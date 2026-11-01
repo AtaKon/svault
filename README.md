@@ -64,7 +64,25 @@ sofia@svault.local / demo1234   (member of the same house)
 ```
 
 Data lives in the `svault-data` volume (`/data` inside the container): one SQLite database plus
-uploads. Back up that volume and you have backed up everything.
+uploads. Back up that volume and you have backed up everything. Set `SVAULT_PORT` if `8080` is
+already taken by another service on your machine.
+
+### Access from your phone (same Wi-Fi)
+
+1. Find the PC's LAN IP (`ipconfig`, e.g. `192.168.0.148`).
+2. Open `http://<pc-ip>:<SVAULT_PORT>` on the phone.
+3. Allow inbound TCP on that port in Windows Firewall, for example in an elevated PowerShell:
+   ```powershell
+   New-NetFirewallRule -DisplayName "SVault (TCP 8095)" -Direction Inbound -Protocol TCP `
+     -LocalPort 8095 -Action Allow -Profile Any
+   ```
+4. Give the PC a DHCP reservation in your router so the address survives reboots, and make sure
+   Docker Desktop starts when you log in (Settings → General).
+
+Browsers only expose the camera on secure origins, so barcode scanning works over `localhost` or
+**HTTPS**. On a plain-HTTP LAN address everything else works, but the scanner will ask you to type
+the code. Use a TLS reverse proxy (Caddy/Traefik with a trusted or locally trusted certificate) or
+Tailscale Serve if you want one-tap scanning from the phone.
 
 ### Camera on a phone
 
