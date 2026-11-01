@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
+import { AI_ENV } from "../config.js";
 import { all, get, newId, now, parseJson, run, tx } from "../db.js";
 import { memberRole, requireAuth, roleAtLeast } from "../auth.js";
 import { ApiError, handler, parseBody, requireHouse } from "../http.js";
@@ -299,20 +300,30 @@ recipeRoutes.post(
     if (!rawText && !body.image) throw new ApiError(400, "Provide recipe text or a scan image");
 
     const house = get<any>("SELECT * FROM houses WHERE id = ?", [houseId])!;
-    const cfg = resolveAi(parseJson(house.settings, {}));
+    const settings = parseJson<Record<string, any>>(house.settings, {});
+    const cfg = resolveAi(settings);
+    // Only send the photo when a vision model is explicitly configured. With a
+    // text-only local model we rely on the OCR text instead.
+    const hasVisionModel = Boolean(settings?.ai?.visionModel || AI_ENV.visionModel);
     let draft = heuristicRecipe(rawText, body.title || "Scanned recipe");
     let provider: "ai" | "local" = "local";
     let warning: string | null = null;
 
-    if (cfg.enabled) {
+    if (cfg.enabled && (rawText || (body.image && hasVisionModel))) {
       try {
-        const images = body.image ? [await localImageToDataUrl(body.image)].filter((x): x is string => !!x) : [];
+        const images =
+          body.image && hasVisionModel
+            ? [await localImageToDataUrl(body.image)].filter((value): value is string => !!value)
+            : [];
         const aiDraft = await aiCleanRecipe(cfg, rawText, images);
         draft = normaliseRecipeDraft(aiDraft, body.title || draft.title || "Scanned recipe");
         provider = "ai";
       } catch (err) {
         warning = `AI cleanup failed, kept the locally parsed version. ${err instanceof Error ? err.message : ""}`.trim();
       }
+    } else if (cfg.enabled) {
+      warning =
+        "No text was recognised in the scan. Add a vision-capable model in Settings → AI to let AI read the photo, or correct the text before digitising.";
     } else {
       warning = "No AI provider configured — parsed locally. Add a key in Settings → AI to clean up scans automatically.";
     }

@@ -6,6 +6,7 @@ import { houseMembers, memberRole, requireAuth, roleAtLeast } from "../auth.js";
 import { ApiError, handler, parseBody, requireHouse } from "../http.js";
 import { serializeHouse } from "../serialize.js";
 import { createHouse } from "../services/houses.js";
+import { chat, resolveAi } from "../ai.js";
 import type { Role } from "../../shared/types.js";
 
 export const houseRoutes = Router();
@@ -131,6 +132,22 @@ houseRoutes.delete(
     const { houseId } = requireHouse(req, "owner");
     run("DELETE FROM houses WHERE id = ?", [houseId]);
     res.json({ ok: true });
+  }),
+);
+
+houseRoutes.post(
+  "/:houseId/ai/test",
+  handler(async (req, res) => {
+    const { houseId } = requireHouse(req, "admin");
+    const row = houseRow(houseId)!;
+    const cfg = resolveAi(parseJson<Record<string, any>>(row.settings, {}));
+    if (!cfg.enabled) throw new ApiError(400, "No AI provider configured");
+    const reply = await chat(cfg, {
+      system: "You are a connectivity probe for a home inventory app. Reply with the single word OK.",
+      user: "ping",
+      temperature: 0,
+    });
+    res.json({ ok: true, model: cfg.model, visionModel: cfg.visionModel, reply: reply.trim().slice(0, 120) });
   }),
 );
 

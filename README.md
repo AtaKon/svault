@@ -106,7 +106,7 @@ Production build:
 ```bash
 npm run build      # client -> dist/client, server -> dist/server
 npm start          # serves both from :4000
-npm test           # 40 API, parser, AI-mock and dataset tests
+npm test           # 42 API, parser, AI-mock and dataset tests
 npm run typecheck
 ```
 
@@ -132,6 +132,39 @@ Copy `.env.example` to `.env` (Docker Compose reads it) or export the variables 
 AI can also be configured **per house** in *Settings → AI*. A stored key wins over the environment.
 Without a key everything still works: OCR is local, recipe parsing is heuristic and food ideas come
 from your own inventory and saved recipes. The UI tells you which path was used.
+
+### Connecting AI (2 minutes)
+
+1. Open **Settings → AI** (as owner/admin of the house).
+2. Pick a preset or fill the fields, press **Save AI settings**, then **Test saved connection**.
+
+| Provider | Base URL | Text model | Vision model | Key |
+|---|---|---|---|---|
+| OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` | `gpt-4o-mini` | your key |
+| OpenRouter | `https://openrouter.ai/api/v1` | `openai/gpt-4o-mini` | `openai/gpt-4o-mini` | your key |
+| Ollama (local) | `http://host.docker.internal:11434/v1` | `llama3.2` | `qwen2.5vl:7b` (optional) | any placeholder |
+| LM Studio (local) | `http://host.docker.internal:1234/v1` | the loaded model id | leave empty | any placeholder |
+
+For a fully local setup:
+
+```bash
+ollama pull llama3.2
+# optional, only for reading photos without OCR:
+ollama pull qwen2.5vl:7b
+```
+
+Then choose **Ollama (local)** in Settings → AI, press Save and Test. SVault only sends the scan image
+when a vision model is configured; otherwise it relies on the on-device OCR text, which is what most
+local text models expect. On Linux hosts replace `host.docker.internal` with your Docker gateway
+(`172.17.0.1`) or the service name if Ollama runs in Compose.
+
+What AI actually powers:
+
+- **Recipe scan cleanup** — fixes OCR errors and structures ingredients/steps.
+- **Improve recipe** — fills missing quantities, times and temperatures; notes what changed.
+- **Food ideas** — suggestions from current stock and saved recipes, with missing essentials.
+
+Stock, barcodes, price history, reminders and photo labelling never call AI.
 
 ## How the pieces work
 

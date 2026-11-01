@@ -999,6 +999,13 @@ function MembersTab({
 
 /* ------------------------------------------------------------------------ ai */
 
+const AI_PRESETS = [
+  { label: "OpenAI", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini", vision: "gpt-4o-mini" },
+  { label: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1", model: "openai/gpt-4o-mini", vision: "openai/gpt-4o-mini" },
+  { label: "Ollama (local)", baseUrl: "http://host.docker.internal:11434/v1", model: "llama3.2", vision: "qwen2.5vl:7b" },
+  { label: "LM Studio (local)", baseUrl: "http://host.docker.internal:1234/v1", model: "local-model", vision: "" },
+];
+
 function AiTab({ house, onSave }: { house: House; onSave: (patch: Record<string, unknown>) => Promise<void> }) {
   const toast = useToast();
   const { can } = useHouse();
@@ -1009,6 +1016,8 @@ function AiTab({ house, onSave }: { house: House; onSave: (patch: Record<string,
   const [visionModel, setVisionModel] = useState(settings.visionModel ?? "");
   const [apiKey, setApiKey] = useState("");
   const [busy, setBusy] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; text: string } | null>(null);
   const masked = settings.apiKey === "***";
 
   const save = async () => {
@@ -1028,6 +1037,19 @@ function AiTab({ house, onSave }: { house: House; onSave: (patch: Record<string,
       toast.error(err instanceof Error ? err.message : "Could not save AI settings");
     } finally {
       setBusy(false);
+    }
+  };
+
+  const test = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const result = await api<{ model: string; reply: string }>(`/api/houses/${house.id}/ai/test`, { method: "POST" });
+      setTestResult({ ok: true, text: `Connected to ${result.model} — ${result.reply || "OK"}` });
+    } catch (err) {
+      setTestResult({ ok: false, text: err instanceof Error ? err.message : "Connection failed" });
+    } finally {
+      setTesting(false);
     }
   };
 
@@ -1063,6 +1085,34 @@ function AiTab({ house, onSave }: { house: House; onSave: (patch: Record<string,
               description="When off, local parsing and inventory suggestions still work."
             />
           </div>
+
+          <div>
+            <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">Quick presets</div>
+            <div className="flex flex-wrap gap-1.5">
+              {AI_PRESETS.map((preset) => (
+                <button
+                  key={preset.label}
+                  type="button"
+                  onClick={() => {
+                    setBaseUrl(preset.baseUrl);
+                    setModel(preset.model);
+                    setVisionModel(preset.vision);
+                    setEnabled(true);
+                    setTestResult(null);
+                  }}
+                  disabled={!can("admin")}
+                  className="rounded-full border border-line bg-surface px-2.5 py-1 text-[11px] font-medium text-muted transition-colors hover:border-brand/40 hover:text-brand disabled:opacity-50"
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+            <p className="mt-1.5 text-[11px] text-muted">
+              Presets only fill the fields — add a key for cloud providers and press Save. Local models accept any
+              non-empty placeholder key.
+            </p>
+          </div>
+
           <Field label="API base URL" hint="include /v1">
             <Input
               value={baseUrl}
@@ -1075,19 +1125,19 @@ function AiTab({ house, onSave }: { house: House; onSave: (patch: Record<string,
             <Field label="Text model">
               <Input value={model} onChange={(event) => setModel(event.target.value)} placeholder="gpt-4o-mini" disabled={!can("admin")} />
             </Field>
-            <Field label="Vision model" hint="for reading scans">
+            <Field label="Vision model" hint="photo-only scans">
               <Input value={visionModel} onChange={(event) => setVisionModel(event.target.value)} placeholder="same as text model" disabled={!can("admin")} />
             </Field>
           </div>
           <Field
             label="API key"
-            hint={masked ? "a key is stored — type to replace" : "stored locally in your database"}
+            hint={masked ? "a key is stored — type to replace" : "local models: use any value"}
           >
             <Input
               type="password"
               value={apiKey}
               onChange={(event) => setApiKey(event.target.value)}
-              placeholder={masked ? "••••••••••••" : "sk-…"}
+              placeholder={masked ? "••••••••••••" : "sk-… or a placeholder for local models"}
               autoComplete="off"
               disabled={!can("admin")}
             />
@@ -1096,12 +1146,26 @@ function AiTab({ house, onSave }: { house: House; onSave: (patch: Record<string,
             <Button onClick={() => void save()} loading={busy} disabled={!can("admin")}>
               Save AI settings
             </Button>
+            <Button variant="secondary" icon="wifi" onClick={() => void test()} loading={testing} disabled={!can("admin")}>
+              Test saved connection
+            </Button>
             {masked && (
               <Button variant="ghost" className="text-danger hover:bg-danger-soft" onClick={() => void clearKey()} disabled={!can("admin")}>
                 Remove stored key
               </Button>
             )}
           </div>
+          {testResult && (
+            <div
+              className={
+                testResult.ok
+                  ? "rounded-xl border border-brand/30 bg-brand-soft px-3 py-2 text-[11px] text-brand"
+                  : "rounded-xl border border-danger/30 bg-danger-soft px-3 py-2 text-[11px] text-danger"
+              }
+            >
+              {testResult.text}
+            </div>
+          )}
         </div>
       </Card>
 

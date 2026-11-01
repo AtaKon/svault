@@ -463,6 +463,63 @@ describe("ai integration", () => {
     assert.ok(aiRequests.some((entry) => entry.headers.authorization === "Bearer test-key"));
   });
 
+  it("tests the saved connection", async () => {
+    const res = await request(`/api/houses/${houseId}/ai/test`, { method: "POST" });
+    assert.equal(res.status, 200);
+    assert.equal(res.data.ok, true);
+    assert.equal(res.data.model, "mock-model");
+  });
+
+  it("only sends scan images when a vision model is configured", async () => {
+    const png = encodePng(16, 16, Buffer.alloc(16 * 16 * 4, 200));
+    const bytes = new ArrayBuffer(png.length);
+    new Uint8Array(bytes).set(png);
+    const form = new FormData();
+    form.append("image", new Blob([bytes], { type: "image/png" }), "card.png");
+    const upload = await fetch(`${base}/api/houses/${houseId}/recipes/upload`, {
+      method: "POST",
+      body: form,
+      headers: { cookie },
+    });
+    assert.equal(upload.status, 201);
+    const { path: imagePath } = await upload.json();
+    assert.ok(imagePath.startsWith("/uploads/recipes/"));
+
+    aiRequests.length = 0;
+    const withoutVision = await request(`/api/houses/${houseId}/recipes/scan`, {
+      method: "POST",
+      body: { text: "flour eggs milk", image: imagePath },
+    });
+    assert.equal(withoutVision.status, 200);
+    assert.equal(withoutVision.data.provider, "ai");
+    assert.equal(typeof aiRequests[0].body.messages[1].content, "string");
+
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { visionModel: "mock-vision" } } },
+    });
+    aiRequests.length = 0;
+    const withVision = await request(`/api/houses/${houseId}/recipes/scan`, {
+      method: "POST",
+      body: { text: "flour eggs milk", image: imagePath },
+    });
+    assert.equal(withVision.data.provider, "ai");
+    const content = aiRequests[0].body.messages[1].content;
+    assert.ok(Array.isArray(content));
+    assert.ok(content.some((part: any) => part.type === "image_url"));
+
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { visionModel: null } } },
+    });
+    const noText = await request(`/api/houses/${houseId}/recipes/scan`, {
+      method: "POST",
+      body: { image: imagePath },
+    });
+    assert.equal(noText.data.provider, "local");
+    assert.match(noText.data.warning, /vision-capable model/);
+  });
+
   it("generates ideas through the provider", async () => {
     const res = await request(`/api/houses/${houseId}/ideas`, { method: "POST", body: { prompt: "dinner" } });
     assert.equal(res.status, 200);
