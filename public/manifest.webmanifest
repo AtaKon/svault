@@ -1,0 +1,25 @@
+{
+  "name": "SVault — Home Inventory",
+  "short_name": "SVault",
+  "description": "Track everything in every house: stock, barcodes, prices, recipes, AI meal ideas and labelled photo datasets.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "background_color": "#f6f3ec",
+  "theme_color": "#1f7a5c",
+  "orientation": "any",
+  "categories": ["productivity", "food", "lifestyle"],
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ],
+  "shortcuts": [
+    { "name": "Scan a barcode", "short_name": "Scan", "url": "/scan", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Inventory", "short_name": "Items", "url": "/items", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Food ideas", "short_name": "Ideas", "url": "/ideas", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

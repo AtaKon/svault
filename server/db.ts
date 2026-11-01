@@ -1,0 +1,351 @@
+import { DatabaseSync } from "node:sqlite";
+import { randomBytes } from "node:crypto";
+import { DB_FILE, ensureDirs } from "./config.js";
+
+ensureDirs();
+
+export const db = new DatabaseSync(DB_FILE);
+db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
+
+const SCHEMA = `
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  name TEXT NOT NULL,
+  password_hash TEXT NOT NULL,
+  is_admin INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE,
+  expires_at TEXT NOT NULL,
+  user_agent TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);
+
+CREATE TABLE IF NOT EXISTS houses (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'home',
+  address TEXT,
+  currency TEXT NOT NULL DEFAULT 'EUR',
+  settings TEXT NOT NULL DEFAULT '{}',
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS house_members (
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role TEXT NOT NULL DEFAULT 'member',
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (house_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS house_invites (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  email TEXT,
+  role TEXT NOT NULL DEFAULT 'member',
+  code TEXT NOT NULL UNIQUE,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  expires_at TEXT,
+  accepted_at TEXT,
+  accepted_by TEXT
+);
+
+CREATE TABLE IF NOT EXISTS locations (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'shelf',
+  icon TEXT,
+  parent_id TEXT REFERENCES locations(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS locations_house ON locations(house_id);
+
+CREATE TABLE IF NOT EXISTS categories (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  icon TEXT,
+  parent_id TEXT REFERENCES categories(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS categories_house ON categories(house_id);
+
+CREATE TABLE IF NOT EXISTS attribute_defs (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  key TEXT NOT NULL,
+  label TEXT NOT NULL,
+  type TEXT NOT NULL DEFAULT 'text',
+  unit TEXT,
+  options TEXT NOT NULL DEFAULT '[]',
+  required INTEGER NOT NULL DEFAULT 0,
+  category_id TEXT REFERENCES categories(id) ON DELETE CASCADE,
+  sort INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  UNIQUE (house_id, key)
+);
+
+CREATE TABLE IF NOT EXISTS items (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  description TEXT,
+  brand TEXT,
+  category_id TEXT REFERENCES categories(id) ON DELETE SET NULL,
+  unit TEXT NOT NULL DEFAULT 'pcs',
+  reorder_point REAL NOT NULL DEFAULT 0,
+  target_stock REAL,
+  attributes TEXT NOT NULL DEFAULT '{}',
+  tags TEXT NOT NULL DEFAULT '[]',
+  image TEXT,
+  archived INTEGER NOT NULL DEFAULT 0,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS items_house ON items(house_id);
+
+CREATE TABLE IF NOT EXISTS item_barcodes (
+  id TEXT PRIMARY KEY,
+  item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  code TEXT NOT NULL,
+  format TEXT,
+  created_at TEXT NOT NULL,
+  UNIQUE (house_id, code)
+);
+CREATE INDEX IF NOT EXISTS barcodes_item ON item_barcodes(item_id);
+
+CREATE TABLE IF NOT EXISTS stock_lots (
+  id TEXT PRIMARY KEY,
+  item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  location_id TEXT REFERENCES locations(id) ON DELETE SET NULL,
+  quantity REAL NOT NULL DEFAULT 0,
+  unit TEXT NOT NULL,
+  unit_price REAL,
+  currency TEXT,
+  purchased_at TEXT,
+  expires_at TEXT,
+  note TEXT,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS lots_item ON stock_lots(item_id);
+CREATE INDEX IF NOT EXISTS lots_house ON stock_lots(house_id);
+
+CREATE TABLE IF NOT EXISTS stock_movements (
+  id TEXT PRIMARY KEY,
+  item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  lot_id TEXT REFERENCES stock_lots(id) ON DELETE SET NULL,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  type TEXT NOT NULL,
+  delta REAL NOT NULL,
+  unit TEXT NOT NULL,
+  quantity REAL NOT NULL,
+  unit_price REAL,
+  normalized_price REAL,
+  location_id TEXT REFERENCES locations(id) ON DELETE SET NULL,
+  user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  reason TEXT,
+  note TEXT,
+  balance_after REAL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS movements_item ON stock_movements(item_id, created_at);
+CREATE INDEX IF NOT EXISTS movements_house ON stock_movements(house_id, created_at);
+
+CREATE TABLE IF NOT EXISTS notifications (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  type TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  data TEXT NOT NULL DEFAULT '{}',
+  dedupe_key TEXT,
+  read_by TEXT NOT NULL DEFAULT '[]',
+  resolved_at TEXT,
+  created_at TEXT NOT NULL,
+  UNIQUE (house_id, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS notifications_house ON notifications(house_id, created_at);
+
+CREATE TABLE IF NOT EXISTS recipes (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  description TEXT,
+  servings INTEGER,
+  prep_minutes INTEGER,
+  cook_minutes INTEGER,
+  steps TEXT NOT NULL DEFAULT '[]',
+  tags TEXT NOT NULL DEFAULT '[]',
+  image TEXT,
+  source_image TEXT,
+  ocr_text TEXT,
+  source TEXT NOT NULL DEFAULT 'manual',
+  ai_notes TEXT,
+  favorite INTEGER NOT NULL DEFAULT 0,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS recipes_house ON recipes(house_id, updated_at);
+
+CREATE TABLE IF NOT EXISTS recipe_ingredients (
+  id TEXT PRIMARY KEY,
+  recipe_id TEXT NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  quantity REAL,
+  unit TEXT,
+  item_id TEXT REFERENCES items(id) ON DELETE SET NULL,
+  optional INTEGER NOT NULL DEFAULT 0,
+  note TEXT,
+  sort INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS ingredients_recipe ON recipe_ingredients(recipe_id);
+
+CREATE TABLE IF NOT EXISTS food_ideas (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  prompt TEXT,
+  result TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS photo_collections (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  description TEXT,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS photos (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  collection_id TEXT REFERENCES photo_collections(id) ON DELETE SET NULL,
+  filename TEXT NOT NULL,
+  original_name TEXT NOT NULL,
+  mime TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  width INTEGER,
+  height INTEGER,
+  notes TEXT,
+  item_id TEXT REFERENCES items(id) ON DELETE SET NULL,
+  split TEXT NOT NULL DEFAULT 'unassigned',
+  captured_at TEXT,
+  uploaded_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS photos_house ON photos(house_id, created_at);
+CREATE INDEX IF NOT EXISTS photos_collection ON photos(collection_id);
+
+CREATE TABLE IF NOT EXISTS photo_labels (
+  id TEXT PRIMARY KEY,
+  photo_id TEXT NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  label TEXT NOT NULL,
+  x REAL,
+  y REAL,
+  w REAL,
+  h REAL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS labels_photo ON photo_labels(photo_id);
+CREATE INDEX IF NOT EXISTS labels_house ON photo_labels(house_id);
+
+CREATE TABLE IF NOT EXISTS ai_cache (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+`;
+
+db.exec(SCHEMA);
+
+export type Row = Record<string, any>;
+
+export function all<T = Row>(sql: string, params: unknown[] = []): T[] {
+  return db.prepare(sql).all(...(params as any[])) as unknown as T[];
+}
+
+export function get<T = Row>(sql: string, params: unknown[] = []): T | undefined {
+  return db.prepare(sql).get(...(params as any[])) as unknown as T | undefined;
+}
+
+export function run(sql: string, params: unknown[] = []) {
+  return db.prepare(sql).run(...(params as any[]));
+}
+
+let txDepth = 0;
+
+/** Runs fn inside a transaction, using savepoints for nested calls. */
+export function tx<T>(fn: () => T): T {
+  const savepoint = `sp_${txDepth}`;
+  const outer = txDepth === 0;
+  db.exec(outer ? "BEGIN" : `SAVEPOINT ${savepoint}`);
+  txDepth++;
+  try {
+    const result = fn();
+    txDepth--;
+    db.exec(outer ? "COMMIT" : `RELEASE ${savepoint}`);
+    return result;
+  } catch (error) {
+    txDepth--;
+    try {
+      db.exec(outer ? "ROLLBACK" : `ROLLBACK TO ${savepoint}`);
+      if (!outer) db.exec(`RELEASE ${savepoint}`);
+    } catch {
+      /* the original error is more useful */
+    }
+    throw error;
+  }
+}
+
+export function now(): string {
+  return new Date().toISOString();
+}
+
+const ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyz";
+
+export function newId(prefix: string): string {
+  const bytes = randomBytes(12);
+  let out = "";
+  for (const b of bytes) out += ALPHABET[b % 36];
+  return `${prefix}_${out}`;
+}
+
+export function parseJson<T>(value: unknown, fallback: T): T {
+  if (typeof value !== "string" || !value) return fallback;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+export function numeric(value: unknown, fallback = 0): number {
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+export function bool(value: unknown): boolean {
+  return value === true || value === 1 || value === "1" || value === "true";
+}
+
+export function houseSettings(house: Row): Record<string, any> {
+  return parseJson<Record<string, any>>(house.settings, {});
+}

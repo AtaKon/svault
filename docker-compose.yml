@@ -1,0 +1,40 @@
+services:
+  svault:
+    build:
+      context: .
+    image: svault:latest
+    container_name: svault
+    restart: unless-stopped
+    ports:
+      - "${SVAULT_PORT:-8080}:4000"
+    volumes:
+      - svault-data:/data
+    environment:
+      NODE_ENV: production
+      PORT: "4000"
+      DATA_DIR: /data
+      # Set to "true" when you put SVault behind HTTPS (recommended).
+      COOKIE_SECURE: "${COOKIE_SECURE:-false}"
+      # Set to "true" to load the demo vault on first start (empty data volume).
+      SEED_DEMO: "${SEED_DEMO:-false}"
+      # Optional AI provider shared by every house. You can also set it per
+      # house in Settings → AI (that value wins).
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      OPENAI_BASE_URL: "${OPENAI_BASE_URL:-}"
+      OPENAI_MODEL: "${OPENAI_MODEL:-}"
+      OPENAI_VISION_MODEL: "${OPENAI_VISION_MODEL:-}"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  svault-data:

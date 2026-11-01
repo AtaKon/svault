@@ -1,0 +1,10 @@
+node_modules/
+dist/
+data/
+public/tesseract/
+.env
+.env.local
+*.log
+.DS_Store
+Thumbs.db
+coverage/
