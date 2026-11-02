@@ -17,8 +17,12 @@ services:
     # TrueNAS SCALE runs apps as UID/GID 568. The host data folder below must
     # be writable by this user (see README.md → Permissions).
     user: "${SVAULT_UID:-568}:${SVAULT_GID:-568}"
+    # Publish for direct LAN access during setup. Once the NPM proxy works,
+    # set SVAULT_BIND=127.0.0.1 (or remove this block) so only NPM can reach it.
     ports:
-      - "${SVAULT_PORT:-8095}:4000"
+      - "${SVAULT_BIND:-0.0.0.0}:${SVAULT_PORT:-8095}:4000"
+    expose:
+      - "4000"
     volumes:
       # Host path so the data is part of your ZFS dataset and snapshots.
       # Change "tank" to your pool name.
@@ -27,8 +31,9 @@ services:
       NODE_ENV: production
       PORT: "4000"
       DATA_DIR: /data
-      # false = plain HTTP on the LAN. Set true when served through HTTPS.
-      COOKIE_SECURE: "${COOKIE_SECURE:-false}"
+      # true once NPM serves the app over HTTPS. While testing over plain
+      # HTTP set false, otherwise browsers drop the session cookie.
+      COOKIE_SECURE: "${COOKIE_SECURE:-true}"
       # true loads the demo vault on the first start only (empty database).
       SEED_DEMO: "${SEED_DEMO:-false}"
       # Optional global AI provider. Per-house settings in the UI win.
@@ -36,6 +41,8 @@ services:
       OPENAI_BASE_URL: "${OPENAI_BASE_URL:-}"
       OPENAI_MODEL: "${OPENAI_MODEL:-}"
       OPENAI_VISION_MODEL: "${OPENAI_VISION_MODEL:-}"
+    networks:
+      - proxy
     security_opt:
       - no-new-privileges:true
     stop_grace_period: 20s
@@ -56,3 +63,10 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+networks:
+  # Nginx Proxy Manager's Docker network (TrueNAS app name).
+  # Both containers must share it so NPM can forward to http://svault:4000.
+  proxy:
+    external: true
+    name: ${PROXY_NETWORK:-ix-nginx-proxy-manager_default}

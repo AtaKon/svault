@@ -62,16 +62,78 @@ database is empty. To seed later:
 sudo docker exec svault node --disable-warning=ExperimentalWarning dist/server/seed.js
 ```
 
-## 4. Network, HTTPS and the phone camera
+## 4. HTTPS with Nginx Proxy Manager
 
-- **LAN access:** `http://<truenas-ip>:8095`. TrueNAS does not block LAN ports by default; if you
-  run a firewall, allow the port.
-- **Camera scanning:** browsers only grant camera access on HTTPS. Behind plain HTTP, everything
-  else works but barcode scanning falls back to typing the number.
-- **Recommended:** put SVault behind your existing reverse proxy (Traefik/Caddy/nginx) with a trusted
-  certificate, point it at `http://<truenas-ip>:8095`, and set `COOKIE_SECURE=true` in `.env`.
-  Then use the HTTPS URL on the phone and the scanner works.
-- Give the NAS a DHCP reservation or use its hostname instead of the IP.
+This stack is pre-wired for **Nginx Proxy Manager (NPM)** on TrueNAS:
+
+- SVault joins NPM's Docker network (`ix-nginx-proxy-manager_default`) under the name `svault`.
+- NPM forwards to `http://svault:4000` over that network — no host port or loopback tricks.
+- The published `8095` port is only for setup/debugging and can be closed after cutover.
+
+### 4.1 DNS and ports
+
+1. Create an A (and optionally AAAA) record for the subdomain, e.g. `svault.example.com`, pointing at
+   your public IP.
+2. Ports **80** and **443** must reach the NAS (NPM already listens on them).
+3. NPM uses the HTTP-01 challenge, so port 80 must be reachable during certificate issuance.
+
+### 4.2 Create the proxy host in NPM
+
+NPM UI → **Hosts → Proxy Hosts → Add Proxy Host**:
+
+| Field | Value |
+| --- | --- |
+| Domain Names | `svault.example.com` |
+| Scheme | `http` |
+| Forward Hostname / IP | `svault` |
+| Forward Port | `4000` |
+| Block Common Exploits | on |
+| Websockets Support | off (not used) |
+
+**SSL tab**
+
+- Request a new SSL certificate (Let's Encrypt)
+- Force SSL: on
+- HTTP/2 Support: on
+- HSTS: optional (only enable if you are sure the subdomain will stay HTTPS)
+
+**Advanced tab** — NPM's defaults block photo uploads over 1 MB and time out AI requests after 60 s:
+
+```nginx
+client_max_body_size 25m;
+proxy_read_timeout 180s;
+proxy_send_timeout 180s;
+```
+
+Save. NPM issues the certificate and starts proxying. Open `https://svault.example.com`.
+
+### 4.3 Cutover (only after HTTPS works)
+
+Edit the stack `.env` in Dockge:
+
+```ini
+COOKIE_SECURE=true
+SVAULT_BIND=127.0.0.1
+```
+
+Press **Deploy**. From then on:
+
+- Sessions are HTTPS-only (browsers will refuse to send the cookie over plain HTTP).
+- The app port is reachable only from the NAS host; all traffic goes through NPM.
+- Barcode scanning works on the phone because the origin is now secure.
+
+If you keep `SVAULT_BIND=0.0.0.0` the app stays reachable at `http://<nas-ip>:8095`, but logins over
+that URL will fail once `COOKIE_SECURE=true` — that is expected.
+
+> If your NPM network has a different name, set `PROXY_NETWORK` in `.env` to the output of
+> `docker inspect ix-nginx-proxy-manager-npm-1 --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}'`.
+
+### 4.4 Camera on the phone
+
+Browsers only expose the camera on secure origins. With the NPM HTTPS URL, scanning works. On plain
+HTTP, everything else works but the scanner falls back to typing the code.
+
+Give the NAS a DHCP reservation or use its hostname instead of the IP.
 
 ## 5. AI (optional)
 
@@ -105,6 +167,9 @@ sudo docker start svault
 | `image not found` / pull error | The image isn't loaded on the NAS or `SVAULT_IMAGE` doesn't match `docker image ls`. |
 | Container restarts in a loop | Check `docker logs svault`; usually permissions or a port conflict. |
 | Port already allocated | Change `SVAULT_PORT` (TrueNAS apps commonly use 8080/8090). |
+| NPM shows 502 Bad Gateway | SVault and NPM aren't on the same network, or the forward host isn't `svault` port `4000`. Check `PROXY_NETWORK`. |
+| Uploads fail with 413 | Add `client_max_body_size 25m;` to the NPM Advanced config. |
+| AI/idea requests time out | Add `proxy_read_timeout 180s;` and `proxy_send_timeout 180s;` in NPM Advanced. |
 | Phone can't open the page | Same VLAN? Guest Wi-Fi isolation? Firewall? Try the NAS IP and port. |
 | Demo login fails | Demo data wasn't seeded (empty DB required). Run the seed command above. |
 | Camera unavailable | Use HTTPS, or scan on a desktop via localhost. |
