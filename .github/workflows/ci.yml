@@ -34,11 +34,12 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Test
-        run: npm test
-
+      # The SPA fallback test needs dist/client to exist.
       - name: Build
         run: npm run build
+
+      - name: Test
+        run: npm test
 
       - name: Smoke test the production server
         run: |

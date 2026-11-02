@@ -95,7 +95,7 @@ exports readable. Timestamps are ISO-8601 strings; dates (`expires_at`, `purchas
 | Reminders | `notifications` |
 | Cooking | `recipes`, `recipe_ingredients`, `food_ideas` |
 | Vision | `photo_collections`, `photos`, `photo_labels` |
-| AI | `ai_cache` |
+| AI | `ai_cache` (reserved; not currently used) |
 
 Key constraints:
 
@@ -180,8 +180,8 @@ barcodes, reminders, photo labelling and authentication.
 ## Photo datasets
 
 - Boxes are stored as fractions (`x`, `y`, `w`, `h` in `0..1`), independent of image resolution.
-- Export streams a generated zip with `jszip`: images grouped by split, YOLO label files, `classes.txt`,
-  `data.yaml`, `manifest.csv`, and `annotations.json` for COCO.
+- Export builds a zip in memory with `jszip` and sends it: images grouped by split, YOLO label
+  files, `classes.txt`, `data.yaml`, `manifest.csv`, and `annotations.json` for COCO.
 - Export reads files from disk on demand; nothing is pre-generated or cached.
 
 ## PWA and offline behaviour

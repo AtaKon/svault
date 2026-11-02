@@ -321,7 +321,8 @@ stock reminders, recipe matching, local idea generation, photo export and SPA ro
 - **Single node by design.** SQLite in WAL mode + a local uploads folder. Great for a home server;
   not a clustered deployment.
 - **Invites are links.** There is no email sending (nothing to configure, nothing to leak). Create
-  an invite, copy the link and share it. Expired/revoked links stop working.
+  an invite, copy the link and share it. Revoked links stop working; invites do not expire on their
+  own, so revoke them in Settings when they are no longer needed.
 - **No password-reset email.** If you lose the password, use the API/DB directly (or re-seed on a
   fresh volume).
 - **AI keys are stored in the house settings table** (plaintext) because the app is self-hosted and

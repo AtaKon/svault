@@ -38,14 +38,17 @@ Open **More -> House settings -> Members** to invite people.
 | **Viewer** | Read everything in the house, mark reminders as read, download exports |
 | **Member** | Everything a viewer can, plus create/edit items, change stock, manage places and categories, create recipes and ideas, label photos |
 | **Admin** | Everything a member can, plus house settings, attributes, AI and reminder settings, invites, member management, deleting places/categories |
-| **Owner** | Everything an admin can, plus transfer ownership, delete the house, manage other admins |
+| **Owner** | Everything an admin can, plus delete the house and manage other admins |
 
 Notes:
 
-- A house has exactly one owner at a time. Transfer ownership before changing the owner's role.
+- A house has one owner. Ownership transfer is not implemented yet
+  ([#16](https://github.com/AtaKon/svault/issues/16)); until it lands, the owner cannot be demoted or
+  removed, and cannot leave without deleting the house.
 - Invites are links, not emails. Create an invite, copy `/join/<code>` and send it yourself. If you
   enter an email address, only that address can accept it.
-- Expired or revoked invite links stop working immediately.
+- Revoked invite links stop working immediately. Invites do not expire automatically; revoke them in
+  **Settings -> Members** when they are no longer needed.
 - There is no password-reset email. The owner can reset a password from the database or you can
   re-seed a fresh volume. This is a deliberate self-hosted trade-off.
 
@@ -231,11 +234,11 @@ annotations.json        (COCO format only)
 
 | Tab | Purpose |
 | --- | --- |
-| General | House name, kind, address, currency, theme preference |
+| General | House name, kind, address, currency, and leaving the house |
 | Places | Add, rename, nest and delete locations |
 | Categories | Same for categories, with icons |
 | Attributes | Custom fields available on items (admin only) |
-| Members | Invites, roles, removal, ownership transfer |
+| Members | Invites, roles and removal |
 | AI | Provider preset, base URL, models, key, connection test |
 | Reminders | Low-stock toggle and expiry warning window |
 | Data | Inventory CSV export, dataset export, data location, house deletion |

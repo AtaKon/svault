@@ -98,11 +98,11 @@ Mounted at `/api/houses`.
 | `POST` | `/:houseId/ai/test` | admin+ | Send a ping to the configured provider. |
 | `GET` | `/:houseId/members` | viewer+ | List members. |
 | `POST` | `/:houseId/members` | admin+ | Add an existing user by email, or create an invite for a new one. |
-| `PATCH` | `/:houseId/members/:userId` | owner | Change a role. Ownership can only be taken by yourself. |
+| `PATCH` | `/:houseId/members/:userId` | owner | Change a role (`admin`, `member` or `viewer`). Ownership transfer is not implemented yet ([#16](https://github.com/AtaKon/svault/issues/16)). |
 | `DELETE` | `/:houseId/members/:userId` | admin+ | Remove a member. Only the owner can remove an admin. |
 | `GET` | `/:houseId/invites` | admin+ | List invites with codes and URLs. |
 | `DELETE` | `/:houseId/invites/:inviteId` | admin+ | Revoke an invite. |
-| `POST` | `/:houseId/leave` | viewer+ | Leave the house. The owner must transfer ownership first. |
+| `POST` | `/:houseId/leave` | viewer+ | Leave the house. The sole owner cannot leave until ownership transfer exists ([#16](https://github.com/AtaKon/svault/issues/16)). |
 
 `settings` accepts a partial object and is deep-merged for `ai` and `notifications`:
 
@@ -346,12 +346,12 @@ See the [user guide](user-guide.md#export-a-dataset) for the archive layout.
 | --- | --- |
 | `200` | Success |
 | `201` | Created (house, item, recipe, upload, label) |
-| `400` | Validation error, bad unit conversion, insufficient stock |
+| `400` | Validation error, bad unit conversion, insufficient stock, or an upload above `MAX_UPLOAD_MB` |
 | `401` | Not signed in |
 | `403` | Signed in but below the required role |
 | `404` | Resource not found or not visible to this user |
 | `409` | Conflict (duplicate email, barcode already linked) |
-| `413` | Upload exceeds `MAX_UPLOAD_MB` |
+| `413` | Reverse proxy body limit (raise `client_max_body_size`) |
 | `500` | Unexpected server error (details are logged, not returned) |
 | `502` | Upstream AI provider failed |
 

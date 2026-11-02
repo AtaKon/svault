@@ -25,6 +25,7 @@ missing, and deploying updates without copying image tarballs.
 | [#6 Deliver reminders to ntfy, Apprise or a webhook](https://github.com/AtaKon/svault/issues/6) | Deployment | M | Browser notifications only work with a tab open; a family needs reminders on a phone. |
 | [#2 Bulk intake from receipts and barcode queues](https://github.com/AtaKon/svault/issues/2) | Inventory, AI | L | The weekly shop is the highest-volume data entry task. |
 | [#4 Weekly meal planner](https://github.com/AtaKon/svault/issues/4) | Recipes, UX | L | Connects recipes to the shopping list. Depends on #1 for the full loop. |
+| [#16 Transfer house ownership](https://github.com/AtaKon/svault/issues/16) | Security, UX | S | Closes an access-control gap: the owner currently cannot hand the house to anyone else. |
 
 ## v1.2 - Power user
 
