@@ -8,6 +8,11 @@ Track what is in the fridge, the cabin and the closet. Scan barcodes, watch pric
 grandma's recipes, get dinner ideas from your actual shelves, and label photos into a vision-model
 dataset — all from one PWA that runs in a single Docker container.
 
+[![CI](https://github.com/AtaKon/svault/actions/workflows/ci.yml/badge.svg)](https://github.com/AtaKon/svault/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
+[![Node 22+](https://img.shields.io/badge/node-22%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![One container](https://img.shields.io/badge/docker-one%20container-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
+
 ![Dashboard](docs/screenshots/desktop-dashboard.png)
 
 ## What it does
@@ -45,6 +50,21 @@ dataset — all from one PWA that runs in a single Docker container.
 <td><img src="docs/screenshots/desktop-dark.png" width="420" alt="Dark mode"><br><sub>Dark mode, also on mobile</sub></td>
 </tr>
 </table>
+
+## Documentation
+
+| Guide | What it covers |
+|---|---|
+| [Documentation index](docs/README.md) | Start here for every guide and project document |
+| [User guide](docs/user-guide.md) | Houses, roles, inventory, stock actions, recipes, datasets, reminders, AI and troubleshooting |
+| [Architecture](docs/architecture.md) | Runtime, data model, auth, stock engine, reminders, AI fallbacks, uploads and PWA |
+| [API reference](docs/api.md) | Conventions, roles, every endpoint, payloads and status codes |
+| [Deployment](docs/deployment.md) | Docker, environment variables, HTTPS, TrueNAS, backups, upgrades and hardening |
+| [Development](docs/development.md) | Local setup, scripts, tests, project layout and conventions |
+| [Roadmap](docs/roadmap.md) | Planned features, priorities, dependencies and non-goals |
+
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and
+[SECURITY.md](SECURITY.md). New feature ideas are tracked as GitHub issues.
 
 ## Quick start (Docker)
 
@@ -313,3 +333,16 @@ stock reminders, recipe matching, local idea generation, photo export and SPA ro
 - The demo seeder adds fictional content only when the database has no demo user.
 
 Built with TypeScript, Express, React, Tailwind and `node:sqlite` — no external services required.
+
+## Contributing
+
+Bug reports, feature requests and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md)
+for the setup, test and review workflow. Security issues should follow [SECURITY.md](SECURITY.md)
+instead of a public issue.
+
+Good first issues: [#10 CSV import](https://github.com/AtaKon/svault/issues/10) and
+[#12 GHCR images](https://github.com/AtaKon/svault/issues/12).
+
+## License
+
+[MIT](LICENSE) © 2026 AtaKon.

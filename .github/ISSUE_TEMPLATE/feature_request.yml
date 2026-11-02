@@ -1,0 +1,66 @@
+name: Feature request
+description: Suggest a capability or a change in behaviour.
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please describe the problem before the solution. Check the [roadmap](https://github.com/AtaKon/svault/blob/main/docs/roadmap.md) first; if an issue already exists, comment there instead.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: The workflow today, and where it hurts.
+      placeholder: Every week I plan meals in a notebook, then copy missing ingredients into a shopping app ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What should SVault do? Rough UI or API ideas are welcome.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other tools, workarounds or a smaller version of the idea.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - Inventory and stock
+        - Prices and barcodes
+        - Recipes and food ideas
+        - Photo library and datasets
+        - Reminders and notifications
+        - AI integration
+        - Deployment and backups
+        - Authentication and security
+        - UI, accessibility and localization
+        - Documentation
+
+  - type: dropdown
+    id: contribute
+    attributes:
+      label: Would you like to work on this?
+      options:
+        - "Yes, I can open a PR"
+        - "Yes, with guidance"
+        - "No, just suggesting"
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and the roadmap.
+          required: true

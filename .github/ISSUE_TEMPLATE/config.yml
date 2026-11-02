@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation
+    url: https://github.com/AtaKon/svault/tree/main/docs
+    about: User guide, architecture, API reference, deployment and development notes.
+  - name: Security vulnerability
+    url: https://github.com/AtaKon/svault/security/advisories/new
+    about: Report security issues privately. Do not open a public issue.
