@@ -108,7 +108,6 @@ proxy_send_timeout 180s;
 Save. NPM issues the certificate and starts proxying. Open `https://svault.example.com`.
 
 ### 4.3 Cutover (only after HTTPS works)
-
 Edit the stack `.env` in Dockge:
 
 ```ini
@@ -127,6 +126,14 @@ that URL will fail once `COOKIE_SECURE=true` — that is expected.
 
 > If your NPM network has a different name, set `PROXY_NETWORK` in `.env` to the output of
 > `docker inspect ix-nginx-proxy-manager-npm-1 --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}'`.
+
+SVault's server binds IPv4. NPM normally resolves a container name to both A and AAAA and may try
+IPv6 first, which shows up as `connect() failed ... [fdd0:...]:4000` and intermittent 502s. Add this
+to the proxy host's **Advanced** tab to force IPv4 resolution:
+
+```nginx
+resolver 127.0.0.11 valid=10s ipv6=off;
+```
 
 ### 4.4 Camera on the phone
 
@@ -167,7 +174,8 @@ sudo docker start svault
 | `image not found` / pull error | The image isn't loaded on the NAS or `SVAULT_IMAGE` doesn't match `docker image ls`. |
 | Container restarts in a loop | Check `docker logs svault`; usually permissions or a port conflict. |
 | Port already allocated | Change `SVAULT_PORT` (TrueNAS apps commonly use 8080/8090). |
-| NPM shows 502 Bad Gateway | SVault and NPM aren't on the same network, or the forward host isn't `svault` port `4000`. Check `PROXY_NETWORK`. |
+| NPM shows 502 Bad Gateway | SVault and NPM aren't on the same network, or the forward host isn't `svault` port `4000`. Check `PROXY_NETWORK` and that `compose.yaml` still has the `networks:` block (re-creating the stack with an old compose removes it). |
+| NPM logs IPv6 connection refused | Add `resolver 127.0.0.11 valid=10s ipv6=off;` to the proxy host's Advanced config. |
 | Uploads fail with 413 | Add `client_max_body_size 25m;` to the NPM Advanced config. |
 | AI/idea requests time out | Add `proxy_read_timeout 180s;` and `proxy_send_timeout 180s;` in NPM Advanced. |
 | Phone can't open the page | Same VLAN? Guest Wi-Fi isolation? Firewall? Try the NAS IP and port. |
