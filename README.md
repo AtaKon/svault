@@ -67,6 +67,11 @@ Data lives in the `svault-data` volume (`/data` inside the container): one SQLit
 uploads. Back up that volume and you have backed up everything. Set `SVAULT_PORT` if `8080` is
 already taken by another service on your machine.
 
+### TrueNAS / Dockge
+
+A ready-to-paste Dockge stack, the image transfer steps and TrueNAS-specific permission notes live in
+[`deploy/dockge`](deploy/dockge/README.md).
+
 ### Access from your phone (same Wi-Fi)
 
 1. Find the PC's LAN IP (`ipconfig`, e.g. `192.168.0.148`).

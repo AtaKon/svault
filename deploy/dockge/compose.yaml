@@ -1,0 +1,58 @@
+# SVault — Dockge stack for TrueNAS SCALE
+#
+# Deploy from Dockge (Stacks → New stack → paste this file) or run
+# `docker compose up -d` in this folder.
+#
+# The image must exist on the TrueNAS host first (see README.md in this
+# folder). It is not published to a registry yet.
+
+name: svault
+
+services:
+  svault:
+    image: ${SVAULT_IMAGE:-svault:1.0.0}
+    container_name: svault
+    restart: unless-stopped
+    init: true
+    # TrueNAS SCALE runs apps as UID/GID 568. The host data folder below must
+    # be writable by this user (see README.md → Permissions).
+    user: "${SVAULT_UID:-568}:${SVAULT_GID:-568}"
+    ports:
+      - "${SVAULT_PORT:-8095}:4000"
+    volumes:
+      # Host path so the data is part of your ZFS dataset and snapshots.
+      # Change "tank" to your pool name.
+      - "${SVAULT_DATA_PATH:-/mnt/tank/apps/svault/data}:/data"
+    environment:
+      NODE_ENV: production
+      PORT: "4000"
+      DATA_DIR: /data
+      # false = plain HTTP on the LAN. Set true when served through HTTPS.
+      COOKIE_SECURE: "${COOKIE_SECURE:-false}"
+      # true loads the demo vault on the first start only (empty database).
+      SEED_DEMO: "${SEED_DEMO:-false}"
+      # Optional global AI provider. Per-house settings in the UI win.
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      OPENAI_BASE_URL: "${OPENAI_BASE_URL:-}"
+      OPENAI_MODEL: "${OPENAI_MODEL:-}"
+      OPENAI_VISION_MODEL: "${OPENAI_VISION_MODEL:-}"
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 20s
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
