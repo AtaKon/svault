@@ -16,7 +16,7 @@ const MIME_EXT: Record<string, string> = {
   "image/tiff": ".tif",
 };
 
-export function uploader(prefix: "photos" | "items" | "recipes") {
+export function uploader(prefix: "photos" | "items" | "recipes" | "receipts") {
   const dest = path.join(UPLOAD_DIR, prefix);
   fs.mkdirSync(dest, { recursive: true });
   return multer({
@@ -35,6 +35,6 @@ export function uploader(prefix: "photos" | "items" | "recipes") {
   });
 }
 
-export function uploadPath(prefix: "photos" | "items" | "recipes", filename: string): string {
+export function uploadPath(prefix: "photos" | "items" | "recipes" | "receipts", filename: string): string {
   return path.join(UPLOAD_DIR, prefix, path.basename(filename));
 }

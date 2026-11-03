@@ -29,4 +29,5 @@ export function ensureDirs() {
   fs.mkdirSync(path.join(UPLOAD_DIR, "photos"), { recursive: true });
   fs.mkdirSync(path.join(UPLOAD_DIR, "items"), { recursive: true });
   fs.mkdirSync(path.join(UPLOAD_DIR, "recipes"), { recursive: true });
+  fs.mkdirSync(path.join(UPLOAD_DIR, "receipts"), { recursive: true });
 }

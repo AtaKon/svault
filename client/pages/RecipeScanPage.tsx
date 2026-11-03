@@ -173,7 +173,7 @@ export function RecipeScanPage() {
             </span>
             <div>
               <div className="font-display text-xl">Take a photo of the recipe</div>
-              <div className="mt-1 text-xs text-muted">JPG, PNG or HEIC · text goes through on-device OCR first</div>
+              <div className="mt-1 text-xs text-muted">JPG, PNG or HEIC · English & Greek OCR on this device first</div>
             </div>
             <span className="rounded-full border border-line bg-surface px-3 py-1.5 text-xs font-medium">Choose photo / camera</span>
           </button>
@@ -181,7 +181,6 @@ export function RecipeScanPage() {
             ref={fileRef}
             type="file"
             accept="image/*"
-            capture="environment"
             className="hidden"
             onChange={(event) => void handleFile(event.target.files?.[0] ?? null)}
           />

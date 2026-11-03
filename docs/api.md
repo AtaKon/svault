@@ -54,11 +54,11 @@ Mounted at `/api/auth`.
 
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
-| `POST` | `/register` | public | Create an account; first user becomes instance admin. Accepts `inviteCode` or creates a house. |
-| `POST` | `/login` | public | Email + password; sets the session cookie. |
+| `POST` | `/register` | public | Create an account; first user becomes instance admin. Accepts an optional `username`, `inviteCode`, or creates a house. |
+| `POST` | `/login` | public | Email **or** username + password; sets the session cookie. |
 | `POST` | `/logout` | any | Deletes the current session and clears the cookie. |
 | `GET` | `/me` | user | Current user plus all houses with roles. |
-| `PATCH` | `/me` | user | Change `name` and/or `email`. |
+| `PATCH` | `/me` | user | Change `name`, `email` and/or `username`. |
 | `POST` | `/me/password` | user | Requires `currentPassword`; rotates every session and issues a new cookie. |
 | `GET` | `/invites/:code` | public | Preview an invite (house name, role, inviter). Does not accept it. |
 | `POST` | `/invites/:code/accept` | user | Join the house if the invite is valid and the email matches. |
@@ -69,17 +69,25 @@ Register body:
 {
   "name": "Alex",
   "email": "alex@example.com",
+  "username": "alex",
   "password": "at-least-8-characters",
   "houseName": "Alex's Home",
   "inviteCode": "optional-code"
 }
 ```
 
+`username` is optional. When omitted, a unique one is derived from the email local part, so every
+account can sign in with either identifier. Usernames are 3–32 characters: letters, numbers, dots,
+dashes and underscores.
+
+Login accepts `{ "identifier": "alex", "password": "..." }`, or `email`/`username` instead of
+`identifier`. The older `{ "email": "alex@example.com" }` form keeps working.
+
 `POST /api/auth/login` and `/register` return:
 
 ```json
 {
-  "user": { "id": "usr_...", "email": "alex@example.com", "name": "Alex", "isAdmin": false, "createdAt": "..." },
+  "user": { "id": "usr_...", "email": "alex@example.com", "username": "alex", "name": "Alex", "isAdmin": false, "createdAt": "..." },
   "houses": [ { "id": "hse_...", "name": "Alex's Home", "role": "owner", "...": "..." } ]
 }
 ```
@@ -144,7 +152,9 @@ All mounted under `/api/houses/:houseId`.
 | `PATCH` | `/attributes/:attributeId` | admin+ | Update a definition. |
 | `DELETE` | `/attributes/:attributeId` | admin+ | Delete a definition; stored values remain in item JSON but are no longer shown. |
 
-Attribute types: `text`, `number`, `select`, `date`, `boolean`, `url`.
+Attribute types: `text`, `number`, `select`, `date`, `boolean`, `url`. Built-in item fields
+(`name`, `description`, `brand`, `category`, `unit`, `reorder_point`, `target_stock`, `tags`,
+`barcode`, `image`, `quantity`, `value`, …) are reserved and rejected as custom attribute keys.
 
 ## Inventory
 
@@ -163,6 +173,9 @@ Attribute types: `text`, `number`, `select`, `date`, `boolean`, `url`.
 | `POST` | `/api/items/:itemId/image` | member+ | `multipart/form-data` field `image`. |
 | `POST` | `/api/items/:itemId/barcodes` | member+ | Attach `{ "code": "...", "format": "ean13" }`. |
 | `DELETE` | `/api/items/:itemId/barcodes/:barcodeId` | member+ | Detach a barcode. |
+| `GET` | `/api/items/:itemId/aliases` | viewer+ | Receipt names mapped to this item. |
+| `POST` | `/api/items/:itemId/aliases` | member+ | Add `{ "rawName": "...", "vendorId": "vnd_..." }` (vendor optional). |
+| `DELETE` | `/api/items/:itemId/aliases/:aliasId` | member+ | Forget a receipt name. |
 
 List query parameters:
 
@@ -198,7 +211,8 @@ Create item body:
     "locationId": "loc_...",
     "purchasedAt": "2026-10-30",
     "expiresAt": "2028-10-30",
-    "note": "Gift"
+    "note": "Gift",
+    "vendorId": "vnd_..."
   }
 }
 ```
@@ -206,14 +220,17 @@ Create item body:
 Stock action body:
 
 ```json
-{ "action": "add", "quantity": 500, "unit": "ml", "unitPrice": 0.8, "locationId": "loc_...", "expiresAt": "2026-12-01" }
+{ "action": "add", "quantity": 500, "unit": "ml", "unitPrice": 0.8, "locationId": "loc_...", "expiresAt": "2026-12-01", "vendorId": "vnd_..." }
 { "action": "remove", "quantity": 200, "unit": "ml", "note": "Dinner" }
 { "action": "waste", "quantity": 100, "reason": "Spoiled" }
 { "action": "set", "target": 1.5, "unit": "l" }
 { "action": "move", "quantity": 2, "fromLocationId": "loc_a", "toLocationId": "loc_b" }
 ```
 
-Every successful stock action returns the complete item detail.
+Every successful stock action returns the complete item detail. Its `priceHistory` contains one entry
+per incoming purchase: `at`, normalized `price` per item unit, entered `unit`, `quantity`, `unitPrice`,
+`vendorId`, `vendorName`, `receiptId` and `note`. Clients can filter this list by shop for per-vendor
+price comparisons.
 
 Barcode scan response:
 
@@ -223,6 +240,202 @@ Barcode scan response:
 
 `match` is `local`, `external` or `none`. For `external`, `product` contains the OpenFoodFacts
 suggestion (name, brand, quantity, image, categories) and `item` is null.
+
+## Receipts and shops
+
+Shops (`vendors`) are per house. Receipts store the shop, date, totals, the original image and every
+line. Importing a receipt creates stock batches through the normal stock engine and can create items
+for unknown products.
+
+| Method | Path | Min role | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/houses/:houseId/vendors` | viewer+ | Shops with a purchase count. |
+| `GET` | `/api/houses/:houseId/vendor-suggestions` | viewer+ | Suggested shops from the catalog. Filters: `country` (default `GR`), `q`. |
+| `POST` | `/api/houses/:houseId/vendors` | member+ | Create a shop (`name`, `kind`, `note`), or pass `catalogId` from the suggestions list. Names are unique per house. |
+| `PATCH` | `/api/houses/:houseId/vendors/:vendorId` | member+ | Rename or edit a shop. |
+| `DELETE` | `/api/houses/:houseId/vendors/:vendorId` | admin+ | Delete a shop. Batches and movements lose the link; receipts keep the name they were saved with. |
+| `GET` | `/api/houses/:houseId/receipts` | viewer+ | Recent receipts. Filters: `vendorId`, `q`, `limit` (default 50, max 300). |
+| `GET` | `/api/houses/:houseId/purchases/analytics` | viewer+ | Spend totals, net/tax split, by shop, monthly, VAT rates and categories. Filters: `from`, `to` (`YYYY-MM-DD`). |
+| `POST` | `/api/houses/:houseId/receipts` | member+ | Import lines as stock and save the receipt. |
+| `POST` | `/api/houses/:houseId/receipts/upload` | member+ | Upload a receipt photo (`field: image`) and get `{ path }`. |
+| `POST` | `/api/houses/:houseId/receipts/scan` | member+ | Parse OCR text and/or an image into a receipt draft. |
+| `GET` | `/api/receipts/:receiptId` | viewer+ | Receipt with its lines and linked item names. |
+| `DELETE` | `/api/receipts/:receiptId` | member+ | Delete the receipt record. Stock and price history stay. |
+
+Suggested-shop response:
+
+```json
+{
+  "country": "GR",
+  "countries": [{ "code": "GR", "name": "Greece" }],
+  "entries": [
+    { "id": "vct_...", "country": "GR", "name": "Σκλαβενίτης", "kind": "supermarket", "added": false },
+    { "id": "vct_...", "country": "GR", "name": "Lidl", "kind": "supermarket", "added": true }
+  ]
+}
+```
+
+The catalog is seeded with common Greek supermarkets, delis, kiosks, markets and online shops. It is
+keyed by `country`, so other countries can be added later without changing the receipt flow. A receipt
+scan resolves known merchant aliases (for example `LIDL HELLAS` or `SKLAVENITIS`) to the catalog name,
+and importing with a `vendorName` reuses an existing house shop when the alias matches.
+
+Scan body (same AI/local fallback behaviour as recipe scans):
+
+```json
+{ "text": "OCR text from the browser", "image": "/uploads/receipts/....jpg" }
+```
+
+Response:
+
+```json
+{
+  "provider": "template",
+  "warning": null,
+  "draft": {
+    "vendorName": "Lidl",
+    "purchasedAt": "2026-10-08",
+    "currency": "EUR",
+    "total": 10.73,
+    "subtotal": 9.33,
+    "tax": 1.4,
+    "taxBreakdown": [{ "rate": 13, "net": 7.64, "tax": 0.99, "gross": 8.63 }],
+    "templateId": "lidl-gr",
+    "templateConfidence": 0.99,
+    "savings": 1.04,
+    "notes": null,
+    "lines": [
+      {
+        "description": "ΑΠΟΓΥΜΝΩΤΗΣ",
+        "rawDescription": "ΑΠΟΓΥΜΝΩΤΗΣ -0523350",
+        "quantity": 1,
+        "unit": null,
+        "unitPrice": 1.99,
+        "lineTotal": 1.99,
+        "taxRate": 24,
+        "discount": 0,
+        "barcode": null
+      }
+    ]
+  }
+}
+```
+
+`provider` is `ai`, `local` or `template`. A recognised layout (the built-in `lidl-gr` and
+`sklavenitis-gr` templates) wins before generic/AI parsing. The response includes `templateId`,
+`templateConfidence` and `savings`, and each line can carry the original `rawDescription`, `taxRate`,
+`discount` and `barcode`. The receipt stores `provider` so clients can show whether AI was used.
+
+Import body:
+
+```json
+{
+  "vendorName": "Corner Market",
+  "purchasedAt": "2026-10-12",
+  "currency": "EUR",
+  "total": 5.5,
+  "subtotal": 4.44,
+  "tax": 1.06,
+  "taxBreakdown": [{ "rate": 24, "net": 4.44, "tax": 1.06, "gross": 5.5 }],
+  "templateId": "lidl-gr",
+  "templateConfidence": 0.99,
+  "provider": "template",
+  "savings": 1.04,
+  "image": "/uploads/receipts/....jpg",
+  "ocrText": "raw text, optional",
+  "notes": null,
+  "lines": [
+    {
+      "description": "Milk",
+      "rawDescription": "ΓΑΛΑ 1,5L",
+      "quantity": 2,
+      "unit": "l",
+      "unitPrice": 1.2,
+      "lineTotal": 2.4,
+      "taxRate": 13,
+      "discount": 0
+    },
+    { "description": "Sourdough bread", "quantity": 1, "unitPrice": 3.1, "lineTotal": 3.1, "locationId": "loc_..." }
+  ]
+}
+```
+
+Use `vendorId` instead of `vendorName` to pick an existing shop; an unknown `vendorName` creates one.
+A line may set `itemId` to force a match or `barcode` to match by barcode. Without either, the server
+matches an item by name (with a conservative loose match) and otherwise creates a new item using the
+line's unit. Incompatible units are rejected with a 400 before anything is written. Every imported line
+creates a normal `in` movement carrying `vendorId` and `receiptId`; delete the receipt later without
+touching stock.
+
+If `rawDescription` is supplied, the resolved item is remembered as a vendor-specific product alias.
+The next receipt from that shop resolves the same abbreviation to the same item. Correcting a line in
+the UI therefore trains the mapping without a separate training step.
+
+Scan responses also include `suggestedItemId`, `suggestedItemName`, `suggestedItemUnit`,
+`suggestedItemScore` and `suggestedItemSource` on each line. Suggestions combine exact aliases, item
+names and a local character-vector similarity (hashed trigram cosine plus token overlap), so slightly
+different abbreviations can still surface the right product. An item may have many aliases, optionally
+scoped to one shop.
+
+Receipt templates can be managed per house:
+
+| Method | Path | Min role | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/houses/:houseId/receipt-templates` | viewer+ | Built-in and custom templates, with rules. |
+| `POST` | `/api/houses/:houseId/receipt-templates` | admin+ | Create a custom template. |
+| `PATCH` | `/api/houses/:houseId/receipt-templates/:templateId` | admin+ | Update and version a template. |
+| `DELETE` | `/api/houses/:houseId/receipt-templates/:templateId` | admin+ | Delete a custom template. |
+| `POST` | `/api/houses/:houseId/receipt-templates/test` | admin+ | Validate and test unsaved `rules` against sample `text`. |
+
+Template rules:
+
+```json
+{
+  "keywords": ["TEST MART"],
+  "threshold": 0.7,
+  "sections": { "start": ["ΦΟΡΟΛΟΓΙΚΗ"], "end": ["^ΣΥΝΟΛΟ"] },
+  "product": {
+    "pattern": "^(?<name>.+?)\\s+(?<total>\\d+[.,]\\d{2})\\s+(?<rate>\\d{1,2})\\s*%$",
+    "ignore": ["^ΣΑΚΟΥ", "^ΤΣ\\.?Π\\.?ΧΡ"]
+  },
+  "quantity": ["^(?<qty>\\d+)\\s*[x×]\\s*(?<unitPrice>\\d+[.,]\\d{2})$"],
+  "weight": ["^(?<qty>\\d+(?:[.,]\\d+)?)\\s*(?<unit>kg|g|l|ml)\\s*[x×]\\s*(?<unitPrice>\\d+[.,]\\d{2})"],
+  "discount": { "patterns": ["κπτωση", "discount"] },
+  "savings": {
+    "patterns": ["ΣΥΝΟΛΙΚΗ ΕΚΠΤΩΣΗ", "YOU SAVED", "TOTAL DISCOUNT"]
+  },
+  "tax": {
+    "start": ["^ΦΠΑ"],
+    "rowPattern": "^[A-ZΑ-Ω]\\s+(?<rate>\\d{1,2}(?:[.,]\\d+)?)\\s*%",
+    "summaryPattern": "^ΣΥΝΟΛΟ(?=\\s|$)"
+  },
+  "total": { "pattern": "^ΣΥΝΟΛΟ(?=\\s|$)" }
+}
+```
+
+Patterns are JavaScript regular expressions using named groups: `name`, `total`, `rate`; `qty`,
+`unit`, `unitPrice`; `amount`; `net`, `tax`, `gross`. `LIDL_TEMPLATE_RULES` and
+`SKLAVENITIS_TEMPLATE_RULES` are exposed as the built-in examples and can be cloned in the UI.
+`discount` lines are folded into their product; `savings` lines are receipt-level totals (for example
+`ΣΥΝΟΛΙΚΗ ΕΚΠΤΩΣΗ` or `YOU SAVED`) and are summed into `draft.savings` without becoming products.
+
+Spending analytics response (`from`/`to` optional):
+
+```json
+{
+  "range": { "from": "2025-11-03", "to": null },
+  "totals": { "receipts": 12, "total": 486.2, "net": 392.1, "tax": 94.1, "average": 40.52 },
+  "byVendor": [
+    { "vendorId": "vnd_...", "vendorName": "Σκλαβενίτης", "receipts": 5, "total": 210.4, "net": 169.7, "tax": 40.7 }
+  ],
+  "monthly": [{ "month": "2026-10", "receipts": 2, "total": 80.1, "net": 64.6, "tax": 15.5 }],
+  "taxRates": [{ "rate": 24, "net": 392.1, "tax": 94.1, "gross": 486.2 }],
+  "byCategory": [{ "categoryId": "cat_...", "categoryName": "Food", "total": 300.5 }]
+}
+```
+
+Net falls back to `total - tax`, or to `total` when no tax was recorded. Category totals use the
+matched item's category; unlinked lines are reported as `Uncategorised`.
 
 ## Recipes
 
@@ -332,6 +545,11 @@ See the [user guide](user-guide.md#export-a-dataset) for the archive layout.
 | `GET` | `/api/houses/:houseId/notifications` | viewer+ | Active reminders. `unread=1`, `limit` up to 200. |
 | `POST` | `/api/houses/:houseId/notifications/read` | viewer+ | Mark all or `{ "ids": [...] }` as read for the current user. |
 | `POST` | `/api/houses/:houseId/notifications/scan` | viewer+ | Recompute low-stock and expiry reminders for the house. |
+| `GET` | `/api/notifications` | user | Reminders from every house the caller belongs to, including house invitations. `unread=1`, `limit` up to 200. |
+| `POST` | `/api/notifications/read` | user | Mark all or `{ "ids": [...] }` across houses as read. |
+
+Joining a house — by accepting an invite or being added by an admin — creates a `house` notification
+addressed to that user only. Other members do not see it.
 
 ## Utility
 

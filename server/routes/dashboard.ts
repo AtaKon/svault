@@ -93,8 +93,8 @@ dashboardRoutes.get(
         )?.n ?? 0,
       ),
       unreadNotifications: all<any>(
-        "SELECT read_by FROM notifications WHERE house_id = ? AND resolved_at IS NULL",
-        [houseId],
+        "SELECT read_by FROM notifications WHERE house_id = ? AND resolved_at IS NULL AND (user_id IS NULL OR user_id = ?)",
+        [houseId, req.user!.id],
       ).filter((r) => {
         try {
           return !(JSON.parse(r.read_by) as string[]).includes(req.user!.id);

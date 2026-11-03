@@ -23,6 +23,7 @@
     "icons": "node scripts/make-icons.mjs"
   },
   "dependencies": {
+    "@tesseract.js-data/ell": "^1.0.0",
     "@tesseract.js-data/eng": "^1.0.0",
     "@zxing/browser": "^0.2.1",
     "@zxing/library": "^0.23.0",

@@ -6,15 +6,19 @@ import { attachUser } from "./auth.js";
 import { authRoutes } from "./routes/auth.js";
 import { houseRoutes } from "./routes/houses.js";
 import { inventoryRoutes, itemRoutes } from "./routes/inventory.js";
+import { receiptRoutes, singleReceiptRoutes } from "./routes/receipts.js";
+import { receiptTemplateRoutes } from "./routes/receipt-templates.js";
 import { recipeRoutes, singleRecipeRoutes } from "./routes/recipes.js";
 import { ideaRoutes, singleIdeaRoutes } from "./routes/ideas.js";
 import { photoRoutes, singlePhotoRoutes } from "./routes/photos.js";
-import { notificationRoutes } from "./routes/notifications.js";
+import { globalNotificationRoutes, notificationRoutes } from "./routes/notifications.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
 import { scanAllHouses } from "./services/notifications.js";
+import { seedVendorCatalog } from "./services/vendors.js";
 import { db } from "./db.js";
 
 ensureDirs();
+seedVendorCatalog();
 
 export const app = express();
 app.disable("x-powered-by");
@@ -50,13 +54,17 @@ if (!IS_PROD) {
 app.use("/api/auth", authRoutes);
 app.use("/api/houses", houseRoutes);
 app.use("/api/houses", inventoryRoutes);
+app.use("/api/houses", receiptRoutes);
+app.use("/api/houses", receiptTemplateRoutes);
 app.use("/api/houses", recipeRoutes);
 app.use("/api/houses", ideaRoutes);
 app.use("/api/houses", photoRoutes);
 app.use("/api/houses", notificationRoutes);
 app.use("/api/houses", dashboardRoutes);
+app.use("/api/notifications", globalNotificationRoutes);
 app.use("/api/items", itemRoutes);
 app.use("/api/recipes", singleRecipeRoutes);
+app.use("/api/receipts", singleReceiptRoutes);
 app.use("/api/ideas", singleIdeaRoutes);
 app.use("/api/photos", singlePhotoRoutes);
 

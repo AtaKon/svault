@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/api";
-import { useHouse } from "@/state";
+import { useAuth, useHouse } from "@/state";
 import { Badge, Button, Card, EmptyState, PageHeader, Skeleton, cn } from "@/components/ui";
 import { Icon, type IconName } from "@/components/icons";
 import { useToast } from "@/components/toast";
@@ -13,10 +13,12 @@ const TYPE_META: Record<Notification["type"], { icon: IconName; tone: string }> 
   expiring: { icon: "clock", tone: "bg-warn-soft text-warn" },
   system: { icon: "bell", tone: "bg-raised text-muted" },
   invite: { icon: "users", tone: "bg-brand-soft text-brand" },
+  house: { icon: "users", tone: "bg-brand-soft text-brand" },
 };
 
 export function NotificationsPage() {
   const { house } = useHouse();
+  const { refresh, selectHouse } = useAuth();
   const navigate = useNavigate();
   const toast = useToast();
   const [items, setItems] = useState<Notification[] | null>(null);
@@ -27,13 +29,13 @@ export function NotificationsPage() {
 
   const load = useCallback(async () => {
     try {
-      const data = await api<{ notifications: Notification[] }>(`/api/houses/${house.id}/notifications?limit=200`);
+      const data = await api<{ notifications: Notification[] }>("/api/notifications?limit=200");
       setItems(data.notifications);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not load reminders");
       setItems([]);
     }
-  }, [house.id, toast]);
+  }, [toast]);
 
   useEffect(() => {
     void load();
@@ -42,7 +44,7 @@ export function NotificationsPage() {
   const markAll = async () => {
     setBusy(true);
     try {
-      await api(`/api/houses/${house.id}/notifications/read`, { method: "POST", body: {} });
+      await api("/api/notifications/read", { method: "POST", body: {} });
       setItems((current) => current?.map((item) => ({ ...item, read: true })) ?? current);
       window.dispatchEvent(new Event("sv:refresh-badges"));
     } catch (err) {
@@ -55,14 +57,16 @@ export function NotificationsPage() {
   const scan = async () => {
     setBusy(true);
     try {
-      const data = await api<{ notifications: Notification[] }>(`/api/houses/${house.id}/notifications/scan`, { method: "POST" });
-      setItems(data.notifications);
+      const scanned = await api<{ notifications: Notification[] }>(`/api/houses/${house.id}/notifications/scan`, {
+        method: "POST",
+      });
+      await load();
       window.dispatchEvent(new Event("sv:refresh-badges"));
-      const unread = data.notifications.filter((item) => !item.read);
+      const unread = scanned.notifications.filter((item) => !item.read);
       if (unread.length && typeof Notification !== "undefined" && Notification.permission === "granted") {
         new Notification("SVault", { body: `${unread.length} reminder${unread.length === 1 ? "" : "s"} need attention` });
       }
-      toast.success(data.notifications.length ? "Reminders refreshed" : "Everything looks stocked");
+      toast.success(scanned.notifications.length ? "Reminders refreshed" : "Everything looks stocked");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not scan reminders");
     } finally {
@@ -82,11 +86,19 @@ export function NotificationsPage() {
   const markOne = async (item: Notification) => {
     if (!item.read) {
       setItems((current) => current?.map((entry) => (entry.id === item.id ? { ...entry, read: true } : entry)) ?? current);
-      await api(`/api/houses/${house.id}/notifications/read`, { method: "POST", body: { ids: [item.id] } }).catch(() => undefined);
+      await api("/api/notifications/read", { method: "POST", body: { ids: [item.id] } }).catch(() => undefined);
       window.dispatchEvent(new Event("sv:refresh-badges"));
     }
+    if (item.houseId !== house.id) {
+      await refresh();
+      selectHouse(item.houseId);
+    }
     const itemId = item.data?.itemId;
-    if (typeof itemId === "string") navigate(`/items/${itemId}`);
+    if (typeof itemId === "string") {
+      navigate(`/items/${itemId}`);
+    } else if (item.houseId !== house.id) {
+      navigate("/");
+    }
   };
 
   const unread = (items ?? []).filter((item) => !item.read).length;
@@ -97,7 +109,7 @@ export function NotificationsPage() {
         back={() => navigate("/more")}
         eyebrow={unread ? `${unread} unread` : "All caught up"}
         title="Reminders"
-        subtitle="Low stock and expiry warnings for this house."
+        subtitle="Low stock, expiry and house updates across all your houses."
         actions={
           <>
             <div className="hidden sm:block">
@@ -144,7 +156,7 @@ export function NotificationsPage() {
         <EmptyState
           icon="bell"
           title="No reminders"
-          body="Set a reorder point on items you never want to run out of, or add expiry dates to stock batches."
+          body="Set a reorder point on items you never want to run out of, add expiry dates to batches, or wait for a house invitation."
           action={
             <Button variant="secondary" onClick={() => void scan()}>
               Run a check
@@ -173,7 +185,15 @@ export function NotificationsPage() {
                       {!item.read && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-brand" />}
                     </span>
                     <span className="mt-0.5 block text-[11px] leading-relaxed text-muted">{item.body}</span>
-                    <span className="mt-1 block text-[10px] uppercase tracking-wide text-muted">{relativeTime(item.createdAt)}</span>
+                    <span className="mt-1 flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-muted">
+                      <span>{relativeTime(item.createdAt)}</span>
+                      {item.houseName && item.houseId !== house.id && (
+                        <>
+                          <span>·</span>
+                          <span className="normal-case tracking-normal">{item.houseName}</span>
+                        </>
+                      )}
+                    </span>
                   </span>
                 </button>
                 {typeof item.data?.itemId === "string" && (

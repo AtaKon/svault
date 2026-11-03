@@ -123,6 +123,46 @@ export function extractJson<T = any>(text: string): T {
   }
 }
 
+export const RECEIPT_SCHEMA = `{
+  "vendorName": string | null,
+  "purchasedAt": string | null (YYYY-MM-DD),
+  "currency": string | null (ISO 4217),
+  "total": number | null,
+  "subtotal": number | null,
+  "tax": number | null,
+  "taxBreakdown": [{"rate": number | null, "net": number, "tax": number, "gross": number}],
+  "savings": number | null,
+  "lines": [{"description": string, "quantity": number, "unit": string | null, "unitPrice": number | null, "lineTotal": number | null, "discount": number | null}],
+  "notes": string | null
+}`;
+
+export async function aiParseReceipt(
+  cfg: AiConfig,
+  rawText: string,
+  images: string[] = [],
+): Promise<Record<string, unknown>> {
+  const text = await chat(cfg, {
+    system:
+      "You are a meticulous receipt archivist for a home inventory. Turn shopping-receipt scans or raw OCR text into clean JSON. " +
+      "Read the shop name, purchase date, currency, total, net subtotal, VAT/tax and every purchased product line. " +
+      "When the receipt prints VAT rates, fill taxBreakdown with one entry per rate (net, tax and gross for that rate); " +
+      "otherwise use an empty array. Never invent products, prices, taxes or lines that are not present. Ignore payment, " +
+      "loyalty, change and cashier lines. Discount and savings lines are not products: put a product's own discount in " +
+      "that line's discount field and sum every discount into savings, or use null when the receipt prints none. " +
+      "Keep product names as printed (expand only obvious abbreviations), include pack " +
+      "sizes in the description, and put the purchased amount in quantity/unit when the receipt states it (2 pcs, 1.5 kg, " +
+      "750 ml). Use unitPrice per single selling unit and lineTotal for the printed line total. If a value is unreadable, " +
+      "return null instead of guessing. Respond with JSON only, no markdown.",
+    user:
+      `Extract this shopping receipt into JSON with this exact shape:\n${RECEIPT_SCHEMA}\n\n` +
+      (rawText ? `RAW OCR TEXT:\n${rawText.slice(0, 12000)}` : "The receipt is in the attached image. Read it carefully."),
+    images,
+    json: true,
+    temperature: 0.1,
+  });
+  return extractJson<Record<string, unknown>>(text);
+}
+
 export const RECIPE_SCHEMA = `{
   "title": string,
   "description": string,

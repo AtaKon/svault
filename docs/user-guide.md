@@ -10,7 +10,9 @@ already running; if not, follow the [quick start](../README.md#quick-start-docke
 
 Open the URL printed by your deployment (for example `http://localhost:8080`).
 
-1. Create an account with your name, email and a password of at least 8 characters.
+1. Create an account with your name, email and a password of at least 8 characters. You can pick a
+   username (or let SVault derive one from your email) and sign in with either the username or the
+   email from then on.
 2. The first account becomes the instance administrator and the **owner** of a new house named
    after you.
 3. Houses come with sensible default places (Kitchen, Pantry, Fridge, Freezer...), categories and a
@@ -91,6 +93,9 @@ Record a unit price whenever you add stock. SVault normalises it to the item's b
 - `500 ml` for 0.80 EUR becomes `1.60 EUR/l` on the price chart.
 - The item page shows the latest, average, minimum and maximum per-unit price and the change since
   the previous purchase.
+- Use the **All shops** selector on the price chart to compare one shop's prices, then switch back to
+  all shops. Every purchase is listed underneath with date, shop, quantity, entered price and
+  normalised per-unit price.
 - Price history is derived from purchase movements. Editing or deleting movements later can change
   the chart.
 
@@ -101,10 +106,71 @@ Record a unit price whenever you add stock. SVault normalises it to the item's b
 1. **Inventory -> New item** (or the `+` button).
 2. Enter a name, choose a category and base unit.
 3. Optionally set a reorder point, target stock, brand, attributes, tags and barcodes.
-4. You can add an initial batch at the same time: quantity, price, place, purchase date and expiry.
+4. You can add an initial batch at the same time: quantity, price, place, purchase date, shop and expiry.
 
 Attributes are defined per house in **Settings -> Attributes**. Supported types are text, number,
 select, date, boolean and URL.
+
+### Add a receipt and record the shop
+
+1. **Inventory -> Receipt** (or **More -> Receipts & shops -> Scan receipt**).
+2. Take a photo of the paper receipt or upload one from your photo library. OCR runs in the browser;
+   correct any lines it misread before pressing **Read receipt**.
+3. The shop printed on the receipt is detected automatically and matched to your existing shops. Known
+   layouts are parsed with a shop-specific template — Lidl Greece and Sklavenitis Greece are built in,
+   including weights, quantity lines, barcodes and store discounts. The receipt header shows whether it
+   was read by **AI**, a **template** or the **local** parser. Check the shop, purchase date, total,
+   **net**, **tax/VAT** and **money saved**. When the receipt prints VAT rates they are read as a split;
+   you can correct the total, net and tax before importing. Every product line can be excluded, renamed,
+   given a quantity, unit and price, or pinned to an existing item. Lines without a match create new items.
+4. Press **Add lines to inventory**. Each line becomes a stock batch with the price, purchase date and
+   shop attached. The receipt, its photo and the line details stay under **Receipts**.
+
+Correcting a line — for example pinning `ΑΛΕΞ.ΛΕΥΚ.ΑΣΠ.1KG` to your “Flour” item — teaches SVault that
+shop's name for next time. The original receipt name is stored with the line, and the alias is reused on
+future receipts from the same shop. Lines that are only carrier bags or packaging fees are skipped by
+the Lidl template; Sklavenitis keeps the printed barcodes, so a line can match an item by barcode.
+Separate discount lines are never imported as products: their amounts are applied to the relevant
+product where possible and always summed into the receipt's **money saved** total.
+
+The **Insights** tab adds up receipts: total spend, net and tax, average basket, spending by month,
+spending by shop, the VAT split and spending by item category. Pick 3, 6, 12 months or all time. Tax
+figures use what was recorded on each receipt; net falls back to total minus tax, or to total when no
+tax was entered.
+
+The **Shops** tab lists the places you buy from. A shop is created automatically the first time a
+receipt uses a new name. You can also pick one under **Where from** when adding stock or an initial
+batch, and it is shown on the item's batches and history.
+
+**Suggested** opens a catalogue of common Greek supermarkets, delis, kiosks, markets and online shops.
+Adding one creates a normal house shop; missing chains and local shops can still be added by hand. The
+catalogue is keyed by country, so more countries can be added later.
+
+### Receipt templates
+
+**Purchases -> Templates** lists the built-in Lidl Greece and Sklavenitis Greece templates and any custom
+templates. Templates control how a shop's layout is parsed: where products start and end, the product
+line pattern, quantity and weight follow-ups, discount lines, receipt-level savings lines, the totals
+line and the VAT table.
+
+- **Clone** the Lidl or Sklavenitis template as a starting point, or create a new one.
+- Detection keywords decide which template is used. Each matching keyword raises confidence; the
+  template is only chosen above its threshold. Unknown layouts fall back to the generic parser or AI.
+- Paste a real receipt's OCR text and press **Test rules** to see parsed products, totals, tax split and
+  discounts before saving.
+- Patterns are regular expressions with named groups such as `name`, `total`, `rate`, `qty`,
+  `unitPrice`, `unit`, `amount`, `net`, `tax` and `gross`.
+- Templates are versioned and can be deactivated without deleting them.
+
+### Product names and aliases
+
+Receipt names are often shortened or shop-specific. SVault handles this in two ways:
+
+- Every correction or pinned line is remembered as a vendor-specific alias (`ΑΛΕΞ.ΛΕΥΚ.ΑΣΠ.1KG` →
+  your flour item). The scan screen also suggests products using existing aliases and a local
+  similarity search, showing a confidence percentage.
+- On an item page, **Receipt names** lists all aliases for that item. You can add a name manually and
+  choose “Any shop” or a specific shop, or remove names that are wrong. One item can have many aliases.
 
 ### Change stock
 
@@ -112,7 +178,7 @@ Open an item and use the stock dialog. There are five actions:
 
 | Action | What it does |
 | --- | --- |
-| **Add** | Creates a new batch. Optionally records unit price, place, purchase date and expiry. |
+| **Add** | Creates a new batch. Optionally records unit price, place, shop, purchase date and expiry. |
 | **Remove** | Consumes stock FIFO: soonest expiry first, then oldest purchase. |
 | **Waste** | Same as remove, but records a `waste` movement so waste is visible separately. |
 | **Set** | Absolute count. SVault records the difference as an adjustment; use this after a physical count. |
@@ -138,7 +204,9 @@ that place.
 - Expiry reminders cover batches with quantity left whose expiry is within the configured number of
   days (7 by default). Expired batches are flagged separately.
 - Reminders are recalculated after every stock change and by a scan at boot and every 30 minutes.
-- **Reminders** shows the active list. Press the bell icon to enable browser notifications; they only
+- **Reminders** shows the active list across every house you belong to. Being added to a new house
+  creates a notification for you, even before you switch to it.
+- Press the bell icon to enable browser notifications; they only
   arrive while SVault is open in a tab. See [roadmap](roadmap.md) for external delivery.
 
 ### Search, filters and bulk actions
@@ -158,8 +226,9 @@ inventory item, and an optional/required flag. Steps are free text; a timer can 
 
 1. **Kitchen -> Scan recipe**.
 2. Photograph the card. The image is compressed in the browser and uploaded as the source image.
-3. Tesseract OCR runs **in the browser** using assets served from `/tesseract`. The image and the OCR
-   text are not sent to an AI provider unless a vision model is configured.
+3. Tesseract OCR runs **in the browser** using assets served from `/tesseract`, with **English and
+   Greek** language data. The image and the OCR text are not sent to an AI provider unless a vision
+   model is configured.
 4. Correct the recognised text if needed and press **Digitise**.
 5. The server cleans the text:
    - with an AI provider, it returns structured ingredients and steps and notes any inferences;

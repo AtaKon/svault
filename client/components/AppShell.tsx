@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { api } from "@/api";
 import { useAuth } from "@/state";
@@ -6,7 +6,7 @@ import { Button, Field, Input, Select, Sheet, cn } from "@/components/ui";
 import { Icon, LogoMark, type IconName } from "@/components/icons";
 import { useToast } from "@/components/toast";
 import { currentTheme, toggleTheme } from "@/theme";
-import type { House } from "@shared/types";
+import type { House, Notification } from "@shared/types";
 
 const NAV: { to: string; label: string; icon: IconName; end?: boolean }[] = [
   { to: "/", label: "Home", icon: "home", end: true },
@@ -18,6 +18,7 @@ const NAV: { to: string; label: string; icon: IconName; end?: boolean }[] = [
 
 const EXTRA: { to: string; label: string; icon: IconName }[] = [
   { to: "/ideas", label: "Food ideas", icon: "sparkles" },
+  { to: "/receipts", label: "Purchases", icon: "receipt" },
   { to: "/photos", label: "Photo library", icon: "image" },
   { to: "/notifications", label: "Reminders", icon: "bell" },
   { to: "/settings", label: "House settings", icon: "settings" },
@@ -35,13 +36,33 @@ export function AppShell() {
   const navigate = useNavigate();
   const [theme, setTheme] = useState(currentTheme());
 
+  const knownNotifications = useRef<Set<string>>(new Set());
+  const notificationsPrimed = useRef(false);
+
   useEffect(() => {
-    if (!house) return;
+    if (!user) return;
     let cancelled = false;
     const load = async () => {
       try {
-        const data = await api<{ unread: number }>(`/api/houses/${house.id}/notifications?unread=1&limit=100`);
-        if (!cancelled) setUnread(data.unread);
+        // Across all houses, so a newly shared house is noticed right away.
+        const data = await api<{ notifications: Notification[]; unread: number }>(
+          "/api/notifications?unread=1&limit=100",
+        );
+        if (cancelled) return;
+        setUnread(data.unread);
+        const fresh = data.notifications.filter((item) => !knownNotifications.current.has(item.id));
+        for (const item of data.notifications) knownNotifications.current.add(item.id);
+        if (
+          notificationsPrimed.current &&
+          fresh.length > 0 &&
+          typeof Notification !== "undefined" &&
+          Notification.permission === "granted"
+        ) {
+          new Notification("SVault", {
+            body: fresh.length === 1 ? fresh[0].title : `${fresh.length} new reminders`,
+          });
+        }
+        notificationsPrimed.current = true;
       } catch {
         /* ignore */
       }
@@ -55,7 +76,7 @@ export function AppShell() {
       window.clearInterval(timer);
       window.removeEventListener("sv:refresh-badges", onBadge);
     };
-  }, [house]);
+  }, [user]);
 
   useEffect(() => {
     window.scrollTo({ top: 0 });
@@ -177,7 +198,7 @@ export function AppShell() {
           {NAV.map((item) => {
             const moreActive =
               item.to === "/more" &&
-              ["/more", "/photos", "/ideas", "/notifications", "/settings", "/profile"].some(
+              ["/more", "/photos", "/ideas", "/receipts", "/notifications", "/settings", "/profile"].some(
                 (path) => location.pathname === path || location.pathname.startsWith(`${path}/`),
               );
             return (

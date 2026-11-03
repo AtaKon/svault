@@ -14,6 +14,7 @@ export function ProfilePage() {
   const toast = useToast();
   const [name, setName] = useState(user?.name ?? "");
   const [email, setEmail] = useState(user?.email ?? "");
+  const [username, setUsername] = useState(user?.username ?? "");
   const [savingProfile, setSavingProfile] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -26,7 +27,7 @@ export function ProfilePage() {
     try {
       const data = await api<{ user: User; houses: House[] }>("/api/auth/me", {
         method: "PATCH",
-        body: { name, email },
+        body: { name, email, username },
       });
       setSession(data);
       toast.success("Profile updated");
@@ -80,7 +81,21 @@ export function ProfilePage() {
           <Field label="Email" required>
             <Input type="email" value={email} onChange={(event) => setEmail(event.target.value)} inputMode="email" />
           </Field>
-          <Button type="submit" loading={savingProfile} disabled={!name.trim() || !email.trim()}>
+          <Field label="Username" hint="sign in with this instead of your email" required>
+            <Input
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
+              minLength={3}
+              maxLength={32}
+              pattern="[A-Za-z0-9][A-Za-z0-9._-]*"
+              autoComplete="username"
+            />
+          </Field>
+          <Button
+            type="submit"
+            loading={savingProfile}
+            disabled={!name.trim() || !email.trim() || username.trim().length < 3}
+          >
             Save profile
           </Button>
         </form>

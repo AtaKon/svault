@@ -45,7 +45,9 @@ export type IconName =
   | "key"
   | "filter"
   | "cup"
-  | "wifi";
+  | "wifi"
+  | "receipt"
+  | "store";
 
 const PATHS: Record<IconName, ReactNode> = {
   home: (
@@ -251,6 +253,20 @@ const PATHS: Record<IconName, ReactNode> = {
   wifi: (
     <>
       <path d="M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0M12 19.5h.01" />
+    </>
+  ),
+  receipt: (
+    <>
+      <path d="M5 21V4a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v17l-3.5-2-3.5 2-3.5-2Z" />
+      <path d="M9 7h6M9 11h6M9 15h4" />
+    </>
+  ),
+  store: (
+    <>
+      <path d="M4 10v10h16V10" />
+      <path d="M3 10 5 4h14l2 6" />
+      <path d="M3 10a3 3 0 0 0 6 0 3 3 0 0 0 6 0 3 3 0 0 0 6 0" />
+      <path d="M9 20v-6h6v6" />
     </>
   ),
 };

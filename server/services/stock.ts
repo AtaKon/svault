@@ -17,6 +17,8 @@ export interface StockOpts {
   purchasedAt?: string | null;
   note?: string | null;
   reason?: string | null;
+  vendorId?: string | null;
+  receiptId?: string | null;
 }
 
 function itemRow(itemId: string, houseId: string) {
@@ -53,6 +55,8 @@ function recordMovement(opts: {
   locationId?: string | null;
   userId: string;
   lotId?: string | null;
+  vendorId?: string | null;
+  receiptId?: string | null;
   reason?: string | null;
   note?: string | null;
 }): string {
@@ -61,8 +65,8 @@ function recordMovement(opts: {
   run(
     `INSERT INTO stock_movements
       (id, item_id, lot_id, house_id, type, delta, unit, quantity, unit_price, normalized_price,
-       location_id, user_id, reason, note, balance_after, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       location_id, user_id, vendor_id, receipt_id, reason, note, balance_after, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       opts.item.id,
@@ -76,6 +80,8 @@ function recordMovement(opts: {
       opts.normalizedPrice ?? null,
       opts.locationId ?? null,
       opts.userId,
+      opts.vendorId ?? null,
+      opts.receiptId ?? null,
       opts.reason ?? null,
       opts.note ?? null,
       balance,
@@ -101,8 +107,9 @@ export function addStock(opts: StockOpts): string {
     const lotId = newId("lot");
     run(
       `INSERT INTO stock_lots
-        (id, item_id, house_id, location_id, quantity, unit, unit_price, currency, purchased_at, expires_at, note, created_by, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (id, item_id, house_id, location_id, quantity, unit, unit_price, currency, purchased_at, expires_at, note,
+         vendor_id, receipt_id, created_by, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         lotId,
         item.id,
@@ -115,6 +122,8 @@ export function addStock(opts: StockOpts): string {
         opts.purchasedAt ?? now(),
         opts.expiresAt ?? null,
         opts.note ?? null,
+        opts.vendorId ?? null,
+        opts.receiptId ?? null,
         opts.userId,
         now(),
       ],
@@ -130,6 +139,8 @@ export function addStock(opts: StockOpts): string {
       locationId: opts.locationId ?? null,
       userId: opts.userId,
       lotId,
+      vendorId: opts.vendorId ?? null,
+      receiptId: opts.receiptId ?? null,
       reason: opts.reason ?? "Stock added",
       note: opts.note ?? null,
     });
@@ -209,8 +220,9 @@ export function setStock(opts: StockOpts & { target: number }): string {
       const lotId = newId("lot");
       run(
         `INSERT INTO stock_lots
-          (id, item_id, house_id, location_id, quantity, unit, unit_price, currency, purchased_at, expires_at, note, created_by, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          (id, item_id, house_id, location_id, quantity, unit, unit_price, currency, purchased_at, expires_at, note,
+           vendor_id, receipt_id, created_by, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           lotId,
           item.id,
@@ -223,6 +235,8 @@ export function setStock(opts: StockOpts & { target: number }): string {
           opts.purchasedAt ?? now(),
           opts.expiresAt ?? null,
           opts.note ?? "Count correction",
+          opts.vendorId ?? null,
+          opts.receiptId ?? null,
           opts.userId,
           now(),
         ],
@@ -238,6 +252,8 @@ export function setStock(opts: StockOpts & { target: number }): string {
         locationId: opts.locationId ?? null,
         userId: opts.userId,
         lotId,
+        vendorId: opts.vendorId ?? null,
+        receiptId: opts.receiptId ?? null,
         reason: opts.reason ?? "Count correction",
       });
     }
@@ -287,8 +303,9 @@ export function moveStock(opts: { itemId: string; houseId: string; userId: strin
       run("UPDATE stock_lots SET quantity = ? WHERE id = ?", [round(Number(lot.quantity) - take), lot.id]);
       run(
         `INSERT INTO stock_lots
-          (id, item_id, house_id, location_id, quantity, unit, unit_price, currency, purchased_at, expires_at, note, created_by, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          (id, item_id, house_id, location_id, quantity, unit, unit_price, currency, purchased_at, expires_at, note,
+           vendor_id, receipt_id, created_by, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           newId("lot"),
           item.id,
@@ -301,6 +318,8 @@ export function moveStock(opts: { itemId: string; houseId: string; userId: strin
           lot.purchased_at,
           lot.expires_at,
           lot.note,
+          lot.vendor_id ?? null,
+          lot.receipt_id ?? null,
           opts.userId,
           now(),
         ],

@@ -154,7 +154,7 @@ createItem(lake, lakeLocations, lakeCategories, {
   target: 4,
   brand: "Farmhouse",
   tags: ["breakfast"],
-  attributes: { brand: "Farmhouse", size: "1 l" },
+  attributes: { size: "1 l" },
   barcode: "4006381333931",
   purchases: [
     { qty: 1.5, price: 1.29, days: 170, location: "Fridge" },
@@ -301,7 +301,7 @@ createItem(lake, lakeLocations, lakeCategories, {
   category: "Clothing",
   unit: "pair",
   brand: "Trailhead",
-  attributes: { brand: "Trailhead", size: "43", color: "brown", warranty_until: "2028-05-01" },
+  attributes: { size: "43", color: "brown", warranty_until: "2028-05-01" },
   tags: ["hiking", "winter"],
   purchases: [{ qty: 1, price: 129, days: 210, location: "Closet" }],
   keep: 1,
@@ -320,7 +320,7 @@ createItem(lake, lakeLocations, lakeCategories, {
   category: "Tools",
   unit: "pcs",
   brand: "Petzl",
-  attributes: { brand: "Petzl", color: "black" },
+  attributes: { color: "black" },
   purchases: [{ qty: 1, price: 39.9, days: 300, location: "Garage" }],
   keep: 1,
 });

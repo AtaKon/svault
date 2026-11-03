@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import type { Item, ItemDetail, Location } from "@shared/types";
+import type { Item, ItemDetail, Location, Vendor } from "@shared/types";
 import { api } from "@/api";
 import { qty as formatQty, unitPriceLabel } from "@/format";
 import { Badge, Button, Card, Field, Input, Select, Sheet, Spinner, Textarea, cn } from "@/components/ui";
@@ -138,14 +138,18 @@ export function StockDialog({
   onClose,
   item,
   locations,
+  vendors = [],
   onUpdated,
+  onVendorCreated,
   initialAction = "add",
 }: {
   open: boolean;
   onClose: () => void;
   item: Item;
   locations: Location[];
+  vendors?: Vendor[];
   onUpdated: (item: ItemDetail) => void;
+  onVendorCreated?: (vendor: Vendor) => void;
   initialAction?: StockAction;
 }) {
   const { house } = useAuth();
@@ -154,6 +158,8 @@ export function StockDialog({
   const [amount, setAmount] = useState("1");
   const [price, setPrice] = useState("");
   const [locationId, setLocationId] = useState<string>("");
+  const [vendorId, setVendorId] = useState<string>("");
+  const [newVendor, setNewVendor] = useState("");
   const [expiresAt, setExpiresAt] = useState("");
   const [purchasedAt, setPurchasedAt] = useState(new Date().toISOString().slice(0, 10));
   const [note, setNote] = useState("");
@@ -167,6 +173,8 @@ export function StockDialog({
     setAmount("1");
     setPrice("");
     setLocationId(locations[0]?.id ?? "");
+    setVendorId("");
+    setNewVendor("");
     setExpiresAt("");
     setPurchasedAt(new Date().toISOString().slice(0, 10));
     setNote("");
@@ -181,9 +189,24 @@ export function StockDialog({
       : Number.isFinite(parsedAmount) && (action === "set" ? parsedAmount >= 0 : parsedAmount > 0);
 
   const submit = async () => {
-    if (!canSubmit) return;
+    if (!canSubmit || !house) return;
     setBusy(true);
     try {
+      let resolvedVendorId = vendorId === "__new" ? "" : vendorId;
+      if (action === "add" && vendorId === "__new" && newVendor.trim()) {
+        const existing = vendors.find((vendor) => vendor.name.toLowerCase() === newVendor.trim().toLowerCase());
+        if (existing) {
+          resolvedVendorId = existing.id;
+        } else {
+          const created = await api<Vendor>(`/api/houses/${house.id}/vendors`, {
+            method: "POST",
+            body: { name: newVendor.trim() },
+          });
+          resolvedVendorId = created.id;
+          onVendorCreated?.(created);
+          setVendorId(created.id);
+        }
+      }
       const body: Record<string, unknown> = { action, note: note || undefined, unit: item.unit };
       if (action === "move") {
         body.quantity = parsedAmount;
@@ -199,6 +222,7 @@ export function StockDialog({
           body.unitPrice = price ? Number(String(price).replace(",", ".")) : undefined;
           body.expiresAt = expiresAt || undefined;
           body.purchasedAt = purchasedAt || undefined;
+          body.vendorId = resolvedVendorId || undefined;
         }
       }
       const detail = await api<ItemDetail>(`/api/items/${item.id}/stock`, { method: "POST", body });
@@ -317,6 +341,26 @@ export function StockDialog({
                     <Input type="date" value={expiresAt} onChange={(e) => setExpiresAt(e.target.value)} />
                   </Field>
                 </div>
+                <Field label="Where from" hint="optional">
+                  <Select value={vendorId} onChange={(e) => setVendorId(e.target.value)}>
+                    <option value="">Not recorded</option>
+                    {vendors.map((vendor) => (
+                      <option key={vendor.id} value={vendor.id}>
+                        {vendor.name}
+                      </option>
+                    ))}
+                    <option value="__new">+ Add a new shop…</option>
+                  </Select>
+                </Field>
+                {vendorId === "__new" && (
+                  <Input
+                    value={newVendor}
+                    onChange={(e) => setNewVendor(e.target.value)}
+                    placeholder="Shop name, e.g. Corner Market"
+                    autoFocus
+                    maxLength={80}
+                  />
+                )}
               </>
             )}
 

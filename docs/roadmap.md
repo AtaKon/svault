@@ -23,7 +23,6 @@ missing, and deploying updates without copying image tarballs.
 | [#10 CSV import for inventory](https://github.com/AtaKon/svault/issues/10) | Inventory | M | Lets spreadsheet users migrate without re-entering everything. Export already exists. |
 | [#1 Shopping list from recipes and low stock](https://github.com/AtaKon/svault/issues/1) | Recipes, Inventory | L | Turns "what is missing" into a list you can actually take to the shop. |
 | [#6 Deliver reminders to ntfy, Apprise or a webhook](https://github.com/AtaKon/svault/issues/6) | Deployment | M | Browser notifications only work with a tab open; a family needs reminders on a phone. |
-| [#2 Bulk intake from receipts and barcode queues](https://github.com/AtaKon/svault/issues/2) | Inventory, AI | L | The weekly shop is the highest-volume data entry task. |
 | [#4 Weekly meal planner](https://github.com/AtaKon/svault/issues/4) | Recipes, UX | L | Connects recipes to the shopping list. Depends on #1 for the full loop. |
 | [#16 Transfer house ownership](https://github.com/AtaKon/svault/issues/16) | Security, UX | S | Closes an access-control gap: the owner currently cannot hand the house to anyone else. |
 
@@ -46,9 +45,7 @@ identity, localization and offline use.
 ```mermaid
 flowchart LR
   SHOP["1 Shopping list"] --> PLAN["4 Meal planner"]
-  SHOP --> INTAKE["2 Bulk intake"]
   GHCR["12 GHCR images"] --> BACKUP["3 Backup and restore"]
-  CSV["10 CSV import"] --> INTAKE
   PLAN --> NOTIFY["6 Notifications"]
   I18N["7 Greek i18n"] --> OFFLINE["11 Offline queue"]
   PASSKEY["8 Passkeys"] --> OIDC["9 OIDC"]
@@ -59,7 +56,7 @@ the place to coordinate.
 
 ## Recently shipped
 
-The `1.0.0` line already includes:
+The current codebase also includes:
 
 - multi-house tenancy with owner/admin/member/viewer roles and link invites,
 - items with per-house attributes, categories, places, tags and barcodes,
@@ -67,6 +64,8 @@ The `1.0.0` line already includes:
 - unit conversion and per-unit price history,
 - low-stock and expiry reminders,
 - barcode scanning with OpenFoodFacts fallback,
+- receipt scanning that adds a whole basket to stock, with shops and purchase provenance recorded on
+  every batch and movement,
 - recipe OCR in the browser, AI or local parsing, and recipe improvement,
 - AI or local food ideas from current stock,
 - photo folders, bounding boxes, train/val/test splits and YOLO/COCO export,

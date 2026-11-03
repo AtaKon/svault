@@ -94,11 +94,97 @@ const UNIT_ALIASES: Record<string, string> = {
   dash: "dash",
   drop: "drop",
   drops: "drop",
+  // Greek units (recipes are commonly handwritten in Greek).
+  φλιτζάνι: "cup",
+  φλιτζανι: "cup",
+  φλιτζάνια: "cup",
+  φλιτζανια: "cup",
+  κούπα: "cup",
+  κουπα: "cup",
+  κούπες: "cup",
+  κουπεσ: "cup",
+  κουταλιά: "tbsp",
+  κουταλια: "tbsp",
+  κουταλιές: "tbsp",
+  κουταλιεσ: "tbsp",
+  κουτάλι: "tbsp",
+  κουταλι: "tbsp",
+  κουτάλια: "tbsp",
+  κουταλάκι: "tsp",
+  κουταλακι: "tsp",
+  κουταλάκια: "tsp",
+  κουταλακια: "tsp",
+  γραμμάριο: "g",
+  γραμμαριο: "g",
+  γραμμάρια: "g",
+  γραμμαρια: "g",
+  γρ: "g",
+  κιλό: "kg",
+  κιλο: "kg",
+  κιλά: "kg",
+  κιλα: "kg",
+  λίτρο: "l",
+  λιτρο: "l",
+  λίτρα: "l",
+  λιτρα: "l",
+  λ: "l",
+  χιλιοστόλιτρο: "ml",
+  χιλιοστολιτρο: "ml",
+  χιλιοστόλιτρα: "ml",
+  χιλιοστολιτρα: "ml",
+  τεμάχιο: "pcs",
+  τεμαχιο: "pcs",
+  τεμάχια: "pcs",
+  τεμαχια: "pcs",
+  τεμ: "pcs",
+  φέτα: "slice",
+  φετα: "slice",
+  φέτες: "slice",
+  φετες: "slice",
+  σκελίδα: "clove",
+  σκελιδα: "clove",
+  σκελίδες: "clove",
+  σκελιδεσ: "clove",
+  κλωνάρι: "sprig",
+  κλωναρι: "sprig",
+  κλωνάρια: "sprig",
+  κλωναρια: "sprig",
+  πρέζα: "pinch",
+  πρεζα: "pinch",
+  πρέζες: "pinch",
+  πρεζεσ: "pinch",
+  χούφτα: "handful",
+  χουφτα: "handful",
+  χούφτες: "handful",
+  χουφτεσ: "handful",
+  κονσέρβα: "can",
+  κονσερβα: "can",
+  κονσέρβες: "can",
+  κονσερβεσ: "can",
+  πακέτο: "pack",
+  πακετο: "pack",
+  πακέτα: "pack",
+  πακετα: "pack",
+  κουτί: "box",
+  κουτι: "box",
+  κουτιά: "box",
+  κουτια: "box",
+  σακουλάκι: "bag",
+  σακουλακι: "bag",
+  σακουλάκια: "bag",
+  σακουλακια: "bag",
+  ματσάκι: "bunch",
+  ματσακι: "bunch",
+  ματσάκια: "bunch",
+  ματσακια: "bunch",
 };
 
-const ING_HEADER = /^(ingredients?|ingredient list|you(?:'|’| wi)ll need|what you(?:'|’)?ll need|what you need|shopping list)\s*:?\s*$/i;
-const STEP_HEADER = /^(instructions?|method|directions?|preparation|steps|how to (?:make|cook)|cooking|cooking method|procedure)\s*:?\s*$/i;
-const NOTES_HEADER = /^(notes?|tips?|variations?|serving suggestions?|storage)\s*:?\s*$/i;
+const ING_HEADER =
+  /^(ingredients?|ingredient list|you(?:'|’| wi)ll need|what you(?:'|’)?ll need|what you need|shopping list|υλικά|υλικα|συστατικά|συστατικα)\s*:?\s*$/i;
+const STEP_HEADER =
+  /^(instructions?|method|directions?|preparation|steps|how to (?:make|cook)|cooking|cooking method|procedure|εκτέλεση|εκτελεση|οδηγίες|οδηγιεσ|παρασκευή|παρασκευη|μέθοδος|μεθοδοσ|διαδικασία|διαδικασια)\s*:?\s*$/i;
+const NOTES_HEADER =
+  /^(notes?|tips?|variations?|serving suggestions?|storage|σημειώσεις|σημειωσεισ|συμβουλές|συμβουλεσ|παραλλαγές|παραλλαγεσ|διατήρηση|διατηρηση)\s*:?\s*$/i;
 
 function normaliseFractions(text: string): string {
   let out = text;
@@ -145,7 +231,7 @@ export function parseIngredientLine(rawLine: string): ParsedIngredient | null {
     line = line.slice(qtyMatch[1].length).trim();
   }
   let unit: string | null = null;
-  const unitMatch = line.match(/^([a-zA-Z.]+)\b/);
+  const unitMatch = line.match(/^([a-zA-Zα-ωά-ώΑ-ΩΆ-Ώ.]+)(?=\s|$)/);
   if (unitMatch) {
     const candidate = unitMatch[1].toLowerCase().replace(/\.$/, "");
     if (UNIT_ALIASES[candidate]) {
@@ -170,15 +256,15 @@ export function parseIngredientLine(rawLine: string): ParsedIngredient | null {
     quantity,
     unit,
     itemId: null,
-    optional: /\b(optional|to taste|if you (?:like|want|have))\b/i.test(rawLine),
+    optional: /\b(optional|to taste|if you (?:like|want|have))\b/i.test(rawLine) || /(προαιρετικό|προαιρετικο|κατά βούληση|κατα βουληση)/i.test(rawLine),
     note,
   };
 }
 
 function stepTimer(text: string): number | null {
-  const hours = text.match(/(\d+(?:[.,]\d+)?)\s*(?:hours?|hrs?)\b/i);
+  const hours = text.match(/(\d+(?:[.,]\d+)?)\s*(?:hours?|hrs?|ώρες|ωρεσ|ώρα|ωρα)/i);
   if (hours) return Math.round(parseFloat(hours[1].replace(",", ".")) * 3600);
-  const mins = text.match(/(\d+)\s*(?:minutes?|mins?)\b/i);
+  const mins = text.match(/(\d+)\s*(?:minutes?|mins?|λεπτά|λεπτα|λεπτό|λεπτο)/i);
   if (mins) return Number(mins[1]) * 60;
   return null;
 }
@@ -204,10 +290,12 @@ export function heuristicRecipe(rawText: string, fallbackTitle = "Scanned recipe
     .map((line) => line.replace(/^[\s|¦•·*\-–—]+/, "").trim())
     .filter((line) => line.length > 0);
 
-  const servingsMatch = text.match(/(?:serves|servings?|yields?)\s*[:\-]?\s*(\d+)/i);
-  const prepMatch = text.match(/prep(?:aration)?(?:\s*time)?\s*[:\-]?\s*(\d+)/i);
+  const servingsMatch = text.match(/(?:serves|servings?|yields?|μερίδες|μεριδεσ|μεριδες|άτομα|ατομα)\s*[:\-]?\s*(\d+)/i);
+  const prepMatch = text.match(
+    /(?:prep(?:aration)?(?:\s*time)?|(?:χρόνος\s*)?προετοιμασίας?|προετοιμασιασ?|προετοιμασια)\s*[:\-]?\s*(\d+)/i,
+  );
   const cookMatch = text.match(
-    /(?:cook|bake|baking|roast|simmer|total)\s*(?:time)?\s*[:\-]?\s*(\d+)\s*(?:min|minutes)?/i,
+    /(?:cook|bake|baking|roast|simmer|total|μαγείρεμα|μαγειρεμα|ψήσιμο|ψησιμο|συνολικός χρόνος|συνολικοσ χρονοσ)\s*(?:time)?\s*[:\-]?\s*(\d+)\s*(?:min|minutes|λεπτά|λεπτα|λεπτό|λεπτο)?/i,
   );
 
   let ingStart = -1;

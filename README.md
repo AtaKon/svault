@@ -20,12 +20,13 @@ dataset — all from one PWA that runs in a single Docker container.
 | | |
 |---|---|
 | **Several houses, several people** | Every house has its own stock, places, categories, recipes and photos. Invite family with owner/admin/member/viewer roles. |
-| **Dynamic inventory** | Items get whatever attributes *you* define per house (brand, size, flavour, material, warranty date…). Units are handled properly (g/kg, ml/l, pcs, pairs…). |
+| **Dynamic inventory** | Items get whatever attributes *you* define per house (size, flavour, material, warranty date…). Units are handled properly (g/kg, ml/l, pcs, pairs…). |
 | **Stock that adds up** | Every change is a movement. Batches keep purchase price, location and expiry, so stock counts, value and FIFO consumption stay honest. |
-| **Price history that means something** | Record a unit price on every purchase and see per-unit trends, averages and highs/lows. Prices are normalised when units differ (e.g. 500 ml at €0.80 becomes €1.60/l). |
+| **Price history that means something** | Record a unit price on every purchase and see per-unit trends, averages and highs/lows, filtered by shop or across all shops. Every individual buy is listed with its date, quantity and vendor. Prices are normalised when units differ (e.g. 500 ml at €0.80 becomes €1.60/l). |
 | **Barcode scanning** | Camera scan (ZXing) works in the browser; unknown EAN/UPC codes fall back to an OpenFoodFacts lookup and pre-fill a new item. |
+| **Receipt intake & shops** | Photograph or upload a weekly shop: OCR reads the lines, you fix anything it missed, and the whole basket becomes stock. Built-in layout templates handle Lidl Greece and Sklavenitis Greece quantities, weights, barcodes and discounts; templates for other stores can be built and tested in the app. Each receipt records whether AI, a template or the local parser read it, and discount lines roll up into a **money saved** total instead of becoming products. The shop is detected automatically, with a country-based catalogue. Receipts keep net and VAT, feeding spend-by-shop, tax and category analytics. Corrections and local vector suggestions map shop shorthand to the right products. |
 | **Low stock & expiry reminders** | Set a reorder point, get a reminder when it is reached. Expiring batches warn you days ahead. Checked on every stock change plus every 30 minutes. |
-| **Recipes, digitised** | Photograph a handwritten card: OCR runs on-device (Tesseract, no upload), then AI or a local parser rebuilds the ingredients and steps. "Improve with AI" fills gaps and rewrites steps. |
+| **Recipes, digitised** | Photograph a handwritten card: English & Greek OCR runs on-device (Tesseract, no upload), then AI or a local parser rebuilds the ingredients and steps. "Improve with AI" fills gaps and rewrites steps. |
 | **Cook what you have** | Meal suggestions built from current stock and saved recipes, with realistic missing-ingredient lists — AI or fully local. |
 | **Vision datasets** | Upload photos into folders, draw boxes, name labels, assign train/val/test splits, and export a ready-to-train YOLO or COCO zip (classes, `data.yaml`, manifest included). |
 | **Installable & offline-ish** | Real PWA with manifest and service worker; app shell is cached, API always hits the server. |

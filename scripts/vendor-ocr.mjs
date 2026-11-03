@@ -1,5 +1,6 @@
-// Copies the OCR runtime and English language data into public/ so the app
-// works offline and in Docker without reaching a CDN.
+// Copies the OCR runtime and language data into public/ so the app works
+// offline and in Docker without reaching a CDN. English first, then Greek for
+// recipes and Greek receipts.
 import fs from "node:fs";
 import path from "node:path";
 
@@ -25,14 +26,22 @@ if (fs.existsSync(coreDir)) {
   }
 }
 
-const langCandidates = [
-  "node_modules/@tesseract.js-data/eng/4.0.0_best_int/eng.traineddata.gz",
-  "node_modules/@tesseract.js-data/eng/4.0.0/eng.traineddata.gz",
-];
-for (const candidate of langCandidates) {
-  if (copy(path.join(root, candidate), path.join(out, "eng.traineddata.gz"))) {
-    copied++;
-    break;
+const LANGUAGES = ["eng", "ell"];
+for (const language of LANGUAGES) {
+  const langCandidates = [
+    `node_modules/@tesseract.js-data/${language}/4.0.0_best_int/${language}.traineddata.gz`,
+    `node_modules/@tesseract.js-data/${language}/4.0.0/${language}.traineddata.gz`,
+  ];
+  let copiedLanguage = false;
+  for (const candidate of langCandidates) {
+    if (copy(path.join(root, candidate), path.join(out, `${language}.traineddata.gz`))) {
+      copied++;
+      copiedLanguage = true;
+      break;
+    }
+  }
+  if (!copiedLanguage) {
+    console.warn(`[vendor-ocr] Missing ${language} language data — install @tesseract.js-data/${language}.`);
   }
 }
 

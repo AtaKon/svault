@@ -14,6 +14,7 @@ const VOLUME: Record<string, number> = {
   floz: 29.57353,
   pint: 473.176,
   qt: 946.353,
+  gal: 3785.411784,
 };
 const COUNT: Record<string, number> = {
   pcs: 1,

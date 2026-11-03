@@ -16,11 +16,14 @@ import {
   serializeMovement,
 } from "../serialize.js";
 import { addStock, afterStockChange, moveStock, removeStock, setStock } from "../services/stock.js";
+import { learnProductAlias } from "../services/product-aliases.js";
 import { uploader } from "../upload.js";
-import type { Role } from "../../shared/types.js";
+import { RESERVED_ATTRIBUTE_KEYS, type Role } from "../../shared/types.js";
 
 export const inventoryRoutes = Router();
 inventoryRoutes.use(requireAuth);
+
+const RESERVED_ATTRIBUTE_KEY_SET = new Set<string>(RESERVED_ATTRIBUTE_KEYS);
 
 /* ------------------------------------------------------------------ helpers */
 
@@ -31,6 +34,26 @@ function itemAccess(req: any, minRole: Role = "viewer") {
   if (!role) throw new ApiError(404, "Item not found");
   if (!roleAtLeast(role, minRole)) throw new ApiError(403, `Requires ${minRole} access`);
   return { item, houseId: item.house_id as string, role };
+}
+
+/**
+ * Keep custom attributes free of keys that already have a first-class item
+ * column. A legacy `brand` attribute is folded into the brand column instead of
+ * being dropped.
+ */
+function normalizeItemAttributes(
+  input: Record<string, unknown> | undefined,
+  brand: string | null | undefined,
+): { attributes: Record<string, unknown>; brand: string | null } {
+  const attributes = { ...(input ?? {}) };
+  const legacyBrand = attributes.brand;
+  for (const key of RESERVED_ATTRIBUTE_KEYS) delete attributes[key];
+  if (brand !== undefined) {
+    return { attributes, brand: typeof brand === "string" ? brand.trim() || null : null };
+  }
+  const fallbackBrand =
+    typeof legacyBrand === "string" ? legacyBrand.trim() : legacyBrand == null ? "" : String(legacyBrand).trim();
+  return { attributes, brand: fallbackBrand || null };
 }
 
 function parseTags(value: unknown): string[] {
@@ -51,26 +74,40 @@ function itemDetail(itemId: string, userId: string) {
   void userId;
   const item = serializeItem(row, barcodesForItem(itemId));
   const lots = all<any>(
-    `SELECT l.*, loc.name AS location_name FROM stock_lots l
+    `SELECT l.*, loc.name AS location_name, v.name AS vendor_name FROM stock_lots l
      LEFT JOIN locations loc ON loc.id = l.location_id
+     LEFT JOIN vendors v ON v.id = l.vendor_id
      WHERE l.item_id = ?
      ORDER BY CASE WHEN l.quantity > 0 THEN 0 ELSE 1 END, CASE WHEN l.expires_at IS NULL THEN 1 ELSE 0 END,
        l.expires_at ASC, l.created_at ASC`,
     [itemId],
   ).map(serializeLot);
   const movements = all<any>(
-    `SELECT m.*, loc.name AS location_name, u.name AS user_name FROM stock_movements m
+    `SELECT m.*, loc.name AS location_name, u.name AS user_name, v.name AS vendor_name FROM stock_movements m
      LEFT JOIN locations loc ON loc.id = m.location_id
      LEFT JOIN users u ON u.id = m.user_id
+     LEFT JOIN vendors v ON v.id = m.vendor_id
      WHERE m.item_id = ? ORDER BY m.created_at DESC LIMIT 80`,
     [itemId],
   ).map(serializeMovement);
   const priceHistory = all<any>(
-    `SELECT normalized_price AS price, created_at AS at, unit FROM stock_movements
-     WHERE item_id = ? AND normalized_price IS NOT NULL AND normalized_price > 0 AND type IN ('in','adjust')
-     ORDER BY created_at ASC LIMIT 120`,
+    `SELECT m.normalized_price AS price, m.created_at AS at, m.unit, m.quantity, m.unit_price,
+       m.vendor_id, v.name AS vendor_name, m.receipt_id, m.note
+     FROM stock_movements m LEFT JOIN vendors v ON v.id = m.vendor_id
+     WHERE m.item_id = ? AND m.normalized_price IS NOT NULL AND m.normalized_price > 0 AND m.type = 'in'
+     ORDER BY m.created_at ASC LIMIT 300`,
     [itemId],
-  ).map((r) => ({ at: r.at, price: Number(r.price), unit: r.unit }));
+  ).map((r) => ({
+    at: r.at,
+    price: Number(r.price),
+    unit: r.unit,
+    quantity: Number(r.quantity ?? 0),
+    unitPrice: r.unit_price == null ? null : Number(r.unit_price),
+    vendorId: r.vendor_id ?? null,
+    vendorName: r.vendor_name ?? null,
+    receiptId: r.receipt_id ?? null,
+    note: r.note ?? null,
+  }));
   const recipes = all<any>(
     `SELECT DISTINCT r.id, r.title FROM recipes r
      JOIN recipe_ingredients ri ON ri.recipe_id = r.id
@@ -237,7 +274,9 @@ inventoryRoutes.get(
   handler((req, res) => {
     const { houseId } = requireHouse(req);
     res.json(
-      all<any>("SELECT * FROM attribute_defs WHERE house_id = ? ORDER BY sort, label", [houseId]).map(serializeAttribute),
+      all<any>("SELECT * FROM attribute_defs WHERE house_id = ? ORDER BY sort, label", [houseId])
+        .filter((row) => !RESERVED_ATTRIBUTE_KEY_SET.has(String(row.key)))
+        .map(serializeAttribute),
     );
   }),
 );
@@ -263,6 +302,9 @@ inventoryRoutes.post(
   handler((req, res) => {
     const { houseId } = requireHouse(req, "admin");
     const body = parseBody(attributeBody, req.body);
+    if (RESERVED_ATTRIBUTE_KEY_SET.has(body.key)) {
+      throw new ApiError(400, `"${body.key}" is a built-in item field and cannot be a custom attribute`);
+    }
     if (get("SELECT id FROM attribute_defs WHERE house_id = ? AND key = ?", [houseId, body.key])) {
       throw new ApiError(409, "An attribute with that key already exists");
     }
@@ -298,6 +340,9 @@ inventoryRoutes.patch(
     ]);
     if (!current) throw new ApiError(404, "Attribute not found");
     const body = parseBody(attributeBody.partial(), req.body);
+    if (body.key && RESERVED_ATTRIBUTE_KEY_SET.has(body.key)) {
+      throw new ApiError(400, `"${body.key}" is a built-in item field and cannot be a custom attribute`);
+    }
     run(
       `UPDATE attribute_defs SET key = ?, label = ?, type = ?, unit = ?, options = ?, required = ?, category_id = ?, sort = ?
        WHERE id = ?`,
@@ -423,6 +468,7 @@ inventoryRoutes.post(
             expiresAt: z.string().max(10).nullish(),
             purchasedAt: z.string().max(10).nullish(),
             note: z.string().max(300).nullish(),
+            vendorId: z.string().max(60).nullish(),
           })
           .optional(),
       }),
@@ -432,7 +478,11 @@ inventoryRoutes.post(
     if (body.categoryId && !get("SELECT id FROM categories WHERE id = ? AND house_id = ?", [body.categoryId, houseId])) {
       throw new ApiError(400, "Category does not exist in this house");
     }
+    if (body.initialStock?.vendorId && !get("SELECT id FROM vendors WHERE id = ? AND house_id = ?", [body.initialStock.vendorId, houseId])) {
+      throw new ApiError(400, "Shop does not exist in this house");
+    }
 
+    const normalized = normalizeItemAttributes(body.attributes, body.brand);
     const id = newId("itm");
     tx(() => {
       run(
@@ -444,12 +494,12 @@ inventoryRoutes.post(
           houseId,
           body.name,
           body.description ?? null,
-          body.brand ?? null,
+          normalized.brand,
           body.categoryId ?? null,
           body.unit.toLowerCase(),
           body.reorderPoint ?? 0,
           body.targetStock ?? null,
-          JSON.stringify(body.attributes ?? {}),
+          JSON.stringify(normalized.attributes),
           JSON.stringify(parseTags(body.tags)),
           body.image ?? null,
           req.user!.id,
@@ -488,6 +538,7 @@ inventoryRoutes.post(
         expiresAt: body.initialStock.expiresAt ?? null,
         purchasedAt: body.initialStock.purchasedAt ?? null,
         note: body.initialStock.note ?? null,
+        vendorId: body.initialStock.vendorId ?? null,
         reason: "Initial stock",
       });
       afterStockChange(id);
@@ -530,18 +581,22 @@ itemRoutes.patch(
       }),
       req.body,
     );
+    const normalized = normalizeItemAttributes(
+      body.attributes ?? parseJson<Record<string, unknown>>(item.attributes, {}),
+      body.brand === undefined ? (item.brand ?? undefined) : body.brand,
+    );
     run(
       `UPDATE items SET name = ?, description = ?, brand = ?, category_id = ?, unit = ?, reorder_point = ?,
          target_stock = ?, attributes = ?, tags = ?, image = ?, archived = ?, updated_at = ? WHERE id = ?`,
       [
         body.name ?? item.name,
         body.description === undefined ? item.description : body.description,
-        body.brand === undefined ? item.brand : body.brand,
+        normalized.brand,
         body.categoryId === undefined ? item.category_id : body.categoryId,
         (body.unit ?? item.unit).toLowerCase(),
         body.reorderPoint ?? item.reorder_point,
         body.targetStock === undefined ? item.target_stock : body.targetStock,
-        JSON.stringify(body.attributes ?? parseJson(item.attributes, {})),
+        JSON.stringify(normalized.attributes),
         JSON.stringify(body.tags === undefined ? parseJson(item.tags, []) : parseTags(body.tags)),
         body.image === undefined ? item.image : body.image,
         body.archived === undefined ? item.archived : body.archived ? 1 : 0,
@@ -583,9 +638,13 @@ itemRoutes.post(
         reason: z.string().max(120).nullish(),
         fromLocationId: z.string().max(60).optional(),
         toLocationId: z.string().max(60).optional(),
+        vendorId: z.string().max(60).nullish(),
       }),
       req.body,
     );
+    if (body.vendorId && !get("SELECT id FROM vendors WHERE id = ? AND house_id = ?", [body.vendorId, item.house_id])) {
+      throw new ApiError(400, "Shop does not exist in this house");
+    }
     const base = {
       itemId: item.id,
       houseId: item.house_id,
@@ -600,6 +659,7 @@ itemRoutes.post(
       purchasedAt: body.purchasedAt ?? null,
       note: body.note ?? null,
       reason: body.reason ?? null,
+      vendorId: body.vendorId ?? null,
     };
     if (body.action === "add") addStock(base);
     else if (body.action === "remove") removeStock(base);
@@ -627,9 +687,10 @@ itemRoutes.get(
     const { item } = itemAccess(req);
     const limit = intParam(req.query.limit, 50, 300);
     const rows = all<any>(
-      `SELECT m.*, loc.name AS location_name, u.name AS user_name FROM stock_movements m
+      `SELECT m.*, loc.name AS location_name, u.name AS user_name, v.name AS vendor_name FROM stock_movements m
        LEFT JOIN locations loc ON loc.id = m.location_id
        LEFT JOIN users u ON u.id = m.user_id
+       LEFT JOIN vendors v ON v.id = m.vendor_id
        WHERE m.item_id = ? ORDER BY m.created_at DESC LIMIT ?`,
       [item.id, limit],
     );
@@ -676,6 +737,67 @@ itemRoutes.delete(
   handler((req, res) => {
     const { item } = itemAccess(req, "member");
     run("DELETE FROM item_barcodes WHERE id = ? AND item_id = ?", [req.params.barcodeId, item.id]);
+    res.json({ ok: true });
+  }),
+);
+
+itemRoutes.get(
+  "/:itemId/aliases",
+  handler((req, res) => {
+    const { item } = itemAccess(req);
+    const rows = all<any>(
+      `SELECT pa.*, v.name AS vendor_name FROM product_aliases pa
+       LEFT JOIN vendors v ON v.id = pa.vendor_key
+       WHERE pa.house_id = ? AND pa.item_id = ?
+       ORDER BY pa.uses DESC, pa.updated_at DESC`,
+      [item.house_id, item.id],
+    );
+    res.json(
+      rows.map((row) => ({
+        id: row.id,
+        rawName: row.raw_text ?? row.raw_key,
+        vendorId: row.vendor_key || null,
+        vendorName: row.vendor_name ?? null,
+        uses: Number(row.uses ?? 0),
+        updatedAt: row.updated_at,
+      })),
+    );
+  }),
+);
+
+itemRoutes.post(
+  "/:itemId/aliases",
+  handler((req, res) => {
+    const { item } = itemAccess(req, "member");
+    const body = parseBody(
+      z.object({
+        rawName: z.string().trim().min(2).max(200),
+        vendorId: z.string().max(60).nullish(),
+      }),
+      req.body,
+    );
+    if (body.vendorId && !get("SELECT id FROM vendors WHERE id = ? AND house_id = ?", [body.vendorId, item.house_id])) {
+      throw new ApiError(400, "Shop does not exist in this house");
+    }
+    learnProductAlias({
+      houseId: item.house_id,
+      vendorId: body.vendorId ?? null,
+      rawDescription: body.rawName,
+      item,
+    });
+    res.status(201).json({ ok: true });
+  }),
+);
+
+itemRoutes.delete(
+  "/:itemId/aliases/:aliasId",
+  handler((req, res) => {
+    const { item } = itemAccess(req, "member");
+    run("DELETE FROM product_aliases WHERE id = ? AND item_id = ? AND house_id = ?", [
+      req.params.aliasId,
+      item.id,
+      item.house_id,
+    ]);
     res.json({ ok: true });
   }),
 );

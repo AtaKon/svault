@@ -19,7 +19,7 @@ import { AttributeFields } from "@/components/ItemCard";
 import { BarcodeScanner } from "@/components/BarcodeScanner";
 import { useToast } from "@/components/toast";
 import { UNIT_OPTIONS } from "@/units";
-import { todayInput } from "@/format";import type { AttributeDef, Category, ItemDetail, Location } from "@shared/types";
+import { todayInput } from "@/format";import type { AttributeDef, Category, ItemDetail, Location, Vendor } from "@shared/types";
 
 export function ItemFormPage() {
   const { itemId } = useParams();
@@ -35,6 +35,7 @@ export function ItemFormPage() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [attributes, setAttributes] = useState<AttributeDef[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
+  const [vendors, setVendors] = useState<Vendor[]>([]);
 
   const [name, setName] = useState(params.get("name") ?? "");
   const [description, setDescription] = useState("");
@@ -52,6 +53,7 @@ export function ItemFormPage() {
   const [initialQty, setInitialQty] = useState("1");
   const [initialPrice, setInitialPrice] = useState("");
   const [initialLocation, setInitialLocation] = useState("");
+  const [initialVendor, setInitialVendor] = useState("");
   const [expiresAt, setExpiresAt] = useState("");
   const [purchasedAt, setPurchasedAt] = useState(todayInput());
 
@@ -63,11 +65,13 @@ export function ItemFormPage() {
       api<Category[]>(`/api/houses/${house.id}/categories`),
       api<AttributeDef[]>(`/api/houses/${house.id}/attributes`),
       api<Location[]>(`/api/houses/${house.id}/locations`),
+      api<Vendor[]>(`/api/houses/${house.id}/vendors`),
     ])
-      .then(([cats, attrs, locs]) => {
+      .then(([cats, attrs, locs, vendorList]) => {
         setCategories(cats);
         setAttributes(attrs);
         setLocations(locs);
+        setVendors(vendorList);
         setInitialLocation((current) => current || locs[0]?.id || "");
       })
       .catch(() => undefined);
@@ -151,6 +155,7 @@ export function ItemFormPage() {
                     quantity: qty,
                     unitPrice: initialPrice ? Number(initialPrice) : null,
                     locationId: initialLocation || null,
+                    vendorId: initialVendor || null,
                     expiresAt: expiresAt || null,
                     purchasedAt: purchasedAt || null,
                   }
@@ -271,9 +276,21 @@ export function ItemFormPage() {
                   <Input type="date" value={expiresAt} onChange={(e) => setExpiresAt(e.target.value)} />
                 </Field>
               </div>
-              <Field label="Purchased on">
-                <Input type="date" value={purchasedAt} onChange={(e) => setPurchasedAt(e.target.value)} />
-              </Field>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Where from" hint="manage under Purchases">
+                  <Select value={initialVendor} onChange={(e) => setInitialVendor(e.target.value)}>
+                    <option value="">Not recorded</option>
+                    {vendors.map((vendor) => (
+                      <option key={vendor.id} value={vendor.id}>
+                        {vendor.name}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+                <Field label="Purchased on">
+                  <Input type="date" value={purchasedAt} onChange={(e) => setPurchasedAt(e.target.value)} />
+                </Field>
+              </div>
             </Card>
           )}
         </div>
@@ -314,7 +331,6 @@ export function ItemFormPage() {
               ref={fileRef}
               type="file"
               accept="image/*"
-              capture="environment"
               className="hidden"
               onChange={(e) => void pickImage(e.target.files?.[0] ?? null)}
             />

@@ -23,6 +23,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
   const invite = params.get("invite");
   const [name, setName] = useState("");
   const [email, setEmail] = useState(params.get("email") ?? "");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -36,7 +37,10 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
         mode === "login" ? "/api/auth/login" : "/api/auth/register",
         {
           method: "POST",
-          body: mode === "login" ? { email, password } : { email, password, name, inviteCode: invite ?? undefined },
+          body:
+            mode === "login"
+              ? { identifier: email, password }
+              : { email, username: username.trim() || undefined, password, name, inviteCode: invite ?? undefined },
         },
       );
       setSession(data);
@@ -125,17 +129,30 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
                 <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Alex" autoComplete="name" required maxLength={80} />
               </Field>
             )}
-            <Field label="Email" required>
+            <Field label={mode === "login" ? "Email or username" : "Email"} required>
               <Input
-                type="email"
+                type={mode === "login" ? "text" : "email"}
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@example.com"
-                autoComplete="email"
+                placeholder={mode === "login" ? "you@example.com or your username" : "you@example.com"}
+                autoComplete={mode === "login" ? "username" : "email"}
                 required
-                inputMode="email"
+                inputMode={mode === "login" ? "text" : "email"}
               />
             </Field>
+            {mode === "register" && (
+              <Field label="Username" hint="optional — you can sign in with it instead of your email">
+                <Input
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="alex"
+                  autoComplete="username"
+                  minLength={3}
+                  maxLength={32}
+                  pattern="[A-Za-z0-9][A-Za-z0-9._-]*"
+                />
+              </Field>
+            )}
             <Field label="Password" hint={mode === "register" ? "at least 8 characters" : undefined} required>
               <Input
                 type="password"

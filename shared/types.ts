@@ -5,6 +5,7 @@ export type Role = "owner" | "admin" | "member" | "viewer";
 export interface User {
   id: string;
   email: string;
+  username: string;
   name: string;
   isAdmin: boolean;
   createdAt: string;
@@ -76,6 +77,28 @@ export interface AttributeDef {
   sort: number;
 }
 
+/**
+ * Item fields that already have first-class columns. Custom attributes must not
+ * reuse these keys, otherwise the same value would appear twice on an item.
+ */
+export const RESERVED_ATTRIBUTE_KEYS = [
+  "name",
+  "description",
+  "brand",
+  "category",
+  "category_id",
+  "unit",
+  "reorder_point",
+  "target_stock",
+  "tags",
+  "barcode",
+  "barcodes",
+  "image",
+  "archived",
+  "quantity",
+  "value",
+] as const;
+
 export interface Barcode {
   id: string;
   code: string;
@@ -94,6 +117,9 @@ export interface StockLot {
   purchasedAt: string | null;
   expiresAt: string | null;
   note: string | null;
+  vendorId: string | null;
+  vendorName?: string | null;
+  receiptId: string | null;
   createdAt: string;
 }
 
@@ -110,6 +136,9 @@ export interface Movement {
   locationId: string | null;
   locationName?: string | null;
   userName?: string | null;
+  vendorId: string | null;
+  vendorName?: string | null;
+  receiptId: string | null;
   balanceAfter: number | null;
   createdAt: string;
 }
@@ -118,6 +147,12 @@ export interface PricePoint {
   at: string;
   price: number;
   unit: string;
+  quantity: number;
+  unitPrice: number | null;
+  vendorId: string | null;
+  vendorName: string | null;
+  receiptId: string | null;
+  note: string | null;
 }
 
 export interface PriceStats {
@@ -210,6 +245,165 @@ export interface RecipeMatch {
   missing: { name: string; quantity: number | null; unit: string | null }[];
 }
 
+export interface Vendor {
+  id: string;
+  houseId: string;
+  name: string;
+  kind: string;
+  note: string | null;
+  createdAt: string;
+  purchaseCount?: number;
+}
+
+export interface VendorSuggestion {
+  id: string;
+  country: string;
+  name: string;
+  kind: string;
+  added: boolean;
+}
+
+export interface VendorSuggestions {
+  country: string;
+  countries: { code: string; name: string }[];
+  entries: VendorSuggestion[];
+}
+
+export interface ReceiptLine {
+  id?: string;
+  description: string;
+  rawDescription?: string | null;
+  quantity: number;
+  unit: string | null;
+  unitPrice: number | null;
+  lineTotal: number | null;
+  taxRate?: number | null;
+  discount?: number | null;
+  itemId: string | null;
+  itemName?: string | null;
+  itemUnit?: string | null;
+  locationId?: string | null;
+  barcode?: string | null;
+  sort?: number;
+}
+
+export interface TaxBreakdownEntry {
+  rate: number | null;
+  net: number;
+  tax: number;
+  gross: number;
+}
+
+export interface Receipt {
+  id: string;
+  houseId: string;
+  vendorId: string | null;
+  vendorName: string | null;
+  purchasedAt: string | null;
+  currency: string | null;
+  total: number | null;
+  subtotal: number | null;
+  tax: number | null;
+  taxBreakdown: TaxBreakdownEntry[];
+  templateId?: string | null;
+  templateConfidence?: number | null;
+  provider?: "ai" | "local" | "template" | null;
+  savings?: number | null;
+  image: string | null;
+  ocrText: string | null;
+  source: "scan" | "manual";
+  notes: string | null;
+  lineCount?: number;
+  lines?: ReceiptLine[];
+  createdAt: string;
+}
+
+export interface ReceiptDraft {
+  vendorName: string | null;
+  purchasedAt: string | null;
+  currency: string | null;
+  total: number | null;
+  subtotal: number | null;
+  tax: number | null;
+  taxBreakdown: TaxBreakdownEntry[];
+  templateId?: string | null;
+  templateConfidence?: number | null;
+  savings?: number | null;
+  notes: string | null;
+  lines: {
+    description: string;
+    rawDescription?: string | null;
+    quantity: number;
+    unit: string | null;
+    unitPrice: number | null;
+    lineTotal: number | null;
+    taxRate?: number | null;
+    discount?: number | null;
+    barcode: string | null;
+    suggestedItemId?: string | null;
+    suggestedItemName?: string | null;
+    suggestedItemUnit?: string | null;
+    suggestedItemScore?: number | null;
+    suggestedItemSource?: "alias" | "name" | "vector" | null;
+  }[];
+}
+
+export interface ReceiptAlias {
+  id: string;
+  rawName: string;
+  vendorId: string | null;
+  vendorName: string | null;
+  uses: number;
+  updatedAt: string;
+}
+
+export interface ReceiptTemplateRules {
+  keywords: string[];
+  threshold?: number;
+  sections?: { start?: string[]; end?: string[] };
+  product: { pattern: string; ignore?: string[] };
+  quantity?: string[];
+  weight?: string[];
+  discount?: { patterns?: string[] };
+  tax?: { start?: string[]; rowPattern?: string; summaryPattern?: string | null };
+  savings?: { patterns?: string[] };
+  total?: { pattern?: string | null };
+}
+
+export interface ReceiptTemplate {
+  id: string;
+  name: string;
+  country: string;
+  vendorName: string | null;
+  active: boolean;
+  builtIn: boolean;
+  version: number;
+  rules: ReceiptTemplateRules;
+  updatedAt: string;
+}
+
+export interface ReceiptTemplateTest {
+  draft: ReceiptDraft;
+  template: { id: string; name: string; confidence: number };
+  errors: string[];
+}
+
+export interface PurchaseAnalytics {
+  range: { from: string | null; to: string | null };
+  totals: { receipts: number; total: number; net: number; tax: number; savings: number; average: number };
+  byVendor: {
+    vendorId: string | null;
+    vendorName: string;
+    receipts: number;
+    total: number;
+    net: number;
+    tax: number;
+  }[];
+  monthly: { month: string; receipts: number; total: number; net: number; tax: number }[];
+  taxRates: { rate: number | null; net: number; tax: number; gross: number }[];
+  byCategory: { categoryId: string | null; categoryName: string; total: number }[];
+}
+
 export interface FoodIdea {
   title: string;
   rationale: string;
@@ -231,7 +425,8 @@ export interface IdeaResponse {
 export interface Notification {
   id: string;
   houseId: string;
-  type: "low_stock" | "expiring" | "system" | "invite";
+  houseName?: string;
+  type: "low_stock" | "expiring" | "system" | "invite" | "house";
   title: string;
   body: string;
   data: Record<string, unknown>;

@@ -13,6 +13,7 @@ import {
   LoadingBlock,
   PageHeader,
   Sheet,
+  Select,
   Spinner,
   cn,
 } from "@/components/ui";
@@ -22,7 +23,7 @@ import { StockDialog } from "@/components/ItemCard";
 import { PriceChart } from "@/components/PriceChart";
 import { useToast } from "@/components/toast";
 import { daysUntil, money, qty, relativeTime, shortDate, unitPriceLabel } from "@/format";
-import type { AttributeDef, ItemDetail, Location, Movement } from "@shared/types";
+import type { AttributeDef, ItemDetail, Location, Movement, PricePoint, ReceiptAlias, Vendor } from "@shared/types";
 
 const MOVEMENT_LABELS: Record<Movement["type"], { label: string; icon: IconName; tone: string }> = {
   in: { label: "Stock in", icon: "plus", tone: "bg-brand-soft text-brand" },
@@ -39,6 +40,7 @@ export function ItemPage() {
   const toast = useToast();
   const [item, setItem] = useState<ItemDetail | null>(null);
   const [locations, setLocations] = useState<Location[]>([]);
+  const [vendors, setVendors] = useState<Vendor[]>([]);
   const [attributes, setAttributes] = useState<AttributeDef[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [stockOpen, setStockOpen] = useState(false);
@@ -49,6 +51,11 @@ export function ItemPage() {
   const [barcodeInput, setBarcodeInput] = useState("");
   const [barcodeBusy, setBarcodeBusy] = useState(false);
   const [scanOpen, setScanOpen] = useState(false);
+  const [priceVendor, setPriceVendor] = useState("");
+  const [aliases, setAliases] = useState<ReceiptAlias[]>([]);
+  const [aliasInput, setAliasInput] = useState("");
+  const [aliasVendor, setAliasVendor] = useState("");
+  const [aliasBusy, setAliasBusy] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -65,13 +72,21 @@ export function ItemPage() {
     Promise.all([
       api<Location[]>(`/api/houses/${house.id}/locations`),
       api<AttributeDef[]>(`/api/houses/${house.id}/attributes`),
+      api<Vendor[]>(`/api/houses/${house.id}/vendors`),
+      api<ReceiptAlias[]>(`/api/items/${itemId}/aliases`),
     ])
-      .then(([locs, attrs]) => {
+      .then(([locs, attrs, vendorList, aliasList]) => {
         setLocations(locs);
         setAttributes(attrs);
+        setVendors(vendorList);
+        setAliases(aliasList);
       })
       .catch(() => undefined);
   }, [load, house.id]);
+
+  useEffect(() => {
+    setPriceVendor("");
+  }, [itemId]);
 
   const quick = async (action: "add" | "remove") => {
     if (!item) return;
@@ -119,6 +134,34 @@ export function ItemPage() {
     }
   };
 
+  const addAlias = async () => {
+    if (!item || !aliasInput.trim()) return;
+    setAliasBusy(true);
+    try {
+      await api(`/api/items/${item.id}/aliases`, {
+        method: "POST",
+        body: { rawName: aliasInput.trim(), vendorId: aliasVendor || null },
+      });
+      setAliasInput("");
+      setAliases(await api<ReceiptAlias[]>(`/api/items/${item.id}/aliases`));
+      toast.success("Receipt name saved");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not save the receipt name");
+    } finally {
+      setAliasBusy(false);
+    }
+  };
+
+  const removeAlias = async (aliasId: string) => {
+    if (!item) return;
+    try {
+      await api(`/api/items/${item.id}/aliases/${aliasId}`, { method: "DELETE" });
+      setAliases((current) => current.filter((alias) => alias.id !== aliasId));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not remove the receipt name");
+    }
+  };
+
   const remove = async () => {
     if (!item) return;
     setDeleting(true);
@@ -152,6 +195,24 @@ export function ItemPage() {
   const sortedAttributes = attributes
     .filter((def) => item.attributes[def.key] !== undefined && item.attributes[def.key] !== null && item.attributes[def.key] !== "")
     .map((def) => ({ def, value: item.attributes[def.key] }));
+  const priceVendors = Array.from(
+    new Map(
+      (item.priceHistory as PricePoint[])
+        .filter((point) => point.vendorId)
+        .map((point) => [point.vendorId as string, point.vendorName ?? "Unknown shop"]),
+    ).entries(),
+  ).sort((a, b) => a[1].localeCompare(b[1]));
+  const priceHistory = priceVendor
+    ? (item.priceHistory as PricePoint[]).filter((point) => point.vendorId === priceVendor)
+    : (item.priceHistory as PricePoint[]);
+  const priceValues = priceHistory.map((point) => point.price);
+  const priceSummary = {
+    latest: priceValues.length ? priceValues[priceValues.length - 1] : null,
+    average: priceValues.length ? priceValues.reduce((sum, value) => sum + value, 0) / priceValues.length : null,
+    min: priceValues.length ? Math.min(...priceValues) : null,
+    max: priceValues.length ? Math.max(...priceValues) : null,
+  };
+  const recentPurchases = [...priceHistory].reverse();
 
   return (
     <div className="space-y-4">
@@ -229,27 +290,80 @@ export function ItemPage() {
           </Card>
 
           <Card className="p-4">
-            <div className="mb-3 flex items-center justify-between">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <h2 className="font-display text-lg">Price history</h2>
-              <Badge tone="outline">{item.priceStats?.observations ?? 0} purchases</Badge>
+              <div className="flex items-center gap-2">
+                {priceVendors.length > 0 && (
+                  <Select
+                    value={priceVendor}
+                    onChange={(event) => setPriceVendor(event.target.value)}
+                    className="h-8 w-[150px] text-[12px]"
+                    aria-label="Filter price history by shop"
+                  >
+                    <option value="">All shops</option>
+                    {priceVendors.map(([id, name]) => (
+                      <option key={id} value={id}>
+                        {name}
+                      </option>
+                    ))}
+                  </Select>
+                )}
+                <Badge tone="outline">
+                  {qty(priceHistory.length)} purchase{priceHistory.length === 1 ? "" : "s"}
+                </Badge>
+              </div>
             </div>
-            <PriceChart points={item.priceHistory} unit={item.unit} currency={house.currency} />
+            <PriceChart points={priceHistory} unit={item.unit} currency={house.currency} />
             <div className="mt-4 grid grid-cols-3 gap-2 text-center">
               <div className="rounded-xl bg-raised px-2 py-2">
                 <div className="text-[10px] uppercase tracking-wide text-muted">Average</div>
-                <div className="mt-0.5 text-sm font-medium">{money(item.priceStats?.average, house.currency)}</div>
+                <div className="mt-0.5 text-sm font-medium">{money(priceSummary.average, house.currency)}</div>
               </div>
               <div className="rounded-xl bg-raised px-2 py-2">
                 <div className="text-[10px] uppercase tracking-wide text-muted">Lowest</div>
-                <div className="mt-0.5 text-sm font-medium">{money(item.priceStats?.min, house.currency)}</div>
+                <div className="mt-0.5 text-sm font-medium">{money(priceSummary.min, house.currency)}</div>
               </div>
               <div className="rounded-xl bg-raised px-2 py-2">
                 <div className="text-[10px] uppercase tracking-wide text-muted">Highest</div>
-                <div className="mt-0.5 text-sm font-medium">{money(item.priceStats?.max, house.currency)}</div>
+                <div className="mt-0.5 text-sm font-medium">{money(priceSummary.max, house.currency)}</div>
               </div>
             </div>
+            {priceHistory.length > 0 && (
+              <div className="mt-4 border-t border-line pt-3">
+                <div className="mb-1.5 flex items-center justify-between gap-2">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">Every purchase</div>
+                  <span className="text-[10px] text-muted">{recentPurchases.length} recorded</span>
+                </div>
+                <div className="max-h-72 divide-y divide-line overflow-y-auto pr-1">
+                  {recentPurchases.map((point, index) => (
+                    <div key={`${point.at}-${index}`} className="flex items-start gap-2 py-2 text-[12px]">
+                      <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-raised text-muted">
+                        <Icon name={point.receiptId ? "receipt" : "plus"} size={12} />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="truncate font-medium">
+                            {shortDate(point.at)}
+                            {point.vendorName ? ` · ${point.vendorName}` : ""}
+                          </span>
+                          <span className="shrink-0 font-medium">
+                            {money(point.price, house.currency)} / {item.unit}
+                          </span>
+                        </div>
+                        <div className="text-[10px] text-muted">
+                          {qty(point.quantity)} {item.unit}
+                          {point.unitPrice != null ? ` · ${money(point.unitPrice, house.currency)} / ${point.unit || item.unit}` : ""}
+                          {point.receiptId ? " · from receipt" : " · added manually"}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             <p className="mt-3 text-[11px] leading-relaxed text-muted">
-              Every purchase with a unit price is recorded, so you can spot a good deal or a creeping price.
+              Every purchase with a unit price is recorded. Pick a shop to compare its prices, or leave it on all shops
+              to see the full history.
             </p>
           </Card>
 
@@ -279,6 +393,7 @@ export function ItemPage() {
                           <div className="text-[11px] text-muted">
                             {lot.unitPrice != null ? unitPriceLabel(lot.unitPrice, item.unit, house.currency) : "no price"}
                             {lot.purchasedAt ? ` · bought ${shortDate(lot.purchasedAt)}` : ""}
+                            {lot.vendorName ? ` · ${lot.vendorName}` : ""}
                           </div>
                         </div>
                         {lot.expiresAt && (
@@ -317,6 +432,7 @@ export function ItemPage() {
                         <div className="text-[11px] text-muted">
                           {meta.label}
                           {movement.reason ? ` · ${movement.reason}` : ""}
+                          {movement.vendorName ? ` · ${movement.vendorName}` : ""}
                           {movement.userName ? ` · ${movement.userName}` : ""}
                           {movement.locationName ? ` · ${movement.locationName}` : ""}
                         </div>
@@ -399,6 +515,62 @@ export function ItemPage() {
             )}
           </Card>
 
+          <Card className="p-4">
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <h2 className="font-display text-lg">Receipt names</h2>
+              <Badge tone="outline">{aliases.length}</Badge>
+            </div>
+            <p className="mb-2 text-[11px] leading-relaxed text-muted">
+              Shop-specific names printed on receipts. They are learned when you pin a receipt line, or add them here.
+            </p>
+            {aliases.length === 0 ? (
+              <p className="text-xs text-muted">No receipt names yet.</p>
+            ) : (
+              <div className="divide-y divide-line">
+                {aliases.map((alias) => (
+                  <div key={alias.id} className="flex items-center gap-2 py-1.5 text-[12px]">
+                    <span className="min-w-0 flex-1 truncate">{alias.rawName}</span>
+                    <Badge tone="outline">{alias.vendorName ?? "Any shop"}</Badge>
+                    {alias.uses > 0 && <span className="text-[10px] text-muted">{alias.uses}×</span>}
+                    {can("member") && (
+                      <button
+                        onClick={() => void removeAlias(alias.id)}
+                        className="text-muted hover:text-danger"
+                        aria-label="Remove receipt name"
+                      >
+                        <Icon name="close" size={12} />
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+            {can("member") && (
+              <div className="mt-3 space-y-2">
+                <Input
+                  value={aliasInput}
+                  onChange={(event) => setAliasInput(event.target.value)}
+                  placeholder="Name on the receipt, e.g. ΑΛΕΞ.ΛΕΥΚ.ΑΣΠ.1KG"
+                  className="h-9 text-[13px]"
+                  maxLength={200}
+                />
+                <div className="flex gap-2">
+                  <Select value={aliasVendor} onChange={(event) => setAliasVendor(event.target.value)} className="h-9 flex-1 text-[12px]">
+                    <option value="">Any shop</option>
+                    {vendors.map((vendor) => (
+                      <option key={vendor.id} value={vendor.id}>
+                        {vendor.name}
+                      </option>
+                    ))}
+                  </Select>
+                  <Button size="sm" variant="secondary" loading={aliasBusy} disabled={!aliasInput.trim()} onClick={() => void addAlias()}>
+                    Add
+                  </Button>
+                </div>
+              </div>
+            )}
+          </Card>
+
           {item.recipes.length > 0 && (
             <Card className="p-4">
               <h2 className="mb-2 font-display text-lg">Used in</h2>
@@ -441,6 +613,8 @@ export function ItemPage() {
         onClose={() => setStockOpen(false)}
         item={item}
         locations={locations}
+        vendors={vendors}
+        onVendorCreated={(vendor) => setVendors((current) => [...current, vendor].sort((a, b) => a.name.localeCompare(b.name)))}
         onUpdated={(detail) => {
           setItem(detail);
           window.dispatchEvent(new Event("sv:refresh-badges"));

@@ -26,11 +26,12 @@ const DEFAULT_CATEGORIES = [
   { name: "Other", icon: "📦" },
 ];
 
+// Brand is a first-class item column, so it must not also be seeded as a
+// custom attribute.
 const DEFAULT_ATTRIBUTES = [
-  { key: "brand", label: "Brand", type: "text", sort: 1 },
-  { key: "size", label: "Size", type: "text", sort: 2 },
-  { key: "color", label: "Colour", type: "text", sort: 3 },
-  { key: "warranty_until", label: "Warranty until", type: "date", sort: 4 },
+  { key: "size", label: "Size", type: "text", sort: 1 },
+  { key: "color", label: "Colour", type: "text", sort: 2 },
+  { key: "warranty_until", label: "Warranty until", type: "date", sort: 3 },
 ];
 
 export function createHouse(opts: {

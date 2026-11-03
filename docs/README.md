@@ -1,8 +1,8 @@
 # SVault documentation
 
-SVault is a self-hosted vault for everything a household owns and cooks: stock, prices, recipes,
-food ideas, reminders and labelled photo datasets. It runs as one Node.js process and one Docker
-container, with SQLite and a local uploads folder.
+SVault is a self-hosted vault for everything a household owns and cooks: stock, prices, receipts,
+shops, recipes, food ideas, reminders and labelled photo datasets. It runs as one Node.js process and
+one Docker container, with SQLite and a local uploads folder.
 
 If you just want to run it, start with the [quick start](../README.md#quick-start-docker). The
 guides below go deeper.

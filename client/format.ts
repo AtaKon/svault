@@ -38,6 +38,26 @@ export function unitPriceLabel(price: number | null | undefined, unit: string, c
   return `${money(price, currency)} / ${unit}`;
 }
 
+const RECEIPT_TEMPLATE_LABELS: Record<string, string> = {
+  "lidl-gr": "Lidl template",
+  "sklavenitis-gr": "Sklavenitis template",
+};
+
+export function receiptTemplateLabel(templateId: string | null | undefined): string | null {
+  if (!templateId) return null;
+  return RECEIPT_TEMPLATE_LABELS[templateId] ?? "template";
+}
+
+export function receiptProviderLabel(
+  provider: string | null | undefined,
+  source?: "scan" | "manual" | null,
+): string {
+  if (provider === "ai") return "AI read";
+  if (provider === "template") return "Template";
+  if (provider === "local") return "Local read";
+  return source === "manual" ? "Manual" : "Not recorded";
+}
+
 export function shortDate(iso: string | null | undefined): string {
   if (!iso) return "";
   const date = new Date(iso.length <= 10 ? `${iso}T00:00:00` : iso);

@@ -4,6 +4,8 @@ const DAY = 864e5;
 
 export function createNotification(opts: {
   houseId: string;
+  /** When set, only this user sees the notification. */
+  userId?: string;
   type: string;
   title: string;
   body: string;
@@ -11,8 +13,8 @@ export function createNotification(opts: {
   dedupeKey: string;
 }) {
   const existing = get<any>(
-    "SELECT id, resolved_at FROM notifications WHERE house_id = ? AND dedupe_key = ?",
-    [opts.houseId, opts.dedupeKey],
+    "SELECT id, resolved_at FROM notifications WHERE house_id = ? AND dedupe_key = ? AND COALESCE(user_id, '') = COALESCE(?, '')",
+    [opts.houseId, opts.dedupeKey, opts.userId ?? null],
   );
   if (existing) {
     if (!existing.resolved_at) return; // still active, keep read state
@@ -23,11 +25,12 @@ export function createNotification(opts: {
     return;
   }
   run(
-    `INSERT INTO notifications (id, house_id, type, title, body, data, dedupe_key, read_by, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, '[]', ?)`,
+    `INSERT INTO notifications (id, house_id, user_id, type, title, body, data, dedupe_key, read_by, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, '[]', ?)`,
     [
       newId("ntf"),
       opts.houseId,
+      opts.userId ?? null,
       opts.type,
       opts.title,
       opts.body,
@@ -38,9 +41,32 @@ export function createNotification(opts: {
   );
 }
 
+/** Tell a user they were added to a house. The key tracks one membership, so
+ * leaving and being re-added later produces a fresh notification. */
+export function notifyHouseAdded(userId: string, houseId: string, role: string, invitedBy?: string | null) {
+  const house = get<any>("SELECT name FROM houses WHERE id = ?", [houseId]);
+  if (!house) return;
+  const membership = get<{ created_at: string }>(
+    "SELECT created_at FROM house_members WHERE house_id = ? AND user_id = ?",
+    [houseId, userId],
+  );
+  const inviter = invitedBy ? get<{ name: string }>("SELECT name FROM users WHERE id = ?", [invitedBy]) : undefined;
+  createNotification({
+    houseId,
+    userId,
+    type: "house",
+    title: `You were added to ${house.name}`,
+    body: inviter
+      ? `${inviter.name} added you as a ${role}. Tap to open the house.`
+      : `You are now a ${role} in ${house.name}. Tap to open the house.`,
+    data: { houseId, houseName: house.name, role },
+    dedupeKey: `joined:${userId}:${membership?.created_at ?? houseId}`,
+  });
+}
+
 function resolve(houseId: string, dedupeKey: string) {
   run(
-    "UPDATE notifications SET resolved_at = ? WHERE house_id = ? AND dedupe_key = ? AND resolved_at IS NULL",
+    "UPDATE notifications SET resolved_at = ? WHERE house_id = ? AND dedupe_key = ? AND user_id IS NULL AND resolved_at IS NULL",
     [now(), houseId, dedupeKey],
   );
 }
@@ -127,7 +153,7 @@ export function syncHouseExpiry(houseId: string, expiryDays = 7) {
     });
   }
   const active = all<any>(
-    "SELECT id, dedupe_key FROM notifications WHERE house_id = ? AND type = 'expiring' AND resolved_at IS NULL",
+    "SELECT id, dedupe_key FROM notifications WHERE house_id = ? AND type = 'expiring' AND user_id IS NULL AND resolved_at IS NULL",
     [houseId],
   );
   for (const n of active) {

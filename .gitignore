@@ -2,6 +2,7 @@ node_modules/
 dist/
 data/
 public/tesseract/
+*.traineddata
 .env
 .env.local
 *.log

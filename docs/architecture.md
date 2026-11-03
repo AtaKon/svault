@@ -78,6 +78,9 @@ Startup order:
   unless `COOKIE_SECURE=false`. The app is same-origin and uses JSON requests, which together with
   `SameSite=Lax` avoids a separate CSRF token.
 - There is no bearer token or API key authentication. The API is designed for the bundled web client.
+- Users have an optional-but-backfilled `username` alongside `email`; both are case-insensitive and
+  either can be used to sign in. Accounts created before usernames existed get one derived from the
+  email local part on the next start.
 - The first registered user is marked `is_admin`; house roles are independent of that flag.
 
 ## Data model
@@ -92,6 +95,10 @@ exports readable. Timestamps are ISO-8601 strings; dates (`expires_at`, `purchas
 | Tenancy | `houses`, `house_members`, `house_invites` |
 | Taxonomy | `locations`, `categories`, `attribute_defs` |
 | Inventory | `items`, `item_barcodes`, `stock_lots`, `stock_movements` |
+| Purchases | `vendors`, `receipts`, `receipt_lines` |
+| Purchase learning | `product_aliases` (raw shop name → item, per vendor) |
+| Receipt layouts | `receipt_templates` (custom rules; built-in Lidl and Sklavenitis live in code) |
+| Reference data | `vendor_catalog` (seeded shops by country) |
 | Reminders | `notifications` |
 | Cooking | `recipes`, `recipe_ingredients`, `food_ideas` |
 | Vision | `photo_collections`, `photos`, `photo_labels` |
@@ -113,7 +120,8 @@ Key constraints:
 `stock_movements` directly.
 
 - **Add** creates a lot, converts the entered quantity to the item's base unit, normalises the price
-  and records an `in` movement.
+  and records an `in` movement. Optional `vendorId` and `receiptId` stay on both the lot and movement
+  as provenance.
 - **Remove/waste** reads positive lots ordered by soonest expiry (nulls last), then oldest creation,
   and consumes them until the requested quantity is met. An optional `locationId` or `lotId` scopes
   the operation. The movement records the total delta and the resulting balance.
@@ -125,7 +133,10 @@ Key constraints:
 - `afterStockChange()` re-evaluates low-stock and expiry reminders for the item/house.
 
 Prices are normalised with `pricePerUnit(price, enteredUnit, baseUnit)`. Incompatible units are
-rejected rather than approximated; see `server/units.ts` for the conversion tables.
+rejected rather than approximated; see `server/units.ts` for the conversion tables. Item price history
+is built from incoming movements and carries the shop and receipt, so the client can compare all shops
+or a single one. Receipt analytics aggregate the receipt header (total, net, tax, VAT breakdown) and
+receipt lines by vendor, month and item category.
 
 ## Reminders
 
@@ -139,6 +150,10 @@ rejected rather than approximated; see `server/units.ts` for the conversion tabl
 - The scan runs at boot and every 30 minutes, and is also triggered by the notifications scan endpoint.
 - Read state is per user (`read_by` JSON array), so one person reading a reminder does not hide it from
   everyone else.
+- Notifications can target one user through `notifications.user_id`. House invitations use this so
+  the new member is told about the house without exposing the reminder to everyone else.
+- The client polls the cross-house `/api/notifications` feed, so a newly shared house is visible
+  before the user switches to it.
 
 Browser notifications are sent by the client while a tab is open. There is no push service.
 
@@ -154,22 +169,52 @@ Browser notifications are sent by the client while a tab is open. There is no pu
 - When a provider is configured but fails, callers fall back to local parsing/suggestions and return a
   warning instead of failing the request.
 
-What uses AI: recipe scan cleanup, recipe completion and food ideas. What never does: stock, prices,
-barcodes, reminders, photo labelling and authentication.
+What uses AI: recipe scan cleanup, receipt parsing, recipe completion and food ideas. What never does:
+stock, prices, barcodes, reminders, photo labelling and authentication.
 
 ## OCR and scanning
 
-- Tesseract.js runs in the browser. `scripts/vendor-ocr.mjs` copies the worker, WASM core and English
-  language data from `node_modules` into `public/tesseract`, so no CDN is needed at runtime. The
-  script runs automatically before `dev` and `build`.
+- Tesseract.js runs in the browser. `scripts/vendor-ocr.mjs` copies the worker, WASM core and
+  **English + Greek** language data from `node_modules` into `public/tesseract`, so no CDN is needed at
+  runtime. The script runs automatically before `dev` and `build`. The worker loads `eng+ell`, so
+  Greek recipes and receipts are recognised alongside Latin product names. The local recipe and receipt
+  parsers understand common Greek headings, units, totals and payment lines.
 - Barcode decoding uses `@zxing/browser`. The camera API requires HTTPS or localhost.
+- Receipt scans reuse the same browser OCR. A local line parser (`server/services/receipt-local.ts`)
+  drops totals, tax and payment lines, then reads quantity/unit/price from the remaining lines. AI can
+  replace that draft when configured. Merchant names are resolved against `vendor_catalog`
+  (`server/services/vendors.ts`), which is seeded on boot and keyed by country; Greece is the first
+  catalogue and adding another country is data-only.
+- Known layouts use deterministic templates (`server/services/receipt-templates.ts`). The built-in
+  `lidl-gr` template parses product lines, `n x price` and weight follow-ups, Lidl Plus discounts and
+  the VAT table, and skips carrier-bag/packaging fee lines. The built-in `sklavenitis-gr` template
+  keeps each printed barcode, handles product names with totals on the same line or a quantity/weight
+  follow-up on the next, folds `ΕΚΠΤΩΣΗ` discounts into the line and reads the `ΣΥΝΟΛΟ` total. Template
+  selection is a confidence score over layout signals; unknown layouts fall back to the generic parser
+  or AI.
+- Receipts persist the `provider` (`ai`, `local` or `template`) that produced the draft so the UI can
+  flag AI-assisted reads. Discount and savings lines never become products: product discounts are
+  applied to the matching line, receipt-level savings lines are summed into `receipts.savings`, and
+  both feed the receipt's **money saved** total.
+- Custom templates are stored per house in `receipt_templates` and executed by
+  `receipt-template-engine.ts`. The rules are JSON with regexes for sections, product lines, quantity,
+  weight, discounts, totals and tax. The admin builder tests unsaved rules against sample text and
+  versions templates on save. Built-in Lidl and Sklavenitis rules are exposed as cloneable examples.
+- Corrected lines teach `product_aliases` (`server/services/product-aliases.ts`). The raw receipt name
+  and shop are stored with the resolved item, and that vendor-specific alias is checked before generic
+  name matching on later receipts. This is the practical training loop; the OCR model itself does not
+  need retraining for product semantics.
+- `suggestProductMatches()` (`server/services/product-match.ts`) enriches scan drafts with suggestions.
+  It folds Greek/Latin lookalikes, hashes character trigrams into a 256-dimensional vector, and combines
+  cosine similarity with token overlap and exact aliases. One item can have many aliases, scoped to a
+  shop or shared across shops.
 - Unknown barcodes are looked up on OpenFoodFacts with a 6-second timeout. Failure is non-fatal; the
   user can still create an item with the code attached.
 
 ## Uploads
 
-- `multer` writes to `DATA_DIR/uploads/<photos|items|recipes>` with a timestamp plus random suffix.
-  Original filenames are stored in the database but not used on disk.
+- `multer` writes to `DATA_DIR/uploads/<photos|items|recipes|receipts>` with a timestamp plus random
+  suffix. Original filenames are stored in the database but not used on disk.
 - Limits: `MAX_UPLOAD_MB` per file (20 MB default), 30 files per request, images only.
 - `/uploads` is served as static content **without authentication**. Filenames are unguessable, but
   anyone with a URL can read the file. Put the app behind a proxy if that matters; this is documented

@@ -6,6 +6,7 @@ import { houseMembers, memberRole, requireAuth, roleAtLeast } from "../auth.js";
 import { ApiError, handler, parseBody, requireHouse } from "../http.js";
 import { serializeHouse } from "../serialize.js";
 import { createHouse } from "../services/houses.js";
+import { notifyHouseAdded } from "../services/notifications.js";
 import { chat, resolveAi } from "../ai.js";
 import type { Role } from "../../shared/types.js";
 
@@ -179,6 +180,7 @@ houseRoutes.post(
         body.role,
         now(),
       ]);
+      notifyHouseAdded(existing.id, houseId, body.role, req.user!.id);
       res.status(201).json({
         member: { id: existing.id, email: existing.email, name: existing.name, role: body.role },
       });

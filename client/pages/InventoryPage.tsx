@@ -100,6 +100,11 @@ export function InventoryPage() {
         actions={
           <>
             <div className="hidden sm:block">
+              <Button variant="secondary" icon="receipt" onClick={() => navigate("/receipts/scan")}>
+                Receipt
+              </Button>
+            </div>
+            <div className="hidden sm:block">
               <Button variant="secondary" icon="scan" onClick={() => navigate("/scan")}>
                 Scan
               </Button>

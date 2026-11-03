@@ -12,6 +12,8 @@ import type {
   StockLot,
   Movement,
   PriceStats,
+  Vendor,
+  Receipt,
 } from "../shared/types.js";
 
 export const ITEM_SELECT = `
@@ -128,6 +130,9 @@ export function serializeLot(row: any): StockLot {
     purchasedAt: row.purchased_at ?? null,
     expiresAt: row.expires_at ?? null,
     note: row.note ?? null,
+    vendorId: row.vendor_id ?? null,
+    vendorName: row.vendor_name ?? null,
+    receiptId: row.receipt_id ?? null,
     createdAt: row.created_at,
   };
 }
@@ -146,7 +151,78 @@ export function serializeMovement(row: any): Movement {
     locationId: row.location_id ?? null,
     locationName: row.location_name ?? null,
     userName: row.user_name ?? null,
+    vendorId: row.vendor_id ?? null,
+    vendorName: row.vendor_name ?? null,
+    receiptId: row.receipt_id ?? null,
     balanceAfter: row.balance_after == null ? null : round(Number(row.balance_after ?? 0)),
+    createdAt: row.created_at,
+  };
+}
+
+export function serializeVendor(row: any): Vendor {
+  return {
+    id: row.id,
+    houseId: row.house_id,
+    name: row.name,
+    kind: row.kind,
+    note: row.note ?? null,
+    createdAt: row.created_at,
+    purchaseCount: row.purchase_count == null ? undefined : Number(row.purchase_count),
+  };
+}
+
+export function receiptLinesFor(receiptId: string) {
+  return all<any>(
+    `SELECT rl.*, i.name AS item_name, i.unit AS item_unit
+     FROM receipt_lines rl LEFT JOIN items i ON i.id = rl.item_id
+     WHERE rl.receipt_id = ? ORDER BY rl.sort, rl.rowid`,
+    [receiptId],
+  ).map((row) => ({
+    id: row.id,
+    description: row.description,
+    rawDescription: row.raw_description ?? null,
+    quantity: round(Number(row.quantity ?? 0)),
+    unit: row.unit ?? null,
+    unitPrice: row.unit_price == null ? null : Number(row.unit_price),
+    lineTotal: row.line_total == null ? null : Number(row.line_total),
+    taxRate: row.tax_rate == null ? null : Number(row.tax_rate),
+    discount: row.discount == null ? null : Number(row.discount),
+    itemId: row.item_id ?? null,
+    itemName: row.item_name ?? null,
+    itemUnit: row.item_unit ?? null,
+    locationId: row.location_id ?? null,
+    barcode: row.barcode ?? null,
+    sort: Number(row.sort ?? 0),
+  }));
+}
+
+export function serializeReceipt(row: any, lines?: any[]): Receipt {
+  return {
+    id: row.id,
+    houseId: row.house_id,
+    vendorId: row.vendor_id ?? null,
+    vendorName: row.vendor_name ?? null,
+    purchasedAt: row.purchased_at ?? null,
+    currency: row.currency ?? null,
+    total: row.total == null ? null : Number(row.total),
+    subtotal: row.subtotal == null ? null : Number(row.subtotal),
+    tax: row.tax == null ? null : Number(row.tax),
+    taxBreakdown: parseJson<any[]>(row.tax_breakdown, []).map((entry) => ({
+      rate: entry?.rate == null ? null : Number(entry.rate),
+      net: Number(entry?.net ?? 0),
+      tax: Number(entry?.tax ?? 0),
+      gross: Number(entry?.gross ?? 0),
+    })),
+    templateId: row.template_id ?? null,
+    templateConfidence: row.template_confidence == null ? null : Number(row.template_confidence),
+    provider: row.provider === "ai" || row.provider === "local" || row.provider === "template" ? row.provider : null,
+    savings: row.savings == null ? null : Number(row.savings),
+    image: row.image ?? null,
+    ocrText: row.ocr_text ?? null,
+    source: row.source === "manual" ? "manual" : "scan",
+    notes: row.notes ?? null,
+    lineCount: row.line_count == null ? undefined : Number(row.line_count),
+    lines,
     createdAt: row.created_at,
   };
 }
@@ -286,6 +362,7 @@ export function serializeNotification(row: any, userId: string): Notification {
   return {
     id: row.id,
     houseId: row.house_id,
+    houseName: row.house_name ?? undefined,
     type: row.type,
     title: row.title,
     body: row.body,

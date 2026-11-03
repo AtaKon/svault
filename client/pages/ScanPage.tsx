@@ -116,6 +116,18 @@ export function ScanPage() {
               Unknown products are looked up online when possible, then you can create the item in two taps.
             </p>
           </Card>
+          <Card className="flex items-center gap-3 p-4">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand-soft text-brand">
+              <Icon name="receipt" size={17} />
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="text-[13px] font-medium">Shopping receipt?</div>
+              <div className="text-[11px] text-muted">Photograph it once and add the whole basket, with the shop recorded.</div>
+            </div>
+            <Button size="sm" variant="secondary" icon="arrowUpRight" onClick={() => navigate("/receipts/scan")}>
+              Scan
+            </Button>
+          </Card>
           {recent.length > 0 && (
             <Card className="p-4">
               <h2 className="mb-2 font-display text-lg">This session</h2>
