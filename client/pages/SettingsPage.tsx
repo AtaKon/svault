@@ -21,7 +21,7 @@ import {
 import { Icon } from "@/components/icons";
 import { useToast } from "@/components/toast";
 import { qty } from "@/format";import { LOCATION_ICONS, LOCATION_KINDS } from "@/units";
-import type { AttributeDef, Category, House, Location as HouseLocation, Role } from "@shared/types";
+import type { AttributeDef, CatalogImportResult, Category, House, Location as HouseLocation, Role } from "@shared/types";
 
 interface Member {
   id: string;
@@ -43,6 +43,15 @@ interface Invite {
   url: string;
   createdAt: string;
   acceptedAt: string | null;
+}
+
+interface CatalogStats {
+  mappings: number;
+  seed: number;
+  local: number;
+  community: number;
+  products: number;
+  syncUrl: string | null;
 }
 
 const TABS = [
@@ -1239,7 +1248,51 @@ function RemindersTab({ house, onSave }: { house: House; onSave: (patch: Record<
 function DataTab({ house, detail }: { house: House; detail: HouseDetail | null }) {
   const toast = useToast();
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [busy, setBusy] = useState(false);
+  const [catalog, setCatalog] = useState<CatalogStats | null>(null);
+  const [catalogBusy, setCatalogBusy] = useState<"import" | "sync" | null>(null);
+
+  const loadCatalog = useCallback(async () => {
+    if (!user?.isAdmin) return;
+    try {
+      setCatalog(await api<CatalogStats>("/api/catalog/stats"));
+    } catch {
+      /* catalogue stats are optional */
+    }
+  }, [user?.isAdmin]);
+
+  useEffect(() => {
+    void loadCatalog();
+  }, [loadCatalog]);
+
+  const importCatalog = async (file: File | null) => {
+    if (!file) return;
+    setCatalogBusy("import");
+    try {
+      const parsed = JSON.parse(await file.text());
+      const result = await api<CatalogImportResult>("/api/catalog/import", { method: "POST", body: parsed });
+      toast.success(`Catalogue merged: ${result.imported} new, ${result.updated} updated, ${result.skipped} skipped`);
+      await loadCatalog();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not import the catalogue");
+    } finally {
+      setCatalogBusy(null);
+    }
+  };
+
+  const syncCatalog = async () => {
+    setCatalogBusy("sync");
+    try {
+      const result = await api<CatalogImportResult>("/api/catalog/sync", { method: "POST", body: {} });
+      toast.success(`Synced: ${result.imported} new, ${result.updated} updated`);
+      await loadCatalog();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not sync the catalogue");
+    } finally {
+      setCatalogBusy(null);
+    }
+  };
 
   const exportCsv = async () => {
     setBusy(true);
@@ -1317,6 +1370,62 @@ function DataTab({ house, detail }: { house: House; detail: HouseDetail | null }
           </a>
         </div>
       </Card>
+
+      {user?.isAdmin && (
+        <Card className="p-4">
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <h2 className="font-display text-lg">Product catalogue</h2>
+              <p className="mt-0.5 text-[11px] leading-relaxed text-muted">
+                Receipt names mapped to OpenFoodFacts products, shared by every house. Learned mappings never leave this
+                server until you export them.
+              </p>
+            </div>
+            <Badge tone="outline">{catalog?.mappings ?? 0} mappings</Badge>
+          </div>
+          <div className="mt-3 grid grid-cols-3 gap-2 text-center text-[11px]">
+            <div className="rounded-lg bg-raised px-2 py-2">
+              <div className="text-muted">Bundled</div>
+              <div className="mt-0.5 font-medium">{catalog?.seed ?? 0}</div>
+            </div>
+            <div className="rounded-lg bg-raised px-2 py-2">
+              <div className="text-muted">Learned here</div>
+              <div className="mt-0.5 font-medium">{catalog?.local ?? 0}</div>
+            </div>
+            <div className="rounded-lg bg-raised px-2 py-2">
+              <div className="text-muted">Products cached</div>
+              <div className="mt-0.5 font-medium">{catalog?.products ?? 0}</div>
+            </div>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <a
+              href="/api/catalog/export"
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line px-2.5 text-[11px] font-medium transition-colors hover:bg-raised"
+            >
+              <Icon name="download" size={13} /> Export catalogue
+            </a>
+            <button
+              type="button"
+              onClick={() => void syncCatalog()}
+              disabled={catalogBusy !== null || !catalog?.syncUrl}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line px-2.5 text-[11px] font-medium transition-colors hover:bg-raised disabled:opacity-40"
+              title={catalog?.syncUrl ? `Sync from ${catalog.syncUrl}` : "Set SV_CATALOG_URL to enable sync"}
+            >
+              <Icon name="refresh" size={13} /> {catalogBusy === "sync" ? "Syncing…" : "Sync catalogue"}
+            </button>
+            <label className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border border-line px-2.5 text-[11px] font-medium transition-colors hover:bg-raised">
+              <Icon name="upload" size={13} /> {catalogBusy === "import" ? "Importing…" : "Import file"}
+              <input
+                type="file"
+                accept="application/json,.json"
+                className="hidden"
+                onChange={(event) => void importCatalog(event.target.files?.[0] ?? null)}
+              />
+            </label>
+          </div>
+          {catalog?.syncUrl && <p className="mt-2 truncate text-[10px] text-muted">Sync source: {catalog.syncUrl}</p>}
+        </Card>
+      )}
 
       <Card className="p-4">
         <h2 className="font-display text-lg">Data location</h2>

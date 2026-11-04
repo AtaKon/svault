@@ -84,6 +84,11 @@ Docker Compose reads `.env` next to `docker-compose.yml`.
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Server | Any OpenAI-compatible endpoint. |
 | `OPENAI_MODEL` | `gpt-4o-mini` | Server | Text model. |
 | `OPENAI_VISION_MODEL` | falls back to text model | Server | Vision model for recipe photos. |
+| `SV_CATALOG_URL` | empty | Server | Optional shared OpenFoodFacts receipt-name catalogue (JSON) for **Settings → Data → Sync catalogue**. |
+| `OFF_API_BASE` | `https://world.openfoodfacts.org` | Server | Product endpoint, overridable for a proxy. |
+| `OFF_SEARCH_BASE` | `https://search.openfoodfacts.org` | Server | Name-search endpoint. |
+| `OFF_TIMEOUT_MS` | `6000` | Server | Per-request OpenFoodFacts timeout. |
+| `OFF_CACHE_DAYS` | `30` | Server | How long a product stays fresh in the shared cache. |
 | `PORT` | `4000` | Server | Internal listen port. Keep it at 4000 inside the container. |
 | `DATA_DIR` | `./data` locally, `/data` in Docker | Server | Database and uploads directory. |
 | `MAX_UPLOAD_MB` | `20` | Server | Per-file upload limit. Add it to the compose `environment` block if you change it. |

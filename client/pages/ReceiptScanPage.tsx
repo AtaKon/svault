@@ -7,7 +7,8 @@ import { Icon } from "@/components/icons";
 import { useToast } from "@/components/toast";
 import { ocrImage } from "@/ocr";
 import { money, receiptTemplateLabel, todayInput } from "@/format";
-import type { Item, Location, Receipt, ReceiptDraft, TaxBreakdownEntry, Vendor } from "@shared/types";
+import { OffProductPicker } from "@/components/OffProductPicker";
+import type { Item, Location, OffProduct, Receipt, ReceiptDraft, TaxBreakdownEntry, Vendor } from "@shared/types";
 
 interface DraftLine {
   key: string;
@@ -26,6 +27,12 @@ interface DraftLine {
   suggestedItemScore: number | null;
   suggestedItemSource: "alias" | "name" | "vector" | null;
   barcode: string | null;
+  offCode: string | null;
+  offName: string | null;
+  offBrand: string | null;
+  offImage: string | null;
+  offQuantity: string | null;
+  offScore: number | null;
   include: boolean;
 }
 
@@ -118,6 +125,12 @@ function toDraftLines(draft: ReceiptDraft): DraftLine[] {
       suggestedItemScore: line.suggestedItemScore ?? null,
       suggestedItemSource: line.suggestedItemSource ?? null,
       barcode: line.barcode,
+      offCode: line.offCode ?? null,
+      offName: line.offName ?? null,
+      offBrand: line.offBrand ?? null,
+      offImage: line.offImage ?? null,
+      offQuantity: line.offQuantity ?? null,
+      offScore: line.offScore ?? null,
       include: true,
     };
   });
@@ -160,6 +173,7 @@ export function ReceiptScanPage() {
   const [templateId, setTemplateId] = useState<string | null>(null);
   const [templateConfidence, setTemplateConfidence] = useState<number | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
+  const [offLineKey, setOffLineKey] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([
@@ -220,10 +234,14 @@ export function ReceiptScanPage() {
     setOcrStatus("Starting OCR");
     setOcrError(null);
     try {
-      const result = await ocrImage(target, (progress, status) => {
-        setOcrProgress(progress);
-        setOcrStatus(status);
-      });
+      const result = await ocrImage(
+        target,
+        (progress, status) => {
+          setOcrProgress(progress);
+          setOcrStatus(status);
+        },
+        { mode: "receipt" },
+      );
       setText(result.trim());
       if (!result.trim()) setOcrError("No text was detected. Try a sharper, flatter photo or type the lines manually.");
     } catch (err) {
@@ -272,6 +290,19 @@ export function ReceiptScanPage() {
     setLines((current) => current.map((line) => (line.key === key ? { ...line, ...patch } : line)));
   };
 
+  const applyOffProduct = (product: OffProduct) => {
+    if (!offLineKey) return;
+    updateLine(offLineKey, {
+      offCode: product.code,
+      offName: product.name,
+      offBrand: product.brand,
+      offImage: product.image,
+      offQuantity: product.quantity,
+      offScore: 1,
+    });
+    setOffLineKey(null);
+  };
+
   const addLine = () => {
     setLines((current) => [
       ...current,
@@ -292,6 +323,12 @@ export function ReceiptScanPage() {
         suggestedItemScore: null,
         suggestedItemSource: null,
         barcode: null,
+        offCode: null,
+        offName: null,
+        offBrand: null,
+        offImage: null,
+        offQuantity: null,
+        offScore: null,
         include: true,
       },
     ]);
@@ -348,6 +385,7 @@ export function ReceiptScanPage() {
               itemId: line.itemId || null,
               locationId: locationId || null,
               barcode: line.barcode ? clampText(line.barcode, 80) : null,
+              offCode: line.offCode ? clampText(line.offCode, 80) : null,
             };
           }),
         },
@@ -377,6 +415,7 @@ export function ReceiptScanPage() {
     setTemplateId(null);
     setTemplateConfidence(null);
     setWarning(null);
+    setOffLineKey(null);
     setOcrError(null);
     setOcrProgress(0);
     setManualMode(false);
@@ -385,6 +424,7 @@ export function ReceiptScanPage() {
   };
 
   const showWorkspace = Boolean(preview) || manualMode;
+  const offLine = lines.find((line) => line.key === offLineKey) ?? null;
 
   return (
     <div className="space-y-4">
@@ -770,6 +810,45 @@ export function ReceiptScanPage() {
                                   <Icon name="plus" size={10} /> new item
                                 </Badge>
                               ) : null}
+                              {line.offCode ? (
+                                <span className="inline-flex items-center gap-1.5">
+                                  <Badge tone="brand">
+                                    <Icon name="barcode" size={10} /> {line.offName ?? line.offCode}
+                                    {line.offScore != null ? ` · ${Math.round(line.offScore * 100)}%` : ""}
+                                  </Badge>
+                                  <button
+                                    type="button"
+                                    onClick={() => setOffLineKey(line.key)}
+                                    className="text-[10px] font-medium text-brand hover:underline"
+                                  >
+                                    change
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      updateLine(line.key, {
+                                        offCode: null,
+                                        offName: null,
+                                        offBrand: null,
+                                        offImage: null,
+                                        offQuantity: null,
+                                        offScore: null,
+                                      })
+                                    }
+                                    className="text-[10px] text-muted hover:text-danger"
+                                  >
+                                    clear
+                                  </button>
+                                </span>
+                              ) : line.description.trim() ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setOffLineKey(line.key)}
+                                  className="text-[10px] font-medium text-brand hover:underline"
+                                >
+                                  Find OpenFoodFacts
+                                </button>
+                              ) : null}
                               <Select
                                 value={line.itemId}
                                 onChange={(event) => updateLine(line.key, { itemId: event.target.value })}
@@ -821,6 +900,14 @@ export function ReceiptScanPage() {
           </div>
         </div>
       )}
+
+      <OffProductPicker
+        open={Boolean(offLineKey)}
+        onClose={() => setOffLineKey(null)}
+        onSelect={applyOffProduct}
+        initialQuery={offLine?.barcode ?? offLine?.description ?? ""}
+        title="Match receipt line"
+      />
 
       <Card className="flex items-start gap-3 p-4">
         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand-soft text-brand">

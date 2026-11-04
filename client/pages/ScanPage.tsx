@@ -7,13 +7,31 @@ import { Icon } from "@/components/icons";
 import { BarcodeScanner } from "@/components/BarcodeScanner";
 import { useToast } from "@/components/toast";
 import { qty as formatQty } from "@/format";
-import type { Item } from "@shared/types";
+import type { Item, OffProduct } from "@shared/types";
 
 interface ScanResponse {
   code: string;
   match: "local" | "external" | "none";
   item: Item | null;
-  product?: { name: string; brand: string; quantity: string; image: string | null; categories: string } | null;
+  product?: OffProduct | null;
+}
+
+function packageSize(quantity: string | null | undefined): { amount: string; unit: string } | null {
+  const text = String(quantity ?? "").replace(/,/g, ".");
+  const normalize = (unit: string) => (unit === "gr" ? "g" : unit === "lt" ? "l" : unit.toLowerCase());
+  const multi = /(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)\s*(kg|gr|g|mg|lt|l|ml|cl|dl|oz|lb)\b/i.exec(text);
+  if (multi) {
+    const amount = Number(multi[1]) * Number(multi[2]);
+    if (Number.isFinite(amount) && amount > 0) {
+      return { amount: String(Math.round(amount * 1000) / 1000), unit: normalize(multi[3]) };
+    }
+  }
+  const single = /(\d+(?:\.\d+)?)\s*(kg|gr|g|mg|lt|l|ml|cl|dl|oz|lb)\b/i.exec(text);
+  if (single) {
+    const amount = Number(single[1]);
+    if (Number.isFinite(amount) && amount > 0) return { amount: String(amount), unit: normalize(single[2]) };
+  }
+  return null;
 }
 
 export function ScanPage() {
@@ -72,8 +90,15 @@ export function ScanPage() {
   const createItem = () => {
     if (!result) return;
     const query = new URLSearchParams({ barcode: result.code });
+    if (result.product?.code) query.set("offCode", result.product.code);
     if (result.product?.name) query.set("name", result.product.name);
     if (result.product?.brand) query.set("brand", result.product.brand);
+    if (result.product?.genericName) query.set("description", result.product.genericName);
+    const size = packageSize(result.product?.quantity);
+    if (size) {
+      query.set("unit", size.unit);
+      query.set("quantity", size.amount);
+    }
     if (result.product?.image) query.set("image", result.product.image);
     navigate(`/items/new?${query.toString()}`);
   };
@@ -241,7 +266,9 @@ export function ScanPage() {
                   {result.product.name && <div className="font-medium">{result.product.name}</div>}
                   {result.product.brand && <div className="text-xs text-muted">{result.product.brand}</div>}
                   {result.product.quantity && <div className="text-xs text-muted">{result.product.quantity}</div>}
-                  {result.product.categories && <div className="text-[11px] text-muted">{result.product.categories.split(",").slice(0, 4).join(" · ")}</div>}
+                  {(result.product.categories ?? []).length > 0 && (
+                    <div className="text-[11px] text-muted">{(result.product.categories ?? []).slice(0, 4).join(" · ")}</div>
+                  )}
                 </div>
               ) : (
                 <div className="text-xs text-muted">

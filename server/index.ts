@@ -13,12 +13,17 @@ import { ideaRoutes, singleIdeaRoutes } from "./routes/ideas.js";
 import { photoRoutes, singlePhotoRoutes } from "./routes/photos.js";
 import { globalNotificationRoutes, notificationRoutes } from "./routes/notifications.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
+import { catalogRoutes } from "./routes/catalog.js";
 import { scanAllHouses } from "./services/notifications.js";
 import { seedVendorCatalog } from "./services/vendors.js";
+import { seedProductCatalog } from "./services/product-catalog.js";
+import { pruneOffProductCache } from "./services/openfoodfacts.js";
 import { db } from "./db.js";
 
 ensureDirs();
 seedVendorCatalog();
+seedProductCatalog();
+pruneOffProductCache();
 
 export const app = express();
 app.disable("x-powered-by");
@@ -62,6 +67,7 @@ app.use("/api/houses", photoRoutes);
 app.use("/api/houses", notificationRoutes);
 app.use("/api/houses", dashboardRoutes);
 app.use("/api/notifications", globalNotificationRoutes);
+app.use("/api/catalog", catalogRoutes);
 app.use("/api/items", itemRoutes);
 app.use("/api/recipes", singleRecipeRoutes);
 app.use("/api/receipts", singleReceiptRoutes);

@@ -11,7 +11,7 @@ process.env.OPENAI_API_KEY = "";
 process.env.SVAI_API_KEY = "";
 
 const { app } = await import("../index.js");
-const { db } = await import("../db.js");
+const { db, run } = await import("../db.js");
 const { heuristicRecipe, parseIngredientLine, localIdeas } = await import("../services/recipe-local.js");
 const { heuristicReceipt } = await import("../services/receipt-local.js");
 const { parseLidlReceipt } = await import("../services/receipt-lidl.js");
@@ -482,6 +482,27 @@ describe("Lidl receipt template", () => {
     assert.ok(!draft.lines.some((line) => line.description.includes("ΣΑΚΟΥΛΑ")));
   });
 
+  it("keeps products when OCR drops the VAT column or confuses Greek zeros", () => {
+    const sample = [
+      "LIDL",
+      "ΦΟΡΟΛΟΓΙΚΗ ΑΠΟΔΕΙΞΗ",
+      "ΚΕΦΙΡ ΦΡΑΟΥΛΑ 500ML 3,96",
+      "4 x 0,99",
+      "ΑΠΟΓΥΜΝΩΤΗΣ -0523350 1,99 24,OO%",
+      "ΣYNOΛO 5,95",
+    ].join("\n");
+
+    const draft = parseLidlReceipt(sample, "EUR");
+    assert.equal(draft.total, 5.95);
+    assert.equal(draft.lines.length, 2);
+    assert.equal(draft.lines[0].description, "ΚΕΦΙΡ ΦΡΑΟΥΛΑ 500ML");
+    assert.equal(draft.lines[0].quantity, 4);
+    assert.equal(draft.lines[0].unitPrice, 0.99);
+    assert.equal(draft.lines[0].taxRate, null);
+    assert.equal(draft.lines[1].description, "ΑΠΟΓΥΜΝΩΤΗΣ");
+    assert.equal(draft.lines[1].taxRate, 24);
+  });
+
   it("can be rebuilt from the generic template rules", () => {
     const draft = parseWithTemplateRules(LIDL_SAMPLE, LIDL_TEMPLATE_RULES, {
       id: "lidl-gr",
@@ -498,6 +519,22 @@ describe("Lidl receipt template", () => {
     assert.ok(flour);
     assert.equal(flour.discount, 1.04);
     assert.equal(flour.lineTotal, 2.06);
+  });
+
+  it("accepts OCR'd amounts without a VAT column in the template engine", () => {
+    const sample = ["LIDL", "ΦΟΡΟΛΟΓΙΚΗ ΑΠΟΔΕΙΞΗ", "ΚΑΦΕΣ 1O,OO", "ΣΥΝΟΛΟ 10,00"].join("\n");
+    const draft = parseWithTemplateRules(sample, LIDL_TEMPLATE_RULES, {
+      id: "lidl-gr",
+      name: "Lidl Greece",
+      confidence: 0.99,
+      vendorName: "Lidl",
+    });
+
+    assert.equal(draft.total, 10);
+    assert.equal(draft.lines.length, 1);
+    assert.equal(draft.lines[0].description, "ΚΑΦΕΣ");
+    assert.equal(draft.lines[0].lineTotal, 10);
+    assert.equal(draft.lines[0].taxRate, null);
   });
 });
 
@@ -525,6 +562,24 @@ describe("Sklavenitis receipt template", () => {
     assert.equal(fairy.discount, 2.17);
     assert.equal(fairy.lineTotal, 2.69);
     assert.equal(fairy.taxRate, 24);
+  });
+
+  it("keeps a compact product line when OCR drops its VAT rate", () => {
+    const sample = [
+      "ΕΛΛΗΝΙΚΕΣ ΥΠΕΡΑΓΟΡΕΣ",
+      "ΣΚΛΑΒΕΝΙΤΗΣ Α.Ε.Ε.",
+      "SUPER MARKETS",
+      "ΑΠΟΔΕΙΞΗ ΛΙΑΝΙΚΗΣ ΠΩΛΗΣΗΣ",
+      "ΚΑΦΕΣ ΕΛΛΗΝΙΚΟΣ 3,20",
+      "ΣYNOΛO 3,20",
+    ].join("\n");
+
+    const draft = parseSklavenitisReceipt(sample, "EUR");
+    assert.equal(draft.total, 3.2);
+    assert.equal(draft.lines.length, 1);
+    assert.equal(draft.lines[0].description, "ΚΑΦΕΣ ΕΛΛΗΝΙΚΟΣ");
+    assert.equal(draft.lines[0].lineTotal, 3.2);
+    assert.equal(draft.lines[0].taxRate, null);
   });
 
   it("parses weight and quantity follow-up lines", () => {
@@ -860,6 +915,166 @@ describe("inventory and stock", () => {
   it("validates stock updates", async () => {
     const res = await request(`/api/items/${itemId}/stock`, { method: "POST", body: { action: "add", quantity: -1 } });
     assert.equal(res.status, 400);
+  });
+});
+
+describe("OpenFoodFacts links and shared catalogue", () => {
+  const fetaCode = "5201704054183";
+  const dodoniCode = "5201168218114";
+
+  function seedProduct(code: string, name: string, brand: string, quantity: string, image: string) {
+    const timestamp = new Date().toISOString();
+    const summary = {
+      code,
+      name,
+      brand,
+      genericName: `${name} PDO`,
+      quantity,
+      categories: ["cheeses", "feta"],
+      image,
+      ingredients: "milk, salt, rennet",
+      allergens: ["milk"],
+      labels: ["PDO"],
+      nutriscore: "e",
+      novaGroup: 3,
+      countries: ["greece"],
+      packaging: "plastic",
+      servingSize: "30 g",
+      source: "openfoodfacts",
+      fetchedAt: timestamp,
+    };
+    run(
+      `INSERT INTO catalog_products
+         (code, name, brand, quantity, image, categories, summary, payload, source, fetched_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, '{}', 'openfoodfacts', ?, ?)
+       ON CONFLICT(code) DO UPDATE SET
+         name = excluded.name, brand = excluded.brand, quantity = excluded.quantity,
+         image = excluded.image, categories = excluded.categories, summary = excluded.summary,
+         source = excluded.source, fetched_at = excluded.fetched_at, updated_at = excluded.updated_at`,
+      [code, name, brand, quantity, image, JSON.stringify(["cheeses", "feta"]), JSON.stringify(summary), timestamp, timestamp],
+    );
+  }
+
+  before(() => {
+    seedProduct(fetaCode, "Feta", "Kolios", "150 g", "https://example.test/feta.png");
+    seedProduct(dodoniCode, "Feta cheese (P.D.O.)", "Dodoni", "1 kg", "https://example.test/dodoni.png");
+  });
+
+  it("searches the shared cache without going online", async () => {
+    const res = await request("/api/catalog/search?q=feta&online=0");
+    assert.equal(res.status, 200);
+    assert.equal(res.data.online, false);
+    assert.ok(res.data.products.some((product: any) => product.code === fetaCode));
+  });
+
+  it("resolves a cached product for an unknown barcode", async () => {
+    const res = await request(`/api/houses/${houseId}/scan?code=${dodoniCode}`);
+    assert.equal(res.status, 200);
+    assert.equal(res.data.match, "external");
+    assert.equal(res.data.product.name, "Feta cheese (P.D.O.)");
+    assert.equal(res.data.product.brand, "Dodoni");
+  });
+
+  it("links an item and fills only empty fields", async () => {
+    const created = await request(`/api/houses/${houseId}/items`, {
+      method: "POST",
+      body: { name: "My feta", brand: "Local brand", unit: "pcs" },
+    });
+    assert.equal(created.status, 201);
+    const linked = await request(`/api/items/${created.data.id}/off/link`, {
+      method: "POST",
+      body: { code: fetaCode },
+    });
+    assert.equal(linked.status, 200);
+    assert.equal(linked.data.item.name, "My feta");
+    assert.equal(linked.data.item.brand, "Local brand");
+    assert.ok(linked.data.filled.includes("description"));
+    assert.ok(linked.data.filled.includes("image"));
+    assert.equal(linked.data.item.off.code, fetaCode);
+    assert.equal(linked.data.item.off.product.brand, "Kolios");
+    assert.ok(linked.data.item.barcodes.some((entry: any) => entry.code === fetaCode));
+
+    const patched = await request(`/api/items/${created.data.id}`, {
+      method: "PATCH",
+      body: { brand: "Still local" },
+    });
+    assert.equal(patched.status, 200);
+    const filled = await request(`/api/items/${created.data.id}/off/fill`, { method: "POST" });
+    assert.equal(filled.status, 200);
+    assert.equal(filled.data.item.brand, "Still local");
+    assert.equal(filled.data.item.name, "My feta");
+  });
+
+  it("refuses to link the same OFF product to two items", async () => {
+    const created = await request(`/api/houses/${houseId}/items`, {
+      method: "POST",
+      body: { name: "Second feta", unit: "pcs" },
+    });
+    const linked = await request(`/api/items/${created.data.id}/off/link`, {
+      method: "POST",
+      body: { code: fetaCode },
+    });
+    assert.equal(linked.status, 409);
+  });
+
+  it("enriches a receipt-created item and learns a shared mapping", async () => {
+    const receipt = await request(`/api/houses/${houseId}/receipts`, {
+      method: "POST",
+      body: {
+        vendorName: "Lidl",
+        currency: "EUR",
+        lines: [
+          {
+            description: "ΦΕΤΑ ΔΩΔΩΝΗ 1KG",
+            rawDescription: "ΦΕΤΑ ΔΩΔΩΝΗ 1KG",
+            quantity: 1,
+            unit: "pcs",
+            unitPrice: 9.9,
+            lineTotal: 9.9,
+            offCode: dodoniCode,
+          },
+        ],
+      },
+    });
+    assert.equal(receipt.status, 201);
+    const line = receipt.data.lines[0];
+    assert.equal(line.offCode, dodoniCode);
+    const item = await request(`/api/items/${line.itemId}`);
+    assert.equal(item.status, 200);
+    assert.equal(item.data.name, "ΦΕΤΑ ΔΩΔΩΝΗ 1KG");
+    assert.equal(item.data.brand, "Dodoni");
+    assert.equal(item.data.off.code, dodoniCode);
+    assert.ok(item.data.image?.startsWith("https://example.test/"));
+
+    const mappings = await request(`/api/catalog/mappings?q=${encodeURIComponent("ΔΩΔΩΝΗ")}`);
+    assert.ok(mappings.data.some((mapping: any) => mapping.offCode === dodoniCode));
+  });
+
+  it("exports and imports the catalogue", async () => {
+    const exported = await request("/api/catalog/export");
+    assert.equal(exported.status, 200);
+    assert.ok(exported.data.mappings.some((mapping: any) => mapping.offCode === dodoniCode));
+
+    const imported = await request("/api/catalog/import", {
+      method: "POST",
+      body: {
+        version: 1,
+        mappings: [
+          {
+            country: "GR",
+            vendor: null,
+            rawText: "TEST IMPORT PRODUCT",
+            offCode: dodoniCode,
+            name: "Imported feta",
+            brand: "Dodoni",
+          },
+        ],
+      },
+    });
+    assert.equal(imported.status, 200);
+    assert.equal(imported.data.imported, 1);
+    const mappings = await request(`/api/catalog/mappings?q=${encodeURIComponent("TEST IMPORT PRODUCT")}`);
+    assert.ok(mappings.data.some((mapping: any) => mapping.offCode === dodoniCode));
   });
 });
 

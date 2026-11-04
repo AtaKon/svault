@@ -19,12 +19,23 @@ import {
 } from "@/components/ui";
 import { Icon, type IconName } from "@/components/icons";
 import { BarcodeScanner } from "@/components/BarcodeScanner";
+import { OffProductPicker } from "@/components/OffProductPicker";
 import { ImageLightbox } from "@/components/ImageLightbox";
 import { StockDialog } from "@/components/ItemCard";
 import { PriceChart } from "@/components/PriceChart";
 import { useToast } from "@/components/toast";
 import { daysUntil, money, qty, relativeTime, shortDate, unitPriceLabel } from "@/format";
-import type { AttributeDef, ItemDetail, Location, Movement, PricePoint, ReceiptAlias, Vendor } from "@shared/types";
+import type {
+  AttributeDef,
+  ItemDetail,
+  Location,
+  Movement,
+  OffLinkResult,
+  OffProduct,
+  PricePoint,
+  ReceiptAlias,
+  Vendor,
+} from "@shared/types";
 
 const MOVEMENT_LABELS: Record<Movement["type"], { label: string; icon: IconName; tone: string }> = {
   in: { label: "Stock in", icon: "plus", tone: "bg-brand-soft text-brand" },
@@ -58,6 +69,9 @@ export function ItemPage() {
   const [aliasInput, setAliasInput] = useState("");
   const [aliasVendor, setAliasVendor] = useState("");
   const [aliasBusy, setAliasBusy] = useState(false);
+  const [offPickerOpen, setOffPickerOpen] = useState(false);
+  const [offBusy, setOffBusy] = useState(false);
+  const [offUnlinkOpen, setOffUnlinkOpen] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -133,6 +147,57 @@ export function ItemPage() {
       setItem({ ...item, barcodes: item.barcodes.filter((barcode) => barcode.id !== barcodeId) });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not remove the barcode");
+    }
+  };
+
+  const linkOffProduct = async (product: OffProduct) => {
+    if (!item) return;
+    setOffBusy(true);
+    try {
+      const result = await api<OffLinkResult>(`/api/items/${item.id}/off/link`, {
+        method: "POST",
+        body: { code: product.code },
+      });
+      setItem(result.item as ItemDetail);
+      setOffPickerOpen(false);
+      toast.success(
+        result.filled.length
+          ? `Linked — filled ${result.filled.join(", ")}`
+          : "Linked to OpenFoodFacts",
+      );
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not link the product");
+    } finally {
+      setOffBusy(false);
+    }
+  };
+
+  const fillOffProduct = async () => {
+    if (!item) return;
+    setOffBusy(true);
+    try {
+      const result = await api<OffLinkResult>(`/api/items/${item.id}/off/fill`, { method: "POST" });
+      setItem(result.item as ItemDetail);
+      toast.success(result.filled.length ? `Filled ${result.filled.join(", ")}` : "Nothing was empty to fill");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not refresh OpenFoodFacts");
+    } finally {
+      setOffBusy(false);
+    }
+  };
+
+  const unlinkOffProduct = async () => {
+    if (!item) return;
+    setOffBusy(true);
+    try {
+      const result = await api<{ item: ItemDetail }>(`/api/items/${item.id}/off`, { method: "DELETE" });
+      setItem(result.item);
+      setOffUnlinkOpen(false);
+      toast.success("OpenFoodFacts link removed");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not remove the link");
+    } finally {
+      setOffBusy(false);
     }
   };
 
@@ -528,6 +593,93 @@ export function ItemPage() {
           </Card>
 
           <Card className="p-4">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <h2 className="font-display text-lg">OpenFoodFacts</h2>
+              {item.off?.product?.nutriscore && (
+                <Badge tone="outline">Nutri {item.off.product.nutriscore.toUpperCase()}</Badge>
+              )}
+            </div>
+            {item.off ? (
+              <div className="space-y-3">
+                <div className="flex items-start gap-3">
+                  <span className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-raised text-muted">
+                    {item.off.product?.image ? (
+                      <img src={item.off.product.image} alt="" className="h-full w-full object-contain" />
+                    ) : (
+                      <Icon name="box" size={22} />
+                    )}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-[13px] font-medium">{item.off.product?.name || "Linked product"}</div>
+                    <div className="truncate text-[11px] text-muted">
+                      {[item.off.product?.brand, item.off.product?.quantity].filter(Boolean).join(" · ") || "No brand or size"}
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                      <Badge tone="outline">{item.off.source}</Badge>
+                      <span className="font-mono text-[10px] text-muted">{item.off.code}</span>
+                    </div>
+                  </div>
+                </div>
+                {(item.off.product?.novaGroup != null ||
+                  (item.off.product?.labels?.length ?? 0) > 0 ||
+                  (item.off.product?.allergens?.length ?? 0) > 0) && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {item.off.product?.novaGroup != null && (
+                      <Badge tone="outline">NOVA {item.off.product.novaGroup}</Badge>
+                    )}
+                    {(item.off.product?.labels ?? []).slice(0, 3).map((label) => (
+                      <Badge key={label} tone="outline">
+                        {label}
+                      </Badge>
+                    ))}
+                    {(item.off.product?.allergens?.length ?? 0) > 0 && (
+                      <Badge tone="warn">Allergens: {item.off.product!.allergens.join(", ")}</Badge>
+                    )}
+                  </div>
+                )}
+                {item.off.product?.ingredients && (
+                  <p className="line-clamp-3 text-[11px] leading-relaxed text-muted">{item.off.product.ingredients}</p>
+                )}
+                {item.off.filled.length > 0 && (
+                  <p className="rounded-xl bg-raised px-3 py-2 text-[11px] text-muted">
+                    Filled empty fields: {item.off.filled.join(", ")}. Your own values are never overwritten.
+                  </p>
+                )}
+                {can("member") && (
+                  <div className="flex flex-wrap gap-2">
+                    <Button size="sm" variant="secondary" icon="refresh" loading={offBusy} onClick={() => void fillOffProduct()}>
+                      Fill empty fields
+                    </Button>
+                    <Button size="sm" variant="ghost" icon="arrowUpRight" onClick={() => setOffPickerOpen(true)}>
+                      Change
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="text-danger hover:bg-danger-soft"
+                      onClick={() => setOffUnlinkOpen(true)}
+                    >
+                      Unlink
+                    </Button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <>
+                <p className="text-xs leading-relaxed text-muted">
+                  Link this product to OpenFoodFacts to fill any empty brand, description, image or category — without
+                  touching values you already set.
+                </p>
+                {can("member") && (
+                  <Button size="sm" variant="secondary" icon="arrowUpRight" className="mt-3" onClick={() => setOffPickerOpen(true)}>
+                    Link product
+                  </Button>
+                )}
+              </>
+            )}
+          </Card>
+
+          <Card className="p-4">
             <div className="mb-1 flex items-center justify-between gap-2">
               <h2 className="font-display text-lg">Receipt names</h2>
               <Badge tone="outline">{aliases.length}</Badge>
@@ -619,6 +771,24 @@ export function ItemPage() {
           </Card>
         </div>
       </div>
+
+      <OffProductPicker
+        open={offPickerOpen}
+        onClose={() => setOffPickerOpen(false)}
+        onSelect={(product) => void linkOffProduct(product)}
+        initialQuery={item.off?.code ?? item.barcodes[0]?.code ?? ""}
+      />
+
+      <ConfirmDialog
+        open={offUnlinkOpen}
+        onClose={() => setOffUnlinkOpen(false)}
+        onConfirm={() => void unlinkOffProduct()}
+        title="Unlink OpenFoodFacts?"
+        body="The item keeps every value already filled. You can link the product again at any time."
+        confirmLabel="Unlink"
+        danger={false}
+        loading={offBusy}
+      />
 
       <StockDialog
         open={stockOpen}
