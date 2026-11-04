@@ -57,6 +57,13 @@ All notable changes to SVault are documented here. The format follows
 - OCR now loads **English and Greek** Tesseract language data, so Greek recipes and receipts are read
   on-device too. The assets are vendored locally; nothing is fetched from a CDN. The local parsers also
   understand common Greek recipe headings, units and receipt total/payment lines.
+- Items track a nutrition panel — energy in kcal and kJ, fat, saturates, carbohydrate, sugars, fibre,
+  protein, salt and sodium — normalised per 100 g or 100 ml. Linking an OpenFoodFacts product fills a
+  blank panel automatically, and the values can also be entered from the label in the item editor.
+  Optional serving size and serving weight let count-based products be estimated later.
+- Recipes now estimate nutrition from the items their ingredients match. The recipe page shows the
+  whole-recipe total and calories and macros per portion, with the number of contributing ingredients;
+  recipe cards show a `kcal / portion` badge.
 - Shopping list and a weekly meal planner are still proposed in the [roadmap](docs/roadmap.md); no code
   has landed for them yet.
 

@@ -17,6 +17,7 @@ import {
 import { Icon } from "@/components/icons";
 import { AttributeFields } from "@/components/ItemCard";
 import { BarcodeScanner } from "@/components/BarcodeScanner";
+import { NutritionFormCard, draftToNutrition, emptyNutritionDraft, nutritionDraft, type NutritionDraft } from "@/components/Nutrition";
 import { useToast } from "@/components/toast";
 import { UNIT_OPTIONS } from "@/units";
 import { todayInput } from "@/format";import type { AttributeDef, Category, ItemDetail, Location, Vendor } from "@shared/types";
@@ -46,6 +47,7 @@ export function ItemFormPage() {
   const [targetStock, setTargetStock] = useState("");
   const [tags, setTags] = useState("");
   const [values, setValues] = useState<Record<string, unknown>>({});
+  const [nutrition, setNutrition] = useState<NutritionDraft>(emptyNutritionDraft);
   const [barcodes, setBarcodes] = useState<string[]>(params.get("barcode") ? [params.get("barcode")!] : []);
   const [barcodeInput, setBarcodeInput] = useState("");
   const [scanOpen, setScanOpen] = useState(false);
@@ -88,6 +90,7 @@ export function ItemFormPage() {
           setTargetStock(item.targetStock != null ? String(item.targetStock) : "");
           setTags(item.tags.join(", "));
           setValues(item.attributes ?? {});
+          setNutrition(nutritionDraft(item.nutrition));
           setImagePreview(item.image);
           setLoading(false);
         })
@@ -136,6 +139,7 @@ export function ItemFormPage() {
         targetStock: targetStock ? Number(targetStock) : null,
         attributes: values,
         tags,
+        nutrition: draftToNutrition(nutrition),
       };
       const offCode = params.get("offCode");
       if (offCode && !editing) payload.offCode = offCode;
@@ -248,6 +252,8 @@ export function ItemFormPage() {
             </div>
             <AttributeFields defs={visibleAttributes} values={values} onChange={setValues} />
           </Card>
+
+          <NutritionFormCard draft={nutrition} onChange={setNutrition} />
 
           {!editing && (
             <Card className="space-y-3 p-4">

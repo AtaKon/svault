@@ -1,5 +1,6 @@
 import { all, parseJson, bool } from "./db.js";
 import { round } from "./units.js";
+import { normaliseNutrition } from "./services/nutrition.js";
 import type {
   Item,
   Recipe,
@@ -105,6 +106,7 @@ export function serializeItem(row: any, barcodes: { id: string; code: string; fo
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     barcodes,
+    nutrition: normaliseNutrition(parseJson(row.nutrition, null)) ?? normaliseNutrition(offProduct?.nutrition) ?? null,
     off,
   };
 }

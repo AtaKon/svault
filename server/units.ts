@@ -60,6 +60,16 @@ export function compatible(a: string, b: string): boolean {
   return convert(1, a, b) !== null;
 }
 
+export type UnitKind = "mass" | "volume" | "count";
+
+/** Classify a unit so nutrition estimates can decide how to scale it. */
+export function unitKind(unit: string): UnitKind | null {
+  if (convert(1, unit, "g") !== null) return "mass";
+  if (convert(1, unit, "ml") !== null) return "volume";
+  if (convert(1, unit, "pcs") !== null) return "count";
+  return null;
+}
+
 export function pricePerUnit(price: number, priceUnit: string, baseUnit: string): number | null {
   const factor = convert(1, priceUnit, baseUnit);
   if (!factor) return null;

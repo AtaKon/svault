@@ -14,6 +14,7 @@ import {
   cn,
 } from "@/components/ui";
 import { Icon } from "@/components/icons";
+import { NutritionRows } from "@/components/Nutrition";
 import { useToast } from "@/components/toast";
 import { minutesLabel, plural, qty, relativeTime } from "@/format";
 import type { Recipe } from "@shared/types";
@@ -135,6 +136,9 @@ export function RecipePage() {
           <Badge tone={recipe.match.coverage >= 0.75 ? "brand" : recipe.match.coverage >= 0.4 ? "warn" : "neutral"}>
             {recipe.match.available} of {recipe.match.total} ingredients in stock
           </Badge>
+        )}
+        {recipe.nutrition?.perServing?.energyKcal != null && (
+          <Badge tone="outline">~{Math.round(recipe.nutrition.perServing.energyKcal)} kcal / portion</Badge>
         )}
         {recipe.tags.map((tag) => (
           <Badge key={tag} tone="neutral">
@@ -260,6 +264,50 @@ export function RecipePage() {
         </div>
 
         <div className="space-y-4">
+          <Card className="p-4">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <h2 className="font-display text-lg">Nutrition</h2>
+              {recipe.nutrition && <Badge tone="outline">estimated</Badge>}
+            </div>
+            {recipe.nutrition ? (
+              <>
+                <div className="flex items-end justify-between gap-3">
+                  <div>
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">
+                      {recipe.nutrition.perServing ? "Per portion" : "Whole recipe"}
+                    </div>
+                    <div className="mt-0.5 font-display text-4xl leading-none">
+                      {Math.round(
+                        (recipe.nutrition.perServing ?? recipe.nutrition.total).energyKcal ?? 0,
+                      )}
+                      <span className="ml-1 text-sm text-muted">kcal</span>
+                    </div>
+                  </div>
+                  {recipe.nutrition.perServing && (
+                    <div className="text-right text-[11px] text-muted">
+                      {Math.round(recipe.nutrition.total.energyKcal ?? 0)} kcal total
+                      {recipe.nutrition.servings ? ` · ${recipe.nutrition.servings} portions` : ""}
+                    </div>
+                  )}
+                </div>
+                <div className="mt-3">
+                  <NutritionRows values={recipe.nutrition.perServing ?? recipe.nutrition.total} />
+                </div>
+                <p className="mt-2 text-[11px] leading-relaxed text-muted">
+                  Estimated from {recipe.nutrition.matched} of {recipe.nutrition.ingredients} ingredients
+                  {recipe.nutrition.coverage < 1
+                    ? " — add nutrition to the remaining items for a closer number."
+                    : "."}
+                </p>
+              </>
+            ) : (
+              <p className="text-xs leading-relaxed text-muted">
+                No estimate yet. Ingredients that match inventory items with nutrition data are summed automatically.
+                Link an OpenFoodFacts product or enter the label values on an item to start.
+              </p>
+            )}
+          </Card>
+
           <Card className="p-4">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="font-display text-lg">Method</h2>

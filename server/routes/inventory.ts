@@ -16,6 +16,7 @@ import {
   serializeMovement,
 } from "../serialize.js";
 import { addStock, afterStockChange, moveStock, removeStock, setStock } from "../services/stock.js";
+import { normaliseNutrition } from "../services/nutrition.js";
 import { learnProductAlias } from "../services/product-aliases.js";
 import {
   fetchOffProduct,
@@ -30,6 +31,25 @@ export const inventoryRoutes = Router();
 inventoryRoutes.use(requireAuth);
 
 const RESERVED_ATTRIBUTE_KEY_SET = new Set<string>(RESERVED_ATTRIBUTE_KEYS);
+
+const nutritionBody = z
+  .object({
+    basis: z.enum(["100g", "100ml"]).optional(),
+    energyKcal: z.number().min(0).max(1e6).nullish(),
+    energyKj: z.number().min(0).max(1e6).nullish(),
+    fat: z.number().min(0).max(1e6).nullish(),
+    saturatedFat: z.number().min(0).max(1e6).nullish(),
+    carbohydrates: z.number().min(0).max(1e6).nullish(),
+    sugars: z.number().min(0).max(1e6).nullish(),
+    fiber: z.number().min(0).max(1e6).nullish(),
+    proteins: z.number().min(0).max(1e6).nullish(),
+    salt: z.number().min(0).max(1e6).nullish(),
+    sodium: z.number().min(0).max(1e6).nullish(),
+    servingSize: z.string().trim().max(60).nullish(),
+    servingQuantity: z.number().min(0).max(1e6).nullish(),
+    source: z.enum(["openfoodfacts", "manual"]).optional(),
+  })
+  .nullish();
 
 /* ------------------------------------------------------------------ helpers */
 
@@ -464,6 +484,7 @@ inventoryRoutes.post(
         attributes: z.record(z.string(), z.any()).optional(),
         tags: z.union([z.array(z.string()), z.string()]).optional(),
         image: z.string().max(300).nullish(),
+        nutrition: nutritionBody,
         barcodes: z.array(z.string().trim().min(1).max(80)).max(10).optional(),
         offCode: z.string().trim().max(80).nullish(),
         initialStock: z
@@ -490,12 +511,13 @@ inventoryRoutes.post(
     }
 
     const normalized = normalizeItemAttributes(body.attributes, body.brand);
+    const nutrition = normaliseNutrition(body.nutrition);
     const id = newId("itm");
     tx(() => {
       run(
         `INSERT INTO items (id, house_id, name, description, brand, category_id, unit, reorder_point, target_stock,
-           attributes, tags, image, archived, created_by, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
+           attributes, tags, image, nutrition, archived, created_by, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
         [
           id,
           houseId,
@@ -509,6 +531,7 @@ inventoryRoutes.post(
           JSON.stringify(normalized.attributes),
           JSON.stringify(parseTags(body.tags)),
           body.image ?? null,
+          nutrition ? JSON.stringify(nutrition) : null,
           req.user!.id,
           now(),
           now(),
@@ -597,6 +620,7 @@ itemRoutes.patch(
         attributes: z.record(z.string(), z.any()).optional(),
         tags: z.union([z.array(z.string()), z.string()]).optional(),
         image: z.string().max(300).nullish(),
+        nutrition: nutritionBody,
         archived: z.boolean().optional(),
         offCode: z.string().trim().max(80).nullish(),
       }),
@@ -606,9 +630,18 @@ itemRoutes.patch(
       body.attributes ?? parseJson<Record<string, unknown>>(item.attributes, {}),
       body.brand === undefined ? (item.brand ?? undefined) : body.brand,
     );
+    const nutrition =
+      body.nutrition === undefined
+        ? item.nutrition
+        : body.nutrition === null
+          ? null
+          : (() => {
+              const normalizedNutrition = normaliseNutrition(body.nutrition);
+              return normalizedNutrition ? JSON.stringify(normalizedNutrition) : null;
+            })();
     run(
       `UPDATE items SET name = ?, description = ?, brand = ?, category_id = ?, unit = ?, reorder_point = ?,
-         target_stock = ?, attributes = ?, tags = ?, image = ?, archived = ?, updated_at = ? WHERE id = ?`,
+         target_stock = ?, attributes = ?, tags = ?, image = ?, nutrition = ?, archived = ?, updated_at = ? WHERE id = ?`,
       [
         body.name ?? item.name,
         body.description === undefined ? item.description : body.description,
@@ -620,6 +653,7 @@ itemRoutes.patch(
         JSON.stringify(normalized.attributes),
         JSON.stringify(body.tags === undefined ? parseJson(item.tags, []) : parseTags(body.tags)),
         body.image === undefined ? item.image : body.image,
+        nutrition,
         body.archived === undefined ? item.archived : body.archived ? 1 : 0,
         now(),
         item.id,

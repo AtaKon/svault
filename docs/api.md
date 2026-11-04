@@ -207,6 +207,21 @@ Create item body:
   "targetStock": 2,
   "attributes": { "origin": "Messinia" },
   "tags": ["kitchen", "greek"],
+  "nutrition": {
+    "basis": "100ml",
+    "energyKcal": 884,
+    "energyKj": 3699,
+    "fat": 100,
+    "saturatedFat": 14,
+    "carbohydrates": 0,
+    "sugars": 0,
+    "fiber": 0,
+    "proteins": 0,
+    "salt": 0,
+    "sodium": 0,
+    "servingSize": "15 ml",
+    "servingQuantity": 14
+  },
   "barcodes": ["5201234567890"],
   "offCode": "5201234567890",
   "initialStock": {
@@ -221,6 +236,11 @@ Create item body:
   }
 }
 ```
+
+`nutrition` is optional and can be sent as `null` to clear it. All nutrient values except
+`energyKcal`/`energyKj` are grams per `basis` (`100g` or `100ml`). `servingQuantity` is the serving
+weight in grams or millilitres and is used to estimate count-based recipe ingredients. Linking an
+OpenFoodFacts product fills a blank panel automatically; existing values are kept.
 
 Stock action body:
 
@@ -246,7 +266,8 @@ Barcode scan response:
 `match` is `local`, `external` or `none`. For `external`, `product` contains the cached
 OpenFoodFacts product (`code`, `name`, `brand`, `genericName`, `quantity`, `categories`, `image`,
 `ingredients`, `allergens`, `labels`, `nutriscore`, `novaGroup`, `countries`, `packaging`,
-`servingSize`) and `item` is null.
+`servingSize`, `nutrition`) and `item` is null. `nutrition` is the parsed per-100 panel, or null when
+the product has no nutrition data.
 
 ## OpenFoodFacts catalogue
 
@@ -479,11 +500,11 @@ matched item's category; unlinked lines are reported as `Uncategorised`.
 
 | Method | Path | Min role | Purpose |
 | --- | --- | --- | --- |
-| `GET` | `/api/houses/:houseId/recipes` | viewer+ | List with ingredient coverage. Filters: `q`, `tag`, `favorite=1`. |
+| `GET` | `/api/houses/:houseId/recipes` | viewer+ | List with ingredient coverage and nutrition estimates. Filters: `q`, `tag`, `favorite=1`. |
 | `POST` | `/api/houses/:houseId/recipes` | member+ | Create a recipe. |
 | `POST` | `/api/houses/:houseId/recipes/upload` | member+ | Upload a source image (`field: image`) and get `{ path }`. |
 | `POST` | `/api/houses/:houseId/recipes/scan` | member+ | Parse OCR text and/or an image into a draft, optionally save. |
-| `GET` | `/api/recipes/:recipeId` | viewer+ | Recipe detail with `match` (available/total/missing). |
+| `GET` | `/api/recipes/:recipeId` | viewer+ | Recipe detail with `match` (available/total/missing) and `nutrition`. |
 | `PATCH` | `/api/recipes/:recipeId` | member+ | Partial update. |
 | `DELETE` | `/api/recipes/:recipeId` | member+ | Delete a recipe. |
 | `POST` | `/api/recipes/:recipeId/favorite` | member+ | Toggle or set `{ "favorite": true }`. |
@@ -519,6 +540,24 @@ Scan body:
 
 Without `save`, the response contains `draft`. With `save: true`, it also contains `recipe`. The
 response always includes `provider` (`ai` or `local`) and an optional `warning`.
+
+Every serialized recipe also carries `nutrition`, derived at read time from the ingredients and the
+nutrition panels of matching items:
+
+```json
+{
+  "total": { "energyKcal": 1840, "fat": 62, "proteins": 48, "...": "..." },
+  "perServing": { "energyKcal": 460, "...": "..." },
+  "servings": 4,
+  "ingredients": 9,
+  "matched": 7,
+  "coverage": 0.78
+}
+```
+
+`matched` and `coverage` show how many ingredients could contribute. The estimate is null when no
+ingredient matches an item with nutrition data. Ingredient amounts are converted between mass and
+volume units; a count-based ingredient (`pcs`, `box`, `can`…) uses the item's `servingQuantity`.
 
 ## Food ideas
 

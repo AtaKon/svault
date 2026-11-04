@@ -213,6 +213,12 @@ that place.
   product; **Unlink** removes the link but keeps everything already filled.
 - The card shows the product image, Nutri-Score, NOVA group, labels, allergens and ingredients. The
   complete OpenFoodFacts payload stays cached on the server.
+- Linking also stores the nutrition panel from OpenFoodFacts: energy (kcal and kJ), fat, saturates,
+  carbohydrate, sugars, fibre, protein, salt and sodium, normalised per 100 g or 100 ml. Existing
+  nutrition values are never overwritten by a later sync.
+- Nutrition can also be entered by hand in the item editor, for products OpenFoodFacts does not cover.
+  Values are kept per 100 g or 100 ml, with an optional serving size and serving weight. The serving
+  weight lets recipes estimate count-based ingredients such as eggs or yogurt cups.
 - Receipt lines show an **OpenFoodFacts** badge when a cached product or shared mapping matched. Use
   **Find OpenFoodFacts** to confirm or change a line before importing; the chosen code is sent with the
   line.
@@ -263,6 +269,16 @@ The recipe records which path was used (AI or local) and keeps the OCR text for 
 Open a saved recipe and press **Improve with AI**. The action fills missing quantities, times and
 temperatures and rewrites unclear steps, noting what changed. It requires a configured provider and
 member access.
+
+### Calories per recipe and portion
+
+Recipes estimate nutrition from their ingredients. Any ingredient whose name matches an inventory item
+with a nutrition panel is scaled to the quantity and unit in the recipe. The recipe page shows the
+whole-recipe total and, when servings are set, the calories and macros per portion. Recipe cards show
+a `kcal / portion` badge.
+
+The estimate is deliberately transparent: it reports how many ingredients contributed. Add nutrition
+to the remaining items, or set a serving weight on count-based products, to improve the number.
 
 ### Cook from what you have
 

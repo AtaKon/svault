@@ -6,9 +6,10 @@ import { memberRole, requireAuth, roleAtLeast } from "../auth.js";
 import { ApiError, handler, parseBody, requireHouse } from "../http.js";
 import { recipeMatch, serializeRecipe, stockQuantity } from "../serialize.js";
 import { aiCleanRecipe, aiCompleteRecipe, fileToDataUrl, resolveAi } from "../ai.js";
+import { normaliseNutrition, recipeNutrition, type NutritionSourceItem } from "../services/nutrition.js";
 import { heuristicRecipe, normaliseRecipeDraft, type ParsedRecipe } from "../services/recipe-local.js";
 import { uploader, uploadPath } from "../upload.js";
-import type { Role, Recipe } from "../../shared/types.js";
+import type { OffProduct, Role, Recipe } from "../../shared/types.js";
 
 export const recipeRoutes = Router();
 export const singleRecipeRoutes = Router();
@@ -62,9 +63,26 @@ function stockMaps(houseId: string) {
   return { byName, byId };
 }
 
+function nutritionItems(houseId: string): NutritionSourceItem[] {
+  return all<any>(
+    `SELECT i.id, i.name, i.unit, i.nutrition, cp.summary AS off_summary
+     FROM items i LEFT JOIN catalog_products cp ON cp.code = i.off_code
+     WHERE i.house_id = ? AND i.archived = 0`,
+    [houseId],
+  ).map((row) => ({
+    id: row.id,
+    name: row.name,
+    unit: row.unit,
+    nutrition:
+      normaliseNutrition(parseJson(row.nutrition, null)) ??
+      normaliseNutrition(parseJson<OffProduct | null>(row.off_summary, null)?.nutrition),
+  }));
+}
+
 function decorateRecipe(
   recipe: Recipe,
   maps: { byName: Map<string, number>; byId: Map<string, number> },
+  items: NutritionSourceItem[],
 ): Recipe {
   const stock = new Map<string, number>();
   for (const [name, quantity] of maps.byName) stock.set(name, quantity);
@@ -89,6 +107,7 @@ function decorateRecipe(
       })),
       stock,
     ),
+    nutrition: recipeNutrition(ingredients, items, recipe.servings),
   };
 }
 
@@ -252,10 +271,11 @@ recipeRoutes.get(
     if (favorite) where.push("r.favorite = 1");
     const rows = all<any>(`SELECT * FROM recipes r WHERE ${where.join(" AND ")} ORDER BY r.favorite DESC, r.updated_at DESC`, params);
     const maps = stockMaps(houseId);
+    const items = nutritionItems(houseId);
     const recipes = rows.map((row) => {
       const ingredients = ingredientsFor(row.id);
       const serialized = serializeRecipe(row, ingredients);
-      return decorateRecipe(serialized, maps);
+      return decorateRecipe(serialized, maps, items);
     });
     res.json(recipes);
   }),
@@ -269,7 +289,7 @@ recipeRoutes.post(
     const id = saveRecipe(houseId, req.user!.id, body);
     const row = recipeRow(id)!;
     const serialized = serializeRecipe(row, ingredientsFor(id));
-    res.status(201).json(decorateRecipe(serialized, stockMaps(houseId)));
+    res.status(201).json(decorateRecipe(serialized, stockMaps(houseId), nutritionItems(houseId)));
   }),
 );
 
@@ -336,7 +356,7 @@ recipeRoutes.post(
         provider,
         warning,
         saved: true,
-        recipe: decorateRecipe(serialized, stockMaps(houseId)),
+        recipe: decorateRecipe(serialized, stockMaps(houseId), nutritionItems(houseId)),
       });
       return;
     }
@@ -352,7 +372,7 @@ singleRecipeRoutes.get(
   handler((req, res) => {
     const { recipe, houseId } = recipeAccess(req);
     const serialized = serializeRecipe(recipe, ingredientsFor(recipe.id));
-    res.json(decorateRecipe(serialized, stockMaps(houseId)));
+    res.json(decorateRecipe(serialized, stockMaps(houseId), nutritionItems(houseId)));
   }),
 );
 
@@ -372,7 +392,7 @@ singleRecipeRoutes.patch(
     saveRecipe(houseId, req.user!.id, merged, recipe.id);
     const updated = recipeRow(recipe.id)!;
     const serialized = serializeRecipe(updated, ingredientsFor(recipe.id));
-    res.json(decorateRecipe(serialized, stockMaps(houseId)));
+    res.json(decorateRecipe(serialized, stockMaps(houseId), nutritionItems(houseId)));
   }),
 );
 
@@ -444,6 +464,6 @@ singleRecipeRoutes.post(
     saveRecipe(houseId, req.user!.id, payload, recipe.id);
     const updated = recipeRow(recipe.id)!;
     const serialized = serializeRecipe(updated, ingredientsFor(recipe.id));
-    res.json(decorateRecipe(serialized, stockMaps(houseId)));
+    res.json(decorateRecipe(serialized, stockMaps(houseId), nutritionItems(houseId)));
   }),
 );

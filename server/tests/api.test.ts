@@ -21,6 +21,7 @@ const { suggestProductMatches } = await import("../services/product-match.js");
 const { parseWithTemplateRules } = await import("../services/receipt-template-engine.js");
 const { LIDL_TEMPLATE_RULES, SKLAVENITIS_TEMPLATE_RULES } = await import("../../shared/receipt-template-example.js");
 const { convert, pricePerUnit } = await import("../units.js");
+const { parseOffNutrition } = await import("../services/nutrition.js");
 const { encodePng } = await import("../lib/png.js");
 const JSZip = (await import("jszip")).default;
 const http = await import("node:http");
@@ -306,6 +307,49 @@ describe("units", () => {
   it("normalises price per base unit", () => {
     assert.equal(pricePerUnit(10, "kg", "g"), 0.01);
     assert.equal(pricePerUnit(3, "pcs", "pcs"), 3);
+  });
+});
+
+describe("nutrition", () => {
+  it("normalises per-serving OpenFoodFacts nutrition to 100 ml", () => {
+    const nutrition = parseOffNutrition({
+      quantity: "330 ml",
+      serving_size: "1 can (330 ml)",
+      serving_quantity: 330,
+      nutrition_data_per: "serving",
+      nutriments: {
+        "energy-kj_serving": 200,
+        proteins_serving: 3.3,
+        salt_serving: 0.33,
+      },
+    });
+    assert.ok(nutrition);
+    assert.equal(nutrition.basis, "100ml");
+    assert.equal(nutrition.servingQuantity, 330);
+    assert.equal(nutrition.energyKcal, Math.round((200 / 4.184) * (100 / 330)));
+    assert.equal(nutrition.proteins, 1);
+    assert.equal(nutrition.salt, 0.1);
+    assert.equal(nutrition.sodium, 0.04);
+  });
+
+  it("reads per-100 values and derives salt from sodium", () => {
+    const nutrition = parseOffNutrition({
+      quantity: "500 g",
+      nutriments: {
+        "energy-kcal_100g": 120,
+        fat_100g: 3.2,
+        "saturated-fat_100g": 1.1,
+        carbohydrates_100g: 20,
+        sugars_100g: 4,
+        fiber_100g: 2,
+        proteins_100g: 5,
+        sodium_100g: 0.4,
+      },
+    });
+    assert.equal(nutrition?.basis, "100g");
+    assert.equal(nutrition?.energyKcal, 120);
+    assert.equal(nutrition?.energyKj, 502);
+    assert.equal(nutrition?.salt, 1);
   });
 });
 
@@ -940,6 +984,22 @@ describe("OpenFoodFacts links and shared catalogue", () => {
       countries: ["greece"],
       packaging: "plastic",
       servingSize: "30 g",
+      nutrition: {
+        energyKcal: 264,
+        energyKj: 1104,
+        fat: 21.3,
+        saturatedFat: 14.9,
+        carbohydrates: 0.5,
+        sugars: 0.5,
+        fiber: 0,
+        proteins: 14.2,
+        salt: 2.5,
+        sodium: 1,
+        basis: "100g",
+        servingSize: "30 g",
+        servingQuantity: 30,
+        source: "openfoodfacts",
+      },
       source: "openfoodfacts",
       fetchedAt: timestamp,
     };
@@ -990,6 +1050,8 @@ describe("OpenFoodFacts links and shared catalogue", () => {
     assert.equal(linked.data.item.brand, "Local brand");
     assert.ok(linked.data.filled.includes("description"));
     assert.ok(linked.data.filled.includes("image"));
+    assert.ok(linked.data.filled.includes("nutrition"));
+    assert.equal(linked.data.item.nutrition.energyKcal, 264);
     assert.equal(linked.data.item.off.code, fetaCode);
     assert.equal(linked.data.item.off.product.brand, "Kolios");
     assert.ok(linked.data.item.barcodes.some((entry: any) => entry.code === fetaCode));
@@ -1618,6 +1680,53 @@ describe("recipes", () => {
     assert.deepEqual(res.data.tags, ["edited", "breakfast"]);
     assert.equal(res.data.favorite, true);
     assert.equal(res.data.ingredients.length, list.data[0].ingredients.length);
+  });
+
+  it("estimates nutrition per recipe and portion", async () => {
+    const flour = await request(`/api/houses/${houseId}/items`, {
+      method: "POST",
+      body: {
+        name: "Nutrition flour",
+        unit: "g",
+        nutrition: {
+          basis: "100g",
+          energyKcal: 364,
+          energyKj: 1523,
+          fat: 1,
+          saturatedFat: 0.2,
+          carbohydrates: 76,
+          sugars: 0.3,
+          fiber: 2.7,
+          proteins: 10,
+          salt: 0.01,
+          sodium: 0.004,
+          servingSize: "100 g",
+          servingQuantity: 100,
+        },
+      },
+    });
+    assert.equal(flour.status, 201);
+    assert.equal(flour.data.nutrition.energyKcal, 364);
+    assert.equal(flour.data.nutrition.source, "manual");
+
+    const recipe = await request(`/api/houses/${houseId}/recipes`, {
+      method: "POST",
+      body: {
+        title: "Nutrition pancakes",
+        servings: 2,
+        ingredients: [
+          { name: "Nutrition flour", quantity: 200, unit: "g" },
+          { name: "Something without nutrition", quantity: 1, unit: "pcs" },
+        ],
+      },
+    });
+    assert.equal(recipe.status, 201);
+    assert.ok(recipe.data.nutrition);
+    assert.equal(recipe.data.nutrition.total.energyKcal, 728);
+    assert.equal(recipe.data.nutrition.perServing.energyKcal, 364);
+    assert.equal(recipe.data.nutrition.matched, 1);
+    assert.equal(recipe.data.nutrition.ingredients, 2);
+    assert.equal(recipe.data.nutrition.coverage, 0.5);
   });
 });
 
