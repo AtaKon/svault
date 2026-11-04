@@ -243,7 +243,7 @@ export function ItemPage() {
                   type="button"
                   aria-label={`View full-size image of ${item.name}`}
                   title="View full-size image"
-                  className="absolute inset-0 cursor-zoom-in"
+                  className="absolute inset-0 cursor-zoom-in focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-inset"
                   onClick={() => setImageOpen(true)}
                 />
                 <span className="pointer-events-none absolute bottom-2 right-2 flex h-8 w-8 items-center justify-center rounded-lg bg-black/45 text-white opacity-80 transition-opacity group-hover:opacity-100">
