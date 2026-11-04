@@ -19,6 +19,7 @@ import {
 } from "@/components/ui";
 import { Icon, type IconName } from "@/components/icons";
 import { BarcodeScanner } from "@/components/BarcodeScanner";
+import { ImageLightbox } from "@/components/ImageLightbox";
 import { StockDialog } from "@/components/ItemCard";
 import { PriceChart } from "@/components/PriceChart";
 import { useToast } from "@/components/toast";
@@ -47,6 +48,7 @@ export function ItemPage() {
   const [stockAction, setStockAction] = useState<"add" | "remove">("add");
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [imageOpen, setImageOpen] = useState(false);
   const [quickBusy, setQuickBusy] = useState(false);
   const [barcodeInput, setBarcodeInput] = useState("");
   const [barcodeBusy, setBarcodeBusy] = useState(false);
@@ -235,8 +237,18 @@ export function ItemPage() {
         <div className="space-y-4">
           <Card className="overflow-hidden">
             {item.image && (
-              <div className="relative h-44 w-full bg-raised sm:h-52">
+              <div className="group relative h-44 w-full bg-raised sm:h-52">
                 <img src={item.image} alt={item.name} className="h-full w-full object-cover" />
+                <button
+                  type="button"
+                  aria-label={`View full-size image of ${item.name}`}
+                  title="View full-size image"
+                  className="absolute inset-0 cursor-zoom-in"
+                  onClick={() => setImageOpen(true)}
+                />
+                <span className="pointer-events-none absolute bottom-2 right-2 flex h-8 w-8 items-center justify-center rounded-lg bg-black/45 text-white opacity-80 transition-opacity group-hover:opacity-100">
+                  <Icon name="image" size={15} />
+                </span>
               </div>
             )}
             <div className="p-4">
@@ -640,6 +652,8 @@ export function ItemPage() {
         confirmLabel="Delete item"
         loading={deleting}
       />
+
+      {imageOpen && item.image && <ImageLightbox src={item.image} alt={item.name} onClose={() => setImageOpen(false)} />}
     </div>
   );
 }
