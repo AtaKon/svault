@@ -186,7 +186,7 @@ export function AppShell() {
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-5xl px-4 pb-28 pt-4 sm:px-6 lg:ml-[260px] lg:max-w-none lg:px-10 lg:pb-14 lg:pt-8">
+      <main className="mx-auto w-full max-w-5xl px-4 pb-28 pt-4 sm:px-6 lg:ml-[260px] lg:w-[calc(100%-260px)] lg:max-w-none lg:px-10 lg:pb-14 lg:pt-8">
         <div className="mx-auto w-full max-w-[1120px]">
           <Outlet />
         </div>
