@@ -119,8 +119,8 @@ export function DashboardPage() {
         </Card>
       )}
 
-      <div className="grid gap-5 lg:grid-cols-[1.15fr_1fr]">
-        <div className="space-y-5">
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
+        <div className="min-w-0 space-y-5">
           <section>
             <div className="mb-2.5 flex items-center justify-between">
               <h2 className="font-display text-xl">Running low</h2>
@@ -182,7 +182,7 @@ export function DashboardPage() {
           </section>
         </div>
 
-        <div className="space-y-5">
+        <div className="min-w-0 space-y-5">
           <section>
             <div className="mb-2.5 flex items-center justify-between">
               <h2 className="font-display text-xl">Use it up</h2>
@@ -234,12 +234,12 @@ export function DashboardPage() {
               <Card className="p-4">
                 <button onClick={() => navigate(`/recipes/${data.recentRecipe!.id}`)} className="w-full text-left">
                   <div className="flex items-start justify-between gap-3">
-                    <div>
+                    <div className="min-w-0">
                       <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted">From your recipes</div>
-                      <div className="mt-1 font-display text-lg leading-tight">{data.recentRecipe.title}</div>
+                      <div className="mt-1 break-words font-display text-lg leading-tight">{data.recentRecipe.title}</div>
                     </div>
                     {data.recentRecipe.match && (
-                      <Badge tone={data.recentRecipe.match.coverage >= 0.75 ? "brand" : "warn"}>
+                      <Badge tone={data.recentRecipe.match.coverage >= 0.75 ? "brand" : "warn"} className="shrink-0">
                         {Math.round(data.recentRecipe.match.coverage * 100)}% in stock
                       </Badge>
                     )}
@@ -250,7 +250,7 @@ export function DashboardPage() {
                     </p>
                   )}
                 </button>
-                <div className="mt-3 flex gap-2">
+                <div className="mt-3 flex flex-wrap gap-2">
                   <Button size="sm" variant="soft" icon="sparkles" onClick={() => navigate("/ideas")}>
                     What can I cook?
                   </Button>
@@ -270,7 +270,7 @@ export function DashboardPage() {
                     <div className="text-[11px] text-muted">Scan a handwritten recipe and let AI tidy it up.</div>
                   </div>
                 </div>
-                <div className="mt-3 flex gap-2">
+                <div className="mt-3 flex flex-wrap gap-2">
                   <Button size="sm" icon="camera" onClick={() => navigate("/recipes/scan")}>
                     Scan recipe
                   </Button>

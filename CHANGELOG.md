@@ -58,6 +58,8 @@ All notable changes to SVault are documented here. The format follows
 
 ### Fixed
 
+- Dashboard side panels stay inside their column when a recipe or item name has a long unbroken word.
+  Recipe titles wrap, other names truncate, and the two columns can no longer widen the page.
 - Wide desktop windows no longer scroll sideways or push page content past the right edge. The page
   area now takes exactly the space beside the sidebar, so its content stays centred from 1024px up.
 - Receipt imports no longer fail with **Invalid request** when OCR produces an oversized product name
