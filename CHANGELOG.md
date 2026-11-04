@@ -58,6 +58,8 @@ All notable changes to SVault are documented here. The format follows
 
 ### Fixed
 
+- Wide desktop windows no longer scroll sideways or push page content past the right edge. The page
+  area now takes exactly the space beside the sidebar, so its content stays centred from 1024px up.
 - Receipt imports no longer fail with **Invalid request** when OCR produces an oversized product name
   or an out-of-range quantity, price, discount or VAT rate. Values are bounded before import, and the
   toast now names the rejected field if validation still fails.
