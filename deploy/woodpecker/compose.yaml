@@ -55,27 +55,12 @@ services:
       WOODPECKER_DISABLE_VERSION_CHECK: "true"
       WOODPECKER_LOG_LEVEL: "info"
       TZ: "${TZ:-Europe/Athens}"
+    # Compose mounts file secrets read-only at /run/secrets/<name>.
     secrets:
-      - source: grpc_secret
-        target: grpc_secret
-        uid: "${WOODPECKER_UID:-568}"
-        gid: "${WOODPECKER_GID:-568}"
-        mode: 0400
-      - source: agent_secret
-        target: agent_secret
-        uid: "${WOODPECKER_UID:-568}"
-        gid: "${WOODPECKER_GID:-568}"
-        mode: 0400
-      - source: github_client
-        target: github_client
-        uid: "${WOODPECKER_UID:-568}"
-        gid: "${WOODPECKER_GID:-568}"
-        mode: 0400
-      - source: github_secret
-        target: github_secret
-        uid: "${WOODPECKER_UID:-568}"
-        gid: "${WOODPECKER_GID:-568}"
-        mode: 0400
+      - grpc_secret
+      - agent_secret
+      - github_client
+      - github_secret
     networks:
       - woodpecker
       - proxy
@@ -128,11 +113,7 @@ services:
       WOODPECKER_LOG_LEVEL: "info"
       TZ: "${TZ:-Europe/Athens}"
     secrets:
-      - source: agent_secret
-        target: agent_secret
-        uid: "${WOODPECKER_UID:-568}"
-        gid: "${WOODPECKER_GID:-568}"
-        mode: 0400
+      - agent_secret
     networks:
       - woodpecker
     depends_on:
