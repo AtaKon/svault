@@ -61,6 +61,7 @@ dataset — all from one PWA that runs in a single Docker container.
 | [Architecture](docs/architecture.md) | Runtime, data model, auth, stock engine, reminders, AI fallbacks, uploads and PWA |
 | [API reference](docs/api.md) | Conventions, roles, every endpoint, payloads and status codes |
 | [Deployment](docs/deployment.md) | Docker, environment variables, HTTPS, TrueNAS, backups, upgrades and hardening |
+| [Self-hosted CI/CD](deploy/woodpecker/README.md) | Woodpecker CI, private registry, automatic deploys and the AI review bot |
 | [Development](docs/development.md) | Local setup, scripts, tests, project layout and conventions |
 | [Roadmap](docs/roadmap.md) | Planned features, priorities, dependencies and non-goals |
 

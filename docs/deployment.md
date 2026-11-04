@@ -328,6 +328,13 @@ back.
 For TrueNAS, build/save the image on a development machine, `docker load` it on the NAS, bump
 `SVAULT_IMAGE`, and press **Deploy** in Dockge.
 
+### Automated deploys with Woodpecker
+
+The repository includes a self-hosted Woodpecker CI stack in [`deploy/woodpecker`](../deploy/woodpecker/README.md).
+After the one-time setup, a push to `main` runs the test suite, builds the image, pushes it to a
+private registry on the NAS, and recreates the `svault` container with the exact commit image. The
+deploy command rolls back automatically when the new container fails its health check.
+
 ## Operations
 
 ### Health check

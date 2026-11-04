@@ -13,6 +13,7 @@ guides below go deeper.
 | [Architecture](architecture.md) | Runtime, data model, auth, stock engine, AI fallbacks, uploads, PWA and design trade-offs |
 | [API reference](api.md) | Conventions, roles, every endpoint, request/response examples and errors |
 | [Deployment](deployment.md) | Docker Compose, environment variables, HTTPS, TrueNAS, backups and upgrades |
+| [Self-hosted CI/CD](../deploy/woodpecker/README.md) | Woodpecker CI, private image registry, automatic deploys and the AI review bot |
 | [Development](development.md) | Local setup, scripts, tests, project layout and contribution workflow |
 | [Roadmap](roadmap.md) | Planned features, priorities and the reasoning behind them |
 

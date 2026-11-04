@@ -1,0 +1,77 @@
+# SVault self-hosted CI/CD (Woodpecker CI on TrueNAS)
+#
+# Flow on a push to main:
+#   test -> publish (Kaniko) -> deploy (SSH forced command)
+#
+# - test    runs for pushes, tags, pull requests and manual runs.
+# - publish builds the production Dockerfile and pushes it to the private
+#           registry that runs next to Woodpecker. It is restricted to main.
+# - deploy  asks the NAS to pull the exact commit image and recreate SVault.
+#           It is restricted to main and uses a key that can only run the
+#           deploy script (see deploy/woodpecker/README.md).
+#
+# Secrets required in the Woodpecker repository settings:
+#   registry_password       password for the `ci` user of the local registry
+#   svault_deploy_ssh_key   private key of the forced-command deploy user
+#
+# Both secrets are deliberately limited to push/tag events. Pull requests only
+# ever get the test step, so fork PRs cannot read deployment credentials.
+
+when:
+  - event: [push, pull_request, tag, manual]
+
+steps:
+  test:
+    image: node:22.23.4-bookworm
+    commands:
+      - npm ci --no-audit --no-fund
+      - npm run typecheck
+      # The SPA fallback test expects dist/client to exist.
+      - npm run build
+      - npm test
+      - |
+        NODE_ENV=production PORT=4100 DATA_DIR=./data-ci npm start &
+        for attempt in $$(seq 1 30); do
+          node -e "fetch('http://127.0.0.1:4100/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" && break
+          sleep 1
+        done
+        node scripts/smoke.mjs http://127.0.0.1:4100
+    when:
+      - event: [push, pull_request, tag, manual]
+
+  publish:
+    image: woodpeckerci/plugin-kaniko:2.3.4
+    depends_on: [test]
+    settings:
+      registry: registry:5000
+      repo: svault
+      tags: ${CI_COMMIT_SHA},main
+      dockerfile: Dockerfile
+      context: .
+      # The registry lives on an isolated Docker network and speaks HTTP.
+      # It is never published to the internet.
+      insecure: true
+      username: ci
+      password:
+        from_secret: registry_password
+    when:
+      - event: push
+        branch: main
+
+  deploy:
+    image: alpine:3.21.9
+    depends_on: [publish]
+    environment:
+      DEPLOY_SSH_KEY:
+        from_secret: svault_deploy_ssh_key
+    commands:
+      - apk add --no-cache openssh-client
+      - mkdir -p ~/.ssh
+      - printf '%s\n' "$${DEPLOY_SSH_KEY}" > ~/.ssh/id_ed25519
+      - chmod 600 ~/.ssh/id_ed25519
+      - cp .woodpecker/known_hosts ~/.ssh/known_hosts
+      - chmod 600 ~/.ssh/known_hosts
+      - ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts svault-deploy@192.168.0.76 "deploy ${CI_COMMIT_SHA}"
+    when:
+      - event: push
+        branch: main

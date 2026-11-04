@@ -1,0 +1,208 @@
+# SVault — self-hosted Woodpecker CI on TrueNAS SCALE
+#
+# Deploy from Dockge (Stacks -> New stack -> paste this file) or run
+# `docker compose up -d` in this folder. See README.md for the one-time setup.
+#
+# Security model:
+#   - No container in this stack publishes a public port. The Woodpecker UI is
+#     reached only through Nginx Proxy Manager on the external `proxy` network.
+#   - Server and agent talk over a private, internal Docker network. The agent
+#     is not on the proxy network.
+#   - The image registry is private, HTTP-only on an isolated Docker network,
+#     and bound to 127.0.0.1 for the host-side deploy script.
+#   - Build/agent credentials are Docker secrets / Woodpecker repo secrets,
+#     never plain environment variables in the compose file.
+
+name: woodpecker
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  woodpecker-server:
+    image: woodpeckerci/woodpecker-server:v3.20.1
+    container_name: woodpecker-server
+    restart: unless-stopped
+    init: true
+    user: "${WOODPECKER_UID:-568}:${WOODPECKER_GID:-568}"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    volumes:
+      - "${WOODPECKER_DATA_PATH:-/mnt/Storage/apps/woodpecker}/server:/var/lib/woodpecker"
+    environment:
+      WOODPECKER_HOST: "${WOODPECKER_HOST:-https://ci.picklehouse.xyz}"
+      WOODPECKER_SERVER_ADDR: ":8000"
+      WOODPECKER_GRPC_ADDR: ":9000"
+      WOODPECKER_GRPC_SECRET_FILE: /run/secrets/grpc_secret
+      WOODPECKER_AGENT_SECRET_FILE: /run/secrets/agent_secret
+      WOODPECKER_GITHUB: "true"
+      WOODPECKER_GITHUB_CLIENT_FILE: /run/secrets/github_client
+      WOODPECKER_GITHUB_SECRET_FILE: /run/secrets/github_secret
+      # Closed registration: only the admin can sign in.
+      WOODPECKER_OPEN: "false"
+      WOODPECKER_ADMIN: "${WOODPECKER_ADMIN:-AtaKon}"
+      WOODPECKER_REPO_OWNERS: "${WOODPECKER_REPO_OWNERS:-AtaKon}"
+      # Do not let users register rogue agents that could exfiltrate secrets.
+      WOODPECKER_DISABLE_USER_AGENT_REGISTRATION: "true"
+      # Fork PRs need manual approval before they run.
+      WOODPECKER_DEFAULT_APPROVAL_MODE: "forks"
+      # Do not expose the API explorer or call out to GitHub for updates.
+      WOODPECKER_ENABLE_SWAGGER: "false"
+      WOODPECKER_DISABLE_VERSION_CHECK: "true"
+      WOODPECKER_LOG_LEVEL: "info"
+      TZ: "${TZ:-Europe/Athens}"
+    secrets:
+      - source: grpc_secret
+        target: grpc_secret
+        uid: "${WOODPECKER_UID:-568}"
+        gid: "${WOODPECKER_GID:-568}"
+        mode: 0400
+      - source: agent_secret
+        target: agent_secret
+        uid: "${WOODPECKER_UID:-568}"
+        gid: "${WOODPECKER_GID:-568}"
+        mode: 0400
+      - source: github_client
+        target: github_client
+        uid: "${WOODPECKER_UID:-568}"
+        gid: "${WOODPECKER_GID:-568}"
+        mode: 0400
+      - source: github_secret
+        target: github_secret
+        uid: "${WOODPECKER_UID:-568}"
+        gid: "${WOODPECKER_GID:-568}"
+        mode: 0400
+    networks:
+      - woodpecker
+      - proxy
+    expose:
+      - "8000"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 512m
+    pids_limit: 256
+    healthcheck:
+      test: ["CMD", "/bin/woodpecker-server", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging: *default-logging
+
+  woodpecker-agent:
+    image: woodpeckerci/woodpecker-agent:v3.20.1
+    container_name: woodpecker-agent
+    restart: unless-stopped
+    init: true
+    # Run as the same unprivileged UID as the server. The supplementary docker
+    # group is only for /var/run/docker.sock. The agent never joins the proxy
+    # network.
+    user: "${WOODPECKER_UID:-568}:${WOODPECKER_GID:-568}"
+    group_add:
+      - "${DOCKER_GID:-999}"
+    read_only: true
+    tmpfs:
+      - /tmp:size=1g,mode=1777
+    volumes:
+      - "${WOODPECKER_DATA_PATH:-/mnt/Storage/apps/woodpecker}/agent:/etc/woodpecker"
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    environment:
+      WOODPECKER_SERVER: "woodpecker-server:9000"
+      WOODPECKER_AGENT_SECRET_FILE: /run/secrets/agent_secret
+      WOODPECKER_BACKEND: "docker"
+      WOODPECKER_MAX_WORKFLOWS: "1"
+      # Attach pipeline step containers to the registry network only. They can
+      # reach registry:5000 but not the Woodpecker server or the proxy network.
+      WOODPECKER_BACKEND_DOCKER_NETWORK: "woodpecker-registry"
+      # Per-step limits: 2 GiB RAM and 2 CPUs.
+      WOODPECKER_BACKEND_DOCKER_LIMIT_MEM: "2147483648"
+      WOODPECKER_BACKEND_DOCKER_LIMIT_CPU_QUOTA: "200000"
+      WOODPECKER_BACKEND_DOCKER_STOP_TIMEOUT: "20"
+      WOODPECKER_HEALTHCHECK: "true"
+      WOODPECKER_LOG_LEVEL: "info"
+      TZ: "${TZ:-Europe/Athens}"
+    secrets:
+      - source: agent_secret
+        target: agent_secret
+        uid: "${WOODPECKER_UID:-568}"
+        gid: "${WOODPECKER_GID:-568}"
+        mode: 0400
+    networks:
+      - woodpecker
+    depends_on:
+      - woodpecker-server
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 2g
+    pids_limit: 1024
+    healthcheck:
+      test: ["CMD", "/bin/woodpecker-agent", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging: *default-logging
+
+  registry:
+    image: registry:2.8.3
+    container_name: woodpecker-registry
+    restart: unless-stopped
+    init: true
+    user: "${WOODPECKER_UID:-568}:${WOODPECKER_GID:-568}"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    volumes:
+      - "${WOODPECKER_DATA_PATH:-/mnt/Storage/apps/woodpecker}/registry:/var/lib/registry"
+      - "./secrets/registry.htpasswd:/auth/htpasswd:ro"
+    environment:
+      REGISTRY_HTTP_ADDR: ":5000"
+      # Immutable tags plus no delete API keeps a compromised pipeline from
+      # removing the image a deploy is about to use.
+      REGISTRY_STORAGE_DELETE_ENABLED: "false"
+      REGISTRY_AUTH: "htpasswd"
+      REGISTRY_AUTH_HTPASSWD_REALM: "SVault CI registry"
+      REGISTRY_AUTH_HTPASSWD_PATH: "/auth/htpasswd"
+      REGISTRY_LOG_LEVEL: "info"
+    ports:
+      - "127.0.0.1:5000:5000"
+    networks:
+      - registry
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 256m
+    pids_limit: 128
+    logging: *default-logging
+
+networks:
+  # Server <-> agent only. `internal` removes outside connectivity.
+  woodpecker:
+    name: woodpecker-internal
+    internal: true
+  # Pipeline step containers + the local registry. No public exposure.
+  registry:
+    name: woodpecker-registry
+  # Nginx Proxy Manager's network on TrueNAS.
+  proxy:
+    external: true
+    name: "${PROXY_NETWORK:-ix-nginx-proxy-manager_default}"
+
+secrets:
+  agent_secret:
+    file: ./secrets/agent_secret
+  grpc_secret:
+    file: ./secrets/grpc_secret
+  github_client:
+    file: ./secrets/github_client
+  github_secret:
+    file: ./secrets/github_secret

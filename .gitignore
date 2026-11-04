@@ -5,6 +5,8 @@ public/tesseract/
 *.traineddata
 .env
 .env.local
+deploy/woodpecker/.env
+deploy/woodpecker/secrets/
 *.log
 .DS_Store
 Thumbs.db
