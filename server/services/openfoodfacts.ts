@@ -1,6 +1,7 @@
 import { all, get, newId, now, parseJson, run } from "../db.js";
 import { OFF_API_BASE, OFF_CACHE_DAYS, OFF_SEARCH_BASE, OFF_TIMEOUT_MS } from "../config.js";
 import type { OffProduct } from "../../shared/types.js";
+import { normaliseNutrition, parseOffNutrition } from "./nutrition.js";
 import { normalizeVendorName } from "./vendors.js";
 import { ApiError } from "../http.js";
 
@@ -75,6 +76,7 @@ export function offSummaryFromPayload(payload: any): OffProduct {
     countries: stringList(payload?.countries_tags, stripTag),
     packaging: firstString(payload?.packaging) || null,
     servingSize: firstString(payload?.serving_size) || null,
+    nutrition: parseOffNutrition(payload),
     source: "openfoodfacts",
     fetchedAt: now(),
   };
@@ -91,6 +93,7 @@ export function offProductFromRow(row: any): OffProduct | null {
       brand: summary.brand || row.brand || "",
       quantity: summary.quantity || row.quantity || "",
       image: summary.image ?? row.image ?? null,
+      nutrition: normaliseNutrition(summary.nutrition) ?? parseOffNutrition(parseJson(row.payload, {})),
       fetchedAt: summary.fetchedAt || row.fetched_at,
       source: row.source === "catalog" ? "catalog" : "openfoodfacts",
     };
@@ -111,6 +114,7 @@ export function offProductFromRow(row: any): OffProduct | null {
     countries: [],
     packaging: null,
     servingSize: null,
+    nutrition: null,
     source: row.source === "catalog" ? "catalog" : "openfoodfacts",
     fetchedAt: row.fetched_at,
   };
@@ -378,6 +382,13 @@ export function fillItemFromOff(opts: {
       patch.category_id = categoryId;
       filled.push("category");
     }
+  }
+  const currentNutrition = normaliseNutrition(parseJson(item.nutrition, null));
+  if (!currentNutrition && product.nutrition) {
+    patch.nutrition = JSON.stringify(product.nutrition);
+    filled.push("nutrition");
+  } else if (currentNutrition && product.nutrition) {
+    skipped.push({ field: "nutrition", reason: "kept local nutrition" });
   }
   const offUnit = offQuantityUnit(product.quantity);
   if (offUnit && (blank(item.unit) || (opts.allowDefaultUnit && item.unit === "pcs"))) {

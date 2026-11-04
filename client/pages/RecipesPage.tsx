@@ -156,6 +156,11 @@ export function RecipesPage() {
                     {(recipe.match?.missing.length ?? 0) > 0 && (
                       <Badge tone="outline">{recipe.match!.missing.length} missing</Badge>
                     )}
+                    {recipe.nutrition?.perServing?.energyKcal != null && (
+                      <Badge tone="outline">
+                        ~{Math.round(recipe.nutrition.perServing.energyKcal)} kcal / portion
+                      </Badge>
+                    )}
                     {recipe.tags.slice(0, 2).map((entry) => (
                       <Badge key={entry} tone="neutral">
                         {entry}

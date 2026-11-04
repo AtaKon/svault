@@ -111,6 +111,7 @@ CREATE TABLE IF NOT EXISTS items (
   attributes TEXT NOT NULL DEFAULT '{}',
   tags TEXT NOT NULL DEFAULT '[]',
   image TEXT,
+  nutrition TEXT,
   archived INTEGER NOT NULL DEFAULT 0,
   created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL,
@@ -453,6 +454,7 @@ ensureColumn("items", "off_linked_at", "TEXT");
 ensureColumn("items", "off_source", "TEXT");
 ensureColumn("items", "off_synced_at", "TEXT");
 ensureColumn("items", "off_filled", "TEXT NOT NULL DEFAULT '[]'");
+ensureColumn("items", "nutrition", "TEXT");
 db.exec("CREATE INDEX IF NOT EXISTS items_off ON items(off_code)");
 db.exec(`UPDATE receipts SET savings = (
   SELECT ROUND(SUM(COALESCE(discount, 0)), 2) FROM receipt_lines WHERE receipt_id = receipts.id

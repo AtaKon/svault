@@ -19,6 +19,7 @@ import {
 } from "@/components/ui";
 import { Icon, type IconName } from "@/components/icons";
 import { BarcodeScanner } from "@/components/BarcodeScanner";
+import { NutritionRows, basisLabel } from "@/components/Nutrition";
 import { OffProductPicker } from "@/components/OffProductPicker";
 import { ImageLightbox } from "@/components/ImageLightbox";
 import { StockDialog } from "@/components/ItemCard";
@@ -589,6 +590,35 @@ export function ItemPage() {
                   Add
                 </Button>
               </form>
+            )}
+          </Card>
+
+          <Card className="p-4">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <h2 className="font-display text-lg">Nutrition</h2>
+              {item.nutrition && (
+                <Badge tone={item.nutrition.source === "openfoodfacts" ? "brand" : "outline"}>
+                  {item.nutrition.source === "openfoodfacts" ? "OpenFoodFacts" : "Manual"}
+                </Badge>
+              )}
+            </div>
+            {item.nutrition ? (
+              <>
+                <NutritionRows values={item.nutrition} />
+                <p className="mt-2 text-[11px] text-muted">
+                  {basisLabel(item.nutrition.basis)}
+                  {item.nutrition.servingSize ? ` · serving ${item.nutrition.servingSize}` : ""}
+                  {item.nutrition.servingQuantity != null
+                    ? ` (${item.nutrition.servingQuantity} ${item.nutrition.basis === "100ml" ? "ml" : "g"})`
+                    : ""}
+                </p>
+              </>
+            ) : (
+              <p className="text-xs leading-relaxed text-muted">
+                {item.off
+                  ? "No nutrition panel is stored for this product yet. Try Fill empty fields below, or add the label values in the item editor."
+                  : "No nutrition panel yet. Link an OpenFoodFacts product or add the values from the label in the item editor to track calories and calculate recipe portions."}
+              </p>
             )}
           </Card>
 

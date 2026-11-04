@@ -105,6 +105,35 @@ export interface Barcode {
   format: string | null;
 }
 
+/** The unit a nutrition panel is expressed against. */
+export type NutritionBasis = "100g" | "100ml";
+
+/**
+ * Nutrition values. Everything except the two energy fields is in grams per
+ * `basis` (salt and sodium included, matching OpenFoodFacts).
+ */
+export interface NutritionValues {
+  energyKcal: number | null;
+  energyKj: number | null;
+  fat: number | null;
+  saturatedFat: number | null;
+  carbohydrates: number | null;
+  sugars: number | null;
+  fiber: number | null;
+  proteins: number | null;
+  salt: number | null;
+  sodium: number | null;
+}
+
+/** A nutrition panel for an item, imported from OpenFoodFacts or entered by hand. */
+export interface NutritionFacts extends NutritionValues {
+  basis: NutritionBasis;
+  servingSize: string | null;
+  /** Grams or millilitres in one serving, used to estimate count-based ingredients. */
+  servingQuantity: number | null;
+  source: "openfoodfacts" | "manual";
+}
+
 /** A product as stored in the shared OpenFoodFacts cache. */
 export interface OffProduct {
   code: string;
@@ -122,6 +151,8 @@ export interface OffProduct {
   countries: string[];
   packaging: string | null;
   servingSize: string | null;
+  /** Parsed nutrition panel from the OpenFoodFacts `nutriments` object. */
+  nutrition?: NutritionFacts | null;
   source: "openfoodfacts" | "catalog";
   fetchedAt: string;
   /** Present only when a full product payload was requested. */
@@ -264,6 +295,7 @@ export interface Item {
   createdAt: string;
   updatedAt: string;
   barcodes: Barcode[];
+  nutrition: NutritionFacts | null;
   off?: OffLink | null;
   lots?: StockLot[];
   priceStats?: PriceStats;
@@ -313,6 +345,20 @@ export interface Recipe {
   createdAt: string;
   updatedAt: string;
   match?: RecipeMatch;
+  /** Nutrition estimated from the ingredients that link to tracked items. */
+  nutrition?: RecipeNutrition | null;
+}
+
+export interface RecipeNutrition {
+  total: NutritionValues;
+  perServing: NutritionValues | null;
+  servings: number | null;
+  /** Number of ingredients considered for the estimate. */
+  ingredients: number;
+  /** Ingredients whose item had usable nutrition data and a compatible amount. */
+  matched: number;
+  /** matched / ingredients, rounded to two decimals. */
+  coverage: number;
 }
 
 export interface RecipeMatch {

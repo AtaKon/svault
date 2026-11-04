@@ -132,6 +132,11 @@ export function OffProductPicker({
                 <span className="block truncate text-[11px] text-muted">
                   {[product.brand, product.quantity].filter(Boolean).join(" · ") || "No brand or size"}
                 </span>
+                {product.nutrition?.energyKcal != null && (
+                  <span className="block truncate text-[10px] text-muted">
+                    {Math.round(product.nutrition.energyKcal)} kcal / 100 {product.nutrition.basis === "100ml" ? "ml" : "g"}
+                  </span>
+                )}
                 <span className="mt-0.5 block truncate font-mono text-[10px] text-muted">{product.code}</span>
               </span>
               <span className="flex shrink-0 flex-col items-end gap-1">
