@@ -107,6 +107,8 @@ Record a unit price whenever you add stock. SVault normalises it to the item's b
 2. Enter a name, choose a category and base unit.
 3. Optionally set a reorder point, target stock, brand, attributes, tags and barcodes.
 4. You can add an initial batch at the same time: quantity, price, place, purchase date, shop and expiry.
+5. Add a photo to make the item easy to recognise. Click or tap a photo in the inventory list or on the
+   item page to open it full-size; press Escape, tap outside the image or use the close button to return.
 
 Attributes are defined per house in **Settings -> Attributes**. Supported types are text, number,
 select, date, boolean and URL.

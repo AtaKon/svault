@@ -5,6 +5,7 @@ import { api } from "@/api";
 import { qty as formatQty, unitPriceLabel } from "@/format";
 import { Badge, Button, Card, Field, Input, Select, Sheet, Spinner, Textarea, cn } from "@/components/ui";
 import { Icon } from "@/components/icons";
+import { ImageLightbox } from "@/components/ImageLightbox";
 import { useToast } from "@/components/toast";
 import { useAuth } from "@/state";
 
@@ -24,6 +25,7 @@ export function ItemCard({
   const toast = useToast();
   const [busy, setBusy] = useState<"add" | "remove" | null>(null);
   const [current, setCurrent] = useState(item);
+  const [imageOpen, setImageOpen] = useState(false);
 
   useEffect(() => setCurrent(item), [item]);
 
@@ -50,6 +52,7 @@ export function ItemCard({
       role="button"
       tabIndex={0}
       onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return;
         if (event.key === "Enter" || event.key === " ") navigate(`/items/${item.id}`);
       }}
     >
@@ -60,7 +63,22 @@ export function ItemCard({
         )}
       >
         {item.image ? (
-          <img src={item.image} alt="" className="h-full w-full object-cover" loading="lazy" />
+          <>
+            <img src={item.image} alt="" className="h-full w-full object-cover" loading="lazy" />
+            <button
+              type="button"
+              aria-label={`View full-size image of ${item.name}`}
+              title="View full-size image"
+              className="absolute inset-0 cursor-zoom-in rounded-xl"
+              onClick={(event) => {
+                event.stopPropagation();
+                setImageOpen(true);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") event.stopPropagation();
+              }}
+            />
+          </>
         ) : item.categoryIcon ? (
           <span className={compact ? "text-lg" : "text-2xl"}>{item.categoryIcon}</span>
         ) : (
@@ -117,6 +135,8 @@ export function ItemCard({
           </button>
         </div>
       </div>
+
+      {imageOpen && item.image && <ImageLightbox src={item.image} alt={item.name} onClose={() => setImageOpen(false)} />}
     </Card>
   );
 }
