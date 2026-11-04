@@ -29,7 +29,9 @@ npm run dev
 - Data: `./data` unless `DATA_DIR` overrides it
 
 `predev` copies OCR assets from `node_modules` into `public/tesseract`. If that step is skipped, the
-recipe scanner falls back to loading Tesseract from a CDN.
+recipe scanner falls back to loading Tesseract from a CDN. Receipt OCR prints the full-image, grayscale
+crop and binary crop scores to the browser console in development (`[ocr] product candidates`), which
+is the quickest way to see whether a layout change helped.
 
 Seed demo data (only if the database is empty):
 

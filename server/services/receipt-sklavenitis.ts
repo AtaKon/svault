@@ -20,22 +20,37 @@ import { detectDate, parseAmount, parseQuantity } from "./receipt-local.js";
 const BARCODE_LINE = /^\d{6,14}$/;
 
 const COMPACT_PRODUCT =
-  /^(?!ΕΚΠΤΩΣΗ)(?<name>[\p{L}].*?)\s+(?<total>-?\d{1,4}[.,]\d{2})\s+(?<rate>\d{1,2}(?:[.,]\d+)?)\s*%\s*$/iu;
+  /^(?!ΕΚΠΤΩΣΗ)(?<name>[\p{L}].*?)\s+(?<total>-?\d{1,4}[.,]\d{2})\s*(?:€|EUR)?(?:\s+(?<rate>\d{1,2}(?:[.,]\d+)?)\s*%)?(?:\s*[A-ZΑ-Ω])?\s*$/iu;
 
 const PRODUCT_NAME_ONLY = /^(?!ΕΚΠΤΩΣΗ)(?<name>[\p{L}][\p{L}\p{N} .,%/&+*()'\-–]*?)\s*$/iu;
 
-const TOTAL_RATE_ONLY = /^(?<total>-?\d{1,4}[.,]\d{2})\s+(?<rate>\d{1,2}(?:[.,]\d+)?)\s*%\s*$/i;
+const TOTAL_RATE_ONLY =
+  /^(?<total>-?\d{1,4}[.,]\d{2})\s*(?:€|EUR)?(?:\s+(?<rate>\d{1,2}(?:[.,]\d+)?)\s*%)?\s*$/iu;
 
 const QUANTITY_LINE =
-  /^(?<qty>\d+(?:[.,]\d+)?)\s*(?<unit>kg|g|l|ml)?\s*(?:[x×]\s*)?(?<unitPrice>\d+[.,]\d{2})(?:\s+(?<total>\d+[.,]\d{2}))?(?:\s+(?<rate>\d{1,2}(?:[.,]\d+)?)\s*%)?\s*$/i;
+  /^(?<qty>\d+(?:[.,]\d+)?)\s*(?<unit>kg|g|l|ml)?\s*(?:[x×Χχ*]\s*)?(?<unitPrice>\d+[.,]\d{2})(?:\s+(?<total>\d+[.,]\d{2}))?(?:\s+(?<rate>\d{1,2}(?:[.,]\d+)?)\s*%)?\s*$/iu;
 
 const DISCOUNT_LINE = /^ΕΚΠΤΩΣΗ(?:\s|$)/i;
 const SAVINGS_LINE =
   /^(?:ΣΥΝΟΛΟ\s+ΕΚΠΤΩΣΕΩΝ|ΣΥΝΟΛΙΚΗ\s+ΕΚΠΤΩΣΗ|ΕΞΟΙΚΟΝΟΜΗΣ(?:Η|ΑΤΕ|ΗΚΕ)|YOU\s+SAVED|TOTAL\s+DISCOUNT)(?:\s|:|$)/i;
-const TOTAL_LINE = /^ΣΥΝΟΛΟ(?!\s+ΕΚΠΤΩΣΕΩΝ)(?:\s|$)/i;
+
+/** Fold look-alike Latin characters so OCR'd totals still match ΣΥΝΟΛΟ. */
+function isTotalLine(text: string): boolean {
+  const folded = text
+    .trim()
+    .replace(/^[^\p{L}\d]+/u, "")
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .toUpperCase()
+    .replace(/Y/g, "Υ")
+    .replace(/[O0]/g, "Ο")
+    .replace(/N/g, "Ν")
+    .replace(/S/g, "Σ");
+  return /^ΣΥΝΟΛΟ(?!\s+(?:ΕΚΠΤΩΣΕΩΝ|ΕΙΔΩΝ|ΠΟΣΟΤΗΤ|ΤΕΜΑΧΙ))(?=$|[\s:.\d])/u.test(folded);
+}
 const SECTION_START = /ΑΠΟΔΕΙΞΗ\s+ΛΙΑΝΙΚΗΣ\s+ΠΩΛΗΣΗΣ/i;
 const NON_PRODUCT =
-  /^(?:ΕΛΛΗΝΙΚΕΣ|ΣΚΛΑΒΕΝΙΤΗΣ|SUPER|Υ\/Α|ΑΦΜ|ΤΑΜΕΙΟ|ΑΠΟΔΕΙΞΗ|ΗΜΕΡ|ΩΡΑ|Α\/Α|ΣΕΙΡΑ|ΠΩΛΗΘΕΝΤΑ|EFT|ΜΕΤΡΗΤΑ|ΚΑΡΤΑ|ΠΑΡΟΧΟΣ|URL|UID|ΑΔΕΙΑ|ΝΟΜΙΜΗ)/i;
+  /^(?:ΕΛΛΗΝΙΚΕΣ|ΣΚΛΑΒΕΝΙΤΗΣ|SUPER|Υ\/Α|ΑΦΜ|ΤΑΜΕΙΟ|ΑΠΟΔΕΙΞΗ|ΗΜΕΡ|ΩΡΑ|Α\/Α|ΣΕΙΡΑ|ΠΩΛΗΘΕΝΤΑ|EFT|ΜΕΤΡΗΤΑ|ΚΑΡΤΑ|ΠΑΡΟΧΟΣ|URL|UID|ΑΔΕΙΑ|ΝΟΜΙΜΗ|ΡΕΣΤΑ|ΠΛΗΡΩΜ|ΦΠΑ|Φ\.Π\.Α|ΣΥΝΟΛΟ|ΕΚΠΤΩΣ|ΕΞΟΙΚΟΝΟΜ|VISA|MASTERCARD)/i;
 const PHONE_LINE = /ΤΗΛ\.?\s*[:.]?\s*\d/i;
 const MONEY = /-?\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})|-?\d+[.,]\d{2}/g;
 
@@ -59,8 +74,11 @@ function round(value: number, digits = 2): number {
 /** Repair common Tesseract confusions in numeric columns without touching words. */
 function normalizeOcrLine(line: string): string {
   return line
-    .replace(/(?<![\p{L}])[ΘθΟοΒβ](?=[,.\d])/gu, "0")
-    .replace(/(?<=[\d,.])[ΘθΟο]/gu, "0")
+    .replace(/(?<![\p{L}])[ΘθΟοO0](?=[,.]\d|\d)/gu, "0")
+    .replace(/(?<![\p{L}])[Ββ](?=[,.]\d|\d)/gu, "8")
+    .replace(/(?<=[\d,.])[ΘθΟοO]+(?=[,.\d%]|$)/gu, (match) => "0".repeat(match.length))
+    .replace(/(?<=[\d,.])[Ββ](?=[,.\d%]|$)/gu, "8")
+    .replace(/(?<=[\d,.])[Il|](?=[,.\d])/g, "1")
     .replace(/(?<=\d)([.,])\s+(\d)/g, "$1$2");
 }
 
@@ -79,6 +97,7 @@ function lineAmount(line: string): number | null {
 
 function cleanName(raw: string): string {
   return raw
+    .replace(/^[*#\-\s]+/, "")
     .replace(/\s+/g, " ")
     .replace(/\s*\*+\s*$/, "")
     .replace(/[.;,:]+$/, "")
@@ -99,8 +118,8 @@ export function sklavenitisConfidence(text: string): number {
   const value = String(text ?? "");
   let score = 0;
   if (/ΣΚΛΑΒΕΝΙΤΗΣ/i.test(value)) score += 0.5;
-  if (/ΕΛΛΗΝΙΚΕΣ\s+ΥΠΕΡΑΓΟΡΕΣ/i.test(value)) score += 0.2;
-  if (/ΑΠΟΔΕΙΞΗ\s+ΛΙΑΝΙΚΗΣ\s+ΠΩΛΗΣΗΣ/i.test(value)) score += 0.2;
+  if (/ΕΛΛΗΝΙΚΕΣ\s+ΥΠΕΡΑΓΟΡΕΣ/i.test(value)) score += 0.35;
+  if (/ΑΠΟΔΕΙΞΗ\s+ΛΙΑΝΙΚΗΣ\s+ΠΩΛΗΣΗΣ/i.test(value)) score += 0.35;
   if (/SUPER\s+MARKETS/i.test(value)) score += 0.1;
   return Math.min(0.99, score);
 }
@@ -115,7 +134,7 @@ export function parseSklavenitisReceipt(rawText: string, fallbackCurrency: strin
   const headerIndex = lines.findIndex((line) => SECTION_START.test(line));
   const superMarketsIndex = lines.findIndex((line) => /SUPER\s+MARKETS/i.test(line));
   const productStart = headerIndex >= 0 ? headerIndex + 1 : superMarketsIndex >= 0 ? superMarketsIndex + 1 : 0;
-  let productEnd = lines.findIndex((line, index) => index >= productStart && TOTAL_LINE.test(line));
+  let productEnd = lines.findIndex((line, index) => index >= productStart && isTotalLine(line));
   if (productEnd < 0) productEnd = lines.length;
 
   const products: DraftProductLine[] = [];
@@ -164,7 +183,10 @@ export function parseSklavenitisReceipt(rawText: string, fallbackCurrency: strin
       }
     }
 
-    const compact = line.match(COMPACT_PRODUCT);
+    // A quantity/weight follow-up can end in a price too; it belongs to the
+    // previous product rather than starting a new one.
+    const followUp = QUANTITY_LINE.test(line);
+    const compact = followUp ? null : line.match(COMPACT_PRODUCT);
     if (compact?.groups) {
       const name = String(compact.groups.name ?? "").trim();
       const parsedTotal = parseAmount(compact.groups.total ?? "");

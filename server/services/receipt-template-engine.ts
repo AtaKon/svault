@@ -10,8 +10,11 @@ function round(value: number, digits = 2): number {
 
 function normalizeOcrLine(line: string): string {
   return line
-    .replace(/(?<![\p{L}])[ΘθΟοΒβ](?=[,.\d])/gu, "0")
-    .replace(/(?<=[\d,.])[ΘθΟο]/gu, "0")
+    .replace(/(?<![\p{L}])[ΘθΟοO0](?=[,.]\d|\d)/gu, "0")
+    .replace(/(?<![\p{L}])[Ββ](?=[,.]\d|\d)/gu, "8")
+    .replace(/(?<=[\d,.])[ΘθΟοO]+(?=[,.\d%]|$)/gu, (match) => "0".repeat(match.length))
+    .replace(/(?<=[\d,.])[Ββ](?=[,.\d%]|$)/gu, "8")
+    .replace(/(?<=[\d,.])[Il|](?=[,.\d])/g, "1")
     .replace(/(?<=\d)([.,])\s+(\d)/g, "$1$2");
 }
 
@@ -220,7 +223,10 @@ export function parseWithTemplateRules(
       continue;
     }
 
-    const productMatch = compiled.product.exec(line);
+    // Follow-up lines can end in a price, so they must not be mistaken for a
+    // new product when the product pattern accepts a missing VAT column.
+    const followUpLine = [...compiled.quantity, ...compiled.weight].some((pattern) => pattern.test(line));
+    const productMatch = followUpLine ? null : compiled.product.exec(line);
     if (productMatch?.groups) {
       const name = String(groupValue(productMatch.groups, "name") ?? "").trim();
       if (!name) continue;
