@@ -69,7 +69,7 @@ export function ItemCard({
               type="button"
               aria-label={`View full-size image of ${item.name}`}
               title="View full-size image"
-              className="absolute inset-0 cursor-zoom-in rounded-xl"
+              className="absolute inset-0 cursor-zoom-in rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-inset"
               onClick={(event) => {
                 event.stopPropagation();
                 setImageOpen(true);
