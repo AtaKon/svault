@@ -173,6 +173,10 @@ Receipt names are often shortened or shop-specific. SVault handles this in two w
   similarity search, showing a confidence percentage.
 - On an item page, **Receipt names** lists all aliases for that item. You can add a name manually and
   choose “Any shop” or a specific shop, or remove names that are wrong. One item can have many aliases.
+- When a line resolves to an OpenFoodFacts product, the pair is also stored in a **shared product
+  catalogue**. The catalogue is instance-wide, ships with bundled mappings, and can be exported,
+  imported or synced by an instance admin under **Settings → Data → Product catalogue**. Local
+  corrections always win over bundled or imported data.
 
 ### Change stock
 
@@ -195,8 +199,23 @@ that place.
 - **Scan** opens the rear camera (ZXing). On plain HTTP or a browser without camera support, type the
   code instead.
 - A known code opens the matching item.
-- An unknown code is looked up on OpenFoodFacts. If found, the name, brand, quantity and image
-  pre-fill the new-item form. The lookup times out after six seconds, so offline use still works.
+- An unknown code is looked up on OpenFoodFacts. If found, the name, brand, description, quantity and
+  image pre-fill the new-item form. The lookup is cached for 30 days and times out after six seconds,
+  so offline use still works.
+
+### OpenFoodFacts product links
+
+- The item page has an **OpenFoodFacts** card. If the item is not linked, press **Link product** and
+  search by name or paste a barcode. You can also link from a receipt line while scanning.
+- Linking fills only empty fields: description, brand, image and a matching house category. It also
+  attaches the product code as an item barcode. Values you already set are never overwritten.
+- **Fill empty fields** re-applies the product after you have edited the item. **Change** picks another
+  product; **Unlink** removes the link but keeps everything already filled.
+- The card shows the product image, Nutri-Score, NOVA group, labels, allergens and ingredients. The
+  complete OpenFoodFacts payload stays cached on the server.
+- Receipt lines show an **OpenFoodFacts** badge when a cached product or shared mapping matched. Use
+  **Find OpenFoodFacts** to confirm or change a line before importing; the chosen code is sent with the
+  line.
 - You can also scan from an item page to attach a code to an existing item.
 
 ### Low stock and expiry

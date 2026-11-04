@@ -11,15 +11,31 @@ import { detectDate, parseAmount, parseQuantity } from "./receipt-local.js";
  *   ΣΥΝΟΛΟ / ΚΑΡΤΑ / VAT table at the bottom
  */
 
-const PRODUCT_LINE = /^(?<name>.+?)\s+(?<total>-?\d{1,4}[.,]\d{2})\s+(?<rate>\d{1,2}(?:[.,]\d+)?)\s*%\s*$/;
-const QUANTITY_LINE = /^(?<qty>\d+(?:[.,]\d+)?)\s*[x×]\s*(?<unitPrice>\d+[.,]\d{2})\s*$/i;
+const PRODUCT_LINE =
+  /^(?<name>.+?)\s+(?<total>-?\d{1,4}[.,]\d{2})\s*(?:€|EUR)?(?:\s+(?<rate>\d{1,2}(?:[.,]\d+)?)\s*%)?(?:\s*[A-ZΑ-Ω])?\s*$/iu;
+const QUANTITY_LINE = /^(?<qty>\d+(?:[.,]\d+)?)\s*[x×Χχ*]\s*(?<unitPrice>\d+[.,]\d{2})\s*$/i;
 const WEIGHT_LINE =
-  /^(?<qty>\d+(?:[.,]\d+)?)\s*(?<unit>kg|g|l|ml)\s*[x×]\s*(?<unitPrice>\d+[.,]\d{2})(?:\s*(?:EUR|€)\s*\/\s*(?:kg|g|l|ml))?\s*$/i;
+  /^(?<qty>\d+(?:[.,]\d+)?)\s*(?<unit>kg|g|l|ml)\s*[x×Χχ*]\s*(?<unitPrice>\d+[.,]\d{2})(?:\s*(?:EUR|€)\s*\/\s*(?:kg|g|l|ml))?\s*$/i;
 const DISCOUNT_LINE = /κπτωση|discount/i;
-const AMOUNT_LINE = /^-?\d+[.,]\d{2}$/;
+const AMOUNT_LINE = /^-?\d+[.,]\d{2}\s*(?:€|EUR)?$/i;
 const NON_PRODUCT_LINE =
-  /^(?:ΤΣ\.?Π\.?ΧΡ|ΣΑΚΟΥ|ΠΕΡΙΒΑΝ\.?ΤΕΛΟΣ|ΧΑΡΤΟΣΑΚΟΥΛ|ΕΝΟΙΚΙΑΣΗ|ΕΓΓΥΗΣΗ)/i;
+  /^(?:ΤΣ\.?Π\.?ΧΡ|ΣΑΚΟΥ|ΠΕΡΙΒΑΝ\.?ΤΕΛΟΣ|ΧΑΡΤΟΣΑΚΟΥΛ|ΕΝΟΙΚΙΑΣΗ|ΕΓΓΥΗΣΗ|ΚΑΡΤΑ|ΜΕΤΡΗΤΑ|ΡΕΣΤΑ|ΠΛΗΡΩΜ|ΦΠΑ|Φ\.Π\.Α|ΑΦΜ|ΤΑΜΕΙΟ|ΗΜΕΡ|ΩΡΑ|ΣΥΝΟΛΟ|ΠΩΛΗΘΕΝΤΑ|EFT|VISA|MASTERCARD|ΕΚΠΤΩΣ|ΕΞΟΙΚΟΝΟΜ)/i;
 const MONEY = /-?\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})|-?\d+[.,]\d{2}/g;
+
+/** Fold look-alike Latin characters so OCR'd totals still match ΣΥΝΟΛΟ. */
+function isTotalLine(text: string): boolean {
+  const folded = text
+    .trim()
+    .replace(/^[^\p{L}\d]+/u, "")
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .toUpperCase()
+    .replace(/Y/g, "Υ")
+    .replace(/[O0]/g, "Ο")
+    .replace(/N/g, "Ν")
+    .replace(/S/g, "Σ");
+  return /^ΣΥΝΟΛΟ(?!\s+(?:ΕΚΠΤΩΣΕΩΝ|ΕΙΔΩΝ|ΠΟΣΟΤΗΤ|ΤΕΜΑΧΙ))(?=$|[\s:.\d])/u.test(folded);
+}
 
 interface DraftProductLine {
   description: string;
@@ -38,11 +54,18 @@ function round(value: number, digits = 2): number {
   return Math.round(value * factor) / factor;
 }
 
-/** Repair common Tesseract confusions in numeric columns without touching words. */
+/**
+ * Repair common Tesseract confusions in numeric columns without touching words.
+ * Greek receipts mix Latin O/I with Greek Ο/Θ around prices, and the model
+ * often drops the space between a price and its VAT rate.
+ */
 function normalizeOcrLine(line: string): string {
   return line
-    .replace(/(?<![\p{L}])[ΘθΟοΒβ](?=[,.\d])/gu, "0")
-    .replace(/(?<=[\d,.])[ΘθΟο]/gu, "0")
+    .replace(/(?<![\p{L}])[ΘθΟοO0](?=[,.]\d|\d)/gu, "0")
+    .replace(/(?<![\p{L}])[Ββ](?=[,.]\d|\d)/gu, "8")
+    .replace(/(?<=[\d,.])[ΘθΟοO]+(?=[,.\d%]|$)/gu, (match) => "0".repeat(match.length))
+    .replace(/(?<=[\d,.])[Ββ](?=[,.\d%]|$)/gu, "8")
+    .replace(/(?<=[\d,.])[Il|](?=[,.\d])/g, "1")
     .replace(/(?<=\d)([.,])\s+(\d)/g, "$1$2");
 }
 
@@ -60,6 +83,7 @@ function moneyTokens(text: string): number[] {
 function cleanProductName(raw: string): string {
   return raw
     .replace(/\s+-?\d{6,}\s*$/, "") // Lidl article numbers such as -0523350
+    .replace(/^[*#\-\s]+/, "")
     .replace(/\s+\*+\s*$/, "")
     .replace(/\s{2,}/g, " ")
     .trim();
@@ -77,10 +101,12 @@ export function lidlConfidence(text: string): number {
   const value = String(text ?? "");
   let score = 0;
   if (/\bLIDL\b/i.test(value)) score += 0.5;
-  if (/ΛΙΝΤΑ\s+ΕΛΛΑΣ/i.test(value)) score += 0.5;
+  if (/ΛΙΝΤΑ/i.test(value)) score += 0.3;
+  if (/ΛΙΝΤΑ\s+ΕΛΛΑΣ/i.test(value)) score += 0.2;
   if (/LIDL\s*PLUS|lidlplus/i.test(value)) score += 0.1;
-  if (/ΦΟΡΟΛΟΓΙΚΗ\s+ΑΠΟΔΕΙΞΗ/i.test(value)) score += 0.1;
-  if (/ΦΤΙΑΞ/i.test(value)) score += 0.1;
+  // A Greek fiscal header is a strong signal even when the logo is cropped.
+  if (/ΦΟΡΟΛΟΓΙΚΗ/i.test(value)) score += 0.2;
+  if (/ΦΤΙΑΞ/i.test(value)) score += 0.2;
   return Math.min(0.99, score);
 }
 
@@ -91,14 +117,13 @@ export function parseLidlReceipt(rawText: string, fallbackCurrency: string | nul
     .map((line) => line.trim())
     .filter(Boolean);
 
-  const headerIndex = lines.findIndex((line) => /ΦΟΡΟΛΟΓΙΚΗ\s+ΑΠΟΔΕΙΞΗ/i.test(line));
+  const headerIndex = lines.findIndex((line) => /ΦΟΡΟΛΟΓΙΚΗ/i.test(line));
   const productStart = headerIndex >= 0 ? headerIndex + 1 : 0;
-  let productEnd = lines.findIndex(
-    (line, index) => index >= productStart && /^ΣΥΝΟΛΟ(?!\s+ΕΚΠΤΩΣΕΩΝ)(?:\s|$)/i.test(line),
-  );
+  let productEnd = lines.findIndex((line, index) => index >= productStart && isTotalLine(line));
   if (productEnd < 0) productEnd = lines.length;
 
-  const total = productEnd < lines.length ? moneyTokens(lines[productEnd])[0] ?? null : null;
+  const total =
+    productEnd < lines.length ? moneyTokens(normalizeOcrLine(lines[productEnd]))[0] ?? null : null;
 
   const products: DraftProductLine[] = [];
   let current: DraftProductLine | null = null;
@@ -110,7 +135,11 @@ export function parseLidlReceipt(rawText: string, fallbackCurrency: string | nul
     const line = normalizeOcrLine(rawLine);
     if (!line || /^-{2,}$/.test(line)) continue;
 
-    const productMatch = line.match(PRODUCT_LINE);
+    // "4 x 0,99" and "0,984 kg x 1,19" are follow-ups for the previous
+    // product, and discount lines also end in an amount. Neither starts a
+    // product, even though both can look like "name price" to the OCR.
+    const followUp = QUANTITY_LINE.test(line) || WEIGHT_LINE.test(line);
+    const productMatch = followUp || DISCOUNT_LINE.test(line) ? null : line.match(PRODUCT_LINE);
     if (productMatch?.groups) {
       if (NON_PRODUCT_LINE.test(productMatch.groups.name)) {
         current = null;
@@ -118,7 +147,7 @@ export function parseLidlReceipt(rawText: string, fallbackCurrency: string | nul
         continue;
       }
       const lineTotal = parseAmount(productMatch.groups.total);
-      const taxRate = parseAmount(productMatch.groups.rate);
+      const taxRate = parseAmount(productMatch.groups.rate ?? "");
       current = {
         description: cleanProductName(productMatch.groups.name),
         rawDescription: productMatch.groups.name.trim(),
@@ -212,7 +241,7 @@ export function parseLidlReceipt(rawText: string, fallbackCurrency: string | nul
       continue;
     }
     if (!inTax) continue;
-    if (/^ΣΥΝΟΛΟ(?!\s+ΕΚΠΤΩΣΕΩΝ)(?:\s|$)/i.test(line)) {
+    if (isTotalLine(line)) {
       const amounts = moneyTokens(line);
       if (amounts.length >= 3) {
         summaryNet = amounts[0];
@@ -223,7 +252,7 @@ export function parseLidlReceipt(rawText: string, fallbackCurrency: string | nul
       }
       continue;
     }
-    const rateMatch = line.match(/^[A-ZΑ-Ω]\s+(?<rate>\d{1,2}(?:[.,]\d+)?)\s*%/i);
+    const rateMatch = line.match(/^[A-ZΑ-Ω]\s*(?<rate>\d{1,2}(?:[.,]\d+)?)\s*%/iu);
     if (!rateMatch?.groups) continue;
     const rate = parseAmount(rateMatch.groups.rate);
     const amounts = moneyTokens(line.slice(rateMatch[0].length));

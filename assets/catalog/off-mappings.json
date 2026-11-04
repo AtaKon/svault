@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "generatedAt": "2026-11-04T00:00:00.000Z",
+  "note": "Bundled receipt-text -> OpenFoodFacts mappings. Local corrections always win. Export from Settings -> Data to contribute.",
+  "mappings": [
+    {
+      "country": "GR",
+      "vendor": null,
+      "rawText": "ΦΕΤΑ ΚΟΛΙΟΣ 150G",
+      "offCode": "5201704054183",
+      "name": "Feta",
+      "brand": "Kolios",
+      "unit": "g",
+      "category": "Cheeses",
+      "confidence": 0.9
+    },
+    {
+      "country": "GR",
+      "vendor": null,
+      "rawText": "ΦΕΤΑ ΔΩΔΩΝΗ 1KG",
+      "offCode": "5201168218114",
+      "name": "Feta cheese (P.D.O.)",
+      "brand": "Dodoni",
+      "unit": "kg",
+      "category": "Cheeses",
+      "confidence": 0.9
+    },
+    {
+      "country": "GR",
+      "vendor": "Lidl",
+      "rawText": "ΦΕΤΑ ΚΟΛΙΟΣ",
+      "offCode": "5201704054183",
+      "name": "Feta",
+      "brand": "Kolios",
+      "unit": "g",
+      "category": "Cheeses",
+      "confidence": 0.85
+    }
+  ]
+}

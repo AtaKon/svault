@@ -17,6 +17,12 @@ import {
 } from "../serialize.js";
 import { addStock, afterStockChange, moveStock, removeStock, setStock } from "../services/stock.js";
 import { learnProductAlias } from "../services/product-aliases.js";
+import {
+  fetchOffProduct,
+  fillItemFromOff,
+  linkItemToOff,
+  unlinkItemFromOff,
+} from "../services/openfoodfacts.js";
 import { uploader } from "../upload.js";
 import { RESERVED_ATTRIBUTE_KEYS, type Role } from "../../shared/types.js";
 
@@ -444,7 +450,7 @@ inventoryRoutes.get(
 
 inventoryRoutes.post(
   "/:houseId/items",
-  handler((req, res) => {
+  handler(async (req, res) => {
     const { houseId } = requireHouse(req, "member");
     const body = parseBody(
       z.object({
@@ -459,6 +465,7 @@ inventoryRoutes.post(
         tags: z.union([z.array(z.string()), z.string()]).optional(),
         image: z.string().max(300).nullish(),
         barcodes: z.array(z.string().trim().min(1).max(80)).max(10).optional(),
+        offCode: z.string().trim().max(80).nullish(),
         initialStock: z
           .object({
             quantity: z.number().positive(),
@@ -544,6 +551,19 @@ inventoryRoutes.post(
       afterStockChange(id);
     }
 
+    if (body.offCode) {
+      const product = await fetchOffProduct(body.offCode);
+      if (product) {
+        const item = get<any>("SELECT * FROM items WHERE id = ?", [id]);
+        try {
+          linkItemToOff({ item, product, source: "manual" });
+        } catch {
+          // The product may already be linked to another item; the new item is
+          // still valid, so creation must not fail after the insert.
+        }
+      }
+    }
+
     res.status(201).json(itemDetail(id, req.user!.id));
   }),
 );
@@ -563,7 +583,7 @@ itemRoutes.get(
 
 itemRoutes.patch(
   "/:itemId",
-  handler((req, res) => {
+  handler(async (req, res) => {
     const { item } = itemAccess(req, "member");
     const body = parseBody(
       z.object({
@@ -578,6 +598,7 @@ itemRoutes.patch(
         tags: z.union([z.array(z.string()), z.string()]).optional(),
         image: z.string().max(300).nullish(),
         archived: z.boolean().optional(),
+        offCode: z.string().trim().max(80).nullish(),
       }),
       req.body,
     );
@@ -605,6 +626,17 @@ itemRoutes.patch(
       ],
     );
     afterStockChange(item.id);
+    if (body.offCode !== undefined) {
+      if (body.offCode === null || body.offCode === "") {
+        unlinkItemFromOff(item.id);
+      } else {
+        const product = await fetchOffProduct(body.offCode);
+        if (product) {
+          const current = get<any>("SELECT * FROM items WHERE id = ?", [item.id]);
+          linkItemToOff({ item: current, product, source: "manual" });
+        }
+      }
+    }
     res.json(itemDetail(item.id, req.user!.id));
   }),
 );
@@ -741,6 +773,103 @@ itemRoutes.delete(
   }),
 );
 
+/* ------------------------------------------------------ OpenFoodFacts links */
+
+itemRoutes.get(
+  "/:itemId/off",
+  handler(async (req, res) => {
+    const { item } = itemAccess(req);
+    if (!item.off_code) {
+      res.json({ off: null, product: null });
+      return;
+    }
+    const product = await fetchOffProduct(item.off_code);
+    const row = get<any>(`${ITEM_SELECT} WHERE i.id = ?`, [item.id]);
+    res.json({
+      off: row ? serializeItem(row, barcodesForItem(item.id)).off : null,
+      product,
+    });
+  }),
+);
+
+itemRoutes.post(
+  "/:itemId/off/link",
+  handler(async (req, res) => {
+    const { item } = itemAccess(req, "member");
+    const body = parseBody(
+      z.object({
+        code: z.string().trim().min(1).max(80),
+        fill: z.boolean().optional(),
+      }),
+      req.body,
+    );
+    const product = await fetchOffProduct(body.code);
+    if (!product) throw new ApiError(404, "Could not load this product from OpenFoodFacts");
+
+    if (body.fill === false) {
+      const other = get<any>(
+        "SELECT id, name FROM items WHERE house_id = ? AND off_code = ? AND id <> ?",
+        [item.house_id, product.code, item.id],
+      );
+      if (other) throw new ApiError(409, `OpenFoodFacts product ${product.code} is already linked to ${other.name}`);
+      run(
+        "UPDATE items SET off_code = ?, off_source = 'manual', off_linked_at = ?, off_synced_at = NULL, off_filled = '[]', updated_at = ? WHERE id = ?",
+        [product.code, now(), now(), item.id],
+      );
+      res.json({
+        item: itemDetail(item.id, req.user!.id),
+        product,
+        filled: [],
+        skipped: [],
+      });
+      return;
+    }
+
+    const result = linkItemToOff({ item, product, source: "manual" });
+    res.json({
+      item: itemDetail(item.id, req.user!.id),
+      product,
+      filled: result.filled,
+      skipped: result.skipped,
+    });
+  }),
+);
+
+itemRoutes.post(
+  "/:itemId/off/fill",
+  handler(async (req, res) => {
+    const { item } = itemAccess(req, "member");
+    if (!item.off_code) throw new ApiError(400, "This item is not linked to OpenFoodFacts");
+    const force = String(req.query.force ?? "") === "1";
+    const product = await fetchOffProduct(item.off_code, { force });
+    if (!product) throw new ApiError(404, "Product not found on OpenFoodFacts");
+    const result = fillItemFromOff({ item, product, source: "manual" });
+    const previous = parseJson<string[]>(item.off_filled, []);
+    const filled = [...new Set([...previous, ...result.filled])];
+    run("UPDATE items SET off_filled = ?, off_synced_at = ?, updated_at = ? WHERE id = ?", [
+      JSON.stringify(filled),
+      now(),
+      now(),
+      item.id,
+    ]);
+    res.json({
+      item: itemDetail(item.id, req.user!.id),
+      product,
+      filled: result.filled,
+      skipped: result.skipped,
+    });
+  }),
+);
+
+itemRoutes.delete(
+  "/:itemId/off",
+  handler((req, res) => {
+    const { item } = itemAccess(req, "member");
+    unlinkItemFromOff(item.id);
+    res.json({ ok: true, item: itemDetail(item.id, req.user!.id) });
+  }),
+);
+
 itemRoutes.get(
   "/:itemId/aliases",
   handler((req, res) => {
@@ -804,31 +933,6 @@ itemRoutes.delete(
 
 /* ----------------------------------------------------------- barcode scan */
 
-const OFF_TIMEOUT = 6000;
-
-async function openFoodFacts(code: string) {
-  try {
-    const res = await fetch(
-      `https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(code)}.json?fields=product_name,brands,quantity,image_front_small_url,categories,code,generic_name`,
-      { signal: AbortSignal.timeout(OFF_TIMEOUT), headers: { "user-agent": "SVault/1.0 (home inventory)" } },
-    );
-    if (!res.ok) return null;
-    const data: any = await res.json();
-    if (data?.status !== 1 || !data.product) return null;
-    const p = data.product;
-    return {
-      name: p.product_name || p.generic_name || "",
-      brand: p.brands || "",
-      quantity: p.quantity || "",
-      image: p.image_front_small_url || null,
-      categories: p.categories || "",
-      code: p.code || code,
-    };
-  } catch {
-    return null;
-  }
-}
-
 inventoryRoutes.get(
   "/:houseId/scan",
   handler(async (req, res) => {
@@ -843,7 +947,7 @@ inventoryRoutes.get(
       res.json({ code, match: "local", item: serializeItem(row, barcodesForItem(row.id)) });
       return;
     }
-    const product = await openFoodFacts(code);
+    const product = await fetchOffProduct(code);
     res.json({ code, match: product ? "external" : "none", item: null, product });
   }),
 );

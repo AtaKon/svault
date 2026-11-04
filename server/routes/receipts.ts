@@ -22,6 +22,8 @@ import {
 import { selectReceiptTemplate } from "../services/receipt-templates.js";
 import { findProductAlias, learnProductAlias } from "../services/product-aliases.js";
 import { suggestProductMatches } from "../services/product-match.js";
+import { fetchOffProduct, getCachedOffProduct, linkItemToOff } from "../services/openfoodfacts.js";
+import { findCatalogMapping, learnCatalogMapping } from "../services/product-catalog.js";
 
 export const receiptRoutes = Router();
 export const singleReceiptRoutes = Router();
@@ -207,6 +209,21 @@ function looseName(value: string): string {
     .trim();
 }
 
+/** Small concurrency pool for OpenFoodFacts lookups during a receipt import. */
+async function mapWithLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(Math.max(limit, 1), items.length) }, async () => {
+    for (;;) {
+      const index = next++;
+      if (index >= items.length) return;
+      results[index] = await fn(items[index]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
 function matchItem(houseId: string, line: { description: string; itemId?: string | null; barcode?: string | null }) {
   if (line.itemId) {
     const item = get<any>("SELECT * FROM items WHERE id = ? AND house_id = ?", [line.itemId, houseId]);
@@ -268,6 +285,7 @@ const lineInput = z.object({
   itemId: z.string().max(60).nullish(),
   locationId: z.string().max(60).nullish(),
   barcode: optionalText(80),
+  offCode: optionalText(80),
 });
 
 const importBody = z.object({
@@ -424,6 +442,13 @@ receiptRoutes.post(
         3,
       );
       const top = suggestions[0];
+      const mapping = findCatalogMapping({
+        country,
+        vendorName: draft.vendorName,
+        rawDescription: line.rawDescription ?? line.description,
+      });
+      const offCode = line.barcode || mapping?.offCode || null;
+      const product = offCode ? getCachedOffProduct(offCode) : null;
       return {
         ...line,
         suggestedItemId: top?.itemId ?? null,
@@ -431,6 +456,12 @@ receiptRoutes.post(
         suggestedItemUnit: top?.unit ?? null,
         suggestedItemScore: top?.score ?? null,
         suggestedItemSource: top?.source ?? null,
+        offCode,
+        offName: product?.name || mapping?.name || null,
+        offBrand: product?.brand || mapping?.brand || null,
+        offImage: product?.image ?? null,
+        offQuantity: product?.quantity || mapping?.unit || null,
+        offScore: product ? (line.barcode ? 1 : (mapping?.confidence ?? 0.7)) : (mapping?.confidence ?? null),
       };
     });
 
@@ -444,7 +475,7 @@ receiptRoutes.post(
 
 receiptRoutes.post(
   "/:houseId/receipts",
-  handler((req, res) => {
+  handler(async (req, res) => {
     const { houseId } = requireHouse(req, "member");
     const body = parseBody(importBody, req.body);
 
@@ -476,6 +507,21 @@ receiptRoutes.post(
     const lineSavings = round(body.lines.reduce((sum, line) => sum + Math.abs(line.discount ?? 0), 0), 2);
     const savings = body.savings != null ? round(Math.max(0, body.savings), 2) : lineSavings > 0 ? lineSavings : null;
 
+    // Resolve OpenFoodFacts before the transaction: product fetches are network
+    // calls and must never hold the SQLite write lock.
+    const country = housePurchaseCountry(houseId);
+    const enriched = await mapWithLimit(body.lines, 4, async (line) => {
+      const rawDescription = line.rawDescription ?? line.description;
+      const mapping = findCatalogMapping({
+        country,
+        vendorName: vendor?.name ?? body.vendorName,
+        rawDescription,
+      });
+      const wanted = line.offCode || line.barcode || mapping?.offCode || null;
+      const product = wanted ? await fetchOffProduct(wanted) : null;
+      return { line, rawDescription, mapping, offCode: product?.code ?? wanted, product };
+    });
+
     tx(() => {
       run(
         `INSERT INTO receipts
@@ -506,8 +552,7 @@ receiptRoutes.post(
         ],
       );
 
-      body.lines.forEach((line, index) => {
-        const rawDescription = line.rawDescription ?? line.description;
+      enriched.forEach(({ line, rawDescription, mapping, offCode, product }, index) => {
         const alias =
           !line.itemId && rawDescription ? findProductAlias(houseId, vendor?.id ?? null, rawDescription) : null;
         let item = alias?.item ?? matchItem(houseId, line);
@@ -516,7 +561,52 @@ receiptRoutes.post(
         if (!item) {
           item = createItemForLine(houseId, req.user!.id, line, unit);
         }
+
+        // Link scanned/receipt products only when the item has no link yet. A
+        // different existing link is a deliberate user choice and is kept.
+        if (product && !item.off_code) {
+          try {
+            const linked = linkItemToOff({
+              item,
+              product,
+              source: line.barcode ? "barcode" : "receipt",
+            });
+            item = linked.item;
+          } catch {
+            // A product can already belong to another item in this house. The
+            // receipt still imports; the OFF lookup is only an enrichment.
+          }
+        }
+
+        // Learn after enrichment so the alias captures the final unit/category.
         learnProductAlias({ houseId, vendorId: vendor?.id ?? null, rawDescription, item });
+
+        if (product) {
+          learnCatalogMapping({
+            country,
+            vendorName: vendor?.name ?? body.vendorName,
+            rawDescription,
+            offCode: product.code,
+            name: product.name || item.name,
+            brand: product.brand || item.brand,
+            unit: product.quantity || item.unit,
+            category: product.categories?.[0] ?? null,
+            confidence: line.offCode ? 0.95 : line.barcode ? 1 : (mapping?.confidence ?? 0.7),
+          });
+        } else if (item.off_code) {
+          // A corrected/pinned line for an item that is already linked to OFF
+          // still teaches the shared catalogue the shop’s printed name.
+          learnCatalogMapping({
+            country,
+            vendorName: vendor?.name ?? body.vendorName,
+            rawDescription,
+            offCode: item.off_code,
+            name: item.name,
+            brand: item.brand,
+            unit: item.unit,
+            confidence: 0.6,
+          });
+        }
 
         const quantity = line.quantity;
         const fromUnit = unit ?? item.unit;
@@ -550,8 +640,8 @@ receiptRoutes.post(
         run(
           `INSERT INTO receipt_lines
             (id, receipt_id, house_id, description, raw_description, quantity, unit, unit_price, line_total,
-             tax_rate, discount, item_id, location_id, barcode, sort)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             tax_rate, discount, item_id, location_id, barcode, off_code, sort)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             newId("rln"),
             receiptId,
@@ -567,6 +657,7 @@ receiptRoutes.post(
             item.id,
             line.locationId ?? null,
             line.barcode ?? null,
+            product?.code ?? offCode ?? null,
             index,
           ],
         );

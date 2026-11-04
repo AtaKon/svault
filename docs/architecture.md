@@ -176,9 +176,17 @@ stock, prices, barcodes, reminders, photo labelling and authentication.
 
 - Tesseract.js runs in the browser. `scripts/vendor-ocr.mjs` copies the worker, WASM core and
   **English + Greek** language data from `node_modules` into `public/tesseract`, so no CDN is needed at
-  runtime. The script runs automatically before `dev` and `build`. The worker loads `eng+ell`, so
-  Greek recipes and receipts are recognised alongside Latin product names. The local recipe and receipt
-  parsers understand common Greek headings, units, totals and payment lines.
+  runtime. The script runs automatically before `dev` and `build`. Receipts load `ell+eng` (Greek
+  first) and recipes load `eng+ell`, so Greek text is recognised alongside Latin product names. The
+  local recipe and receipt parsers understand common Greek headings, units, totals and payment lines.
+- Receipt OCR is two-pass. The full image is read with sparse-text layout detection to find the
+  `ΦΟΡΟΛΟΓΙΚΗ ΑΠΟΔΕΙΞΗ`/`ΑΠΟΔΕΙΞΗ ΛΙΑΝΙΚΗΣ ΠΩΛΗΣΗΣ` header and the `ΣΥΝΟΛΟ` anchor, keeping the
+  merchant, date, payment and VAT summary intact. The product region between them is cropped,
+  upscaled, and read again both as grayscale and as an Otsu-binarised image. Candidates are compared
+  by how many rows parse as products (plus Greek characters preserved and VAT columns found), not by
+  Tesseract confidence alone. The better product text is spliced back into the full receipt, so the
+  layout anchors and totals are never lost. The OCR pass never rewrites a product name or price; only
+  numeric look-alikes (`O`/`Θ`/`Β`, missing decimals) are repaired in the parser.
 - Barcode decoding uses `@zxing/browser`. The camera API requires HTTPS or localhost.
 - Receipt scans reuse the same browser OCR. A local line parser (`server/services/receipt-local.ts`)
   drops totals, tax and payment lines, then reads quantity/unit/price from the remaining lines. AI can
@@ -210,6 +218,25 @@ stock, prices, barcodes, reminders, photo labelling and authentication.
   shop or shared across shops.
 - Unknown barcodes are looked up on OpenFoodFacts with a 6-second timeout. Failure is non-fatal; the
   user can still create an item with the code attached.
+
+### OpenFoodFacts enrichment
+
+- `server/services/openfoodfacts.ts` normalises GTIN spellings, fetches the full product, and caches
+  the summary plus raw payload in the instance-wide `catalog_products` table for 30 days. Scans,
+  receipt imports and the item page share that cache, so repeated lookups do not hit the network.
+- Barcode scans (`GET /api/houses/:houseId/scan`) return the complete cached product. Name search uses
+  the search-a-licious endpoint and is rate-limited per process.
+- Linking an item (`POST /api/items/:itemId/off/link`) attaches the OFF code as a barcode and fills
+  only blank first-class fields: name, description, brand, image and a matching house category.
+  Existing values are never overwritten, and the response lists what was filled or skipped.
+  `off_filled` records the provenance for the UI.
+- Receipt imports resolve an `offCode` before the write transaction (network calls never hold the
+  SQLite lock). New items are created with the receipt name and unit, then enriched from OFF. Existing
+  items keep a different existing OFF link — only an explicit user action replaces it.
+- `server/services/product-catalog.ts` maps normalised receipt text to an OFF code. Bundled mappings
+  live in `assets/catalog/off-mappings.json` and are marked `seed`; corrections learned on the
+  instance are `local` and win over seed/community rows. Exports are an explicit instance-admin
+  action, and imports/syncs never overwrite local rows.
 
 ## Uploads
 

@@ -45,6 +45,15 @@ All notable changes to SVault are documented here. The format follows
   another shop's layout with regex rules, test it against sample text, and save/version/disable it.
 - Scan drafts suggest products using learned aliases, item names and local vector similarity; item pages
   list and manage multiple **Receipt names** per product.
+- OpenFoodFacts is now a first-class product link. Barcode scans fetch the full product, receipt
+  imports can carry an OFF code per line, and any item can be linked later from its page. Linking only
+  fills blank fields (name, description, brand, image, matching category), attaches the OFF code as a
+  barcode, and never overwrites a value you set. The item page shows the OFF image, Nutri-Score, NOVA
+  group, labels, allergens and ingredients, plus a **Fill empty fields** action.
+- A shared receipt-name → OpenFoodFacts catalogue ships in `assets/catalog/off-mappings.json`. Mappings
+  learned on an instance are local and can be exported, imported or synced from `SV_CATALOG_URL` under
+  **Settings → Data → Product catalogue**; local rows are never overwritten by a bundled or imported
+  file.
 - OCR now loads **English and Greek** Tesseract language data, so Greek recipes and receipts are read
   on-device too. The assets are vendored locally; nothing is fetched from a CDN. The local parsers also
   understand common Greek recipe headings, units and receipt total/payment lines.
@@ -62,6 +71,11 @@ All notable changes to SVault are documented here. The format follows
   Recipe titles wrap, other names truncate, and the two columns can no longer widen the page.
 - Wide desktop windows no longer scroll sideways or push page content past the right edge. The page
   area now takes exactly the space beside the sidebar, so its content stays centred from 1024px up.
+- Greek receipt scans are more reliable. Receipt OCR now uses Greek-first language data, reads the
+  product section as a separate upscaled crop, and compares grayscale and binary candidates before
+  merging the best one back into the full receipt. VAT rates are optional when a line loses its tax
+  column, and common OCR confusions in Greek numeric columns (`Ο`/`Θ`/`Β`, missing decimals) are
+  repaired without changing product names or prices.
 - Receipt imports no longer fail with **Invalid request** when OCR produces an oversized product name
   or an out-of-range quantity, price, discount or VAT rate. Values are bounded before import, and the
   toast now names the rejected field if validation still fails.

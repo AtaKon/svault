@@ -38,10 +38,10 @@ export function ItemFormPage() {
   const [vendors, setVendors] = useState<Vendor[]>([]);
 
   const [name, setName] = useState(params.get("name") ?? "");
-  const [description, setDescription] = useState("");
+  const [description, setDescription] = useState(params.get("description") ?? "");
   const [brand, setBrand] = useState(params.get("brand") ?? "");
   const [categoryId, setCategoryId] = useState("");
-  const [unit, setUnit] = useState("pcs");
+  const [unit, setUnit] = useState(params.get("unit") ?? "pcs");
   const [reorderPoint, setReorderPoint] = useState("");
   const [targetStock, setTargetStock] = useState("");
   const [tags, setTags] = useState("");
@@ -50,7 +50,7 @@ export function ItemFormPage() {
   const [barcodeInput, setBarcodeInput] = useState("");
   const [scanOpen, setScanOpen] = useState(false);
 
-  const [initialQty, setInitialQty] = useState("1");
+  const [initialQty, setInitialQty] = useState(params.get("quantity") ?? "1");
   const [initialPrice, setInitialPrice] = useState("");
   const [initialLocation, setInitialLocation] = useState("");
   const [initialVendor, setInitialVendor] = useState("");
@@ -137,6 +137,8 @@ export function ItemFormPage() {
         attributes: values,
         tags,
       };
+      const offCode = params.get("offCode");
+      if (offCode && !editing) payload.offCode = offCode;
       if (params.get("image") && !editing) payload.image = params.get("image");
 
       let item: ItemDetail;

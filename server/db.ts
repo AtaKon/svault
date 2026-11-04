@@ -252,6 +252,46 @@ CREATE TABLE IF NOT EXISTS product_aliases (
 );
 CREATE INDEX IF NOT EXISTS product_aliases_house ON product_aliases(house_id, vendor_key);
 
+/* Shared product catalogue. These tables are deliberately not house-scoped:
+   every house on the instance benefits from a mapping or a cached product. */
+CREATE TABLE IF NOT EXISTS catalog_products (
+  code TEXT PRIMARY KEY,
+  name TEXT,
+  brand TEXT,
+  quantity TEXT,
+  image TEXT,
+  categories TEXT,
+  summary TEXT NOT NULL DEFAULT '{}',
+  payload TEXT NOT NULL DEFAULT '{}',
+  source TEXT NOT NULL DEFAULT 'openfoodfacts',
+  fetched_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS catalog_products_name ON catalog_products(name);
+CREATE INDEX IF NOT EXISTS catalog_products_brand ON catalog_products(brand);
+
+CREATE TABLE IF NOT EXISTS catalog_mappings (
+  id TEXT PRIMARY KEY,
+  country TEXT NOT NULL DEFAULT '',
+  vendor_key TEXT NOT NULL DEFAULT '',
+  vendor_label TEXT,
+  raw_key TEXT NOT NULL,
+  raw_text TEXT,
+  off_code TEXT,
+  name TEXT,
+  brand TEXT,
+  unit TEXT,
+  category TEXT,
+  source TEXT NOT NULL DEFAULT 'local',
+  confidence REAL NOT NULL DEFAULT 0.5,
+  uses INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (country, vendor_key, raw_key)
+);
+CREATE INDEX IF NOT EXISTS catalog_mappings_lookup ON catalog_mappings(country, vendor_key, raw_key);
+CREATE INDEX IF NOT EXISTS catalog_mappings_off ON catalog_mappings(off_code);
+
 CREATE TABLE IF NOT EXISTS receipt_templates (
   id TEXT PRIMARY KEY,
   house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
@@ -407,6 +447,13 @@ ensureColumn("receipts", "savings", "REAL");
 ensureColumn("receipt_lines", "raw_description", "TEXT");
 ensureColumn("receipt_lines", "tax_rate", "REAL");
 ensureColumn("receipt_lines", "discount", "REAL");
+ensureColumn("receipt_lines", "off_code", "TEXT");
+ensureColumn("items", "off_code", "TEXT");
+ensureColumn("items", "off_linked_at", "TEXT");
+ensureColumn("items", "off_source", "TEXT");
+ensureColumn("items", "off_synced_at", "TEXT");
+ensureColumn("items", "off_filled", "TEXT NOT NULL DEFAULT '[]'");
+db.exec("CREATE INDEX IF NOT EXISTS items_off ON items(off_code)");
 db.exec(`UPDATE receipts SET savings = (
   SELECT ROUND(SUM(COALESCE(discount, 0)), 2) FROM receipt_lines WHERE receipt_id = receipts.id
 ) WHERE savings IS NULL AND EXISTS (

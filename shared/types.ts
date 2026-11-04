@@ -105,6 +105,82 @@ export interface Barcode {
   format: string | null;
 }
 
+/** A product as stored in the shared OpenFoodFacts cache. */
+export interface OffProduct {
+  code: string;
+  name: string;
+  brand: string;
+  genericName: string;
+  quantity: string;
+  categories: string[];
+  image: string | null;
+  ingredients: string | null;
+  allergens: string[];
+  labels: string[];
+  nutriscore: string | null;
+  novaGroup: number | null;
+  countries: string[];
+  packaging: string | null;
+  servingSize: string | null;
+  source: "openfoodfacts" | "catalog";
+  fetchedAt: string;
+  /** Present only when a full product payload was requested. */
+  payload?: Record<string, unknown> | null;
+}
+
+/** An item's link to an OpenFoodFacts product. */
+export interface OffLink {
+  code: string;
+  source: "barcode" | "receipt" | "manual" | "catalog";
+  linkedAt: string;
+  syncedAt: string | null;
+  /** First-class item fields that OpenFoodFacts filled when the item was linked. */
+  filled: string[];
+  product: OffProduct | null;
+}
+
+export interface OffLinkResult {
+  item: Item;
+  product: OffProduct | null;
+  filled: string[];
+  skipped: { field: string; reason: string }[];
+}
+
+export interface OffSearchResult {
+  products: OffProduct[];
+  online: boolean;
+  warning: string | null;
+}
+
+export interface CatalogMapping {
+  id: string;
+  country: string;
+  vendor: string | null;
+  rawText: string;
+  offCode: string | null;
+  name: string | null;
+  brand: string | null;
+  unit: string | null;
+  category: string | null;
+  source: "seed" | "local" | "community";
+  confidence: number;
+  uses: number;
+  updatedAt: string;
+}
+
+export interface CatalogExport {
+  version: 1;
+  generatedAt: string;
+  mappings: Omit<CatalogMapping, "id" | "uses" | "updatedAt">[];
+}
+
+export interface CatalogImportResult {
+  imported: number;
+  updated: number;
+  skipped: number;
+  total: number;
+}
+
 export interface StockLot {
   id: string;
   itemId: string;
@@ -188,6 +264,7 @@ export interface Item {
   createdAt: string;
   updatedAt: string;
   barcodes: Barcode[];
+  off?: OffLink | null;
   lots?: StockLot[];
   priceStats?: PriceStats;
 }
@@ -284,6 +361,7 @@ export interface ReceiptLine {
   itemUnit?: string | null;
   locationId?: string | null;
   barcode?: string | null;
+  offCode?: string | null;
   sort?: number;
 }
 
@@ -340,6 +418,12 @@ export interface ReceiptDraft {
     taxRate?: number | null;
     discount?: number | null;
     barcode: string | null;
+    offCode?: string | null;
+    offName?: string | null;
+    offBrand?: string | null;
+    offImage?: string | null;
+    offQuantity?: string | null;
+    offScore?: number | null;
     suggestedItemId?: string | null;
     suggestedItemName?: string | null;
     suggestedItemUnit?: string | null;

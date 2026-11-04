@@ -165,14 +165,18 @@ Attribute types: `text`, `number`, `select`, `date`, `boolean`, `url`. Built-in 
 | `GET` | `/api/houses/:houseId/items` | viewer+ | List/search items. |
 | `POST` | `/api/houses/:houseId/items` | member+ | Create an item, optional barcodes and initial stock. |
 | `GET` | `/api/houses/:houseId/scan?code=...` | viewer+ | Resolve a barcode in this house, then OpenFoodFacts. |
-| `GET` | `/api/items/:itemId` | viewer+ | Item detail: lots, movements, price history, linked recipes. |
-| `PATCH` | `/api/items/:itemId` | member+ | Update fields or `archived`. |
+| `GET` | `/api/items/:itemId` | viewer+ | Item detail: lots, movements, price history, linked recipes, OpenFoodFacts link. |
+| `PATCH` | `/api/items/:itemId` | member+ | Update fields or `archived`. Pass `offCode` to link, or `null` to unlink. |
 | `DELETE` | `/api/items/:itemId` | member+ | Delete the item, its batches and barcodes. Recipes stay. |
 | `POST` | `/api/items/:itemId/stock` | member+ | Add, remove, waste, set or move stock. |
 | `GET` | `/api/items/:itemId/movements` | viewer+ | Movement ledger (`limit` 1-300, default 50). |
 | `POST` | `/api/items/:itemId/image` | member+ | `multipart/form-data` field `image`. |
 | `POST` | `/api/items/:itemId/barcodes` | member+ | Attach `{ "code": "...", "format": "ean13" }`. |
 | `DELETE` | `/api/items/:itemId/barcodes/:barcodeId` | member+ | Detach a barcode. |
+| `GET` | `/api/items/:itemId/off` | viewer+ | Current OpenFoodFacts link and product. |
+| `POST` | `/api/items/:itemId/off/link` | member+ | Link `{ "code": "..." }`. Fills empty fields and attaches the code as a barcode. `fill: false` links without filling. |
+| `POST` | `/api/items/:itemId/off/fill` | member+ | Re-apply OpenFoodFacts to blank fields. `force=1` refreshes the cached product first. |
+| `DELETE` | `/api/items/:itemId/off` | member+ | Remove the link. Filled values stay; the code stays as a barcode. |
 | `GET` | `/api/items/:itemId/aliases` | viewer+ | Receipt names mapped to this item. |
 | `POST` | `/api/items/:itemId/aliases` | member+ | Add `{ "rawName": "...", "vendorId": "vnd_..." }` (vendor optional). |
 | `DELETE` | `/api/items/:itemId/aliases/:aliasId` | member+ | Forget a receipt name. |
@@ -204,6 +208,7 @@ Create item body:
   "attributes": { "origin": "Messinia" },
   "tags": ["kitchen", "greek"],
   "barcodes": ["5201234567890"],
+  "offCode": "5201234567890",
   "initialStock": {
     "quantity": 750,
     "unit": "ml",
@@ -238,8 +243,36 @@ Barcode scan response:
 { "code": "5201234567890", "match": "local", "item": { "...": "..." }, "product": null }
 ```
 
-`match` is `local`, `external` or `none`. For `external`, `product` contains the OpenFoodFacts
-suggestion (name, brand, quantity, image, categories) and `item` is null.
+`match` is `local`, `external` or `none`. For `external`, `product` contains the cached
+OpenFoodFacts product (`code`, `name`, `brand`, `genericName`, `quantity`, `categories`, `image`,
+`ingredients`, `allergens`, `labels`, `nutriscore`, `novaGroup`, `countries`, `packaging`,
+`servingSize`) and `item` is null.
+
+## OpenFoodFacts catalogue
+
+Barcode scans and receipt imports enrich inventory from OpenFoodFacts. Products are cached in a
+shared `catalog_products` table for `OFF_CACHE_DAYS` (default 30). Receipt text mappings live in
+`catalog_mappings`: bundled seed rows ship in `assets/catalog/off-mappings.json`, mappings learned on
+the instance are `local`, and imported files are `community`. A local mapping is never overwritten by
+a seed file or import.
+
+| Method | Path | Min role | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/catalog/search?q=...` | signed in | Search the cache, then OpenFoodFacts. `online=0` skips the network; `limit` 1-20. |
+| `GET` | `/api/catalog/product/:code` | signed in | Cached or live product. `full=1` adds the stored OFF payload. |
+| `GET` | `/api/catalog/resolve?raw=...` | signed in | Best shared mapping for a raw receipt line. |
+| `GET` | `/api/catalog/mappings` | signed in | List/search shared mappings (`q`, `limit` 1-500). |
+| `GET` | `/api/catalog/stats` | instance admin | Mapping and cache counts plus the configured sync URL. |
+| `GET` | `/api/catalog/export` | instance admin | Download the catalogue JSON (includes local mappings and raw receipt text). |
+| `POST` | `/api/catalog/import` | instance admin | Merge `{ "version": 1, "mappings": [...] }`. Local rows are skipped. |
+| `POST` | `/api/catalog/sync` | instance admin | Download and merge `SV_CATALOG_URL`, or a `{ "url": "https://..." }` override. |
+
+Linking an item returns `{ item, product, filled, skipped }`. `filled` lists the first-class fields
+that were blank and are now populated (name, description, brand, image, category); `skipped` explains
+values that were kept. Existing values are never overwritten.
+
+Receipt imports accept `offCode` per line. When a line also has a printed `barcode`, the barcode wins;
+otherwise the shared catalogue resolves the raw text. Line responses expose `offCode`.
 
 ## Receipts and shops
 
@@ -353,7 +386,8 @@ Import body:
       "unitPrice": 1.2,
       "lineTotal": 2.4,
       "taxRate": 13,
-      "discount": 0
+      "discount": 0,
+      "offCode": "5201234567890"
     },
     { "description": "Sourdough bread", "quantity": 1, "unitPrice": 3.1, "lineTotal": 3.1, "locationId": "loc_..." }
   ]
@@ -361,19 +395,23 @@ Import body:
 ```
 
 Use `vendorId` instead of `vendorName` to pick an existing shop; an unknown `vendorName` creates one.
-A line may set `itemId` to force a match or `barcode` to match by barcode. Without either, the server
-matches an item by name (with a conservative loose match) and otherwise creates a new item using the
-line's unit. Incompatible units are rejected with a 400 before anything is written. Every imported line
-creates a normal `in` movement carrying `vendorId` and `receiptId`; delete the receipt later without
-touching stock.
+A line may set `itemId` to force a match, `barcode` to match by barcode, or `offCode` to link the
+created item to an OpenFoodFacts product. A printed `barcode` is tried before `offCode` for the
+OpenFoodFacts lookup, and the shared catalogue fills gaps when neither is present. Without any of
+these, the server matches an item by name (with a conservative loose match) and otherwise creates a
+new item using the line's unit. Incompatible units are rejected with a 400 before anything is written.
+Every imported line creates a normal `in` movement carrying `vendorId` and `receiptId`; delete the
+receipt later without touching stock.
 
 If `rawDescription` is supplied, the resolved item is remembered as a vendor-specific product alias.
 The next receipt from that shop resolves the same abbreviation to the same item. Correcting a line in
 the UI therefore trains the mapping without a separate training step.
 
 Scan responses also include `suggestedItemId`, `suggestedItemName`, `suggestedItemUnit`,
-`suggestedItemScore` and `suggestedItemSource` on each line. Suggestions combine exact aliases, item
-names and a local character-vector similarity (hashed trigram cosine plus token overlap), so slightly
+`suggestedItemScore` and `suggestedItemSource` on each line, plus `offCode`, `offName`, `offBrand`,
+`offImage`, `offQuantity` and `offScore` when a cached product or shared mapping matched. Suggestions
+combine exact aliases, item names and a local character-vector similarity (hashed trigram cosine plus
+token overlap), so slightly
 different abbreviations can still surface the right product. An item may have many aliases, optionally
 scoped to one shop.
 

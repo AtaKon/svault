@@ -23,6 +23,8 @@ services:
       OPENAI_BASE_URL: "${OPENAI_BASE_URL:-}"
       OPENAI_MODEL: "${OPENAI_MODEL:-}"
       OPENAI_VISION_MODEL: "${OPENAI_VISION_MODEL:-}"
+      # Optional shared OpenFoodFacts receipt-name catalogue (JSON).
+      SV_CATALOG_URL: "${SV_CATALOG_URL:-}"
     healthcheck:
       test:
         [

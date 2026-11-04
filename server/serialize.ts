@@ -14,10 +14,13 @@ import type {
   PriceStats,
   Vendor,
   Receipt,
+  OffLink,
+  OffProduct,
 } from "../shared/types.js";
 
 export const ITEM_SELECT = `
   SELECT i.*, c.name AS category_name, c.icon AS category_icon,
+    cp.summary AS off_summary,
     COALESCE((SELECT SUM(l.quantity) FROM stock_lots l WHERE l.item_id = i.id), 0) AS quantity,
     COALESCE((SELECT SUM(l.quantity * COALESCE(l.unit_price, 0)) FROM stock_lots l WHERE l.item_id = i.id), 0) AS value,
     (SELECT sm.normalized_price FROM stock_movements sm
@@ -25,6 +28,7 @@ export const ITEM_SELECT = `
        ORDER BY sm.created_at DESC LIMIT 1) AS latest_price
   FROM items i
   LEFT JOIN categories c ON c.id = i.category_id
+  LEFT JOIN catalog_products cp ON cp.code = i.off_code
 `;
 
 export function maskHouseSettings(settings: Record<string, any>): Record<string, any> {
@@ -65,6 +69,19 @@ export function barcodesForItem(itemId: string) {
 export function serializeItem(row: any, barcodes: { id: string; code: string; format: string | null }[] = []): Item {
   const quantity = round(Number(row.quantity ?? 0));
   const reorderPoint = Number(row.reorder_point ?? 0);
+  const offProduct = parseJson<OffProduct | null>(row.off_summary, null);
+  const off: OffLink | null = row.off_code
+    ? {
+        code: row.off_code,
+        source: (["barcode", "receipt", "manual", "catalog"].includes(row.off_source)
+          ? row.off_source
+          : "manual") as OffLink["source"],
+        linkedAt: row.off_linked_at ?? row.created_at,
+        syncedAt: row.off_synced_at ?? null,
+        filled: parseJson<string[]>(row.off_filled, []),
+        product: offProduct,
+      }
+    : null;
   return {
     id: row.id,
     houseId: row.house_id,
@@ -88,6 +105,7 @@ export function serializeItem(row: any, barcodes: { id: string; code: string; fo
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     barcodes,
+    off,
   };
 }
 
@@ -192,6 +210,7 @@ export function receiptLinesFor(receiptId: string) {
     itemUnit: row.item_unit ?? null,
     locationId: row.location_id ?? null,
     barcode: row.barcode ?? null,
+    offCode: row.off_code ?? null,
     sort: Number(row.sort ?? 0),
   }));
 }

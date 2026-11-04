@@ -1,6 +1,6 @@
 // Copies the OCR runtime and language data into public/ so the app works
-// offline and in Docker without reaching a CDN. English first, then Greek for
-// recipes and Greek receipts.
+// offline and in Docker without reaching a CDN. Greek and English cover both
+// Greek receipts and mixed-language recipe cards.
 import fs from "node:fs";
 import path from "node:path";
 
