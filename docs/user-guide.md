@@ -107,8 +107,10 @@ Record a unit price whenever you add stock. SVault normalises it to the item's b
 2. Enter a name, choose a category and base unit.
 3. Optionally set a reorder point, target stock, brand, attributes, tags and barcodes.
 4. You can add an initial batch at the same time: quantity, price, place, purchase date, shop and expiry.
-5. Add a photo to make the item easy to recognise. Click or tap a photo in the inventory list or on the
-   item page to open it full-size; press Escape, tap outside the image or use the close button to return.
+5. Add a photo to make the item easy to recognise.
+
+Click or tap any photo in SVault — in the inventory list, on an item, recipe or receipt, or on a scan
+preview — to open it full-size. Press Escape, tap outside the image or use the close button to return.
 
 Attributes are defined per house in **Settings -> Attributes**. Supported types are text, number,
 select, date, boolean and URL.
@@ -127,7 +129,8 @@ select, date, boolean and URL.
    you can correct the total, net and tax before importing. Every product line can be excluded, renamed,
    given a quantity, unit and price, or pinned to an existing item. Lines without a match create new items.
 4. Press **Add lines to inventory**. Each line becomes a stock batch with the price, purchase date and
-   shop attached. The receipt, its photo and the line details stay under **Receipts**.
+   shop attached. The receipt, its photo and the line details stay under **Receipts**. Click the photo
+   there to open the original scan full-size.
 
 Correcting a line — for example pinning `ΑΛΕΞ.ΛΕΥΚ.ΑΣΠ.1KG` to your “Flour” item — teaches SVault that
 shop's name for next time. The original receipt name is stored with the line, and the alias is reused on
@@ -212,8 +215,8 @@ that place.
   attaches the product code as an item barcode. Values you already set are never overwritten.
 - **Fill empty fields** re-applies the product after you have edited the item. **Change** picks another
   product; **Unlink** removes the link but keeps everything already filled.
-- The card shows the product image, Nutri-Score, NOVA group, labels, allergens and ingredients. The
-  complete OpenFoodFacts payload stays cached on the server.
+- The card shows the product image, Nutri-Score, NOVA group, labels, allergens and ingredients. Click
+  the product image to open it full-size. The complete OpenFoodFacts payload stays cached on the server.
 - Linking also stores the nutrition panel from OpenFoodFacts: energy (kcal and kJ), fat, saturates,
   carbohydrate, sugars, fibre, protein, salt and sodium, normalised per 100 g or 100 ml. Existing
   nutrition values are never overwritten by a later sync.
@@ -253,7 +256,8 @@ inventory item, and an optional/required flag. Steps are free text; a timer can 
 ### Scan a handwritten recipe
 
 1. **Kitchen -> Scan recipe**.
-2. Photograph the card. The image is compressed in the browser and uploaded as the source image.
+2. Photograph the card. The image is compressed in the browser and uploaded as the source image. Click
+   the preview or the original scan on the recipe page to view it full-size.
 3. Tesseract OCR runs **in the browser** using assets served from `/tesseract`, with **English and
    Greek** language data. The image and the OCR text are not sent to an AI provider unless a vision
    model is configured.

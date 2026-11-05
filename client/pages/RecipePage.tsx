@@ -15,6 +15,7 @@ import {
 } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { NutritionRows } from "@/components/Nutrition";
+import { ZoomableImage } from "@/components/ZoomableImage";
 import { useToast } from "@/components/toast";
 import { minutesLabel, plural, qty, relativeTime } from "@/format";
 import type { Recipe } from "@shared/types";
@@ -152,7 +153,7 @@ export function RecipePage() {
         <div className="space-y-4">
           {(recipe.image || recipe.sourceImage) && (
             <Card className="overflow-hidden">
-              <img
+              <ZoomableImage
                 src={recipe.image ?? recipe.sourceImage ?? ""}
                 alt={recipe.title}
                 className="max-h-72 w-full object-cover"

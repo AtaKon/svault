@@ -5,7 +5,7 @@ import { api } from "@/api";
 import { qty as formatQty, unitPriceLabel } from "@/format";
 import { Badge, Button, Card, Field, Input, Select, Sheet, Spinner, Textarea, cn } from "@/components/ui";
 import { Icon } from "@/components/icons";
-import { ImageLightbox } from "@/components/ImageLightbox";
+import { ZoomableImage } from "@/components/ZoomableImage";
 import { useToast } from "@/components/toast";
 import { useAuth } from "@/state";
 
@@ -25,7 +25,6 @@ export function ItemCard({
   const toast = useToast();
   const [busy, setBusy] = useState<"add" | "remove" | null>(null);
   const [current, setCurrent] = useState(item);
-  const [imageOpen, setImageOpen] = useState(false);
 
   useEffect(() => setCurrent(item), [item]);
 
@@ -63,22 +62,13 @@ export function ItemCard({
         )}
       >
         {item.image ? (
-          <>
-            <img src={item.image} alt="" className="h-full w-full object-cover" loading="lazy" />
-            <button
-              type="button"
-              aria-label={`View full-size image of ${item.name}`}
-              title="View full-size image"
-              className="absolute inset-0 cursor-zoom-in rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-inset"
-              onClick={(event) => {
-                event.stopPropagation();
-                setImageOpen(true);
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") event.stopPropagation();
-              }}
-            />
-          </>
+          <ZoomableImage
+            src={item.image}
+            alt={item.name}
+            wrapperClassName="h-full w-full"
+            className="h-full w-full object-cover"
+            loading="lazy"
+          />
         ) : item.categoryIcon ? (
           <span className={compact ? "text-lg" : "text-2xl"}>{item.categoryIcon}</span>
         ) : (
@@ -136,7 +126,6 @@ export function ItemCard({
         </div>
       </div>
 
-      {imageOpen && item.image && <ImageLightbox src={item.image} alt={item.name} onClose={() => setImageOpen(false)} />}
     </Card>
   );
 }

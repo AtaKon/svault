@@ -5,6 +5,7 @@ import { useHouse } from "@/state";
 import { Badge, Button, Card, Input, PageHeader, Sheet, Spinner, cn } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { BarcodeScanner } from "@/components/BarcodeScanner";
+import { ZoomableImage } from "@/components/ZoomableImage";
 import { useToast } from "@/components/toast";
 import { qty as formatQty } from "@/format";
 import type { Item, OffProduct } from "@shared/types";
@@ -219,7 +220,12 @@ export function ScanPage() {
             <div className="flex items-center gap-3">
               <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-raised text-muted">
                 {result.item.image ? (
-                  <img src={result.item.image} alt="" className="h-full w-full object-cover" />
+                  <ZoomableImage
+                    src={result.item.image}
+                    alt={result.item.name}
+                    wrapperClassName="h-full w-full"
+                    className="h-full w-full object-cover"
+                  />
                 ) : result.item.categoryIcon ? (
                   <span className="text-2xl">{result.item.categoryIcon}</span>
                 ) : (
@@ -258,7 +264,12 @@ export function ScanPage() {
         ) : result ? (
           <div className="space-y-4">
             {result.product?.image && (
-              <img src={result.product.image} alt="" className="mx-auto h-32 rounded-2xl object-contain" />
+              <ZoomableImage
+                src={result.product.image}
+                alt={result.product.name ?? "Product photo"}
+                wrapperClassName="mx-auto h-32 w-fit"
+                className="h-full rounded-2xl object-contain"
+              />
             )}
             <div className="rounded-xl bg-raised p-3 text-sm">
               {result.product ? (
