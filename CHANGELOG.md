@@ -27,6 +27,10 @@ All notable changes to SVault are documented here. The format follows
 - Receipt photos are straightened automatically: the paper is found in the frame, cropped away from the
   table or hand around it, and perspective-corrected before OCR and storage. When no page can be found
   confidently the photo is kept as-is, and the scan footer shows when a background was trimmed.
+- A long receipt can be scanned from several overlapping photos. Each page is straightened and OCR'd
+  on its own, the repeated lines where two shots overlap are dropped before parsing, and the pages are
+  stitched into one image for the stored scan. Pages can be reordered, removed or OCR'd again before
+  reading the receipt.
 - Receipts now store net subtotal, tax/VAT and the per-rate VAT split. **Purchases → Insights** shows
   total spend, net and tax, average basket, monthly spend, spend per shop, VAT rates and spend by
   category, with 3/6/12-month and all-time ranges.
