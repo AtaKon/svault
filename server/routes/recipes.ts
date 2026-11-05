@@ -44,6 +44,7 @@ export const recipeInput = z.object({
   ocrText: z.string().max(30000).nullish(),
   source: z.enum(["manual", "scan", "ai"]).optional(),
   aiNotes: z.string().max(4000).nullish(),
+  aiCost: z.number().min(0).max(1e9).nullish(),
   favorite: z.boolean().optional(),
   ingredients: z.array(ingredientSchema).max(150).optional(),
 });
@@ -151,12 +152,18 @@ export function saveRecipe(houseId: string, userId: string, body: z.infer<typeof
         .split(",")
         .map((t) => t.trim())
         .filter(Boolean);
+  // Editing a recipe must not erase what its AI scan already cost. Callers that
+  // do not send aiCost keep the stored value.
+  const currentAiCost = existingId
+    ? (get<{ ai_cost: number | null }>("SELECT ai_cost FROM recipes WHERE id = ?", [existingId])?.ai_cost ?? null)
+    : null;
+  const aiCost = body.aiCost === undefined ? currentAiCost : (body.aiCost ?? null);
   return tx(() => {
     const id = existingId ?? newId("rcp");
     if (existingId) {
       run(
         `UPDATE recipes SET title = ?, description = ?, servings = ?, prep_minutes = ?, cook_minutes = ?, steps = ?,
-           tags = ?, image = ?, source_image = ?, ocr_text = ?, source = ?, ai_notes = ?, favorite = ?, updated_at = ?
+           tags = ?, image = ?, source_image = ?, ocr_text = ?, source = ?, ai_notes = ?, ai_cost = ?, favorite = ?, updated_at = ?
          WHERE id = ?`,
         [
           body.title,
@@ -171,6 +178,7 @@ export function saveRecipe(houseId: string, userId: string, body: z.infer<typeof
           body.ocrText ?? null,
           body.source ?? "manual",
           body.aiNotes ?? null,
+          aiCost,
           body.favorite ? 1 : 0,
           now(),
           id,
@@ -180,8 +188,8 @@ export function saveRecipe(houseId: string, userId: string, body: z.infer<typeof
     } else {
       run(
         `INSERT INTO recipes (id, house_id, title, description, servings, prep_minutes, cook_minutes, steps, tags,
-           image, source_image, ocr_text, source, ai_notes, favorite, created_by, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           image, source_image, ocr_text, source, ai_notes, ai_cost, favorite, created_by, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
           houseId,
@@ -197,6 +205,7 @@ export function saveRecipe(houseId: string, userId: string, body: z.infer<typeof
           body.ocrText ?? null,
           body.source ?? "manual",
           body.aiNotes ?? null,
+          aiCost,
           body.favorite ? 1 : 0,
           userId,
           now(),
@@ -225,7 +234,7 @@ export function saveRecipe(houseId: string, userId: string, body: z.infer<typeof
   });
 }
 
-function draftToInput(draft: ParsedRecipe, meta: { source?: "manual" | "scan" | "ai"; sourceImage?: string | null; ocrText?: string | null }): z.infer<typeof recipeInput> {
+function draftToInput(draft: ParsedRecipe, meta: { source?: "manual" | "scan" | "ai"; sourceImage?: string | null; ocrText?: string | null; aiCost?: number | null }): z.infer<typeof recipeInput> {
   return {
     title: draft.title,
     description: draft.description,
@@ -239,6 +248,7 @@ function draftToInput(draft: ParsedRecipe, meta: { source?: "manual" | "scan" | 
     ocrText: meta.ocrText ?? null,
     source: meta.source ?? "scan",
     aiNotes: draft.notes,
+    aiCost: meta.aiCost ?? null,
     ingredients: draft.ingredients,
   };
 }
@@ -327,6 +337,7 @@ recipeRoutes.post(
     const hasVisionModel = Boolean(settings?.ai?.visionModel || AI_ENV.visionModel);
     let draft = heuristicRecipe(rawText, body.title || "Scanned recipe");
     let provider: "ai" | "local" = "local";
+    let aiCost: number | null = null;
     let warning: string | null = null;
 
     if (cfg.enabled && (rawText || (body.image && hasVisionModel))) {
@@ -336,7 +347,8 @@ recipeRoutes.post(
             ? [await localImageToDataUrl(body.image)].filter((value): value is string => !!value)
             : [];
         const aiDraft = await aiCleanRecipe(cfg, rawText, images);
-        draft = normaliseRecipeDraft(aiDraft, body.title || draft.title || "Scanned recipe");
+        draft = normaliseRecipeDraft(aiDraft.data, body.title || draft.title || "Scanned recipe");
+        aiCost = aiDraft.usage.cost;
         provider = "ai";
       } catch (err) {
         warning = `AI cleanup failed, kept the locally parsed version. ${err instanceof Error ? err.message : ""}`.trim();
@@ -349,19 +361,26 @@ recipeRoutes.post(
     }
 
     if (body.save) {
-      const id = saveRecipe(houseId, req.user!.id, draftToInput(draft, { source: "scan", sourceImage: body.image ?? null, ocrText: rawText }));
+      const id = saveRecipe(houseId, req.user!.id, draftToInput(draft, { source: "scan", sourceImage: body.image ?? null, ocrText: rawText, aiCost }));
       const row = recipeRow(id)!;
       const serialized = serializeRecipe(row, ingredientsFor(id));
       res.status(201).json({
         provider,
         warning,
+        aiCost,
         saved: true,
         recipe: decorateRecipe(serialized, stockMaps(houseId), nutritionItems(houseId)),
       });
       return;
     }
 
-    res.json({ provider, warning, saved: false, draft: draftToInput(draft, { source: "scan", sourceImage: body.image ?? null, ocrText: rawText }) });
+    res.json({
+      provider,
+      warning,
+      aiCost,
+      saved: false,
+      draft: draftToInput(draft, { source: "scan", sourceImage: body.image ?? null, ocrText: rawText, aiCost }),
+    });
   }),
 );
 
@@ -428,7 +447,7 @@ singleRecipeRoutes.post(
     const body = parseBody(z.object({ action: z.enum(["complete"]).default("complete") }), req.body ?? {});
     void body;
     const current = serializeRecipe(recipe, ingredientsFor(recipe.id));
-    const draft = await aiCompleteRecipe(cfg, {
+    const aiResult = await aiCompleteRecipe(cfg, {
       title: current.title,
       description: current.description,
       servings: current.servings,
@@ -444,7 +463,13 @@ singleRecipeRoutes.post(
       })),
       steps: current.steps,
     });
-    const normalised = normaliseRecipeDraft(draft, current.title);
+    const normalised = normaliseRecipeDraft(aiResult.data, current.title);
+    // A recipe can be scanned and polished several times: keep the total AI spend.
+    const spentBefore = current.aiCost ?? 0;
+    const aiCost =
+      aiResult.usage.cost == null
+        ? current.aiCost ?? null
+        : Math.round((spentBefore + aiResult.usage.cost) * 1e6) / 1e6;
     const payload = recipeInput.parse({
       title: normalised.title,
       description: normalised.description ?? current.description,
@@ -458,6 +483,7 @@ singleRecipeRoutes.post(
       ocrText: current.ocrText,
       source: current.source,
       aiNotes: normalised.notes ?? current.aiNotes,
+      aiCost,
       favorite: current.favorite,
       ingredients: normalised.ingredients.length ? normalised.ingredients : current.ingredients,
     });

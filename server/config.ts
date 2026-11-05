@@ -47,11 +47,20 @@ export const OFF_CACHE_DAYS = Number(process.env.OFF_CACHE_DAYS ?? 30);
 /** Optional public catalogue file used by "Sync catalogue" in Settings → Data. */
 export const CATALOG_URL = process.env.SV_CATALOG_URL ?? process.env.CATALOG_URL ?? "";
 
+const optionalNumber = (value: string | undefined): number | null => {
+  if (value == null || value.trim() === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+};
+
 export const AI_ENV = {
   baseUrl: process.env.OPENAI_BASE_URL ?? process.env.SVAI_BASE_URL ?? "https://api.openai.com/v1",
   apiKey: process.env.OPENAI_API_KEY ?? process.env.SVAI_API_KEY ?? "",
   model: process.env.OPENAI_MODEL ?? process.env.SVAI_MODEL ?? "gpt-4o-mini",
   visionModel: process.env.OPENAI_VISION_MODEL ?? process.env.SVAI_VISION_MODEL ?? "",
+  /** Prices in USD per 1M tokens, used to estimate AI cost when the provider does not report it. */
+  inputPrice: optionalNumber(process.env.OPENAI_INPUT_PRICE ?? process.env.SVAI_INPUT_PRICE),
+  outputPrice: optionalNumber(process.env.OPENAI_OUTPUT_PRICE ?? process.env.SVAI_OUTPUT_PRICE),
 };
 
 export function ensureDirs() {

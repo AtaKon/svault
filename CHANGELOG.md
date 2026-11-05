@@ -8,6 +8,9 @@ All notable changes to SVault are documented here. The format follows
 
 ### Added
 
+- AI receipt scans and recipe scans now record what the AI call cost. The price is taken from the
+  provider when it reports one, or estimated from optional prompt/completion prices in
+  **Settings → AI**, and is shown next to the scan and on the saved receipt or recipe.
 - Photos open in a full-size viewer wherever they appear, not only for inventory items: recipe
   photos and original scans, receipt photos, scan previews and OpenFoodFacts product images all open
   on click or tap. The image keeps its aspect ratio, and the viewer closes with its close button,

@@ -9,7 +9,7 @@ import { ocrImage } from "@/ocr";
 import { mergeOcrTexts } from "@/ocr-merge";
 import { scanDocument } from "@/document-scan";
 import { stitchImages } from "@/image-stitch";
-import { money, receiptTemplateLabel, todayInput } from "@/format";
+import { money, aiCostLabel, receiptTemplateLabel, todayInput } from "@/format";
 import { OffProductPicker } from "@/components/OffProductPicker";
 import { ZoomableImage } from "@/components/ZoomableImage";
 import type { Item, Location, OffProduct, Receipt, ReceiptDraft, TaxBreakdownEntry, Vendor } from "@shared/types";
@@ -43,6 +43,7 @@ interface DraftLine {
 interface ScanResponse {
   provider: "ai" | "local" | "template";
   warning: string | null;
+  aiCost: number | null;
   draft: ReceiptDraft;
 }
 
@@ -191,6 +192,7 @@ export function ReceiptScanPage() {
   const [locationId, setLocationId] = useState("");
   const [lines, setLines] = useState<DraftLine[]>([]);
   const [provider, setProvider] = useState<"ai" | "local" | "template" | null>(null);
+  const [aiCost, setAiCost] = useState<number | null>(null);
   const [templateId, setTemplateId] = useState<string | null>(null);
   const [templateConfidence, setTemplateConfidence] = useState<number | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
@@ -417,6 +419,7 @@ export function ReceiptScanPage() {
       setTaxBreakdown(data.draft.taxBreakdown ?? []);
       setLines(toDraftLines(data.draft));
       setProvider(data.provider);
+      setAiCost(data.aiCost ?? null);
       setTemplateId(data.draft.templateId ?? null);
       setTemplateConfidence(data.draft.templateConfidence ?? null);
       setWarning(data.warning);
@@ -520,6 +523,7 @@ export function ReceiptScanPage() {
           templateConfidence:
             templateConfidence != null && templateConfidence >= 0 && templateConfidence <= 1 ? templateConfidence : null,
           provider,
+          aiCost,
           lines: included.map((line) => {
             const description = clampText(line.description, 160);
             return {
@@ -569,6 +573,7 @@ export function ReceiptScanPage() {
     setSavings("");
     setTaxBreakdown([]);
     setProvider(null);
+    setAiCost(null);
     setTemplateId(null);
     setTemplateConfidence(null);
     setWarning(null);
@@ -913,13 +918,16 @@ export function ReceiptScanPage() {
               <div className="flex items-center justify-between gap-2">
                 <h2 className="font-display text-lg">Receipt details</h2>
                 {provider && (
-                  <Badge tone={provider === "local" ? "neutral" : "brand"}>
-                    {provider === "template"
-                      ? receiptTemplateLabel(templateId) ?? "template"
-                      : provider === "ai"
-                        ? "AI read"
-                        : "local read"}
-                  </Badge>
+                  <div className="flex items-center gap-1.5">
+                    <Badge tone={provider === "local" ? "neutral" : "brand"}>
+                      {provider === "template"
+                        ? receiptTemplateLabel(templateId) ?? "template"
+                        : provider === "ai"
+                          ? "AI read"
+                          : "local read"}
+                    </Badge>
+                    {aiCost != null && <Badge tone="outline">{aiCostLabel(aiCost)}</Badge>}
+                  </div>
                 )}
               </div>
               {warning && <p className="rounded-xl bg-raised px-3 py-2 text-[11px] leading-relaxed text-muted">{warning}</p>}

@@ -166,6 +166,11 @@ Browser notifications are sent by the client while a tab is open. There is no pu
 - Requests time out after 90 seconds. If a JSON response format is rejected with a 4xx, the adapter
   retries without `response_format`, which keeps older local models working.
 - Response parsing tolerates fenced code blocks and trailing prose.
+- Every call returns token usage and, when it can be determined, a USD cost. Providers that report
+  `usage.cost` (for example OpenRouter) are trusted directly; otherwise the per-house prompt and
+  completion prices (USD per 1M tokens) or the `OPENAI_INPUT_PRICE` / `OPENAI_OUTPUT_PRICE`
+  environment variables are used. Receipt scans store the cost on `receipts.ai_cost`; recipe scans and
+  AI polish accumulate it on `recipes.ai_cost`.
 - When a provider is configured but fails, callers fall back to local parsing/suggestions and return a
   warning instead of failing the request.
 

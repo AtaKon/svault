@@ -163,7 +163,13 @@ houseRoutes.post(
       user: "ping",
       temperature: 0,
     });
-    res.json({ ok: true, model: cfg.model, visionModel: cfg.visionModel, reply: reply.trim().slice(0, 120) });
+    res.json({
+      ok: true,
+      model: cfg.model,
+      visionModel: cfg.visionModel,
+      reply: reply.text.trim().slice(0, 120),
+      cost: reply.usage.cost,
+    });
   }),
 );
 

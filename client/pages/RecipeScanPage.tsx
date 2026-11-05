@@ -7,7 +7,7 @@ import { Icon } from "@/components/icons";
 import { ZoomableImage } from "@/components/ZoomableImage";
 import { useToast } from "@/components/toast";
 import { ocrImage } from "@/ocr";
-import { minutesLabel, plural, qty } from "@/format";
+import { aiCostLabel, minutesLabel, plural, qty } from "@/format";
 import type { Recipe } from "@shared/types";
 
 interface Draft {
@@ -24,6 +24,7 @@ interface Draft {
   sourceImage: string | null;
   ocrText: string | null;
   source: "manual" | "scan" | "ai";
+  aiCost?: number | null;
 }
 
 export function RecipeScanPage() {
@@ -253,7 +254,10 @@ export function RecipeScanPage() {
               <Card className="p-4">
                 <div className="flex items-center justify-between gap-2">
                   <h2 className="font-display text-lg">Ready to save</h2>
-                  <Badge tone={provider === "ai" ? "brand" : "neutral"}>{provider === "ai" ? "AI cleaned" : "local parse"}</Badge>
+                  <div className="flex items-center gap-1.5">
+                    <Badge tone={provider === "ai" ? "brand" : "neutral"}>{provider === "ai" ? "AI cleaned" : "local parse"}</Badge>
+                    {draft.aiCost != null && <Badge tone="outline">{aiCostLabel(draft.aiCost)}</Badge>}
+                  </div>
                 </div>
                 {warning && (
                   <p className="mt-2 rounded-xl bg-raised px-3 py-2 text-[11px] leading-relaxed text-muted">{warning}</p>
