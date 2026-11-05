@@ -135,7 +135,7 @@ export function InventoryPage() {
         }
       />
 
-      <div className="sticky top-[57px] z-20 -mx-4 mb-4 space-y-2 border-b border-line/70 bg-bg/90 px-4 py-2.5 backdrop-blur sm:static sm:mx-0 sm:border-0 sm:bg-transparent sm:p-0 sm:backdrop-blur-none">
+      <div className="sticky top-[var(--sv-mobile-header,57px)] z-20 -mx-4 mb-4 space-y-2 border-b border-line/70 bg-bg/90 px-4 py-2.5 backdrop-blur sm:static sm:mx-0 sm:border-0 sm:bg-transparent sm:p-0 sm:backdrop-blur-none">
         <div className="flex gap-2">
           <div className="relative flex-1">
             <Icon name="search" size={17} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" />

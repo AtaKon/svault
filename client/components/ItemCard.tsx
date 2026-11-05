@@ -65,7 +65,10 @@ export function ItemCard({
 
   return (
     <Card
-      className={cn("group relative flex cursor-pointer items-center gap-3 p-3 transition-colors hover:bg-raised", compact && "p-2.5")}
+      className={cn(
+        "group relative flex min-w-0 cursor-pointer items-center gap-3 overflow-hidden p-3 transition-colors hover:bg-raised",
+        compact && "p-2.5",
+      )}
       onClick={() => navigate(`/items/${item.id}`)}
       role="button"
       tabIndex={0}
@@ -96,34 +99,34 @@ export function ItemCard({
       </div>
 
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5">
-          <div className={cn("truncate font-medium leading-tight", compact ? "text-sm" : "text-[15px]")}>{item.name}</div>
+        <div className="flex min-w-0 items-center gap-1.5">
+          <div className={cn("min-w-0 truncate font-medium leading-tight", compact ? "text-sm" : "text-[15px]")}>{item.name}</div>
           {item.isLow && (
             <Badge tone="warn" className="shrink-0">
               low
             </Badge>
           )}
         </div>
-        <div className="mt-0.5 flex items-center gap-1.5 truncate text-[11px] text-muted">
-          {item.categoryName && <span className="truncate">{item.categoryName}</span>}
-          {item.brand && <span className="truncate">· {item.brand}</span>}
+        <div className="mt-0.5 flex min-w-0 items-center gap-1.5 truncate text-[11px] text-muted">
+          {item.categoryName && <span className="min-w-0 truncate">{item.categoryName}</span>}
+          {item.brand && <span className="min-w-0 truncate">· {item.brand}</span>}
           {item.barcodes.length > 0 && (
-            <span className="inline-flex items-center gap-0.5" title={`${item.barcodes.length} barcode${item.barcodes.length === 1 ? "" : "s"}`}>
+            <span className="inline-flex shrink-0 items-center gap-0.5" title={`${item.barcodes.length} barcode${item.barcodes.length === 1 ? "" : "s"}`}>
               · <Icon name="barcode" size={11} />
             </span>
           )}
         </div>
         {!compact && (item.priceStats?.latest ?? item.latestPrice) != null && (
-          <div className="mt-1 text-[11px] text-muted">
+          <div className="mt-1 min-w-0 truncate text-[11px] text-muted">
             {unitPriceLabel(item.priceStats?.latest ?? item.latestPrice, item.unit, house?.currency)}
           </div>
         )}
       </div>
 
-      <div className="flex shrink-0 flex-col items-end gap-1.5" onClick={(event) => event.stopPropagation()}>
-        <div className="flex items-baseline gap-1">
-          <span className="font-display text-xl leading-none">{formatQty(current.quantity)}</span>
-          <span className="text-[11px] text-muted">{item.unit}</span>
+      <div className="flex max-w-[45%] min-w-0 shrink-0 flex-col items-end gap-1.5" onClick={(event) => event.stopPropagation()}>
+        <div className="flex min-w-0 max-w-full items-baseline gap-1">
+          <span className="min-w-0 truncate font-display text-xl leading-none">{formatQty(current.quantity)}</span>
+          <span className="shrink-0 text-[11px] text-muted">{item.unit}</span>
         </div>
         <div className="flex items-center gap-1">
           <button
