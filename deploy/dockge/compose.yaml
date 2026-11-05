@@ -41,6 +41,16 @@ services:
       OPENAI_BASE_URL: "${OPENAI_BASE_URL:-}"
       OPENAI_MODEL: "${OPENAI_MODEL:-}"
       OPENAI_VISION_MODEL: "${OPENAI_VISION_MODEL:-}"
+      RP_ID: "${RP_ID:-}"
+      ORIGIN: "${ORIGIN:-}"
+      OIDC_ISSUER: "${OIDC_ISSUER:-}"
+      OIDC_CLIENT_ID: "${OIDC_CLIENT_ID:-}"
+      OIDC_CLIENT_SECRET: "${OIDC_CLIENT_SECRET:-}"
+      OIDC_REDIRECT_URI: "${OIDC_REDIRECT_URI:-}"
+      OIDC_ALLOWED_DOMAINS: "${OIDC_ALLOWED_DOMAINS:-}"
+      OIDC_AUTO_PROVISION: "${OIDC_AUTO_PROVISION:-true}"
+      OIDC_DEFAULT_HOUSE_ID: "${OIDC_DEFAULT_HOUSE_ID:-}"
+      OIDC_LABEL: "${OIDC_LABEL:-Single sign-on}"
     networks:
       - proxy
     security_opt:

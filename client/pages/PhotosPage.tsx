@@ -40,6 +40,8 @@ export function PhotosPage() {
   const [viewerId, setViewerId] = useState<string | null>(null);
   const [folderOpen, setFolderOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [datasetOpen, setDatasetOpen] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(false);
   const [deleteCollectionOpen, setDeleteCollectionOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -161,6 +163,16 @@ export function PhotosPage() {
         subtitle="Folders of photos, labelled for training your own vision models."
         actions={
           <>
+            <div className="hidden sm:block">
+              <Button variant="secondary" icon="upload" onClick={() => setDatasetOpen(true)} disabled={!can("member")}>
+                Import dataset
+              </Button>
+            </div>
+            <div className="hidden sm:block">
+              <Button variant="secondary" icon="image" onClick={() => setReviewOpen(true)}>
+                Review
+              </Button>
+            </div>
             <div className="hidden sm:block">
               <Button variant="secondary" icon="download" onClick={() => setExportOpen(true)}>
                 Export
@@ -427,6 +439,24 @@ export function PhotosPage() {
         confirmLabel="Delete folder"
         loading={busy}
       />
+
+      <DatasetImportSheet
+        open={datasetOpen}
+        houseId={house.id}
+        onClose={() => setDatasetOpen(false)}
+        onImported={async () => {
+          setDatasetOpen(false);
+          await Promise.all([loadPhotos(), loadCollections()]);
+        }}
+      />
+
+      <LabelReviewSheet
+        open={reviewOpen}
+        houseId={house.id}
+        canDelete={can("admin")}
+        onClose={() => setReviewOpen(false)}
+        onChanged={() => void Promise.all([loadPhotos(), loadCollections()])}
+      />
     </div>
   );
 }
@@ -471,6 +501,354 @@ function NewFolderSheet({
         <Field label="Description" hint="optional">
           <Textarea rows={2} value={description} onChange={(event) => setDescription(event.target.value)} maxLength={500} />
         </Field>
+      </div>
+    </Sheet>
+  );
+}
+
+interface DatasetPreview {
+  kind: "yolo" | "coco";
+  classes: string[];
+  splits: Record<string, number>;
+  labelled: number;
+  total: number;
+  errors: string[];
+  files: { path: string; name: string; split: string; labels: number }[];
+}
+
+function DatasetImportSheet({
+  open,
+  houseId,
+  onClose,
+  onImported,
+}: {
+  open: boolean;
+  houseId: string;
+  onClose: () => void;
+  onImported: () => void | Promise<void>;
+}) {
+  const toast = useToast();
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<DatasetPreview | null>(null);
+  const [mapping, setMapping] = useState<Record<string, string>>({});
+  const [collectionName, setCollectionName] = useState("Imported dataset");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setFile(null);
+    setPreview(null);
+    setMapping({});
+    setCollectionName("Imported dataset");
+  }, [open]);
+
+  const inspect = async (next: File | null) => {
+    if (!next) return;
+    setFile(next);
+    setBusy(true);
+    try {
+      const form = new FormData();
+      form.append("dataset", next);
+      const data = await api<DatasetPreview>(`/api/houses/${houseId}/photos/dataset/preview`, {
+        method: "POST",
+        body: form,
+      });
+      setPreview(data);
+      setMapping(Object.fromEntries(data.classes.map((name) => [name, name])));
+      toast.success(`Read ${data.total} images (${data.labelled} labelled)`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not read the dataset");
+      setPreview(null);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const importNow = async () => {
+    if (!file) return;
+    setBusy(true);
+    try {
+      const form = new FormData();
+      form.append("dataset", file);
+      form.append("mapping", JSON.stringify(mapping));
+      form.append("collectionName", collectionName.trim() || "Imported dataset");
+      const result = await api<{ imported: number; skipped: number; labels: number; errors: { file: string; error: string }[] }>(
+        `/api/houses/${houseId}/photos/dataset/import`,
+        { method: "POST", body: form },
+      );
+      toast.success(`Imported ${result.imported} photos and ${result.labels} labels`);
+      if (result.errors.length) toast.push(`${result.errors.length} files were skipped`);
+      await onImported();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not import the dataset");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Sheet
+      open={open}
+      onClose={onClose}
+      wide
+      title="Import a YOLO or COCO dataset"
+      description="Preserve boxes and splits, then map imported class names to your labels."
+      footer={
+        <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+          <Button variant="secondary" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button onClick={() => void importNow()} loading={busy} disabled={!preview || !preview.total}>
+            Import dataset
+          </Button>
+        </div>
+      }
+    >
+      <div className="space-y-3">
+        <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-dashed border-line bg-surface p-3 transition-colors hover:bg-raised">
+          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-soft text-brand">
+            <Icon name="upload" size={18} />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-medium">{file?.name ?? "Choose a dataset zip"}</span>
+            <span className="block text-[11px] text-muted">images + labels/classes.txt/data.yaml, or images + annotations.json</span>
+          </span>
+          <input type="file" accept=".zip,application/zip" className="hidden" onChange={(event) => void inspect(event.target.files?.[0] ?? null)} />
+        </label>
+
+        {preview && (
+          <>
+            <div className="flex flex-wrap gap-2 text-[11px]">
+              <Badge tone="brand">{preview.kind.toUpperCase()}</Badge>
+              <Badge tone="outline">{preview.total} images</Badge>
+              <Badge tone="outline">{preview.labelled} labelled</Badge>
+              <Badge tone="outline">train {preview.splits.train ?? 0}</Badge>
+              <Badge tone="outline">val {preview.splits.val ?? 0}</Badge>
+              <Badge tone="outline">test {preview.splits.test ?? 0}</Badge>
+              <Badge tone="outline">unassigned {preview.splits.unassigned ?? 0}</Badge>
+            </div>
+            {preview.errors.length > 0 && (
+              <div className="rounded-xl border border-warn/30 bg-warn-soft px-3 py-2 text-[11px] text-warn">
+                {preview.errors.slice(0, 3).join(" · ")}
+                {preview.errors.length > 3 ? ` · +${preview.errors.length - 3} more` : ""}
+              </div>
+            )}
+            <Field label="Folder name">
+              <Input value={collectionName} onChange={(event) => setCollectionName(event.target.value)} maxLength={80} />
+            </Field>
+            <div>
+              <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">Class mapping</div>
+              <div className="space-y-1.5">
+                {preview.classes.map((name) => (
+                  <div key={name} className="flex items-center gap-2">
+                    <span className="w-1/2 truncate text-[12px]">{name}</span>
+                    <Input
+                      value={mapping[name] ?? ""}
+                      onChange={(event) => setMapping((current) => ({ ...current, [name]: event.target.value }))}
+                      placeholder="target label or __skip"
+                      className="h-9 flex-1 text-[12px]"
+                    />
+                  </div>
+                ))}
+              </div>
+              <p className="mt-1.5 text-[10px] text-muted">Use <code>__skip</code> to drop a class.</p>
+            </div>
+          </>
+        )}
+      </div>
+    </Sheet>
+  );
+}
+
+interface ReviewPhoto extends Photo {
+  labelCount: number;
+  boxCount: number;
+  reason: "unlabeled" | "classification-only" | "boxes";
+}
+
+function LabelReviewSheet({
+  open,
+  houseId,
+  canDelete,
+  onClose,
+  onChanged,
+}: {
+  open: boolean;
+  houseId: string;
+  canDelete: boolean;
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  const toast = useToast();
+  const [photos, setPhotos] = useState<ReviewPhoto[]>([]);
+  const [index, setIndex] = useState(0);
+  const [labels, setLabels] = useState<{ label: string; count: number }[]>([]);
+  const [rename, setRename] = useState("");
+  const [target, setTarget] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const [review, labelList] = await Promise.all([
+        api<{ photos: ReviewPhoto[] }>(`/api/houses/${houseId}/photos/review`),
+        api<{ label: string; count: number }[]>(`/api/houses/${houseId}/labels`),
+      ]);
+      setPhotos(review.photos);
+      setLabels(labelList);
+      setIndex((current) => Math.min(current, Math.max(0, review.photos.length - 1)));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not load the review queue");
+    }
+  }, [houseId, toast]);
+
+  useEffect(() => {
+    if (open) void load();
+  }, [open, load]);
+
+  const current = photos[index] ?? null;
+
+  const setSplit = async (split: "unassigned" | "train" | "val" | "test") => {
+    if (!current) return;
+    await api(`/api/photos/${current.id}`, { method: "PATCH", body: { split } });
+    setPhotos((rows) => rows.map((row) => (row.id === current.id ? { ...row, split } : row)));
+    onChanged();
+  };
+
+  const deleteCurrent = async () => {
+    if (!current || !canDelete) return;
+    await api(`/api/houses/${houseId}/photos/delete-bulk`, { method: "POST", body: { photoIds: [current.id] } });
+    setPhotos((rows) => rows.filter((row) => row.id !== current.id));
+    setIndex((value) => Math.max(0, Math.min(value, photos.length - 2)));
+    onChanged();
+    toast.success("Photo deleted");
+  };
+
+  const bulkLabel = async (action: "rename" | "merge" | "delete") => {
+    if (!rename.trim() && action !== "delete") return;
+    setBusy(true);
+    try {
+      const result = await api<{ affected: number }>(`/api/houses/${houseId}/photos/labels/bulk`, {
+        method: "POST",
+        body: { action, from: rename.trim(), to: target.trim() || undefined },
+      });
+      toast.success(`${result.affected} label${result.affected === 1 ? "" : "s"} updated`);
+      setRename("");
+      setTarget("");
+      await load();
+      onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not update labels");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => {
+      const tag = (event.target as HTMLElement | null)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (event.key === "ArrowRight") setIndex((value) => Math.min(value + 1, photos.length - 1));
+      if (event.key === "ArrowLeft") setIndex((value) => Math.max(0, value - 1));
+      if (event.key.toLowerCase() === "d" && canDelete) void deleteCurrent();
+      if (event.key.toLowerCase() === "s" && current) {
+        const order = ["unassigned", "train", "val", "test"] as const;
+        void setSplit(order[(order.indexOf(current.split as any) + 1) % order.length]);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  return (
+    <Sheet open={open} onClose={onClose} wide title="Review labels" description="← → move · S changes split · D deletes (owner/admin)">
+      <div className="space-y-4">
+        <div className="flex flex-wrap gap-2 text-[11px]">
+          <Badge tone="danger">{photos.filter((photo) => photo.reason === "unlabeled").length} unlabeled</Badge>
+          <Badge tone="warn">{photos.filter((photo) => photo.reason === "classification-only").length} classification only</Badge>
+          <Badge tone="outline">{photos.length} in queue</Badge>
+        </div>
+
+        {current ? (
+          <div className="grid gap-4 sm:grid-cols-[1.2fr_1fr]">
+            <div className="overflow-hidden rounded-xl border border-line bg-raised">
+              <img src={current.url} alt={current.originalName} className="max-h-[420px] w-full object-contain" />
+            </div>
+            <div className="space-y-3">
+              <div>
+                <div className="truncate text-sm font-medium">{current.originalName}</div>
+                <div className="text-[11px] text-muted">
+                  {current.labelCount} labels · {current.boxCount} boxes · {current.split}
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {current.labels.map((label) => (
+                  <Badge key={label.id} tone={label.w !== null ? "brand" : "warn"}>
+                    {label.label}
+                  </Badge>
+                ))}
+                {!current.labels.length && <Badge tone="danger">No labels</Badge>}
+              </div>
+              <div>
+                <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">Split</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {(["unassigned", "train", "val", "test"] as const).map((split) => (
+                    <Button key={split} size="sm" variant={current.split === split ? "primary" : "secondary"} onClick={() => void setSplit(split)}>
+                      {split}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" variant="secondary" onClick={() => setIndex((value) => Math.max(0, value - 1))} disabled={index === 0}>
+                  Previous
+                </Button>
+                <Button size="sm" variant="secondary" onClick={() => setIndex((value) => Math.min(value + 1, photos.length - 1))} disabled={index >= photos.length - 1}>
+                  Next
+                </Button>
+                {canDelete && (
+                  <Button size="sm" variant="danger" onClick={() => void deleteCurrent()}>
+                    Delete photo
+                  </Button>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-xl border border-dashed border-line px-4 py-8 text-center text-sm text-muted">
+            Nothing to review. Every photo has a label.
+          </div>
+        )}
+
+        <div className="rounded-xl border border-line p-3">
+          <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">Bulk label actions</div>
+          <div className="space-y-2">
+            <select
+              value={rename}
+              onChange={(event) => setRename(event.target.value)}
+              className="h-9 w-full rounded-lg border border-line bg-surface px-2 text-[12px]"
+            >
+              <option value="">Choose a label…</option>
+              {labels.map((entry) => (
+                <option key={entry.label} value={entry.label}>
+                  {entry.label} ({entry.count})
+                </option>
+              ))}
+            </select>
+            <Input value={target} onChange={(event) => setTarget(event.target.value)} placeholder="Rename/merge target" className="h-9 text-[12px]" />
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" variant="secondary" loading={busy} disabled={!rename.trim() || !target.trim()} onClick={() => void bulkLabel("rename")}>
+                Rename
+              </Button>
+              <Button size="sm" variant="secondary" loading={busy} disabled={!rename.trim() || !target.trim()} onClick={() => void bulkLabel("merge")}>
+                Merge
+              </Button>
+              <Button size="sm" variant="danger" loading={busy} disabled={!rename.trim()} onClick={() => void bulkLabel("delete")}>
+                Delete label
+              </Button>
+            </div>
+          </div>
+        </div>
       </div>
     </Sheet>
   );

@@ -355,6 +355,18 @@ transaction. Without an AI provider the local parser and manual editing still wo
 Each photo has a split: `train`, `val`, `test` or `unassigned`. Set it while uploading or later in the
 photo detail. Splits are preserved in exports.
 
+### Import a dataset
+
+**Photo library → Import dataset** accepts a zip with `images/` and `labels/` plus `classes.txt` or
+`data.yaml` (YOLO), or `images/` plus `annotations.json` / `instances*.json` (COCO). The preview reports
+the detected format, class list, train/val/test counts and per-file errors. Map each imported class to a
+house label, or use `__skip` to drop it, then import. Files go into a new folder; boxes and splits are
+preserved.
+
+**Review** opens the review queue for unlabelled and classification-only photos. Use ←/→ to move, `S` to
+cycle the split and `D` to delete (owner/admin). Bulk actions rename, merge or delete a label, reassign
+splits and delete selected photos.
+
 ### Export a dataset
 
 **Photos -> Export dataset** produces a zip:
@@ -385,7 +397,7 @@ annotations.json        (COCO format only)
 | Members | Invites, roles, removal, and explicit ownership transfer |
 | AI | Provider preset, base URL, models, key, connection test |
 | Reminders | Low-stock toggle, expiry window, ntfy/Apprise/webhook channels |
-| Data | Inventory CSV import/export, dataset export, data location, house deletion |
+| Data | Inventory CSV import/export, backup/restore, dataset import/export, data location, house deletion |
 
 **Profile** (under More) holds your name, email, password, theme and install prompt. Phones and
 desktops can install SVault as a PWA from the browser menu.
@@ -420,10 +432,50 @@ sends only the edited OCR text. A text-only local model never receives images.
 - Dataset exports are generated on demand.
 - For a full backup, copy the whole `DATA_DIR` (or the `svault-data` Docker volume). Stop the
   container first for the most consistent SQLite copy, or use `sqlite3 svault.db ".backup ..."`.
+- **Settings → Data → Backup & restore** downloads a checksummed zip with a live SQLite snapshot and
+  uploads. Restore validates the archive, keeps a pre-restore copy and returns 503 while it restarts.
+  The same operations are available as `npm run backup` / `npm run restore`.
 - To move to another server, copy `DATA_DIR` to the new host and start the same image with the same
   `DATA_DIR`.
 
-## 10. Troubleshooting
+## 10. Security, language and offline use
+
+### Two-factor authentication
+
+Open **Profile → Two-factor authentication**, confirm your password, add the shown secret/otpauth URL to
+an authenticator app and verify a 6-digit code. SVault shows eight backup codes once; store them safely.
+Login then asks for the second step. A wrong code can be retried until the five-minute challenge expires.
+Disable 2FA from the same card with your password and a current code.
+
+### Passkeys
+
+**Profile → Passkeys** registers one or more WebAuthn credentials after you are signed in. Name them
+(e.g. "This phone"), remove them individually, and keep the password as a fallback. Passkeys require
+HTTPS or localhost. The server stores only credential IDs, public keys, counters and transports.
+Owners/instance admins can reset another user's passkeys.
+
+### OIDC single sign-on
+
+When `OIDC_ISSUER` and `OIDC_CLIENT_ID` are configured, the login page shows a single sign-on button.
+Only verified email addresses are accepted; `OIDC_ALLOWED_DOMAINS` restricts them further. Existing
+accounts are linked by email. Auto-provisioning is controlled by `OIDC_AUTO_PROVISION`. The first local
+owner and password login remain available as a break-glass path.
+
+### Language
+
+Choose **English** or **Ελληνικά** in **Profile → Language**. The preference is stored on your account and
+drives the dictionary plus locale-aware dates, numbers and currency. Greek receipt and recipe parsing
+already works with either language.
+
+### Offline stock queue
+
+When the browser is offline, quick `+/-` and the stock dialog queue changes in IndexedDB instead of
+losing the form. A banner shows pending changes, counts, sync progress and a discard action. They replay
+in order on reconnect with idempotency keys. Absolute counts made against an older server version stop
+with a conflict dialog where you can discard your count or retry on the new baseline. Closing the tab
+warns while unsynced changes exist; reads are still network-only.
+
+## 11. Troubleshooting
 
 | Symptom | Likely cause / fix |
 | --- | --- |

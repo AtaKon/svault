@@ -4,6 +4,9 @@ import { PORT, CLIENT_DIR, IS_PROD, UPLOAD_DIR, ensureDirs } from "./config.js";
 import { ApiError } from "./http.js";
 import { attachUser } from "./auth.js";
 import { authRoutes } from "./routes/auth.js";
+import { passkeyRoutes } from "./routes/passkeys.js";
+import { twoFactorRoutes } from "./routes/twofactor.js";
+import { oidcRoutes } from "./routes/oidc.js";
 import { houseRoutes } from "./routes/houses.js";
 import { inventoryRoutes, itemRoutes } from "./routes/inventory.js";
 import { receiptRoutes, singleReceiptRoutes } from "./routes/receipts.js";
@@ -18,6 +21,9 @@ import { shoppingRoutes } from "./routes/shopping.js";
 import { planRoutes } from "./routes/plan.js";
 import { intakeRoutes } from "./routes/intake.js";
 import { importRoutes } from "./routes/imports.js";
+import { backupRoutes } from "./routes/backup.js";
+import { datasetRoutes } from "./routes/dataset.js";
+import { inMaintenance } from "./maintenance.js";
 import { scanAllHouses } from "./services/notifications.js";
 import { seedVendorCatalog } from "./services/vendors.js";
 import { seedProductCatalog } from "./services/product-catalog.js";
@@ -48,6 +54,14 @@ app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: false, limit: "1mb" }));
 app.use(attachUser);
 
+app.use((_req, res, next) => {
+  if (!inMaintenance()) {
+    next();
+    return;
+  }
+  res.status(503).json({ error: "SVault is restoring a backup. Try again in a moment." });
+});
+
 if (!IS_PROD) {
   app.use((req, res, next) => {
     const start = Date.now();
@@ -61,6 +75,9 @@ if (!IS_PROD) {
 }
 
 app.use("/api/auth", authRoutes);
+app.use("/api/auth", passkeyRoutes);
+app.use("/api/auth", twoFactorRoutes);
+app.use("/api/auth", oidcRoutes);
 app.use("/api/houses", houseRoutes);
 app.use("/api/houses", inventoryRoutes);
 app.use("/api/houses", receiptRoutes);
@@ -74,6 +91,8 @@ app.use("/api/houses", shoppingRoutes);
 app.use("/api/houses", planRoutes);
 app.use("/api/houses", intakeRoutes);
 app.use("/api/houses", importRoutes);
+app.use("/api/houses", backupRoutes);
+app.use("/api/houses", datasetRoutes);
 app.use("/api/notifications", globalNotificationRoutes);
 app.use("/api/catalog", catalogRoutes);
 app.use("/api/items", itemRoutes);

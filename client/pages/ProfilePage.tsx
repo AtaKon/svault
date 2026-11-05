@@ -1,8 +1,10 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
+import { startRegistration } from "@simplewebauthn/browser";
 import { api } from "@/api";
 import { useAuth } from "@/state";
-import { Avatar, Button, Card, Field, Input, PageHeader } from "@/components/ui";
+import { useI18n, type Language } from "@/i18n";
+import { Avatar, Badge, Button, Card, Field, Input, PageHeader } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { useToast } from "@/components/toast";
 import { shortDate } from "@/format";
@@ -10,6 +12,7 @@ import type { House, User } from "@shared/types";
 
 export function ProfilePage() {
   const { user, houses, setSession, signOut } = useAuth();
+  const { t, language, setLanguage } = useI18n();
   const navigate = useNavigate();
   const toast = useToast();
   const [name, setName] = useState(user?.name ?? "");
@@ -20,6 +23,120 @@ export function ProfilePage() {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [savingPassword, setSavingPassword] = useState(false);
+  const [twoFactor, setTwoFactor] = useState<{ enabled: boolean; configured: boolean; backupCodesRemaining: number } | null>(null);
+  const [securityPassword, setSecurityPassword] = useState("");
+  const [totpCode, setTotpCode] = useState("");
+  const [totpSetup, setTotpSetup] = useState<{ secret: string; otpauth: string } | null>(null);
+  const [backupCodes, setBackupCodes] = useState<string[]>([]);
+  const [securityBusy, setSecurityBusy] = useState(false);
+  const [passkeys, setPasskeys] = useState<{ id: string; name: string; createdAt: string; lastUsedAt: string | null }[]>([]);
+  const [passkeyName, setPasskeyName] = useState("");
+  const [passkeyBusy, setPasskeyBusy] = useState(false);
+
+  const loadSecurity = async () => {
+    try {
+      const [status, passkeyData] = await Promise.all([
+        api<{ enabled: boolean; configured: boolean; backupCodesRemaining: number }>("/api/auth/2fa"),
+        api<{ passkeys: typeof passkeys }>("/api/auth/passkeys"),
+      ]);
+      setTwoFactor(status);
+      setPasskeys(passkeyData.passkeys);
+    } catch {
+      /* security endpoints are optional in older servers */
+    }
+  };
+
+  useEffect(() => {
+    void loadSecurity();
+  }, []);
+
+  const startTotp = async (event: FormEvent) => {
+    event.preventDefault();
+    setSecurityBusy(true);
+    try {
+      const data = await api<{ secret: string; otpauth: string }>("/api/auth/2fa/setup", {
+        method: "POST",
+        body: { password: securityPassword },
+      });
+      setTotpSetup(data);
+      toast.success("Scan or paste the secret into your authenticator");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not start 2FA setup");
+    } finally {
+      setSecurityBusy(false);
+    }
+  };
+
+  const enableTotp = async (event: FormEvent) => {
+    event.preventDefault();
+    setSecurityBusy(true);
+    try {
+      const data = await api<{ backupCodes: string[] }>("/api/auth/2fa/enable", {
+        method: "POST",
+        body: { code: totpCode },
+      });
+      setBackupCodes(data.backupCodes);
+      setTotpSetup(null);
+      setTotpCode("");
+      setSecurityPassword("");
+      toast.success("Two-factor authentication enabled");
+      await loadSecurity();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not enable 2FA");
+    } finally {
+      setSecurityBusy(false);
+    }
+  };
+
+  const disableTotp = async (event: FormEvent) => {
+    event.preventDefault();
+    setSecurityBusy(true);
+    try {
+      await api("/api/auth/2fa/disable", {
+        method: "POST",
+        body: { password: securityPassword, code: totpCode || undefined },
+      });
+      setSecurityPassword("");
+      setTotpCode("");
+      setBackupCodes([]);
+      toast.success("Two-factor authentication disabled");
+      await loadSecurity();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not disable 2FA");
+    } finally {
+      setSecurityBusy(false);
+    }
+  };
+
+  const addPasskey = async () => {
+    setPasskeyBusy(true);
+    try {
+      const options = await api<{ challengeId: string; options: any }>("/api/auth/passkeys/options", { method: "POST" });
+      const response = await startRegistration({ optionsJSON: options.options });
+      await api("/api/auth/passkeys/verify", {
+        method: "POST",
+        body: { challengeId: options.challengeId, response, name: passkeyName.trim() || undefined },
+      });
+      setPasskeyName("");
+      toast.success("Passkey added");
+      await loadSecurity();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not add a passkey");
+    } finally {
+      setPasskeyBusy(false);
+    }
+  };
+
+  const removePasskey = async (id: string) => {
+    if (passkeys.length === 1 && !window.confirm("This is your last passkey. Your password will be the only way in. Continue?")) return;
+    try {
+      await api(`/api/auth/passkeys/${id}`, { method: "DELETE" });
+      await loadSecurity();
+      toast.success("Passkey removed");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not remove the passkey");
+    }
+  };
 
   const saveProfile = async (event: FormEvent) => {
     event.preventDefault();
@@ -120,6 +237,117 @@ export function ProfilePage() {
             Change password
           </Button>
         </form>
+      </Card>
+
+      <Card className="p-4">
+        <h2 className="mb-1 font-display text-lg">{t("Language")}</h2>
+        <p className="mb-3 text-[11px] text-muted">The choice is saved on your account, not the house.</p>
+        <div className="flex flex-wrap gap-2">
+          {(["en", "el"] as Language[]).map((option) => (
+            <Button
+              key={option}
+              variant={language === option ? "primary" : "secondary"}
+              size="sm"
+              onClick={() => void setLanguage(option)}
+            >
+              {option === "el" ? t("Greek") : t("English")}
+            </Button>
+          ))}
+        </div>
+      </Card>
+
+      <Card className="p-4">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <h2 className="font-display text-lg">{t("Two-factor authentication")}</h2>
+          <Badge tone={twoFactor?.enabled ? "brand" : "neutral"}>
+            {twoFactor?.enabled ? t("Two-factor enabled") : "optional"}
+          </Badge>
+        </div>
+        {!twoFactor?.enabled && !totpSetup && (
+          <form onSubmit={startTotp} className="space-y-3">
+            <Field label={t("Password")} required hint="confirm it is you">
+              <Input type="password" value={securityPassword} onChange={(event) => setSecurityPassword(event.target.value)} autoComplete="current-password" />
+            </Field>
+            <Button type="submit" loading={securityBusy} disabled={!securityPassword}>
+              Start 2FA setup
+            </Button>
+          </form>
+        )}
+        {totpSetup && (
+          <form onSubmit={enableTotp} className="space-y-3">
+            <div className="rounded-xl border border-line bg-raised p-3 text-[11px]">
+              <div className="font-medium">Add this to your authenticator app</div>
+              <div className="mt-1 break-all font-mono text-[12px]">{totpSetup.secret}</div>
+              <div className="mt-2 break-all text-[10px] text-muted">{totpSetup.otpauth}</div>
+            </div>
+            <Field label={t("Authentication code")} required>
+              <Input value={totpCode} onChange={(event) => setTotpCode(event.target.value)} inputMode="numeric" autoComplete="one-time-code" placeholder="123456" maxLength={6} />
+            </Field>
+            <Button type="submit" loading={securityBusy} disabled={totpCode.length !== 6}>
+              Enable 2FA
+            </Button>
+          </form>
+        )}
+        {twoFactor?.enabled && (
+          <form onSubmit={disableTotp} className="space-y-3">
+            <p className="text-[11px] text-muted">
+              {twoFactor.backupCodesRemaining} backup code{twoFactor.backupCodesRemaining === 1 ? "" : "s"} remaining.
+            </p>
+            <Field label={t("Password")} required>
+              <Input type="password" value={securityPassword} onChange={(event) => setSecurityPassword(event.target.value)} autoComplete="current-password" />
+            </Field>
+            <Field label={t("Authentication code")} required>
+              <Input value={totpCode} onChange={(event) => setTotpCode(event.target.value)} inputMode="numeric" autoComplete="one-time-code" placeholder="123456 or backup code" maxLength={30} />
+            </Field>
+            <Button type="submit" variant="secondary" loading={securityBusy} disabled={!securityPassword || !totpCode}>
+              Disable 2FA
+            </Button>
+          </form>
+        )}
+        {backupCodes.length > 0 && (
+          <div className="mt-3 rounded-xl border border-brand/30 bg-brand-soft p-3 text-[11px] text-brand">
+            <div className="font-medium">Save these backup codes now. They will not be shown again.</div>
+            <div className="mt-2 grid grid-cols-2 gap-1 font-mono text-[11px] sm:grid-cols-4">
+              {backupCodes.map((code) => (
+                <span key={code}>{code}</span>
+              ))}
+            </div>
+          </div>
+        )}
+      </Card>
+
+      <Card className="p-4">
+        <div className="mb-1 flex items-center justify-between gap-2">
+          <h2 className="font-display text-lg">{t("Passkeys")}</h2>
+          <Badge tone="outline">{passkeys.length}</Badge>
+        </div>
+        <p className="mb-3 text-[11px] text-muted">
+          Passkeys need HTTPS or localhost. Your password remains a fallback.
+        </p>
+        <div className="space-y-1.5">
+          {passkeys.length === 0 && <div className="rounded-lg bg-raised px-3 py-2 text-[11px] text-muted">No passkeys yet.</div>}
+          {passkeys.map((passkey) => (
+            <div key={passkey.id} className="flex items-center gap-2 rounded-lg bg-raised px-3 py-2 text-sm">
+              <Icon name="key" size={14} className="text-muted" />
+              <div className="min-w-0 flex-1">
+                <div className="truncate">{passkey.name}</div>
+                <div className="text-[10px] text-muted">
+                  added {shortDate(passkey.createdAt)}
+                  {passkey.lastUsedAt ? ` · last used ${shortDate(passkey.lastUsedAt)}` : ""}
+                </div>
+              </div>
+              <button onClick={() => void removePasskey(passkey.id)} className="text-muted hover:text-danger" aria-label={`Remove ${passkey.name}`}>
+                <Icon name="trash" size={14} />
+              </button>
+            </div>
+          ))}
+        </div>
+        <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+          <Input value={passkeyName} onChange={(event) => setPasskeyName(event.target.value)} placeholder="This phone" maxLength={60} />
+          <Button variant="secondary" icon="key" loading={passkeyBusy} onClick={() => void addPasskey()}>
+            {t("Add a passkey")}
+          </Button>
+        </div>
       </Card>
 
       <Card className="p-4">

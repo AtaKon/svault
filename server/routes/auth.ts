@@ -17,6 +17,7 @@ import { serializeHouse } from "../serialize.js";
 import { createHouse } from "../services/houses.js";
 import { notifyHouseAdded } from "../services/notifications.js";
 import { usernameFromEmail, usernameWithSuffix } from "../username.js";
+import { createLoginChallenge, requireTotp } from "../services/totp.js";
 import type { Role } from "../../shared/types.js";
 
 export const authRoutes = Router();
@@ -62,12 +63,13 @@ function publicUser(row: any) {
     email: row.email,
     username: row.username,
     name: row.name,
+    language: row.language ?? "en",
     isAdmin: !!row.is_admin,
     createdAt: row.created_at,
   };
 }
 
-function userPayload(userId: string) {
+export function userPayload(userId: string) {
   const user = get<any>("SELECT * FROM users WHERE id = ?", [userId])!;
   const houses = userHouses(userId).map((h) => serializeHouse(h, h.role));
   return { user: publicUser(user), houses };
@@ -162,6 +164,16 @@ authRoutes.post(
     if (!user || !verifyPassword(body.password, user.password_hash)) {
       throw new ApiError(401, "Wrong email/username or password");
     }
+    if (requireTotp(user.id)) {
+      const challenge = createLoginChallenge(user.id, "totp");
+      res.json({
+        twoFactorRequired: true,
+        challenge,
+        methods: ["totp", "backup_code"],
+        user: { name: user.name, email: user.email },
+      });
+      return;
+    }
     const token = createSession(user.id, req.headers["user-agent"]);
     res.setHeader("Set-Cookie", sessionCookie(token));
     res.json(userPayload(user.id));
@@ -194,6 +206,7 @@ authRoutes.patch(
         name: z.string().trim().min(1).max(80).optional(),
         email: emailSchema.optional(),
         username: usernameSchema.optional(),
+        language: z.enum(["en", "el"]).optional(),
       }),
       req.body,
     );
@@ -203,10 +216,11 @@ authRoutes.patch(
     if (body.username && usernameTaken(body.username, req.user!.id)) {
       throw new ApiError(409, "Another account already uses that username");
     }
-    run("UPDATE users SET name = COALESCE(?, name), email = COALESCE(?, email), username = COALESCE(?, username) WHERE id = ?", [
+    run("UPDATE users SET name = COALESCE(?, name), email = COALESCE(?, email), username = COALESCE(?, username), language = COALESCE(?, language) WHERE id = ?", [
       body.name ?? null,
       body.email ?? null,
       body.username ?? null,
+      body.language ?? null,
       req.user!.id,
     ]);
     res.json(userPayload(req.user!.id));
