@@ -116,8 +116,9 @@ select, date, boolean and URL.
 ### Add a receipt and record the shop
 
 1. **Inventory -> Receipt** (or **More -> Receipts & shops -> Scan receipt**).
-2. Take a photo of the paper receipt or upload one from your photo library. OCR runs in the browser;
-   correct any lines it misread before pressing **Read receipt**.
+2. Take a photo of the paper receipt or upload one from your photo library. The paper is found and
+   straightened automatically — the table around it is trimmed and perspective is corrected — then OCR
+   runs in the browser; correct any lines it misread before pressing **Read receipt**.
 3. The shop printed on the receipt is detected automatically and matched to your existing shops. Known
    layouts are parsed with a shop-specific template — Lidl Greece and Sklavenitis Greece are built in,
    including weights, quantity lines, barcodes and store discounts. The receipt header shows whether it

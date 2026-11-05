@@ -23,6 +23,9 @@ All notable changes to SVault are documented here. The format follows
   suggests common supermarkets, delis, kiosks and online shops, with one-tap add and alias matching for
   names like `LIDL HELLAS` or `SKLAVENITIS`.
 - Receipt photos can be taken with the camera or uploaded from the photo library.
+- Receipt photos are straightened automatically: the paper is found in the frame, cropped away from the
+  table or hand around it, and perspective-corrected before OCR and storage. When no page can be found
+  confidently the photo is kept as-is, and the scan footer shows when a background was trimmed.
 - Receipts now store net subtotal, tax/VAT and the per-rate VAT split. **Purchases → Insights** shows
   total spend, net and tax, average basket, monthly spend, spend per shop, VAT rates and spend by
   category, with 3/6/12-month and all-time ranges.
