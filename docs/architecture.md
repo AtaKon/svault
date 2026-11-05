@@ -179,6 +179,13 @@ stock, prices, barcodes, reminders, photo labelling and authentication.
   runtime. The script runs automatically before `dev` and `build`. Receipts load `ell+eng` (Greek
   first) and recipes load `eng+ell`, so Greek text is recognised alongside Latin product names. The
   local recipe and receipt parsers understand common Greek headings, units, totals and payment lines.
+- Receipt photos are page-corrected in the browser before OCR (`client/document-scan.ts`). A
+  down-scaled copy is thresholded and lightly closed, the largest bright component becomes the paper
+  mask, and its convex hull's diagonal extremes give the four corners. The photo is then warped with a
+  projective mesh (8×8 affine triangles) onto a rectangle, so a receipt shot at an angle is deskewed
+  and the table is dropped. A crop is only used when the component is bright against its surroundings,
+  roughly rectangular, and contains ink; otherwise the original photo is read unchanged. The corrected
+  image is also the one uploaded, so the stored scan matches the recognised text.
 - Receipt OCR is two-pass. The full image is read with sparse-text layout detection to find the
   `ΦΟΡΟΛΟΓΙΚΗ ΑΠΟΔΕΙΞΗ`/`ΑΠΟΔΕΙΞΗ ΛΙΑΝΙΚΗΣ ΠΩΛΗΣΗΣ` header and the `ΣΥΝΟΛΟ` anchor, keeping the
   merchant, date, payment and VAT summary intact. The product region between them is cropped,

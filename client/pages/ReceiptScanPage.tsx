@@ -6,6 +6,7 @@ import { Badge, Button, Card, Field, Input, PageHeader, Select, Spinner, Textare
 import { Icon } from "@/components/icons";
 import { useToast } from "@/components/toast";
 import { ocrImage } from "@/ocr";
+import { scanDocument } from "@/document-scan";
 import { money, receiptTemplateLabel, todayInput } from "@/format";
 import { OffProductPicker } from "@/components/OffProductPicker";
 import type { Item, Location, OffProduct, Receipt, ReceiptDraft, TaxBreakdownEntry, Vendor } from "@shared/types";
@@ -142,8 +143,11 @@ export function ReceiptScanPage() {
   const toast = useToast();
   const cameraRef = useRef<HTMLInputElement>(null);
   const libraryRef = useRef<HTMLInputElement>(null);
+  const scanFileRef = useRef<File | null>(null);
+  const previewUrlRef = useRef<string | null>(null);
 
   const [preview, setPreview] = useState<string | null>(null);
+  const [trimmed, setTrimmed] = useState(false);
   const [uploadedPath, setUploadedPath] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [manualMode, setManualMode] = useState(false);
@@ -205,17 +209,30 @@ export function ReceiptScanPage() {
     [included, items],
   );
 
+  const showPreview = (file: File) => {
+    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+    const url = URL.createObjectURL(file);
+    previewUrlRef.current = url;
+    setPreview(url);
+  };
+
   const handleFile = async (file: File | null) => {
     if (!file) return;
     setOcrError(null);
     setWarning(null);
     const prepared = await prepareImage(file, { maxSize: 2800, quality: 0.92 });
-    setPreview(URL.createObjectURL(prepared));
+    // Straighten the paper and drop the table before both OCR and upload, so the
+    // stored scan and the recognised text come from the same cropped image.
+    const scan = await scanDocument(prepared);
+    const scanned = scan.file;
+    scanFileRef.current = scanned;
+    setTrimmed(Boolean(scan.corners));
+    showPreview(scanned);
     setText("");
     setUploading(true);
     try {
       const form = new FormData();
-      form.append("image", prepared);
+      form.append("image", scanned);
       const data = await api<{ path: string }>(`/api/houses/${house.id}/receipts/upload`, { method: "POST", body: form });
       setUploadedPath(data.path);
     } catch (err) {
@@ -223,11 +240,11 @@ export function ReceiptScanPage() {
     } finally {
       setUploading(false);
     }
-    void runOcr(prepared);
+    void runOcr(scanned);
   };
 
   const runOcr = async (file?: File) => {
-    const target = file ?? cameraRef.current?.files?.[0] ?? libraryRef.current?.files?.[0];
+    const target = file ?? scanFileRef.current ?? cameraRef.current?.files?.[0] ?? libraryRef.current?.files?.[0];
     if (!target) return;
     setOcrRunning(true);
     setOcrProgress(0);
@@ -401,7 +418,13 @@ export function ReceiptScanPage() {
   };
 
   const reset = () => {
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current);
+      previewUrlRef.current = null;
+    }
+    scanFileRef.current = null;
     setPreview(null);
+    setTrimmed(false);
     setUploadedPath(null);
     setText("");
     setLines([]);
@@ -450,7 +473,7 @@ export function ReceiptScanPage() {
             </span>
             <div>
               <div className="font-display text-xl">Add the receipt photo</div>
-              <div className="mt-1 text-xs text-muted">Flat, bright and in frame · text is read on this device first</div>
+              <div className="mt-1 text-xs text-muted">Any angle · the paper is straightened on this device</div>
             </div>
             <div className="flex flex-wrap justify-center gap-2">
               <Button type="button" icon="camera" onClick={() => cameraRef.current?.click()}>
@@ -509,7 +532,7 @@ export function ReceiptScanPage() {
                 </div>
               )}
               <div className="flex items-center justify-between px-3 py-2 text-[11px] text-muted">
-                <span>{uploading ? "Uploading scan…" : uploadedPath ? "Scan stored with the receipt" : "No photo"}</span>
+                <span>{uploading ? "Uploading scan…" : uploadedPath ? (trimmed ? "Background trimmed · scan stored" : "Scan stored with the receipt") : "No photo"}</span>
                 <span className="flex items-center gap-2">
                   <button type="button" onClick={() => cameraRef.current?.click()} className="font-medium text-brand hover:underline">
                     Camera
