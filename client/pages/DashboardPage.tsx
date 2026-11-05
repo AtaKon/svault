@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "@/api";
 import { useAuth, useHouse } from "@/state";
+import { useI18n } from "@/i18n";
 import { Badge, Button, Card, PageHeader, Skeleton, Stat, cn } from "@/components/ui";import { Icon, type IconName } from "@/components/icons";
 import { ItemCard } from "@/components/ItemCard";
 import { useToast } from "@/components/toast";
@@ -17,6 +18,7 @@ interface DashboardData extends Omit<Dashboard, "recent"> {
 export function DashboardPage() {
   const { house } = useHouse();
   const { user } = useAuth();
+  const { t } = useI18n();
   const navigate = useNavigate();
   const toast = useToast();
   const [data, setData] = useState<DashboardData | null>(null);
@@ -139,7 +141,7 @@ export function DashboardPage() {
         <div className="min-w-0 space-y-5">
           <section>
             <div className="mb-2.5 flex items-center justify-between">
-              <h2 className="font-display text-xl">Running low</h2>
+              <h2 className="font-display text-xl">{t("Running low")}</h2>
               <div className="flex items-center gap-3">
                 {data && data.lowStock.length > 0 && (
                   <button onClick={() => void addLowStock()} className="text-xs font-medium text-brand hover:underline">
@@ -177,7 +179,7 @@ export function DashboardPage() {
 
           <section>
             <div className="mb-2.5 flex items-center justify-between">
-              <h2 className="font-display text-xl">Rooms & places</h2>
+              <h2 className="font-display text-xl">{t("Rooms & places")}</h2>
               <Link to="/settings?tab=places" className="text-xs font-medium text-brand hover:underline">
                 Manage
               </Link>
@@ -208,7 +210,7 @@ export function DashboardPage() {
         <div className="min-w-0 space-y-5">
           <section>
             <div className="mb-2.5 flex items-center justify-between">
-              <h2 className="font-display text-xl">Use it up</h2>
+              <h2 className="font-display text-xl">{t("Use it up")}</h2>
               <Link to="/items?expiring=1" className="text-xs font-medium text-brand hover:underline">
                 Expiring
               </Link>
@@ -248,7 +250,7 @@ export function DashboardPage() {
 
           <section>
             <div className="mb-2.5 flex items-center justify-between">
-              <h2 className="font-display text-xl">This week</h2>
+              <h2 className="font-display text-xl">{t("This week")}</h2>
               <Link to="/plan" className="text-xs font-medium text-brand hover:underline">
                 Open plan
               </Link>
@@ -276,7 +278,7 @@ export function DashboardPage() {
 
           <section>
             <div className="mb-2.5 flex items-center justify-between">
-              <h2 className="font-display text-xl">Cook something</h2>
+              <h2 className="font-display text-xl">{t("Cook something")}</h2>
               <Link to="/ideas" className="text-xs font-medium text-brand hover:underline">
                 Get ideas
               </Link>
@@ -335,7 +337,7 @@ export function DashboardPage() {
 
           <section>
             <div className="mb-2.5 flex items-center justify-between">
-              <h2 className="font-display text-xl">Recent activity</h2>
+              <h2 className="font-display text-xl">{t("Recent activity")}</h2>
               <button onClick={() => void load()} className="text-muted transition-colors hover:text-ink" aria-label="Refresh activity">
                 <Icon name="refresh" size={15} />
               </button>

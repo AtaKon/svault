@@ -1,15 +1,18 @@
-const numberFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
+let formatLocale: string | undefined;
+export function setFormatLocale(locale: string | undefined) {
+  formatLocale = locale;
+}
 
 export function qty(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return "0";
-  if (Number.isInteger(value)) return numberFormat.format(value);
-  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 3 }).format(value);
+  if (Number.isInteger(value)) return new Intl.NumberFormat(formatLocale, { maximumFractionDigits: 2 }).format(value);
+  return new Intl.NumberFormat(formatLocale, { maximumFractionDigits: 3 }).format(value);
 }
 
 export function money(value: number | null | undefined, currency = "EUR"): string {
   if (value == null || !Number.isFinite(value)) return "—";
   try {
-    return new Intl.NumberFormat(undefined, {
+    return new Intl.NumberFormat(formatLocale, {
       style: "currency",
       currency,
       maximumFractionDigits: value < 1 ? 4 : 2,
@@ -22,7 +25,7 @@ export function money(value: number | null | undefined, currency = "EUR"): strin
 export function compactMoney(value: number | null | undefined, currency = "EUR"): string {
   if (value == null || !Number.isFinite(value)) return "—";
   try {
-    return new Intl.NumberFormat(undefined, {
+    return new Intl.NumberFormat(formatLocale, {
       style: "currency",
       currency,
       notation: Math.abs(value) >= 10000 ? "compact" : "standard",
@@ -62,7 +65,7 @@ export function shortDate(iso: string | null | undefined): string {
   if (!iso) return "";
   const date = new Date(iso.length <= 10 ? `${iso}T00:00:00` : iso);
   if (Number.isNaN(date.getTime())) return iso;
-  return new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short", year: "numeric" }).format(date);
+  return new Intl.DateTimeFormat(formatLocale, { day: "numeric", month: "short", year: "numeric" }).format(date);
 }
 
 export function dateInput(iso: string | null | undefined): string {
@@ -92,7 +95,7 @@ export function relativeTime(iso: string | null | undefined): string {
     ["hour", 36e5],
     ["minute", 6e4],
   ];
-  const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  const rtf = new Intl.RelativeTimeFormat(formatLocale, { numeric: "auto" });
   for (const [unit, ms] of units) {
     if (abs >= ms) return rtf.format(Math.round(-diff / ms), unit);
   }

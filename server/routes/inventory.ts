@@ -15,7 +15,7 @@ import {
   serializeLot,
   serializeMovement,
 } from "../serialize.js";
-import { addStock, afterStockChange, moveStock, removeStock, setStock } from "../services/stock.js";
+import { addStock, afterStockChange, itemQuantity, moveStock, removeStock, setStock } from "../services/stock.js";
 import { normaliseNutrition } from "../services/nutrition.js";
 import { learnProductAlias } from "../services/product-aliases.js";
 import {
@@ -705,9 +705,29 @@ itemRoutes.post(
         fromLocationId: z.string().max(60).optional(),
         toLocationId: z.string().max(60).optional(),
         vendorId: z.string().max(60).nullish(),
+        idempotencyKey: z.string().min(8).max(120).optional(),
+        baseUpdatedAt: z.string().max(40).optional(),
       }),
       req.body,
     );
+    if (body.idempotencyKey) {
+      const previous = get<any>("SELECT response FROM stock_mutations WHERE house_id = ? AND idempotency_key = ?", [
+        item.house_id,
+        body.idempotencyKey,
+      ]);
+      if (previous) {
+        res.json(parseJson(previous.response, {}));
+        return;
+      }
+    }
+    if (body.action === "set" && body.baseUpdatedAt && item.updated_at > body.baseUpdatedAt) {
+      throw new ApiError(409, "This count is older than a newer server change", {
+        conflict: true,
+        currentUpdatedAt: item.updated_at,
+        currentQuantity: itemQuantity(item.id),
+        baseUpdatedAt: body.baseUpdatedAt,
+      });
+    }
     if (body.vendorId && !get("SELECT id FROM vendors WHERE id = ? AND house_id = ?", [body.vendorId, item.house_id])) {
       throw new ApiError(400, "Shop does not exist in this house");
     }
@@ -727,23 +747,33 @@ itemRoutes.post(
       reason: body.reason ?? null,
       vendorId: body.vendorId ?? null,
     };
-    if (body.action === "add") addStock(base);
-    else if (body.action === "remove") removeStock(base);
-    else if (body.action === "waste") removeStock({ ...base, waste: true });
-    else if (body.action === "set") setStock({ ...base, target: body.target ?? 0 });
-    else
-      moveStock({
-        itemId: item.id,
-        houseId: item.house_id,
-        userId: req.user!.id,
-        quantity: body.quantity ?? 0,
-        unit: body.unit,
-        fromLocationId: body.fromLocationId ?? body.locationId ?? "",
-        toLocationId: body.toLocationId ?? "",
-        note: body.note ?? undefined,
-      });
+    const detail = tx(() => {
+      if (body.action === "add") addStock(base);
+      else if (body.action === "remove") removeStock(base);
+      else if (body.action === "waste") removeStock({ ...base, waste: true });
+      else if (body.action === "set") setStock({ ...base, target: body.target ?? 0 });
+      else
+        moveStock({
+          itemId: item.id,
+          houseId: item.house_id,
+          userId: req.user!.id,
+          quantity: body.quantity ?? 0,
+          unit: body.unit,
+          fromLocationId: body.fromLocationId ?? body.locationId ?? "",
+          toLocationId: body.toLocationId ?? "",
+          note: body.note ?? undefined,
+        });
+      const result = itemDetail(item.id, req.user!.id);
+      if (body.idempotencyKey) {
+        run(
+          "INSERT OR IGNORE INTO stock_mutations (id, house_id, idempotency_key, user_id, response, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+          [newId("mut"), item.house_id, body.idempotencyKey, req.user!.id, JSON.stringify(result), now()],
+        );
+      }
+      return result;
+    });
     afterStockChange(item.id);
-    res.json(itemDetail(item.id, req.user!.id));
+    res.json(detail);
   }),
 );
 

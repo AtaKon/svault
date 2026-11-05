@@ -19,7 +19,7 @@ dataset — all from one PWA that runs in a single Docker container.
 
 | | |
 |---|---|
-| **Several houses, several people** | Every house has its own stock, places, categories, recipes and photos. Invite family with owner/admin/member/viewer roles, and hand ownership over explicitly when the household changes. |
+| **Several houses, several people** | Every house has its own stock, places, categories, recipes and photos. Invite family with owner/admin/member/viewer roles, and hand ownership over explicitly when the household changes. Optional per-user TOTP two-factor, passkeys and OIDC single sign-on. |
 | **Dynamic inventory** | Items get whatever attributes *you* define per house (size, flavour, material, warranty date…). Units are handled properly (g/kg, ml/l, pcs, pairs…). |
 | **Stock that adds up** | Every change is a movement. Batches keep purchase price, location and expiry, so stock counts, value and FIFO consumption stay honest. |
 | **Price history that means something** | Record a unit price on every purchase and see per-unit trends, averages and highs/lows, filtered by shop or across all shops. Every individual buy is listed with its date, quantity and vendor. Prices are normalised when units differ (e.g. 500 ml at €0.80 becomes €1.60/l). |
@@ -33,7 +33,10 @@ dataset — all from one PWA that runs in a single Docker container.
 | **Low stock & expiry reminders** | Set a reorder point, get a reminder when it is reached. Expiring batches warn you days ahead. Checked on every stock change plus every 30 minutes. Deliver to the bell, the browser, ntfy, Apprise or a signed webhook. |
 | **Recipes, digitised** | Photograph a handwritten card: English & Greek OCR runs on-device (Tesseract, no upload), then AI or a local parser rebuilds the ingredients and steps. "Improve with AI" fills gaps and rewrites steps. |
 | **Cook what you have** | Meal suggestions built from current stock and saved recipes, with realistic missing-ingredient lists — AI or fully local. |
-| **Vision datasets** | Upload photos into folders, draw boxes, name labels, assign train/val/test splits, and export a ready-to-train YOLO or COCO zip (classes, `data.yaml`, manifest included). |
+| **Vision datasets** | Upload photos into folders, draw boxes, name labels, assign train/val/test splits, and export a ready-to-train YOLO or COCO zip (classes, `data.yaml`, manifest included). Import existing YOLO/COCO datasets with a class-mapping preview and review queue. |
+| **Backup & restore** | Download a checksummed zip of the SQLite snapshot and uploads from Settings, or use the CLI for cron. Restore validates schema and checksums, keeps a pre-restore copy and returns 503 while it swaps. |
+| **Offline-friendly stock** | Stock changes made while offline are queued in IndexedDB with idempotency keys, replayed in order on reconnect and stopped at conflicts with a resolution UI. |
+| **Greek & English UI** | Per-user language choice, Greek dictionary, locale-aware dates, numbers and currency, plus Greek recipe/receipt parsing. |
 | **Installable & offline-ish** | Real PWA with manifest and service worker; app shell is cached, API always hits the server. |
 
 <table>

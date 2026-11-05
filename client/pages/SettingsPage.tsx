@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "@/api";
 import { useAuth, useHouse } from "@/state";
+import { useI18n } from "@/i18n";
 import {
   Badge,
   Button,
@@ -81,6 +82,7 @@ const ROLE_OPTIONS: Role[] = ["admin", "member", "viewer"];
 
 export function SettingsPage() {
   const { house, can } = useHouse();
+  const { t } = useI18n();
   const { houses, selectHouse, refresh } = useAuth();
   const navigate = useNavigate();
   const toast = useToast();
@@ -128,7 +130,7 @@ export function SettingsPage() {
       </div>
 
       <div className="sticky top-[57px] z-20 -mx-4 mb-4 border-b border-line/70 bg-bg/90 px-4 py-2 backdrop-blur sm:static sm:mx-0 sm:mb-5 sm:border-0 sm:bg-transparent sm:p-0">
-        <Tabs items={TABS} value={tab} onChange={setTab} />
+        <Tabs items={TABS.map((entry) => ({ ...entry, label: t(entry.label) }))} value={tab} onChange={setTab} />
       </div>
 
       {tab === "general" && <GeneralTab house={house} detail={detail} onSaved={() => void Promise.all([loadDetail(), refresh()])} />}
@@ -1569,6 +1571,11 @@ function DataTab({ house, detail }: { house: House; detail: HouseDetail | null }
   const [csvMap, setCsvMap] = useState<CsvColumnMap>({});
   const [csvPreview, setCsvPreview] = useState<CsvImportPreview | null>(null);
   const [csvBusy, setCsvBusy] = useState(false);
+  const { can } = useHouse();
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [restoreFile, setRestoreFile] = useState<File | null>(null);
+  const [restoreConfirm, setRestoreConfirm] = useState("");
+  const [backups, setBackups] = useState<{ name: string; size: number; createdAt: string }[]>([]);
 
   const loadCatalog = useCallback(async () => {
     if (!user?.isAdmin) return;
@@ -1582,6 +1589,61 @@ function DataTab({ house, detail }: { house: House; detail: HouseDetail | null }
   useEffect(() => {
     void loadCatalog();
   }, [loadCatalog]);
+
+  const loadBackups = useCallback(async () => {
+    if (!can("owner")) return;
+    try {
+      const data = await api<{ backups: { name: string; size: number; createdAt: string }[] }>(`/api/houses/${house.id}/backups`);
+      setBackups(data.backups);
+    } catch {
+      /* backup listing is optional */
+    }
+  }, [house.id, can]);
+
+  useEffect(() => {
+    void loadBackups();
+  }, [loadBackups]);
+
+  const downloadBackup = async () => {
+    setBackupBusy(true);
+    try {
+      const response = await api<Response>(`/api/houses/${house.id}/backup`, { raw: true });
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `svault-backup-${new Date().toISOString().slice(0, 10)}.zip`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      toast.success("Backup downloaded");
+      await loadBackups();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not download the backup");
+    } finally {
+      setBackupBusy(false);
+    }
+  };
+
+  const restoreBackup = async () => {
+    if (!restoreFile) return;
+    setBackupBusy(true);
+    try {
+      const form = new FormData();
+      form.append("backup", restoreFile);
+      form.append("houseName", restoreConfirm);
+      const result = await api<{ ok: boolean; message: string; manifest: { createdAt: string; schemaVersion: number } }>(
+        `/api/houses/${house.id}/restore`,
+        { method: "POST", body: form },
+      );
+      toast.success(result.message);
+      setRestoreFile(null);
+      setRestoreConfirm("");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not restore the backup");
+    } finally {
+      setBackupBusy(false);
+    }
+  };
 
   const importCatalog = async (file: File | null) => {
     if (!file) return;
@@ -1913,6 +1975,60 @@ function DataTab({ house, detail }: { house: House; detail: HouseDetail | null }
             </label>
           </div>
           {catalog?.syncUrl && <p className="mt-2 truncate text-[10px] text-muted">Sync source: {catalog.syncUrl}</p>}
+        </Card>
+      )}
+
+      {can("owner") && (
+        <Card className="space-y-3 p-4">
+          <div>
+            <h2 className="font-display text-lg">Backup &amp; restore</h2>
+            <p className="mt-0.5 text-[11px] leading-relaxed text-muted">
+              A zip with a consistent SQLite snapshot, the uploads folder and a manifest with checksums. Owner only.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" icon="download" onClick={() => void downloadBackup()} loading={backupBusy}>
+              Download backup
+            </Button>
+            <span className="text-[11px] text-muted">Last five backups are kept in <code>DATA_DIR/backups</code>.</span>
+          </div>
+          {backups.length > 0 && (
+            <div className="space-y-1 rounded-xl bg-raised p-2">
+              {backups.slice(0, 5).map((backup) => (
+                <div key={backup.name} className="flex items-center gap-2 text-[11px]">
+                  <Icon name="download" size={12} className="text-muted" />
+                  <span className="min-w-0 flex-1 truncate">{backup.name}</span>
+                  <span className="text-muted">{Math.round(backup.size / 1024)} KB</span>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="rounded-xl border border-line p-3">
+            <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted">Restore</div>
+            <input
+              type="file"
+              accept=".zip,application/zip"
+              onChange={(event) => setRestoreFile(event.target.files?.[0] ?? null)}
+              className="block w-full text-[11px] text-muted"
+            />
+            <Field label="Type the house name to confirm" hint={house.name} className="mt-2">
+              <Input value={restoreConfirm} onChange={(event) => setRestoreConfirm(event.target.value)} placeholder={house.name} />
+            </Field>
+            <Button
+              size="sm"
+              variant="danger"
+              className="mt-2"
+              icon="upload"
+              loading={backupBusy}
+              disabled={!restoreFile || restoreConfirm.trim().toLowerCase() !== house.name.trim().toLowerCase()}
+              onClick={() => void restoreBackup()}
+            >
+              Restore backup
+            </Button>
+            <p className="mt-1.5 text-[10px] text-muted">
+              The server stages the archive, keeps a pre-restore copy and restarts. API requests return 503 until it finishes.
+            </p>
+          </div>
         </Card>
       )}
 

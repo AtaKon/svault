@@ -1,10 +1,31 @@
 import { DatabaseSync } from "node:sqlite";
 import { randomBytes } from "node:crypto";
-import { DB_FILE, ensureDirs } from "./config.js";
+import fs from "node:fs";
+import path from "node:path";
+import { BACKUP_DIR, DB_FILE, UPLOAD_DIR, ensureDirs } from "./config.js";
 import { RESERVED_ATTRIBUTE_KEYS } from "../shared/types.js";
 import { usernameFromEmail, usernameWithSuffix } from "./username.js";
 
 ensureDirs();
+
+/** A restore is staged by the API and applied before SQLite is opened. */
+function applyPendingRestore() {
+  const marker = path.join(path.dirname(DB_FILE), ".restore-pending.json");
+  const staging = path.join(path.dirname(DB_FILE), ".restore-staging");
+  if (!fs.existsSync(marker) || !fs.existsSync(path.join(staging, "svault.db"))) return;
+  fs.mkdirSync(BACKUP_DIR, { recursive: true });
+  if (fs.existsSync(DB_FILE)) fs.copyFileSync(DB_FILE, path.join(BACKUP_DIR, `pre-restore-${Date.now()}.db`));
+  for (const suffix of ["-wal", "-shm"]) fs.rmSync(`${DB_FILE}${suffix}`, { force: true });
+  fs.copyFileSync(path.join(staging, "svault.db"), DB_FILE);
+  fs.rmSync(UPLOAD_DIR, { recursive: true, force: true });
+  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+  const uploads = path.join(staging, "uploads");
+  if (fs.existsSync(uploads)) fs.cpSync(uploads, UPLOAD_DIR, { recursive: true });
+  fs.rmSync(staging, { recursive: true, force: true });
+  fs.rmSync(marker, { force: true });
+}
+
+applyPendingRestore();
 
 export const db = new DatabaseSync(DB_FILE);
 db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
@@ -16,6 +37,7 @@ CREATE TABLE IF NOT EXISTS users (
   username TEXT UNIQUE COLLATE NOCASE,
   name TEXT NOT NULL,
   password_hash TEXT NOT NULL,
+  language TEXT,
   is_admin INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL
 );
@@ -29,6 +51,59 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);
+
+CREATE TABLE IF NOT EXISTS user_totp (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  secret TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 0,
+  backup_codes TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  confirmed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS passkeys (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  credential_id TEXT NOT NULL UNIQUE,
+  public_key TEXT NOT NULL,
+  counter INTEGER NOT NULL DEFAULT 0,
+  transports TEXT NOT NULL DEFAULT '[]',
+  name TEXT NOT NULL DEFAULT 'Passkey',
+  created_at TEXT NOT NULL,
+  last_used_at TEXT
+);
+CREATE INDEX IF NOT EXISTS passkeys_user ON passkeys(user_id);
+
+CREATE TABLE IF NOT EXISTS webauthn_challenges (
+  id TEXT PRIMARY KEY,
+  user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+  type TEXT NOT NULL,
+  challenge TEXT NOT NULL,
+  data TEXT NOT NULL DEFAULT '{}',
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS webauthn_challenges_expiry ON webauthn_challenges(expires_at);
+
+CREATE TABLE IF NOT EXISTS user_identities (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  email TEXT,
+  created_at TEXT NOT NULL,
+  UNIQUE (provider, subject)
+);
+CREATE INDEX IF NOT EXISTS user_identities_user ON user_identities(user_id);
+
+CREATE TABLE IF NOT EXISTS login_challenges (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  type TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS login_challenges_user ON login_challenges(user_id, type);
 
 CREATE TABLE IF NOT EXISTS houses (
   id TEXT PRIMARY KEY,
@@ -168,6 +243,16 @@ CREATE TABLE IF NOT EXISTS stock_movements (
 );
 CREATE INDEX IF NOT EXISTS movements_item ON stock_movements(item_id, created_at);
 CREATE INDEX IF NOT EXISTS movements_house ON stock_movements(house_id, created_at);
+
+CREATE TABLE IF NOT EXISTS stock_mutations (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  idempotency_key TEXT NOT NULL,
+  user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  response TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  UNIQUE (house_id, idempotency_key)
+);
 
 CREATE TABLE IF NOT EXISTS vendors (
   id TEXT PRIMARY KEY,
@@ -494,6 +579,7 @@ function ensureColumn(table: string, column: string, definition: string) {
 }
 
 ensureColumn("users", "username", "TEXT");
+ensureColumn("users", "language", "TEXT");
 ensureColumn("notifications", "user_id", "TEXT REFERENCES users(id) ON DELETE CASCADE");
 ensureColumn("stock_lots", "vendor_id", "TEXT REFERENCES vendors(id) ON DELETE SET NULL");
 ensureColumn("stock_lots", "receipt_id", "TEXT REFERENCES receipts(id) ON DELETE SET NULL");

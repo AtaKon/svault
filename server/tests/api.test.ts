@@ -1,6 +1,6 @@
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { createHmac } from "node:crypto";
+import { createHmac, createSign, generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -10,6 +10,92 @@ process.env.DATA_DIR = dataDir;
 process.env.NODE_ENV = "test";
 process.env.OPENAI_API_KEY = "";
 process.env.SVAI_API_KEY = "";
+
+const http = await import("node:http");
+
+/* A local OpenID Connect provider for the SSO tests. The issuer is set before
+   the app imports its config. */
+const oidcKeys = generateKeyPairSync("rsa", { modulusLength: 2048 });
+const oidcJwk = oidcKeys.publicKey.export({ format: "jwk" }) as { n?: string; e?: string };
+let oidcServer: import("node:http").Server;
+let oidcIssuer = "";
+await new Promise<void>((resolve) => {
+  oidcServer = http.createServer((req, res) => {
+    const url = new URL(req.url ?? "/", "http://127.0.0.1");
+    const json = (value: unknown) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(value));
+    };
+    if (url.pathname === "/.well-known/openid-configuration") {
+      json({
+        issuer: oidcIssuer,
+        authorization_endpoint: `${oidcIssuer}/authorize`,
+        token_endpoint: `${oidcIssuer}/token`,
+        jwks_uri: `${oidcIssuer}/jwks`,
+        response_types_supported: ["code"],
+        subject_types_supported: ["public"],
+        id_token_signing_alg_values_supported: ["RS256"],
+        scopes_supported: ["openid", "email", "profile"],
+        token_endpoint_auth_methods_supported: ["client_secret_basic", "client_secret_post"],
+        claims_supported: ["sub", "email", "email_verified", "name"],
+      });
+      return;
+    }
+    if (url.pathname === "/jwks") {
+      json({ keys: [{ kty: "RSA", kid: "test-key", use: "sig", alg: "RS256", n: oidcJwk.n, e: oidcJwk.e }] });
+      return;
+    }
+    if (url.pathname === "/token" && req.method === "POST") {
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      req.on("end", () => {
+        const params = new URLSearchParams(Buffer.concat(chunks).toString("utf8"));
+        const code = params.get("code") ?? "";
+        const unverified = code.startsWith("unverified");
+        const nonce = code.replace(/^unverified-/, "");
+        const header = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT", kid: "test-key" })).toString("base64url");
+        const payload = Buffer.from(
+          JSON.stringify({
+            iss: oidcIssuer,
+            sub: "oidc-test-subject",
+            aud: "svault-test",
+            exp: Math.floor(Date.now() / 1000) + 300,
+            iat: Math.floor(Date.now() / 1000),
+            nonce,
+            email: "sso@example.com",
+            email_verified: !unverified,
+            name: "SSO User",
+          }),
+        ).toString("base64url");
+        const signingInput = `${header}.${payload}`;
+        const signature = createSign("RSA-SHA256").update(signingInput).sign(oidcKeys.privateKey).toString("base64url");
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            access_token: "test-access",
+            token_type: "Bearer",
+            expires_in: 300,
+            id_token: `${signingInput}.${signature}`,
+          }),
+        );
+      });
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  oidcServer.listen(0, "127.0.0.1", () => {
+    const address = oidcServer.address();
+    if (!address || typeof address === "string") throw new Error("no oidc address");
+    oidcIssuer = `http://127.0.0.1:${address.port}`;
+    process.env.OIDC_ISSUER = oidcIssuer;
+    process.env.OIDC_CLIENT_ID = "svault-test";
+    process.env.OIDC_CLIENT_SECRET = "test-secret";
+    process.env.OIDC_ALLOWED_DOMAINS = "example.com";
+    process.env.OIDC_AUTO_PROVISION = "true";
+    resolve();
+  });
+});
 
 const { app } = await import("../index.js");
 const { db, run } = await import("../db.js");
@@ -25,9 +111,11 @@ const { LIDL_TEMPLATE_RULES, SKLAVENITIS_TEMPLATE_RULES } = await import("../../
 const { convert, pricePerUnit } = await import("../units.js");
 const { parseOffNutrition } = await import("../services/nutrition.js");
 const { parseCsv, parseCsvNumber } = await import("../services/csv.js");
+const { totpCode, verifyTotp, generateTotpSecret, generateBackupCodes } = await import("../services/totp.js");
+const { backupForTest, validateBackup } = await import("../services/backup.js");
+const { inspectDataset, importDataset } = await import("../services/dataset-import.js");
 const { encodePng } = await import("../lib/png.js");
 const JSZip = (await import("jszip")).default;
-const http = await import("node:http");
 
 let server: import("node:http").Server;
 let aiServer: import("node:http").Server;
@@ -297,6 +385,7 @@ before(async () => {
 after(() => {
   server?.close();
   aiServer?.close();
+  oidcServer?.close();
   db.close();
   rmSync(dataDir, { recursive: true, force: true });
 });
@@ -2577,5 +2666,258 @@ describe("reminder delivery channels", () => {
     });
     assert.equal(res.status, 502);
     assert.equal(res.data.ok, false);
+  });
+});
+
+describe("two-factor authentication", () => {
+  it("generates and verifies TOTP codes and backup codes", () => {
+    const secret = generateTotpSecret();
+    const code = totpCode(secret);
+    assert.equal(code.length, 6);
+    assert.equal(verifyTotp(secret, code), true);
+    assert.equal(verifyTotp(secret, "000000"), false);
+    const backup = generateBackupCodes(3);
+    assert.equal(backup.plain.length, 3);
+    assert.equal(new Set(backup.hashed).size, 3);
+  });
+
+  it("enables 2FA, requires the second step at login and disables it again", async () => {
+    const setup = await request("/api/auth/2fa/setup", {
+      method: "POST",
+      body: { password: "test password" },
+    });
+    assert.equal(setup.status, 200);
+    assert.ok(setup.data.secret);
+
+    const wrong = await request("/api/auth/2fa/enable", { method: "POST", body: { code: "000000" } });
+    assert.equal(wrong.status, 400);
+
+    const enabled = await request("/api/auth/2fa/enable", {
+      method: "POST",
+      body: { code: totpCode(setup.data.secret) },
+    });
+    assert.equal(enabled.status, 200);
+    assert.equal(enabled.data.backupCodes.length, 8);
+
+    const login = await request("/api/auth/login", {
+      method: "POST",
+      body: { identifier: "owner", password: "test password" },
+    });
+    assert.equal(login.status, 200);
+    assert.equal(login.data.twoFactorRequired, true);
+    assert.ok(login.data.challenge);
+
+    const rejected = await request("/api/auth/2fa/verify", {
+      method: "POST",
+      body: { challenge: login.data.challenge, code: "000000" },
+    });
+    assert.equal(rejected.status, 401);
+
+    const verified = await request("/api/auth/2fa/verify", {
+      method: "POST",
+      body: { challenge: login.data.challenge, code: totpCode(setup.data.secret) },
+    });
+    assert.equal(verified.status, 200);
+    assert.ok(verified.cookie);
+
+    const disabled = await request("/api/auth/2fa/disable", {
+      method: "POST",
+      body: { password: "test password", code: totpCode(setup.data.secret) },
+    });
+    assert.equal(disabled.status, 200);
+    const status = await request("/api/auth/2fa");
+    assert.equal(status.data.enabled, false);
+  });
+
+  it("exposes passkey options and rejects an unknown assertion", async () => {
+    const options = await request("/api/auth/passkeys/login/options", { method: "POST", body: {} });
+    assert.equal(options.status, 200);
+    assert.ok(options.data.challengeId);
+    assert.ok(options.data.options.challenge);
+    const bad = await request("/api/auth/passkeys/login/verify", {
+      method: "POST",
+      body: { challengeId: options.data.challengeId, response: { id: "missing" } },
+    });
+    assert.equal(bad.status, 401);
+  });
+
+  it("reports OIDC enabled and auto-provisions a verified email", async () => {
+    const status = await request("/api/auth/oidc/status", { auth: "" });
+    assert.equal(status.status, 200);
+    assert.equal(status.data.enabled, true);
+
+    const start = await fetch(`${base}/api/auth/oidc/start`, { redirect: "manual" });
+    assert.equal(start.status, 302);
+    const authorize = new URL(start.headers.get("location")!);
+    const state = authorize.searchParams.get("state")!;
+    const nonce = authorize.searchParams.get("nonce")!;
+    assert.ok(state && nonce);
+
+    const callback = await fetch(`${base}/api/auth/oidc/callback?code=${encodeURIComponent(nonce)}&state=${encodeURIComponent(state)}`, {
+      redirect: "manual",
+    });
+    assert.equal(callback.status, 302);
+    assert.match(callback.headers.get("location") ?? "", /sso=1/);
+    const setCookie = callback.headers.get("set-cookie")!.split(";")[0];
+    const me = await fetch(`${base}/api/auth/me`, { headers: { cookie: setCookie } });
+    assert.equal(me.status, 200);
+    const meData = (await me.json()) as any;
+    assert.equal(meData.user.email, "sso@example.com");
+    assert.ok(meData.houses.length >= 1);
+  });
+
+  it("rejects invalid state and an unverified OIDC email", async () => {
+    const badState = await fetch(`${base}/api/auth/oidc/callback?code=x&state=missing`, { redirect: "manual" });
+    assert.equal(badState.status, 302);
+    assert.match(badState.headers.get("location") ?? "", /oidc_error=/);
+
+    const start = await fetch(`${base}/api/auth/oidc/start`, { redirect: "manual" });
+    const authorize = new URL(start.headers.get("location")!);
+    const state = authorize.searchParams.get("state")!;
+    const nonce = authorize.searchParams.get("nonce")!;
+    const callback = await fetch(
+      `${base}/api/auth/oidc/callback?code=${encodeURIComponent(`unverified-${nonce}`)}&state=${encodeURIComponent(state)}`,
+      { redirect: "manual" },
+    );
+    assert.equal(callback.status, 302);
+    assert.match(callback.headers.get("location") ?? "", /oidc_error=/);
+  });
+});
+
+describe("offline mutation idempotency", () => {
+  it("replays the same stock mutation only once", async () => {
+    const item = await request(`/api/houses/${houseId}/items`, {
+      method: "POST",
+      body: { name: "Idempotent rice", unit: "g", initialStock: { quantity: 100 } },
+    });
+    const key = `offline-${Date.now()}`;
+    const first = await request(`/api/items/${item.data.id}/stock`, {
+      method: "POST",
+      body: { action: "add", quantity: 25, unit: "g", idempotencyKey: key },
+    });
+    assert.equal(first.status, 200);
+    assert.equal(first.data.quantity, 125);
+    const replay = await request(`/api/items/${item.data.id}/stock`, {
+      method: "POST",
+      body: { action: "add", quantity: 25, unit: "g", idempotencyKey: key },
+    });
+    assert.equal(replay.status, 200);
+    assert.equal(replay.data.quantity, 125);
+  });
+
+  it("rejects a stale count instead of silently overwriting", async () => {
+    const item = await request(`/api/houses/${houseId}/items`, {
+      method: "POST",
+      body: { name: "Conflict lentils", unit: "g", initialStock: { quantity: 50 } },
+    });
+    const stale = await request(`/api/items/${item.data.id}/stock`, {
+      method: "POST",
+      body: { action: "set", target: 10, baseUpdatedAt: "2000-01-01T00:00:00.000Z" },
+    });
+    assert.equal(stale.status, 409);
+    assert.equal(stale.data.details.conflict, true);
+  });
+});
+
+describe("backup and restore", () => {
+  it("creates a valid zip with a manifest and checksums", async () => {
+    const { buffer, validation } = await backupForTest();
+    assert.ok(buffer.length > 0);
+    assert.equal(validation.manifest.format, 1);
+    assert.ok(validation.manifest.checksums.database);
+    assert.ok(validation.database.length > 0);
+  });
+
+  it("serves the backup download to an owner", async () => {
+    const res = await fetch(`${base}/api/houses/${houseId}/backup`, { headers: { cookie } });
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get("content-type") ?? "", /zip/);
+    const bytes = Buffer.from(await res.arrayBuffer());
+    assert.equal(bytes.subarray(0, 2).toString(), "PK");
+  });
+
+  it("rejects corrupt archives, unsafe paths and newer schemas", async () => {
+    await assert.rejects(() => validateBackup(Buffer.from("not a zip")));
+
+    const unsafe = new JSZip();
+    unsafe.file("../escape.txt", "nope");
+    unsafe.file("manifest.json", JSON.stringify({ format: 1, schemaVersion: 1, checksums: {} }));
+    unsafe.file("svault.db", Buffer.from("x"));
+    const unsafeBuffer = await unsafe.generateAsync({ type: "nodebuffer" });
+    await assert.rejects(() => validateBackup(unsafeBuffer), /Unsafe archive path/);
+
+    const { buffer } = await backupForTest();
+    const newer = await JSZip.loadAsync(buffer);
+    const manifest = JSON.parse(await newer.file("manifest.json")!.async("string"));
+    manifest.schemaVersion = 999;
+    newer.file("manifest.json", JSON.stringify(manifest));
+    const newerBuffer = await newer.generateAsync({ type: "nodebuffer" });
+    await assert.rejects(() => validateBackup(newerBuffer), /supports up to/);
+  });
+});
+
+describe("dataset import", () => {
+  const png = () => encodePng(8, 8, Buffer.alloc(8 * 8 * 4, 180));
+
+  it("parses YOLO labels, classes and splits", async () => {
+    const zip = new JSZip();
+    zip.file("classes.txt", "apple\npear\n");
+    zip.file("train/images/a.png", png());
+    zip.file("train/labels/a.txt", "0 0.5 0.5 0.2 0.2\n1 0.2 0.2 0.1 0.1\n");
+    zip.file("val/images/b.png", png());
+    zip.file("val/labels/b.txt", "0 0.3 0.3 0.1 0.1\n");
+    const inspection = await inspectDataset(await zip.generateAsync({ type: "nodebuffer" }));
+    assert.equal(inspection.kind, "yolo");
+    assert.deepEqual(inspection.classes, ["apple", "pear"]);
+    assert.equal(inspection.images.length, 2);
+    assert.equal(inspection.splits.train, 1);
+    assert.equal(inspection.splits.val, 1);
+  });
+
+  it("imports boxes while merging and skipping classes", async () => {
+    const zip = new JSZip();
+    zip.file("classes.txt", "apple\npear\n");
+    zip.file("train/images/a.png", png());
+    zip.file("train/labels/a.txt", "0 0.5 0.5 0.2 0.2\n1 0.2 0.2 0.1 0.1\n");
+    const buffer = await zip.generateAsync({ type: "nodebuffer" });
+    const result = await importDataset({
+      houseId,
+      userId: (await request("/api/auth/me")).data.user.id,
+      buffer,
+      mapping: { apple: "Imported apple", pear: "__skip" },
+      collectionName: "Test dataset",
+    });
+    assert.equal(result.imported, 1);
+    assert.equal(result.labels, 1);
+    const collection = (await request(`/api/houses/${houseId}/collections`)).data.find(
+      (entry: any) => entry.id === result.collectionId,
+    );
+    assert.equal(collection.photoCount, 1);
+    const review = await request(`/api/houses/${houseId}/photos/review`);
+    assert.ok(review.data.photos.some((photo: any) => photo.collectionId === result.collectionId && photo.labels[0].label === "Imported apple"));
+  });
+
+  it("rejects path traversal in a dataset archive", async () => {
+    const zip = new JSZip();
+    zip.file("../evil.png", png());
+    const buffer = await zip.generateAsync({ type: "nodebuffer" });
+    await assert.rejects(() => inspectDataset(buffer), /Unsafe archive path/);
+  });
+
+  it("reads COCO annotations with absolute boxes", async () => {
+    const zip = new JSZip();
+    zip.file("images/c.png", png());
+    zip.file(
+      "annotations.json",
+      JSON.stringify({
+        images: [{ id: 1, file_name: "c.png", width: 8, height: 8 }],
+        categories: [{ id: 7, name: "crate" }],
+        annotations: [{ id: 1, image_id: 1, category_id: 7, bbox: [1, 2, 4, 4] }],
+      }),
+    );
+    const inspection = await inspectDataset(await zip.generateAsync({ type: "nodebuffer" }));
+    assert.equal(inspection.kind, "coco");
+    assert.deepEqual(inspection.classes, ["crate"]);
+    assert.equal(inspection.images[0].labels[0].w, 0.5);
   });
 });

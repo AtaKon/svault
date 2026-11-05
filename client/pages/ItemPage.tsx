@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "@/api";
 import { useHouse } from "@/state";
+import { useAuth } from "@/state";
+import { enqueueStockAction, isOffline } from "@/offline-queue";
 import {
   Badge,
   Button,
@@ -49,6 +51,7 @@ const MOVEMENT_LABELS: Record<Movement["type"], { label: string; icon: IconName;
 export function ItemPage() {
   const { itemId = "" } = useParams();
   const { house, can } = useHouse();
+  const { user } = useAuth();
   const navigate = useNavigate();
   const toast = useToast();
   const [item, setItem] = useState<ItemDetail | null>(null);
@@ -108,6 +111,24 @@ export function ItemPage() {
     if (!item) return;
     setQuickBusy(true);
     try {
+      if (isOffline() && user) {
+        await enqueueStockAction({
+          userId: user.id,
+          houseId: house.id,
+          itemId: item.id,
+          itemName: item.name,
+          unit: item.unit,
+          body: { action, quantity: 1, unit: item.unit },
+          baseUpdatedAt: item.updatedAt,
+        });
+        setItem((previous) =>
+          previous
+            ? { ...previous, quantity: Math.max(0, previous.quantity + (action === "add" ? 1 : -1)) }
+            : previous,
+        );
+        toast.push("Queued offline — it will sync when you reconnect");
+        return;
+      }
       const detail = await api<ItemDetail>(`/api/items/${item.id}/stock`, {
         method: "POST",
         body: { action, quantity: 1, unit: item.unit },

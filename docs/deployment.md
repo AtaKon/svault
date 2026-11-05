@@ -87,6 +87,15 @@ Docker Compose reads `.env` next to `docker-compose.yml`.
 | `OPENAI_MODEL` | `gpt-4o-mini` | Server | Text model. |
 | `OPENAI_VISION_MODEL` | falls back to text model | Server | Vision model for recipe photos. |
 | `SV_CATALOG_URL` | empty | Server | Optional shared OpenFoodFacts receipt-name catalogue (JSON) for **Settings → Data → Sync catalogue**. |
+| `RP_ID` | request host | Server | WebAuthn relying-party domain, e.g. `svault.example.com`. |
+| `ORIGIN` | request origin | Server | Public HTTPS origin for passkeys, e.g. `https://svault.example.com`. |
+| `OIDC_ISSUER` | empty | Server | OpenID Connect issuer URL; empty disables SSO. |
+| `OIDC_CLIENT_ID` | empty | Server | OIDC client id. |
+| `OIDC_CLIENT_SECRET` | empty | Server | OIDC client secret (never sent to the browser). |
+| `OIDC_REDIRECT_URI` | `<origin>/api/auth/oidc/callback` | Server | Must match the provider registration. |
+| `OIDC_ALLOWED_DOMAINS` | empty | Server | Comma-separated verified email domains; empty allows any. |
+| `OIDC_AUTO_PROVISION` | `true` | Server | Create a user for unknown verified identities. |
+| `OIDC_DEFAULT_HOUSE_ID` | empty | Server | Join new SSO users to this house instead of creating one. |
 | `OFF_API_BASE` | `https://world.openfoodfacts.org` | Server | Product endpoint, overridable for a proxy. |
 | `OFF_SEARCH_BASE` | `https://search.openfoodfacts.org` | Server | Name-search endpoint. |
 | `OFF_TIMEOUT_MS` | `6000` | Server | Per-request OpenFoodFacts timeout. |
@@ -250,6 +259,22 @@ Everything is in `DATA_DIR`:
 
 Choose one of these:
 
+### In-app backup (recommended)
+
+Open **Settings → Data → Backup & restore** as the house owner and press **Download backup**. The zip
+contains a consistent `svault.db`, `uploads/`, and `manifest.json` with the app/schema version and
+SHA-256 checksums. The last five copies stay in `DATA_DIR/backups`.
+
+The same operations are available without the UI:
+
+```bash
+npm run backup -- --out svault-backup.zip
+npm run restore -- --in svault-backup.zip   # stop the server first
+```
+
+Restore validates paths, checksums and schema, keeps a pre-restore copy, stages the archive and restarts
+the server. During the swap API requests return `503`.
+
 ### Stop and copy (simplest, consistent)
 
 ```bash
@@ -301,7 +326,7 @@ docker compose up -d
 ```
 
 Restoring is destructive. Keep the old volume or a second archive until the new instance is verified.
-In-app backup/restore is planned in [issue #3](https://github.com/AtaKon/svault/issues/3).
+The in-app restore keeps a timestamped pre-restore copy under `DATA_DIR/backups`.
 
 ### What to back up
 

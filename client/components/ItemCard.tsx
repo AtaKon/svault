@@ -8,6 +8,7 @@ import { Icon } from "@/components/icons";
 import { ZoomableImage } from "@/components/ZoomableImage";
 import { useToast } from "@/components/toast";
 import { useAuth } from "@/state";
+import { enqueueStockAction, isOffline } from "@/offline-queue";
 
 /* ----------------------------------------------------------------- item card */
 
@@ -21,7 +22,7 @@ export function ItemCard({
   compact?: boolean;
 }) {
   const navigate = useNavigate();
-  const { house } = useAuth();
+  const { house, user } = useAuth();
   const toast = useToast();
   const [busy, setBusy] = useState<"add" | "remove" | null>(null);
   const [current, setCurrent] = useState(item);
@@ -31,6 +32,24 @@ export function ItemCard({
   const step = async (action: "add" | "remove") => {
     setBusy(action);
     try {
+      if (isOffline()) {
+        if (!house || !user) return;
+        await enqueueStockAction({
+          userId: user.id,
+          houseId: house.id,
+          itemId: item.id,
+          itemName: item.name,
+          unit: item.unit,
+          body: { action, quantity: 1, unit: item.unit },
+          baseUpdatedAt: item.updatedAt,
+        });
+        setCurrent((previous) => ({
+          ...previous,
+          quantity: Math.max(0, previous.quantity + (action === "add" ? 1 : -1)),
+        }));
+        toast.push("Queued offline — it will sync when you reconnect");
+        return;
+      }
       const detail = await api<ItemDetail>(`/api/items/${item.id}/stock`, {
         method: "POST",
         body: { action, quantity: 1, unit: item.unit },
@@ -161,7 +180,7 @@ export function StockDialog({
   onVendorCreated?: (vendor: Vendor) => void;
   initialAction?: StockAction;
 }) {
-  const { house } = useAuth();
+  const { house, user } = useAuth();
   const toast = useToast();
   const [action, setAction] = useState<StockAction>(initialAction);
   const [amount, setAmount] = useState("1");
@@ -202,7 +221,7 @@ export function StockDialog({
     setBusy(true);
     try {
       let resolvedVendorId = vendorId === "__new" ? "" : vendorId;
-      if (action === "add" && vendorId === "__new" && newVendor.trim()) {
+      if (!isOffline() && action === "add" && vendorId === "__new" && newVendor.trim()) {
         const existing = vendors.find((vendor) => vendor.name.toLowerCase() === newVendor.trim().toLowerCase());
         if (existing) {
           resolvedVendorId = existing.id;
@@ -233,6 +252,24 @@ export function StockDialog({
           body.purchasedAt = purchasedAt || undefined;
           body.vendorId = resolvedVendorId || undefined;
         }
+      }
+      if (isOffline()) {
+        if (!user) return;
+        if (action === "add" && vendorId === "__new" && newVendor.trim()) {
+          throw new Error("Add the new shop while you are online, then queue the stock change");
+        }
+        await enqueueStockAction({
+          userId: user.id,
+          houseId: house.id,
+          itemId: item.id,
+          itemName: item.name,
+          unit: item.unit,
+          body,
+          baseUpdatedAt: item.updatedAt,
+        });
+        toast.push("Queued offline — it will sync when you reconnect");
+        onClose();
+        return;
       }
       const detail = await api<ItemDetail>(`/api/items/${item.id}/stock`, { method: "POST", body });
       onUpdated(detail);

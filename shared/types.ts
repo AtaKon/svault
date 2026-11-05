@@ -7,6 +7,7 @@ export interface User {
   email: string;
   username: string;
   name: string;
+  language?: "en" | "el";
   isAdmin: boolean;
   createdAt: string;
 }

@@ -780,6 +780,100 @@ with an optional `x-api-key`. Webhooks receive
 notification key and channel, and retried three times with backoff. Resolved reminders are not re-sent.
 The weekly summary runs from the reminder scan once per ISO week when at least one channel enables it.
 
+## Two-factor authentication
+
+| Method | Path | Auth | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/auth/2fa` | user | `{ enabled, configured, backupCodesRemaining }`. |
+| `POST` | `/api/auth/2fa/setup` | user | Confirm password, return `{ secret, otpauth }`. |
+| `POST` | `/api/auth/2fa/enable` | user | Verify a 6-digit code and return 8 backup codes. |
+| `POST` | `/api/auth/2fa/disable` | user | Confirm password and a current TOTP/backup code. |
+| `POST` | `/api/auth/2fa/backup-codes` | user | Regenerate backup codes after password + code confirmation. |
+| `POST` | `/api/auth/2fa/verify` | public | Exchange `{ challenge, code }` for a session cookie. |
+
+When 2FA is enabled, `POST /api/auth/login` returns
+`{ twoFactorRequired: true, challenge }` and **does not** set a session cookie. The challenge expires
+after five minutes; a wrong code does not consume it. Backup codes are stored hashed and consumed once.
+
+## Passkeys (WebAuthn)
+
+| Method | Path | Auth | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/auth/passkeys` | user | List passkeys and the RP ID/origin. |
+| `POST` | `/api/auth/passkeys/options` | user | Registration options + `challengeId`. |
+| `POST` | `/api/auth/passkeys/verify` | user | Verify `{ challengeId, response, name? }`. |
+| `DELETE` | `/api/auth/passkeys/:passkeyId` | user | Remove one passkey. |
+| `DELETE` | `/api/auth/passkeys/user/:userId` | owner/admin | Reset another user's passkeys. |
+| `POST` | `/api/auth/passkeys/login/options` | public | Authentication options; body `{ identifier? }`. |
+| `POST` | `/api/auth/passkeys/login/verify` | public | Verify `{ challengeId, response }`, set a session. |
+
+Registration/authentication responses are the standard WebAuthn JSON from `@simplewebauthn/browser`.
+Challenges are stored server-side with a five-minute expiry and deleted after use. The relying party
+comes from `RP_ID` / `ORIGIN`, falling back to the request host. Counters are persisted and a
+non-advancing counter is rejected as a replay. Passkeys still require HTTPS or localhost.
+
+## OIDC single sign-on
+
+| Method | Path | Auth | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/auth/oidc/status` | public | `{ enabled, label }`; never returns secrets. |
+| `GET` | `/api/auth/oidc/start` | public | Start the authorization-code flow with PKCE, state and nonce. |
+| `GET` | `/api/auth/oidc/callback` | public | Validate the response, link/provision the user and set a session. |
+
+Configure `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, optional `OIDC_REDIRECT_URI`,
+`OIDC_ALLOWED_DOMAINS`, `OIDC_AUTO_PROVISION` and `OIDC_DEFAULT_HOUSE_ID`. Only verified email addresses
+are accepted. Existing users are linked by email; new users are provisioned when allowed. Password login
+and the first local owner remain as the break-glass path. Errors redirect to `/login?oidc_error=...`.
+
+## Offline stock mutations
+
+`POST /api/items/:itemId/stock` accepts an optional `idempotencyKey` (8–120 chars). The response is stored
+in `stock_mutations`; replaying the same key returns the original response without applying the change
+again. For absolute counts, send `baseUpdatedAt`; if the item was changed later the server returns `409`
+with `details: { conflict, currentUpdatedAt, currentQuantity }` so the client can resolve it.
+
+## Backup and restore
+
+| Method | Path | Min role | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/houses/:houseId/backup` | owner | Download a zip with `svault.db`, `uploads/` and `manifest.json`. |
+| `GET` | `/api/houses/:houseId/backups` | owner | List retained local backups (last five). |
+| `POST` | `/api/houses/:houseId/restore` | owner | Upload `backup` plus `houseName` or `password`. |
+
+The snapshot uses `VACUUM INTO`, runs while the server is live, and is checked with
+`PRAGMA integrity_check`. The manifest records the app version, schema version, counts and SHA-256
+checksums for the database and every upload. Restore rejects unsafe zip paths, checksum failures and
+archives from a newer schema, keeps a pre-restore copy, then stages the archive and restarts the server.
+During the swap API requests return `503`.
+
+CLI (stop the server first for restore):
+
+```bash
+npm run backup -- --out svault-backup.zip
+npm run restore -- --in svault-backup.zip
+```
+
+## Dataset import and review
+
+| Method | Path | Min role | Purpose |
+| --- | --- | --- | --- |
+| `POST` | `/api/houses/:houseId/photos/dataset/preview` | member+ | Inspect a YOLO/COCO zip without writing. |
+| `POST` | `/api/houses/:houseId/photos/dataset/import` | member+ | Import images, boxes, classes and splits. |
+| `GET` | `/api/houses/:houseId/photos/review` | viewer+ | Unlabelled and classification-only review queue. |
+| `POST` | `/api/houses/:houseId/photos/labels/bulk` | member+ | Rename, merge or delete a label across the house. |
+| `POST` | `/api/houses/:houseId/photos/splits` | member+ | Bulk reassign train/val/test/unassigned. |
+| `POST` | `/api/houses/:houseId/photos/delete-bulk` | admin+ | Delete selected photos and files. |
+
+The importer accepts `images/` + `labels/` + `classes.txt`/`data.yaml`, or `images/` + a COCO
+`annotations.json`/`instances*.json`. It validates zip paths, converts YOLO normalised boxes and COCO
+absolute boxes to SVault's format, preserves train/val/test folders, reports per-file errors, and lets the
+caller map class names (or `__skip`) before writing. Rounds back to the existing YOLO/COCO exporter.
+
+## Language
+
+`PATCH /api/auth/me` accepts `{ "language": "en" | "el" }`. The stored preference is returned on `user`
+and drives the client dictionary and `Intl` date/number/currency formatting.
+
 ## Status codes
 
 | Code | Meaning |

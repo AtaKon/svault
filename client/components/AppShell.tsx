@@ -2,9 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { api } from "@/api";
 import { useAuth } from "@/state";
+import { useI18n } from "@/i18n";
 import { Button, Field, Input, Select, Sheet, cn } from "@/components/ui";
 import { Icon, LogoMark, type IconName } from "@/components/icons";
 import { useToast } from "@/components/toast";
+import { OfflineQueueBar } from "@/components/OfflineQueueBar";
 import { currentTheme, toggleTheme } from "@/theme";
 import type { House, Notification } from "@shared/types";
 
@@ -31,6 +33,7 @@ const CURRENCIES = ["EUR", "USD", "GBP", "CHF", "SEK", "NOK", "DKK", "PLN", "CZK
 
 export function AppShell() {
   const { house, houses, selectHouse, refresh, user } = useAuth();
+  const { t } = useI18n();
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [unread, setUnread] = useState(0);
@@ -115,11 +118,11 @@ export function AppShell() {
 
         <nav className="mt-5 flex flex-col gap-0.5">
           {NAV.filter((item) => item.to !== "/scan" && item.to !== "/more").map((item) => (
-            <SideLink key={item.to} {...item} />
+            <SideLink key={item.to} {...item} label={t(item.label)} />
           ))}
           <div className="my-2 h-px bg-line" />
           {EXTRA.map((item) => (
-            <SideLink key={item.to} {...item} badge={item.to === "/notifications" && unread > 0 ? unread : undefined} />
+            <SideLink key={item.to} {...item} label={t(item.label)} badge={item.to === "/notifications" && unread > 0 ? unread : undefined} />
           ))}
         </nav>
 
@@ -191,6 +194,7 @@ export function AppShell() {
 
       <main className="mx-auto w-full max-w-5xl px-4 pb-28 pt-4 sm:px-6 lg:ml-[260px] lg:w-[calc(100%-260px)] lg:max-w-none lg:px-10 lg:pb-14 lg:pt-8">
         <div className="mx-auto w-full max-w-[1120px]">
+          <OfflineQueueBar />
           <Outlet />
         </div>
       </main>
@@ -229,7 +233,7 @@ export function AppShell() {
                       >
                         <Icon name={item.icon} size={item.to === "/scan" ? 19 : 18} />
                       </span>
-                      {item.label}
+                      {t(item.label)}
                     </>
                   );
                 }}

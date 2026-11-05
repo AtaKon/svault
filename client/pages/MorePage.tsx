@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/state";
+import { useI18n } from "@/i18n";
 import { Avatar, Badge, Button, Card, ConfirmDialog, PageHeader, cn } from "@/components/ui";
 import { Icon, LogoMark, type IconName } from "@/components/icons";
 import { useToast } from "@/components/toast";
@@ -20,6 +21,7 @@ const LINKS: { to: string; label: string; description: string; icon: IconName; t
 
 export function MorePage() {
   const { user, house, houses, signOut } = useAuth();
+  const { t } = useI18n();
   const navigate = useNavigate();
   const toast = useToast();
   const [theme, setTheme] = useState(currentTheme());
@@ -73,7 +75,7 @@ export function MorePage() {
               <Icon name={link.icon} size={18} />
             </span>
             <span className="min-w-0 flex-1">
-              <span className="block text-[13px] font-medium">{link.label}</span>
+              <span className="block text-[13px] font-medium">{t(link.label)}</span>
               <span className="block truncate text-[11px] text-muted">{link.description}</span>
             </span>
             <Icon name="chevronRight" size={15} className="text-muted" />

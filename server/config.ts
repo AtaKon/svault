@@ -9,12 +9,34 @@ export const ROOT = path.resolve(here, here.includes(`${path.sep}dist${path.sep}
 
 export const DATA_DIR = path.resolve(process.env.DATA_DIR ?? path.join(ROOT, "data"));
 export const UPLOAD_DIR = path.join(DATA_DIR, "uploads");
+export const BACKUP_DIR = path.join(DATA_DIR, "backups");
 export const DB_FILE = path.join(DATA_DIR, "svault.db");
 export const PORT = Number(process.env.PORT ?? 4000);
 export const IS_PROD = process.env.NODE_ENV === "production";
 export const CLIENT_DIR = path.join(ROOT, "dist", "client");
 export const SESSION_DAYS = 30;
 export const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_MB ?? 20) * 1024 * 1024;
+export const APP_VERSION = process.env.SV_VERSION ?? "1.2.0";
+export const SCHEMA_VERSION = 2;
+
+/** WebAuthn relying party. Both must match the browser origin. */
+export const RP_ID = process.env.RP_ID ?? "";
+export const RP_ORIGIN = process.env.ORIGIN ?? process.env.RP_ORIGIN ?? "";
+
+/** Optional OpenID Connect provider. Everything is server-side. */
+export const OIDC = {
+  issuer: process.env.OIDC_ISSUER ?? "",
+  clientId: process.env.OIDC_CLIENT_ID ?? "",
+  clientSecret: process.env.OIDC_CLIENT_SECRET ?? "",
+  redirectUri: process.env.OIDC_REDIRECT_URI ?? "",
+  allowedDomains: (process.env.OIDC_ALLOWED_DOMAINS ?? "")
+    .split(",")
+    .map((domain) => domain.trim().toLowerCase())
+    .filter(Boolean),
+  autoProvision: process.env.OIDC_AUTO_PROVISION !== "false",
+  defaultHouseId: process.env.OIDC_DEFAULT_HOUSE_ID ?? "",
+  label: process.env.OIDC_LABEL ?? "Single sign-on",
+};
 
 /** OpenFoodFacts is read through a small local cache so receipts and scans stay fast. */
 export const OFF_API_BASE = process.env.OFF_API_BASE ?? "https://world.openfoodfacts.org";
@@ -39,4 +61,5 @@ export function ensureDirs() {
   fs.mkdirSync(path.join(UPLOAD_DIR, "items"), { recursive: true });
   fs.mkdirSync(path.join(UPLOAD_DIR, "recipes"), { recursive: true });
   fs.mkdirSync(path.join(UPLOAD_DIR, "receipts"), { recursive: true });
+  fs.mkdirSync(BACKUP_DIR, { recursive: true });
 }

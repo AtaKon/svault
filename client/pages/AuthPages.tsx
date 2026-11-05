@@ -1,7 +1,9 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { api } from "@/api";
+import { startAuthentication } from "@simplewebauthn/browser";
+import { api, ApiError } from "@/api";
 import { useAuth } from "@/state";
+import { useI18n } from "@/i18n";
 import { Button, Card, Field, Input } from "@/components/ui";
 import { Icon, LogoMark } from "@/components/icons";
 import { useToast } from "@/components/toast";
@@ -16,46 +18,113 @@ const FEATURES = [
 
 export function AuthPage({ mode }: { mode: "login" | "register" }) {
   const { setSession, user } = useAuth();
+  const { t } = useI18n();
   const navigate = useNavigate();
   const location = useLocation();
   const [params] = useSearchParams();
   const toast = useToast();
   const invite = params.get("invite");
+  const oidcError = params.get("oidc_error");
   const [name, setName] = useState("");
   const [email, setEmail] = useState(params.get("email") ?? "");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [challenge, setChallenge] = useState<string | null>(null);
+  const [code, setCode] = useState("");
+  const [backupCode, setBackupCode] = useState(false);
+  const [passkeyBusy, setPasskeyBusy] = useState(false);
+  const [oidc, setOidc] = useState<{ enabled: boolean; label: string }>({ enabled: false, label: "Single sign-on" });
+
+  useEffect(() => {
+    if (oidcError) setError(oidcError);
+    void api<{ enabled: boolean; label: string }>("/api/auth/oidc/status")
+      .then(setOidc)
+      .catch(() => undefined);
+  }, [oidcError]);
+
+  const finishLogin = async (data: { user: User; houses: House[] }) => {
+    setSession(data);
+    if (invite) {
+      await api("/api/auth/invites/" + encodeURIComponent(invite) + "/accept", { method: "POST" }).catch(() => undefined);
+      const refreshed = await api<{ user: User; houses: House[] }>("/api/auth/me");
+      setSession(refreshed);
+    }
+    const from = (location.state as { from?: string } | null)?.from;
+    navigate(from && from !== "/login" ? from : "/", { replace: true });
+  };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setBusy(true);
     setError(null);
     try {
-      const data = await api<{ user: User; houses: House[] }>(
-        mode === "login" ? "/api/auth/login" : "/api/auth/register",
-        {
-          method: "POST",
-          body:
-            mode === "login"
-              ? { identifier: email, password }
-              : { email, username: username.trim() || undefined, password, name, inviteCode: invite ?? undefined },
-        },
-      );
-      setSession(data);
-      if (invite) {
-        await api("/api/auth/invites/" + encodeURIComponent(invite) + "/accept", { method: "POST" }).catch(() => undefined);
-        const refreshed = await api<{ user: User; houses: House[] }>("/api/auth/me");
-        setSession(refreshed);
+      const data = await api<
+        | { user: User; houses: House[] }
+        | { twoFactorRequired: true; challenge: string }
+      >(mode === "login" ? "/api/auth/login" : "/api/auth/register", {
+        method: "POST",
+        body:
+          mode === "login"
+            ? { identifier: email, password }
+            : { email, username: username.trim() || undefined, password, name, inviteCode: invite ?? undefined },
+      });
+      if ("twoFactorRequired" in data && data.twoFactorRequired) {
+        setChallenge(data.challenge);
+        toast.push("Enter your authenticator code");
+        return;
       }
-      const from = (location.state as { from?: string } | null)?.from;
-      navigate(from && from !== "/login" ? from : "/", { replace: true });
-      toast.success(mode === "login" ? `Welcome back, ${data.user.name.split(" ")[0]}` : "Your vault is ready");
+      const session = data as { user: User; houses: House[] };
+      await finishLogin(session);
+      toast.success(mode === "login" ? `Welcome back, ${session.user.name.split(" ")[0]}` : "Your vault is ready");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
       setBusy(false);
+    }
+  };
+
+  const verifyTwoFactor = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!challenge) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const data = await api<{ user: User; houses: House[] }>("/api/auth/2fa/verify", {
+        method: "POST",
+        body: { challenge, code },
+      });
+      await finishLogin(data);
+      toast.success("Signed in");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "That code is not valid");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const signInWithPasskey = async () => {
+    setPasskeyBusy(true);
+    setError(null);
+    try {
+      const options = await api<{ challengeId: string; options: any; hasPasskeys: boolean; discoverable: boolean }>(
+        "/api/auth/passkeys/login/options",
+        { method: "POST", body: { identifier: email.trim() || undefined } },
+      );
+      if (!options.options?.allowCredentials?.length && !options.discoverable) {
+        throw new Error("No passkey is registered for this account");
+      }
+      const response = await startAuthentication({ optionsJSON: options.options });
+      const data = await api<{ user: User; houses: House[] }>("/api/auth/passkeys/login/verify", {
+        method: "POST",
+        body: { challengeId: options.challengeId, response },
+      });
+      await finishLogin(data);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : "Passkey sign-in failed");
+    } finally {
+      setPasskeyBusy(false);
     }
   };
 
@@ -123,57 +192,119 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
             </div>
           )}
 
-          <form onSubmit={submit} className="mt-6 space-y-3.5">
-            {mode === "register" && (
-              <Field label="Your name" required>
-                <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Alex" autoComplete="name" required maxLength={80} />
-              </Field>
-            )}
-            <Field label={mode === "login" ? "Email or username" : "Email"} required>
-              <Input
-                type={mode === "login" ? "text" : "email"}
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder={mode === "login" ? "you@example.com or your username" : "you@example.com"}
-                autoComplete={mode === "login" ? "username" : "email"}
-                required
-                inputMode={mode === "login" ? "text" : "email"}
-              />
-            </Field>
-            {mode === "register" && (
-              <Field label="Username" hint="optional — you can sign in with it instead of your email">
+          {challenge ? (
+            <form onSubmit={verifyTwoFactor} className="mt-6 space-y-3.5">
+              <div className="rounded-xl border border-brand/30 bg-brand-soft px-3 py-2.5 text-xs text-brand">
+                <div className="font-semibold">{t("Two-factor authentication")}</div>
+                <div className="mt-0.5 opacity-80">
+                  {backupCode ? "Enter one of your backup codes." : "Enter the 6-digit code from your authenticator app."}
+                </div>
+              </div>
+              <Field label={backupCode ? "Backup code" : t("Authentication code")} required>
                 <Input
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  placeholder="alex"
-                  autoComplete="username"
-                  minLength={3}
-                  maxLength={32}
-                  pattern="[A-Za-z0-9][A-Za-z0-9._-]*"
+                  autoFocus
+                  value={code}
+                  onChange={(event) => setCode(event.target.value)}
+                  inputMode={backupCode ? "text" : "numeric"}
+                  autoComplete="one-time-code"
+                  placeholder={backupCode ? "XXXXX-XXXXX" : "123456"}
+                  maxLength={30}
                 />
               </Field>
-            )}
-            <Field label="Password" hint={mode === "register" ? "at least 8 characters" : undefined} required>
-              <Input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                autoComplete={mode === "login" ? "current-password" : "new-password"}
-                required
-                minLength={mode === "register" ? 8 : 1}
-              />
-            </Field>
-            {error && (
-              <div className="flex items-start gap-2 rounded-xl border border-danger/25 bg-danger-soft px-3 py-2 text-xs text-danger">
-                <Icon name="alert" size={14} className="mt-0.5 shrink-0" />
-                {error}
-              </div>
-            )}
-            <Button type="submit" block loading={busy} size="lg">
-              {mode === "login" ? "Sign in" : "Create account"}
-            </Button>
-          </form>
+              {error && <div className="rounded-xl border border-danger/25 bg-danger-soft px-3 py-2 text-xs text-danger">{error}</div>}
+              <Button type="submit" block loading={busy} size="lg" disabled={!code.trim()}>
+                {t("Verify")}
+              </Button>
+              <button
+                type="button"
+                className="w-full text-center text-[12px] text-brand hover:underline"
+                onClick={() => {
+                  setBackupCode((current) => !current);
+                  setCode("");
+                }}
+              >
+                {backupCode ? "Use the authenticator code" : t("Use a backup code")}
+              </button>
+              <button
+                type="button"
+                className="w-full text-center text-[12px] text-muted hover:text-ink"
+                onClick={() => {
+                  setChallenge(null);
+                  setCode("");
+                  setBackupCode(false);
+                }}
+              >
+                Back to password
+              </button>
+            </form>
+          ) : (
+            <>
+              <form onSubmit={submit} className="mt-6 space-y-3.5">
+                {mode === "register" && (
+                  <Field label="Your name" required>
+                    <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Alex" autoComplete="name" required maxLength={80} />
+                  </Field>
+                )}
+                <Field label={mode === "login" ? t("Email or username") : t("Email")} required>
+                  <Input
+                    type={mode === "login" ? "text" : "email"}
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder={mode === "login" ? "you@example.com or your username" : "you@example.com"}
+                    autoComplete={mode === "login" ? "username" : "email"}
+                    required
+                    inputMode={mode === "login" ? "text" : "email"}
+                  />
+                </Field>
+                {mode === "register" && (
+                  <Field label="Username" hint="optional — you can sign in with it instead of your email">
+                    <Input
+                      value={username}
+                      onChange={(e) => setUsername(e.target.value)}
+                      placeholder="alex"
+                      autoComplete="username"
+                      minLength={3}
+                      maxLength={32}
+                      pattern="[A-Za-z0-9][A-Za-z0-9._-]*"
+                    />
+                  </Field>
+                )}
+                <Field label={t("Password")} hint={mode === "register" ? "at least 8 characters" : undefined} required>
+                  <Input
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••"
+                    autoComplete={mode === "login" ? "current-password" : "new-password"}
+                    required
+                    minLength={mode === "register" ? 8 : 1}
+                  />
+                </Field>
+                {error && (
+                  <div className="flex items-start gap-2 rounded-xl border border-danger/25 bg-danger-soft px-3 py-2 text-xs text-danger">
+                    <Icon name="alert" size={14} className="mt-0.5 shrink-0" />
+                    {error}
+                  </div>
+                )}
+                <Button type="submit" block loading={busy} size="lg">
+                  {mode === "login" ? t("Sign in") : t("Create account")}
+                </Button>
+              </form>
+
+              {mode === "login" && (
+                <div className="mt-3 space-y-2">
+                  <Button block variant="secondary" icon="key" loading={passkeyBusy} onClick={() => void signInWithPasskey()}>
+                    {t("Sign in with a passkey")}
+                  </Button>
+                  {oidc.enabled && (
+                    <Button block variant="secondary" icon="wifi" onClick={() => window.location.assign("/api/auth/oidc/start")}>
+                      {t(oidc.label)}
+                    </Button>
+                  )}
+                </div>
+              )}
+            </>
+          )}
 
           <div className="mt-5 text-center text-sm text-muted">
             {mode === "login" ? (
