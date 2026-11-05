@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { api } from "@/api";
 import { useAuth } from "@/state";
@@ -44,6 +44,26 @@ export function AppShell() {
 
   const knownNotifications = useRef<Set<string>>(new Set());
   const notificationsPrimed = useRef(false);
+  const mobileHeaderRef = useRef<HTMLElement | null>(null);
+
+  // Sticky page toolbars offset themselves by the real header height, which
+  // changes with the notch/safe area and text size.
+  useLayoutEffect(() => {
+    const header = mobileHeaderRef.current;
+    if (!header) return;
+    const apply = () => {
+      document.documentElement.style.setProperty("--sv-mobile-header", `${header.getBoundingClientRect().height}px`);
+    };
+    apply();
+    const observer = new ResizeObserver(apply);
+    observer.observe(header);
+    window.addEventListener("resize", apply);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", apply);
+      document.documentElement.style.removeProperty("--sv-mobile-header");
+    };
+  }, [house]);
 
   useEffect(() => {
     if (!user) return;
@@ -154,7 +174,7 @@ export function AppShell() {
       </aside>
 
       {/* mobile top bar */}
-      <header className="safe-top sticky top-0 z-30 border-b border-line bg-bg/90 backdrop-blur lg:hidden">
+      <header ref={mobileHeaderRef} className="safe-top sticky top-0 z-30 border-b border-line bg-bg/90 backdrop-blur lg:hidden">
         <div className="flex items-center gap-2 px-4 py-2.5">
           <button
             onClick={() => setSwitcherOpen(true)}
