@@ -8,9 +8,10 @@ All notable changes to SVault are documented here. The format follows
 
 ### Added
 
-- Inventory item photos open in a full-size viewer from the inventory list, dashboard and item page.
-  The image keeps its aspect ratio, and the viewer closes with its close button, Escape or a tap
-  outside the image.
+- Photos open in a full-size viewer wherever they appear, not only for inventory items: recipe
+  photos and original scans, receipt photos, scan previews and OpenFoodFacts product images all open
+  on click or tap. The image keeps its aspect ratio, and the viewer closes with its close button,
+  Escape or a tap outside the image.
 - Sign in with a username as well as an email. Existing accounts get a username derived from their
   email automatically; usernames can be changed from the profile page.
 - A notification when you are added to a new house, shown in the cross-house reminder feed and bell.

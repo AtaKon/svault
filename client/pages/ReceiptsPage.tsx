@@ -20,6 +20,7 @@ import {
   Textarea,
 } from "@/components/ui";
 import { Icon } from "@/components/icons";
+import { ZoomableImage } from "@/components/ZoomableImage";
 import { useToast } from "@/components/toast";
 import { money, qty, receiptProviderLabel, receiptTemplateLabel, shortDate } from "@/format";
 import type {
@@ -464,7 +465,12 @@ export function ReceiptsPage() {
         ) : detail ? (
           <div className="space-y-3">
             {detail.image && (
-              <img src={detail.image} alt="Receipt" className="max-h-64 w-full rounded-xl bg-raised object-contain" />
+              <ZoomableImage
+                src={detail.image}
+                alt={`Receipt from ${detail.vendorName ?? "an unknown shop"}`}
+                wrapperClassName="max-h-64 overflow-hidden rounded-xl bg-raised"
+                className="max-h-64 w-full object-contain"
+              />
             )}
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               <ReceiptStat label="Total" value={money(detail.total, detail.currency ?? house.currency)} />

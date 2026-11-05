@@ -9,6 +9,7 @@ import { ocrImage } from "@/ocr";
 import { scanDocument } from "@/document-scan";
 import { money, receiptTemplateLabel, todayInput } from "@/format";
 import { OffProductPicker } from "@/components/OffProductPicker";
+import { ZoomableImage } from "@/components/ZoomableImage";
 import type { Item, Location, OffProduct, Receipt, ReceiptDraft, TaxBreakdownEntry, Vendor } from "@shared/types";
 
 interface DraftLine {
@@ -521,7 +522,7 @@ export function ReceiptScanPage() {
           <div className="space-y-3">
             <Card className="overflow-hidden">
               {preview ? (
-                <img src={preview} alt="Receipt scan" className="max-h-[380px] w-full bg-raised object-contain" />
+                <ZoomableImage src={preview} alt="Receipt scan" className="max-h-[380px] w-full bg-raised object-contain" />
               ) : (
                 <div className="flex flex-col items-center justify-center gap-2 py-10 text-center">
                   <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-soft text-brand">

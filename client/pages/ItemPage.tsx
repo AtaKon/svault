@@ -21,7 +21,7 @@ import { Icon, type IconName } from "@/components/icons";
 import { BarcodeScanner } from "@/components/BarcodeScanner";
 import { NutritionRows, basisLabel } from "@/components/Nutrition";
 import { OffProductPicker } from "@/components/OffProductPicker";
-import { ImageLightbox } from "@/components/ImageLightbox";
+import { ZoomableImage } from "@/components/ZoomableImage";
 import { StockDialog } from "@/components/ItemCard";
 import { PriceChart } from "@/components/PriceChart";
 import { useToast } from "@/components/toast";
@@ -60,7 +60,6 @@ export function ItemPage() {
   const [stockAction, setStockAction] = useState<"add" | "remove">("add");
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [imageOpen, setImageOpen] = useState(false);
   const [quickBusy, setQuickBusy] = useState(false);
   const [barcodeInput, setBarcodeInput] = useState("");
   const [barcodeBusy, setBarcodeBusy] = useState(false);
@@ -303,19 +302,17 @@ export function ItemPage() {
         <div className="space-y-4">
           <Card className="overflow-hidden">
             {item.image && (
-              <div className="group relative h-44 w-full bg-raised sm:h-52">
-                <img src={item.image} alt={item.name} className="h-full w-full object-cover" />
-                <button
-                  type="button"
-                  aria-label={`View full-size image of ${item.name}`}
-                  title="View full-size image"
-                  className="absolute inset-0 cursor-zoom-in focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-inset"
-                  onClick={() => setImageOpen(true)}
-                />
-                <span className="pointer-events-none absolute bottom-2 right-2 flex h-8 w-8 items-center justify-center rounded-lg bg-black/45 text-white opacity-80 transition-opacity group-hover:opacity-100">
-                  <Icon name="image" size={15} />
-                </span>
-              </div>
+              <ZoomableImage
+                src={item.image}
+                alt={item.name}
+                wrapperClassName="h-44 w-full bg-raised sm:h-52"
+                className="h-full w-full object-cover"
+                overlay={
+                  <span className="pointer-events-none absolute bottom-2 right-2 flex h-8 w-8 items-center justify-center rounded-lg bg-black/45 text-white opacity-80 transition-opacity group-hover:opacity-100">
+                    <Icon name="image" size={15} />
+                  </span>
+                }
+              />
             )}
             <div className="p-4">
               <div className="flex items-start justify-between gap-4">
@@ -632,13 +629,18 @@ export function ItemPage() {
             {item.off ? (
               <div className="space-y-3">
                 <div className="flex items-start gap-3">
-                  <span className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-raised text-muted">
+                  <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-raised text-muted">
                     {item.off.product?.image ? (
-                      <img src={item.off.product.image} alt="" className="h-full w-full object-contain" />
+                      <ZoomableImage
+                        src={item.off.product.image}
+                        alt={item.off.product.name ?? "Product photo"}
+                        wrapperClassName="h-full w-full"
+                        className="h-full w-full object-contain"
+                      />
                     ) : (
                       <Icon name="box" size={22} />
                     )}
-                  </span>
+                  </div>
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-[13px] font-medium">{item.off.product?.name || "Linked product"}</div>
                     <div className="truncate text-[11px] text-muted">
@@ -853,7 +855,6 @@ export function ItemPage() {
         loading={deleting}
       />
 
-      {imageOpen && item.image && <ImageLightbox src={item.image} alt={item.name} onClose={() => setImageOpen(false)} />}
     </div>
   );
 }

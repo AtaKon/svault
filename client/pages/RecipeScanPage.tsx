@@ -4,6 +4,7 @@ import { api, prepareImage } from "@/api";
 import { useHouse } from "@/state";
 import { Badge, Button, Card, Field, Input, PageHeader, Spinner, Textarea, cn } from "@/components/ui";
 import { Icon } from "@/components/icons";
+import { ZoomableImage } from "@/components/ZoomableImage";
 import { useToast } from "@/components/toast";
 import { ocrImage } from "@/ocr";
 import { minutesLabel, plural, qty } from "@/format";
@@ -188,7 +189,7 @@ export function RecipeScanPage() {
       ) : (
         <div className="grid gap-4 lg:grid-cols-[1fr_1.05fr]">
           <Card className="overflow-hidden">
-            <img src={preview} alt="Recipe scan" className="max-h-[420px] w-full object-contain bg-raised" />
+            <ZoomableImage src={preview} alt="Recipe scan" className="max-h-[420px] w-full bg-raised object-contain" />
             <div className="flex items-center justify-between px-3 py-2 text-[11px] text-muted">
               <span>{uploading ? "Uploading scan…" : uploadedPath ? "Scan stored" : "Local only"}</span>
               <button type="button" onClick={() => fileRef.current?.click()} className="font-medium text-brand hover:underline">

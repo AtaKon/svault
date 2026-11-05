@@ -4,6 +4,7 @@ import { api, prepareImage } from "@/api";
 import { useHouse } from "@/state";
 import { Badge, Button, Card, Field, Input, LoadingBlock, PageHeader, Textarea } from "@/components/ui";
 import { Icon } from "@/components/icons";
+import { ZoomableImage } from "@/components/ZoomableImage";
 import { useToast } from "@/components/toast";
 import { UNIT_OPTIONS } from "@/units";
 import type { Recipe } from "@shared/types";
@@ -310,7 +311,12 @@ export function RecipeFormPage() {
             {sourceImage && (
               <div>
                 <div className="text-[11px] font-semibold uppercase tracking-wide text-muted">Original scan</div>
-                <img src={sourceImage} alt="" className="mt-1 rounded-lg border border-line" />
+                <ZoomableImage
+                  src={sourceImage}
+                  alt="Original recipe scan"
+                  wrapperClassName="mt-1 overflow-hidden rounded-lg border border-line"
+                  className="w-full"
+                />
               </div>
             )}
             {ocrText && (
