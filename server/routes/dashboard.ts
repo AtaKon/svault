@@ -113,6 +113,29 @@ dashboardRoutes.get(
       expiring,
       recent,
       recentRecipe,
+      plan: (() => {
+        const now = new Date();
+        const weekday = (now.getUTCDay() + 6) % 7;
+        const monday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - weekday));
+        const weekStart = monday.toISOString().slice(0, 10);
+        const weekEnd = new Date(monday.getTime() + 6 * 864e5).toISOString().slice(0, 10);
+        const today = now.toISOString().slice(0, 10);
+        return {
+          today: Number(
+            get<{ n: number }>("SELECT COUNT(*) AS n FROM meal_plan_entries WHERE house_id = ? AND day = ?", [
+              houseId,
+              today,
+            ])?.n ?? 0,
+          ),
+          week: Number(
+            get<{ n: number }>(
+              "SELECT COUNT(*) AS n FROM meal_plan_entries WHERE house_id = ? AND day >= ? AND day <= ?",
+              [houseId, weekStart, weekEnd],
+            )?.n ?? 0,
+          ),
+          weekStart,
+        };
+      })(),
       locations: all<any>(
         `SELECT l.*, (SELECT COUNT(DISTINCT item_id) FROM stock_lots WHERE location_id = l.id) AS item_count
          FROM locations l WHERE l.house_id = ? ORDER BY l.name COLLATE NOCASE`,

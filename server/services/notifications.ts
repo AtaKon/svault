@@ -1,4 +1,5 @@
 import { all, get, now, newId, run } from "../db.js";
+import { maybeSendWeeklySummaries, queueDeliveries, type DeliveryEvent } from "./channels.js";
 
 const DAY = 864e5;
 
@@ -11,24 +12,27 @@ export function createNotification(opts: {
   body: string;
   data?: Record<string, unknown>;
   dedupeKey: string;
-}) {
+}): { created: boolean; id: string | null } {
   const existing = get<any>(
     "SELECT id, resolved_at FROM notifications WHERE house_id = ? AND dedupe_key = ? AND COALESCE(user_id, '') = COALESCE(?, '')",
     [opts.houseId, opts.dedupeKey, opts.userId ?? null],
   );
   if (existing) {
-    if (!existing.resolved_at) return; // still active, keep read state
+    if (!existing.resolved_at) return { created: false, id: existing.id }; // still active, keep read state
     run(
       "UPDATE notifications SET title = ?, body = ?, data = ?, read_by = '[]', resolved_at = NULL, created_at = ? WHERE id = ?",
       [opts.title, opts.body, JSON.stringify(opts.data ?? {}), now(), existing.id],
     );
-    return;
+    // A resolved reminder that comes back is in-app only; delivery channels
+    // already saw this dedupe key and must not be spammed with it again.
+    return { created: false, id: existing.id };
   }
+  const id = newId("ntf");
   run(
     `INSERT INTO notifications (id, house_id, user_id, type, title, body, data, dedupe_key, read_by, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, '[]', ?)`,
     [
-      newId("ntf"),
+      id,
       opts.houseId,
       opts.userId ?? null,
       opts.type,
@@ -39,6 +43,21 @@ export function createNotification(opts: {
       now(),
     ],
   );
+  const event: DeliveryEvent | null =
+    opts.type === "low_stock" ? "low_stock" : opts.type === "expiring" ? "expiring" : null;
+  if (event && !opts.userId) {
+    queueDeliveries(
+      {
+        event,
+        houseId: opts.houseId,
+        title: opts.title,
+        body: opts.body,
+        data: opts.data,
+      },
+      opts.dedupeKey,
+    );
+  }
+  return { created: true, id };
 }
 
 /** Tell a user they were added to a house. The key tracks one membership, so
@@ -61,6 +80,24 @@ export function notifyHouseAdded(userId: string, houseId: string, role: string, 
       : `You are now a ${role} in ${house.name}. Tap to open the house.`,
     data: { houseId, houseName: house.name, role },
     dedupeKey: `joined:${userId}:${membership?.created_at ?? houseId}`,
+  });
+}
+
+/** Inform the new owner after an atomic ownership transfer. */
+export function notifyOwnershipTransferred(userId: string, houseId: string, previousOwnerId: string) {
+  const house = get<any>("SELECT name FROM houses WHERE id = ?", [houseId]);
+  if (!house) return;
+  const previous = get<{ name: string }>("SELECT name FROM users WHERE id = ?", [previousOwnerId]);
+  createNotification({
+    houseId,
+    userId,
+    type: "house",
+    title: `You now own ${house.name}`,
+    body: previous
+      ? `${previous.name} transferred ownership to you. You can manage members and settings.`
+      : "Ownership of this house was transferred to you.",
+    data: { houseId, houseName: house.name, role: "owner", previousOwnerId },
+    dedupeKey: `owner:${userId}:${houseId}:${now()}`,
   });
 }
 
@@ -176,4 +213,5 @@ export function scanAllHouses() {
     for (const item of items) syncItemLowStock(item.id);
     syncHouseExpiry(house.id, expiryDays);
   }
+  maybeSendWeeklySummaries();
 }

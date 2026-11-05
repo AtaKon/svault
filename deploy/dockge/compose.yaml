@@ -3,14 +3,14 @@
 # Deploy from Dockge (Stacks → New stack → paste this file) or run
 # `docker compose up -d` in this folder.
 #
-# The image must exist on the TrueNAS host first (see README.md in this
-# folder). It is not published to a registry yet.
+# The default image is the published multi-arch build. Pin a version with
+# SVAULT_TAG, or use SVAULT_IMAGE to point at a local build.
 
 name: svault
 
 services:
   svault:
-    image: ${SVAULT_IMAGE:-svault:1.0.0}
+    image: ${SVAULT_IMAGE:-ghcr.io/atakon/svault:latest}
     container_name: svault
     restart: unless-stopped
     init: true

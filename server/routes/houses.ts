@@ -1,14 +1,21 @@
 import { Router } from "express";
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
-import { all, get, newId, now, parseJson, run } from "../db.js";
-import { houseMembers, memberRole, requireAuth, roleAtLeast } from "../auth.js";
+import { all, get, newId, now, parseJson, run, tx } from "../db.js";
+import { houseMembers, memberRole, requireAuth, roleAtLeast, verifyPassword } from "../auth.js";
 import { ApiError, handler, parseBody, requireHouse } from "../http.js";
 import { serializeHouse } from "../serialize.js";
 import { createHouse } from "../services/houses.js";
-import { notifyHouseAdded } from "../services/notifications.js";
+import { notifyHouseAdded, notifyOwnershipTransferred } from "../services/notifications.js";
+import {
+  channelsFromSettings,
+  deliveryLog,
+  mergeChannels,
+  sendChannelMessage,
+  type ChannelMessage,
+} from "../services/channels.js";
 import { chat, resolveAi } from "../ai.js";
-import type { Role } from "../../shared/types.js";
+import type { NotificationChannel, Role } from "../../shared/types.js";
 
 export const houseRoutes = Router();
 houseRoutes.use(requireAuth);
@@ -44,6 +51,14 @@ function mergeSettings(current: Record<string, any>, incoming: Record<string, an
   }
   if (incoming.notifications && typeof incoming.notifications === "object") {
     next.notifications = { ...(current.notifications ?? {}), ...incoming.notifications };
+    if (Array.isArray(incoming.notifications.channels)) {
+      next.notifications.channels = mergeChannels(
+        channelsFromSettings(current),
+        incoming.notifications.channels as NotificationChannel[],
+      );
+    } else if (current.notifications?.channels) {
+      next.notifications.channels = current.notifications.channels;
+    }
   }
   return next;
 }
@@ -152,6 +167,54 @@ houseRoutes.post(
   }),
 );
 
+houseRoutes.post(
+  "/:houseId/notifications/test",
+  handler(async (req, res) => {
+    const { houseId } = requireHouse(req, "admin");
+    const row = houseRow(houseId)!;
+    const body = parseBody(
+      z.object({
+        channelId: z.string().max(60).optional(),
+        channel: z.record(z.string(), z.any()).optional(),
+      }),
+      req.body ?? {},
+    );
+    const current = channelsFromSettings(parseJson<Record<string, any>>(row.settings, {}));
+    let channel: NotificationChannel | undefined;
+    if (body.channel) {
+      channel = mergeChannels(current, [body.channel as unknown as NotificationChannel])[0];
+    } else if (body.channelId) {
+      channel = current.find((entry) => entry.id === body.channelId);
+    } else {
+      channel = current[0];
+    }
+    if (!channel) throw new ApiError(400, "Configure a reminder channel first");
+    const message: ChannelMessage = {
+      event: "test",
+      houseId,
+      houseName: row.name,
+      title: `SVault test · ${row.name}`,
+      body: `This is a test reminder from ${row.name}. Low-stock, expiry and weekly summaries will arrive here.`,
+      data: { test: true },
+    };
+    const result = await sendChannelMessage(channel, message);
+    res.status(result.ok ? 200 : 502).json({
+      ok: result.ok,
+      status: result.status,
+      error: result.error,
+      channel: { id: channel.id, name: channel.name, type: channel.type },
+    });
+  }),
+);
+
+houseRoutes.get(
+  "/:houseId/reminder-deliveries",
+  handler((req, res) => {
+    const { houseId } = requireHouse(req, "admin");
+    res.json({ deliveries: deliveryLog(houseId) });
+  }),
+);
+
 houseRoutes.get(
   "/:houseId/members",
   handler((req, res) => {
@@ -195,6 +258,43 @@ houseRoutes.post(
     res.status(201).json({
       invite: { id, code, email: body.email, role: body.role, url: `/join/${code}` },
     });
+  }),
+);
+
+houseRoutes.post(
+  "/:houseId/members/:userId/transfer-ownership",
+  handler((req, res) => {
+    const { houseId, role } = requireHouse(req, "owner");
+    if (role !== "owner") throw new ApiError(403, "Only the owner can transfer ownership");
+    const targetId = String(req.params.userId);
+    if (targetId === req.user!.id) throw new ApiError(400, "You already own this house");
+    const targetRole = memberRole(targetId, houseId);
+    if (!targetRole) throw new ApiError(404, "That person is not a member");
+    const body = parseBody(
+      z.object({
+        houseName: z.string().trim().max(80).optional(),
+        password: z.string().max(200).optional(),
+      }),
+      req.body ?? {},
+    );
+    const house = houseRow(houseId)!;
+    const named = (body.houseName ?? "").trim().toLowerCase() === String(house.name).trim().toLowerCase();
+    const passwordHash = body.password
+      ? get<{ password_hash: string }>("SELECT password_hash FROM users WHERE id = ?", [req.user!.id])?.password_hash
+      : null;
+    const confirmed = Boolean(body.houseName?.trim() ? named : body.password && passwordHash && verifyPassword(body.password, passwordHash));
+    if (!confirmed) throw new ApiError(400, "Type the house name or your password to confirm");
+
+    tx(() => {
+      run("UPDATE house_members SET role = 'admin' WHERE house_id = ? AND user_id = ?", [houseId, req.user!.id]);
+      run("UPDATE house_members SET role = 'owner' WHERE house_id = ? AND user_id = ?", [houseId, targetId]);
+      const owners = all<any>("SELECT user_id FROM house_members WHERE house_id = ? AND role = 'owner'", [houseId]);
+      if (owners.length !== 1 || owners[0].user_id !== targetId) {
+        throw new ApiError(409, "Ownership transfer failed; no changes were saved");
+      }
+    });
+    notifyOwnershipTransferred(targetId, houseId, req.user!.id);
+    res.json({ ok: true, ownerId: targetId, members: houseMembers(houseId) });
   }),
 );
 

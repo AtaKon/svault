@@ -88,6 +88,25 @@ export function RecipePage() {
     }
   };
 
+  const addToShoppingList = async (includeOptional: boolean, missingOnly: boolean) => {
+    if (!recipe) return;
+    try {
+      const result = await api<{ added: number; merged: number; skipped: number }>(
+        `/api/houses/${house.id}/shopping/from-recipe`,
+        { method: "POST", body: { recipeId: recipe.id, includeOptional, missingOnly } },
+      );
+      const count = result.added + result.merged;
+      if (count) {
+        toast.success(`Added ${count} ingredient${count === 1 ? "" : "s"} to the shopping list`);
+        navigate("/shopping");
+      } else {
+        toast.push("Everything is already in stock or on the list");
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not build the shopping list");
+    }
+  };
+
   if (error) {
     return (
       <EmptyState icon="book" title="Recipe not found" body={error} action={<Button onClick={() => navigate("/recipes")}>Back to recipes</Button>} />
@@ -230,6 +249,14 @@ export function RecipePage() {
                 <p className="mt-1.5 text-[11px] text-warn/80">Tap one to add it to your inventory.</p>
               </div>
             )}
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Button size="sm" variant="soft" icon="list" onClick={() => void addToShoppingList(false, true)} disabled={!can("member")}>
+                Add missing to list
+              </Button>
+              <Button size="sm" variant="secondary" icon="plus" onClick={() => void addToShoppingList(true, false)} disabled={!can("member")}>
+                Add all (optional too)
+              </Button>
+            </div>
           </Card>
 
           <Card className="p-4">

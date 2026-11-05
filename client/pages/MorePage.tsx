@@ -7,6 +7,9 @@ import { useToast } from "@/components/toast";
 import { currentTheme, toggleTheme } from "@/theme";
 
 const LINKS: { to: string; label: string; description: string; icon: IconName; tint: string }[] = [
+  { to: "/shopping", label: "Shopping list", description: "From recipes, low stock and the plan", icon: "list", tint: "bg-brand-soft text-brand" },
+  { to: "/plan", label: "Meal plan", description: "Seven days, scaled servings", icon: "calendar", tint: "bg-warn-soft text-warn" },
+  { to: "/intake", label: "Bulk intake", description: "A receipt or a queue of barcodes", icon: "upload", tint: "bg-brand-soft text-brand" },
   { to: "/ideas", label: "Food ideas", description: "Meals built from your shelves", icon: "sparkles", tint: "bg-warn-soft text-warn" },
   { to: "/receipts", label: "Receipts & shops", description: "Bulk intake and where it came from", icon: "receipt", tint: "bg-brand-soft text-brand" },
   { to: "/photos", label: "Photo library", description: "Label photos and export datasets", icon: "image", tint: "bg-brand-soft text-brand" },

@@ -21,7 +21,18 @@ import {
 import { Icon } from "@/components/icons";
 import { useToast } from "@/components/toast";
 import { qty } from "@/format";import { LOCATION_ICONS, LOCATION_KINDS } from "@/units";
-import type { AttributeDef, CatalogImportResult, Category, House, Location as HouseLocation, Role } from "@shared/types";
+import type {
+  AttributeDef,
+  CatalogImportResult,
+  Category,
+  CsvColumnMap,
+  CsvImportPreview,
+  CsvImportResult,
+  House,
+  Location as HouseLocation,
+  NotificationChannel,
+  Role,
+} from "@shared/types";
 
 interface Member {
   id: string;
@@ -817,6 +828,9 @@ function MembersTab({
   const [invite, setInvite] = useState<{ url: string; email: string } | null>(null);
   const [invites, setInvites] = useState<Invite[] | null>(null);
   const [removeTarget, setRemoveTarget] = useState<Member | null>(null);
+  const [transferTarget, setTransferTarget] = useState<Member | null>(null);
+  const [transferName, setTransferName] = useState("");
+  const [transferBusy, setTransferBusy] = useState(false);
 
   const loadInvites = useCallback(async () => {
     if (!can("admin")) return;
@@ -890,6 +904,25 @@ function MembersTab({
     }
   };
 
+  const transferOwnership = async () => {
+    if (!transferTarget) return;
+    setTransferBusy(true);
+    try {
+      await api(`/api/houses/${house.id}/members/${transferTarget.id}/transfer-ownership`, {
+        method: "POST",
+        body: { houseName: transferName },
+      });
+      toast.success(`${transferTarget.name} is now the owner`);
+      setTransferTarget(null);
+      setTransferName("");
+      onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not transfer ownership");
+    } finally {
+      setTransferBusy(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <Card className="p-4">
@@ -910,13 +943,24 @@ function MembersTab({
                   <div className="truncate text-[11px] text-muted">{member.email}</div>
                 </div>
                 {can("owner") && member.role !== "owner" ? (
-                  <Select value={member.role} onChange={(event) => void changeRole(member, event.target.value as Role)} className="h-8 w-[106px] text-[12px]">
-                    {ROLE_OPTIONS.map((option) => (
-                      <option key={option} value={option}>
-                        {option}
-                      </option>
-                    ))}
-                  </Select>
+                  <>
+                    <button
+                      onClick={() => {
+                        setTransferTarget(member);
+                        setTransferName("");
+                      }}
+                      className="hidden text-[11px] font-medium text-brand hover:underline sm:inline"
+                    >
+                      Make owner
+                    </button>
+                    <Select value={member.role} onChange={(event) => void changeRole(member, event.target.value as Role)} className="h-8 w-[106px] text-[12px]">
+                      {ROLE_OPTIONS.map((option) => (
+                        <option key={option} value={option}>
+                          {option}
+                        </option>
+                      ))}
+                    </Select>
+                  </>
                 ) : (
                   <Badge tone={member.role === "owner" ? "brand" : "neutral"}>{member.role}</Badge>
                 )}
@@ -1002,6 +1046,27 @@ function MembersTab({
         confirmLabel="Remove member"
         loading={busy}
       />
+
+      <Sheet
+        open={Boolean(transferTarget)}
+        onClose={() => setTransferTarget(null)}
+        title={`Make ${transferTarget?.name ?? "this member"} the owner?`}
+        description="You become an admin and can leave the house afterwards. Type the house name to confirm."
+        footer={
+          <Button
+            block
+            onClick={() => void transferOwnership()}
+            loading={transferBusy}
+            disabled={transferName.trim().toLowerCase() !== house.name.trim().toLowerCase()}
+          >
+            Transfer ownership
+          </Button>
+        }
+      >
+        <Field label="House name" required hint={house.name}>
+          <Input autoFocus value={transferName} onChange={(event) => setTransferName(event.target.value)} placeholder={house.name} />
+        </Field>
+      </Sheet>
     </div>
   );
 }
@@ -1199,17 +1264,87 @@ function RemindersTab({ house, onSave }: { house: House; onSave: (patch: Record<
   const settings = house.settings?.notifications ?? {};
   const [lowStock, setLowStock] = useState(settings.lowStock !== false);
   const [expiryDays, setExpiryDays] = useState(String(settings.expiryDays ?? 7));
+  const [channels, setChannels] = useState<NotificationChannel[]>(settings.channels ?? []);
   const [busy, setBusy] = useState(false);
+  const [testing, setTesting] = useState<string | null>(null);
+  const [testResults, setTestResults] = useState<Record<string, { ok: boolean; text: string }>>({});
+  const [deliveries, setDeliveries] = useState<
+    { id: string; event: string; status: string; attempts: number; httpStatus: number | null; error: string | null; createdAt: string }[]
+  >([]);
+
+  const loadDeliveries = useCallback(async () => {
+    if (!can("admin")) return;
+    try {
+      const data = await api<{ deliveries: typeof deliveries }>(`/api/houses/${house.id}/reminder-deliveries`);
+      setDeliveries(data.deliveries);
+    } catch {
+      /* delivery history is optional */
+    }
+  }, [house.id, can]);
+
+  useEffect(() => {
+    void loadDeliveries();
+  }, [loadDeliveries]);
+
+  useEffect(() => {
+    setLowStock(settings.lowStock !== false);
+    setExpiryDays(String(settings.expiryDays ?? 7));
+    setChannels(settings.channels ?? []);
+  }, [settings.lowStock, settings.expiryDays, settings.channels]);
 
   const save = async () => {
     setBusy(true);
     try {
-      await onSave({ notifications: { lowStock, expiryDays: Math.max(0, Number(expiryDays) || 0) } });
+      await onSave({ notifications: { lowStock, expiryDays: Math.max(0, Number(expiryDays) || 0), channels } });
       toast.success("Reminder settings saved");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not save");
     } finally {
       setBusy(false);
+    }
+  };
+
+  const patchChannel = (id: string, patch: Partial<NotificationChannel>) => {
+    setChannels((current) => current.map((channel) => (channel.id === id ? { ...channel, ...patch } : channel)));
+  };
+
+  const addChannel = () => {
+    setChannels((current) => [
+      ...current,
+      {
+        id: "new",
+        type: "ntfy",
+        name: "Phone notifications",
+        enabled: true,
+        url: "https://ntfy.sh",
+        topic: "",
+        token: "",
+        events: { lowStock: true, expiring: true, weeklySummary: false },
+      },
+    ]);
+  };
+
+  const testChannel = async (channel: NotificationChannel) => {
+    setTesting(channel.id);
+    try {
+      const result = await api<{ ok: boolean; status: number | null; error: string | null }>(
+        `/api/houses/${house.id}/notifications/test`,
+        { method: "POST", body: { channel } },
+      );
+      setTestResults((current) => ({
+        ...current,
+        [channel.id]: {
+          ok: result.ok,
+          text: result.ok ? `Delivered (HTTP ${result.status ?? 200})` : `Failed: ${result.error ?? "unknown error"}`,
+        },
+      }));
+    } catch (err) {
+      setTestResults((current) => ({
+        ...current,
+        [channel.id]: { ok: false, text: err instanceof Error ? err.message : "Delivery failed" },
+      }));
+    } finally {
+      setTesting(null);
     }
   };
 
@@ -1235,9 +1370,185 @@ function RemindersTab({ house, onSave }: { house: House; onSave: (patch: Record<
           Save reminders
         </Button>
       </Card>
+
+      <Card className="space-y-3 p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="font-display text-lg">Delivery channels</h2>
+            <p className="text-[11px] text-muted">
+              Send reminders to ntfy, Apprise or any webhook. Failures retry three times with backoff.
+            </p>
+          </div>
+          <Button size="sm" variant="secondary" icon="plus" onClick={addChannel} disabled={!can("admin")}>
+            Add
+          </Button>
+        </div>
+
+        {channels.length === 0 && (
+          <div className="rounded-xl border border-dashed border-line px-3 py-5 text-center text-xs text-muted">
+            In-app and browser notifications still work. Add a channel to reach your phone when SVault is closed.
+          </div>
+        )}
+
+        {channels.map((channel) => (
+          <div key={channel.id} className="space-y-3 rounded-xl border border-line bg-surface p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Select
+                value={channel.type}
+                onChange={(event) => patchChannel(channel.id, { type: event.target.value as NotificationChannel["type"] })}
+                className="h-9 w-[130px] text-[12px]"
+                aria-label="Channel type"
+              >
+                <option value="ntfy">ntfy</option>
+                <option value="apprise">Apprise</option>
+                <option value="webhook">Webhook</option>
+              </Select>
+              <div className="min-w-[140px] flex-1">
+                <Input
+                  value={channel.name}
+                  onChange={(event) => patchChannel(channel.id, { name: event.target.value })}
+                  placeholder="Channel name"
+                  className="h-9 text-[13px]"
+                  maxLength={80}
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] text-muted">{channel.enabled ? "on" : "off"}</span>
+                <Switch
+                  checked={channel.enabled}
+                  onChange={(enabled) => patchChannel(channel.id, { enabled })}
+                  label=""
+                />
+              </div>
+              <IconButton
+                icon="trash"
+                label="Remove channel"
+                onClick={() => setChannels((current) => current.filter((entry) => entry.id !== channel.id))}
+                disabled={!can("admin")}
+              />
+            </div>
+
+            <Field label={channel.type === "ntfy" ? "Server URL" : channel.type === "apprise" ? "Apprise endpoint" : "Webhook URL"}>
+              <Input
+                value={channel.url}
+                onChange={(event) => patchChannel(channel.id, { url: event.target.value })}
+                placeholder={channel.type === "ntfy" ? "https://ntfy.sh" : "https://example.com/notify"}
+                type="url"
+                className="h-9 text-[13px]"
+              />
+            </Field>
+
+            {channel.type === "ntfy" && (
+              <div className="grid gap-2 sm:grid-cols-2">
+                <Field label="Topic">
+                  <Input value={channel.topic ?? ""} onChange={(event) => patchChannel(channel.id, { topic: event.target.value })} placeholder="svault-home" className="h-9 text-[13px]" />
+                </Field>
+                <Field label="Access token" hint={channel.token === "***" ? "stored" : "optional"}>
+                  <Input
+                    type="password"
+                    value={channel.token ?? ""}
+                    onChange={(event) => patchChannel(channel.id, { token: event.target.value })}
+                    placeholder={channel.token === "***" ? "••••••" : "tk_…"}
+                    autoComplete="off"
+                    className="h-9 text-[13px]"
+                  />
+                </Field>
+              </div>
+            )}
+            {channel.type === "apprise" && (
+              <Field label="API key" hint={channel.key === "***" ? "stored" : "optional"}>
+                <Input
+                  type="password"
+                  value={channel.key ?? ""}
+                  onChange={(event) => patchChannel(channel.id, { key: event.target.value })}
+                  placeholder={channel.key === "***" ? "••••••" : "key"}
+                  autoComplete="off"
+                  className="h-9 text-[13px]"
+                />
+              </Field>
+            )}
+            {channel.type === "webhook" && (
+              <Field label="HMAC secret" hint={channel.secret === "***" ? "stored" : "optional"}>
+                <Input
+                  type="password"
+                  value={channel.secret ?? ""}
+                  onChange={(event) => patchChannel(channel.id, { secret: event.target.value })}
+                  placeholder={channel.secret === "***" ? "••••••" : "signing secret"}
+                  autoComplete="off"
+                  className="h-9 text-[13px]"
+                />
+              </Field>
+            )}
+
+            <div className="grid gap-1 sm:grid-cols-3">
+              <Switch
+                checked={channel.events.lowStock}
+                onChange={(lowStock) => patchChannel(channel.id, { events: { ...channel.events, lowStock } })}
+                label="Low stock"
+              />
+              <Switch
+                checked={channel.events.expiring}
+                onChange={(expiring) => patchChannel(channel.id, { events: { ...channel.events, expiring } })}
+                label="Expiry"
+              />
+              <Switch
+                checked={channel.events.weeklySummary}
+                onChange={(weeklySummary) => patchChannel(channel.id, { events: { ...channel.events, weeklySummary } })}
+                label="Weekly summary"
+              />
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <Button size="sm" variant="secondary" icon="wifi" onClick={() => void testChannel(channel)} loading={testing === channel.id} disabled={!can("admin")}>
+                Send test
+              </Button>
+              {testResults[channel.id] && (
+                <span className={testResults[channel.id].ok ? "text-[11px] text-brand" : "text-[11px] text-danger"}>
+                  {testResults[channel.id].text}
+                </span>
+              )}
+            </div>
+          </div>
+        ))}
+
+        <Button onClick={() => void save()} loading={busy} disabled={!can("admin")}>
+          Save channels
+        </Button>
+        <p className="text-[10px] leading-relaxed text-muted">
+          ntfy receives a POST to <code>server/topic</code>. Webhooks receive{" "}
+          <code>{`{ event, title, body, houseId, houseName, data, sentAt }`}</code> and an{" "}
+          <code>x-svault-signature: sha256=…</code> header when a secret is set.
+        </p>
+
+        {deliveries.length > 0 && (
+          <div className="rounded-xl border border-line bg-bg p-2.5">
+            <div className="mb-1.5 flex items-center justify-between">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">Recent deliveries</span>
+              <button onClick={() => void loadDeliveries()} className="text-[10px] text-brand hover:underline">
+                Refresh
+              </button>
+            </div>
+            <div className="space-y-1">
+              {deliveries.slice(0, 5).map((delivery) => (
+                <div key={delivery.id} className="flex flex-wrap items-center gap-1.5 text-[10px]">
+                  <Badge tone={delivery.status === "sent" ? "brand" : delivery.status === "failed" ? "danger" : "neutral"}>
+                    {delivery.status}
+                  </Badge>
+                  <span className="text-muted">{delivery.event.replace("_", " ")}</span>
+                  {delivery.httpStatus != null && <span className="text-muted">HTTP {delivery.httpStatus}</span>}
+                  {delivery.attempts > 1 && <span className="text-muted">{delivery.attempts} attempts</span>}
+                  {delivery.error && <span className="truncate text-danger">{delivery.error}</span>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </Card>
+
       <Card className="p-4 text-[11px] leading-relaxed text-muted">
         Reminders appear in the bell menu and, if you allow it, as browser notifications. To enable notifications on
-        iPhone, add SVault to the Home Screen first.
+        iPhone, add SVault to the Home Screen first. Delivery never waits for the channel: a failed webhook retries
+        twice and is recorded under the house settings API.
       </Card>
     </div>
   );
@@ -1252,6 +1563,12 @@ function DataTab({ house, detail }: { house: House; detail: HouseDetail | null }
   const [busy, setBusy] = useState(false);
   const [catalog, setCatalog] = useState<CatalogStats | null>(null);
   const [catalogBusy, setCatalogBusy] = useState<"import" | "sync" | null>(null);
+  const [csvText, setCsvText] = useState("");
+  const [csvFileName, setCsvFileName] = useState("");
+  const [csvMode, setCsvMode] = useState<"create" | "update">("create");
+  const [csvMap, setCsvMap] = useState<CsvColumnMap>({});
+  const [csvPreview, setCsvPreview] = useState<CsvImportPreview | null>(null);
+  const [csvBusy, setCsvBusy] = useState(false);
 
   const loadCatalog = useCallback(async () => {
     if (!user?.isAdmin) return;
@@ -1328,6 +1645,73 @@ function DataTab({ house, detail }: { house: House; detail: HouseDetail | null }
     }
   };
 
+  const previewCsv = async (text: string, mapping: CsvColumnMap, mode: "create" | "update") => {
+    if (!text.trim()) return;
+    setCsvBusy(true);
+    try {
+      const preview = await api<CsvImportPreview>(`/api/houses/${house.id}/import/csv/preview`, {
+        method: "POST",
+        body: { csv: text, mapping: Object.keys(mapping).length ? mapping : undefined, mode },
+      });
+      setCsvPreview(preview);
+      setCsvMap(preview.map);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not preview the CSV");
+    } finally {
+      setCsvBusy(false);
+    }
+  };
+
+  const chooseCsv = async (file: File | null) => {
+    if (!file) return;
+    const text = await file.text();
+    setCsvText(text);
+    setCsvFileName(file.name);
+    setCsvPreview(null);
+    await previewCsv(text, {}, csvMode);
+  };
+
+  const changeMapping = async (field: keyof CsvColumnMap, column: string) => {
+    const next: CsvColumnMap = { ...csvMap };
+    if (column) next[field] = column;
+    else delete next[field];
+    setCsvMap(next);
+    await previewCsv(csvText, next, csvMode);
+  };
+
+  const commitCsv = async () => {
+    setCsvBusy(true);
+    try {
+      const result = await api<CsvImportResult>(`/api/houses/${house.id}/import/csv/commit`, {
+        method: "POST",
+        body: { csv: csvText, mapping: csvMap, mode: csvMode },
+      });
+      toast.success(`Imported ${result.created} new and ${result.updated} updated items`);
+      setCsvPreview(null);
+      setCsvText("");
+      setCsvFileName("");
+      setCsvMap({});
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not import the CSV");
+    } finally {
+      setCsvBusy(false);
+    }
+  };
+
+  const MAPPING_FIELDS: { key: keyof CsvColumnMap; label: string; required?: boolean }[] = [
+    { key: "name", label: "Name", required: true },
+    { key: "brand", label: "Brand" },
+    { key: "category", label: "Category" },
+    { key: "place", label: "Place" },
+    { key: "unit", label: "Unit" },
+    { key: "quantity", label: "Quantity" },
+    { key: "reorderPoint", label: "Reorder point" },
+    { key: "targetStock", label: "Target stock" },
+    { key: "price", label: "Unit price" },
+    { key: "barcodes", label: "Barcodes" },
+    { key: "attributes", label: "Attributes" },
+  ];
+
   return (
     <div className="space-y-4">
       <Card className="p-4">
@@ -1369,6 +1753,111 @@ function DataTab({ house, detail }: { house: House; detail: HouseDetail | null }
             <Icon name="download" size={12} /> COCO all photos
           </a>
         </div>
+      </Card>
+
+      <Card className="space-y-3 p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="font-display text-lg">Import inventory CSV</h2>
+            <p className="mt-0.5 text-[11px] leading-relaxed text-muted">
+              Commas or semicolons, quoted fields, a BOM and decimal commas are fine. Review the dry run before anything
+              is written.
+            </p>
+          </div>
+          <label className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-lg border border-line px-2.5 text-[11px] font-medium transition-colors hover:bg-raised">
+            <Icon name="upload" size={13} /> Choose file
+            <input
+              type="file"
+              accept="text/csv,.csv,text/plain"
+              className="hidden"
+              onChange={(event) => void chooseCsv(event.target.files?.[0] ?? null)}
+            />
+          </label>
+        </div>
+
+        {csvFileName && (
+          <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted">
+            <Badge tone="outline">{csvFileName}</Badge>
+            <span>{csvPreview?.headers.length ?? 0} columns</span>
+            <Select
+              value={csvMode}
+              onChange={(event) => {
+                const mode = event.target.value as "create" | "update";
+                setCsvMode(mode);
+                void previewCsv(csvText, csvMap, mode);
+              }}
+              className="h-8 w-[160px] text-[12px]"
+            >
+              <option value="create">Create only</option>
+              <option value="update">Update by barcode/name</option>
+            </Select>
+          </div>
+        )}
+
+        {csvPreview && (
+          <>
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {MAPPING_FIELDS.map((entry) => (
+                <Field key={entry.key} label={entry.label} required={entry.required}>
+                  <Select value={csvMap[entry.key] ?? ""} onChange={(event) => void changeMapping(entry.key, event.target.value)} className="h-9 text-[12px]">
+                    <option value="">— not mapped —</option>
+                    {csvPreview.headers.map((header) => (
+                      <option key={header} value={header}>
+                        {header}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+              ))}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge tone="brand">{csvPreview.summary.create} new</Badge>
+              <Badge tone={csvPreview.summary.update ? "warn" : "neutral"}>{csvPreview.summary.update} updates</Badge>
+              <Badge tone="neutral">{csvPreview.summary.skip} skipped</Badge>
+              {csvPreview.summary.errors > 0 && <Badge tone="danger">{csvPreview.summary.errors} with errors</Badge>}
+              <Button
+                size="sm"
+                className="ml-auto"
+                icon="check"
+                onClick={() => void commitCsv()}
+                loading={csvBusy}
+                disabled={!csvPreview.summary.create && !csvPreview.summary.update}
+              >
+                Import
+              </Button>
+            </div>
+
+            <div className="max-h-64 overflow-auto rounded-xl border border-line">
+              <table className="w-full min-w-[640px] text-left text-[11px]">
+                <thead className="sticky top-0 bg-raised text-muted">
+                  <tr>
+                    <th className="px-2 py-1.5">Line</th>
+                    <th className="px-2 py-1.5">Name</th>
+                    <th className="px-2 py-1.5">Qty</th>
+                    <th className="px-2 py-1.5">Action</th>
+                    <th className="px-2 py-1.5">Notes</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-line">
+                  {csvPreview.rows.slice(0, 100).map((row) => (
+                    <tr key={row.line} className={row.errors.length ? "bg-danger-soft/40" : undefined}>
+                      <td className="px-2 py-1.5 text-muted">{row.line}</td>
+                      <td className="px-2 py-1.5">{row.name || "—"}</td>
+                      <td className="px-2 py-1.5">{row.quantity ?? "—"} {row.unit ?? ""}</td>
+                      <td className="px-2 py-1.5">{row.action}</td>
+                      <td className="px-2 py-1.5">
+                        {row.errors.length > 0 && <span className="text-danger">{row.errors.join("; ")}</span>}
+                        {row.errors.length === 0 && row.warnings.length > 0 && <span className="text-warn">{row.warnings.join("; ")}</span>}
+                        {row.errors.length === 0 && row.warnings.length === 0 && <span className="text-muted">ok</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
       </Card>
 
       {user?.isAdmin && (

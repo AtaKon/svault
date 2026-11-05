@@ -1,32 +1,23 @@
 # Deploying SVault with Dockge on TrueNAS SCALE
 
 SVault ships as a single container: Express API + built web app, SQLite and uploads in `/data`.
-Dockge only manages the compose file — the image has to be present on the TrueNAS host first.
 
-## 1. Put the image on the NAS
+## 1. Pull the image on the NAS
 
-On the development PC (this Windows machine already has the image):
-
-```powershell
-docker tag svault:latest svault:1.0.0
-docker save svault:1.0.0 -o svault-1.0.0-image.tar
-```
-
-Copy `svault-1.0.0-image.tar` (about 163 MB) to the NAS over SMB/SCP, then in the TrueNAS shell:
+Published images support `linux/amd64` and `linux/arm64`:
 
 ```bash
-sudo docker load -i /tmp/svault-1.0.0-image.tar
-sudo docker image ls svault
+sudo docker pull ghcr.io/atakon/svault:latest
+# or pin a release:
+sudo docker pull ghcr.io/atakon/svault:1.1.0
 ```
 
-You should see `svault:1.0.0`. Dockge uses the host Docker daemon, so the image is immediately
-available to stacks.
+GHCR is public, so no login is needed. If you prefer a private mirror, run
+`docker login ghcr.io` and set `SVAULT_IMAGE` in `.env` to that image.
 
-> **Alternative:** build on the NAS. Copy the repository into the Dockge stack folder and replace
-> `image:` with `build: .` in `compose.yaml`. This needs ~1 GB RAM and network access for npm.
-
-> **Alternative:** publish the image to a registry (GHCR/Docker Hub), `docker login` on the NAS, and
-> set `SVAULT_IMAGE` in `.env` to that image. This is the nicest option for updates.
+> **Alternative:** build from a checkout. Use the repository's
+> `docker-compose.build.yml` override, or replace `image:` with `build: .` in
+> `compose.yaml`. This needs ~1 GB RAM and network access for npm.
 
 ## 2. Create the data folder and fix permissions
 

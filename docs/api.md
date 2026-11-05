@@ -635,6 +635,151 @@ addressed to that user only. Other members do not see it.
 | `GET` | `/api/health` | public | `{ ok: true, version, time }`; used by Docker health checks. |
 | `GET` | `/uploads/<kind>/<file>` | public | Static uploaded image. Unauthenticated by design. |
 
+## Shopping list
+
+| Method | Path | Min role | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/houses/:houseId/shopping` | viewer+ | Open lines and checked lines. `?checked=0` hides checked. |
+| `POST` | `/api/houses/:houseId/shopping` | member+ | Add a manual line. |
+| `PATCH` | `/api/houses/:houseId/shopping/:entryId` | member+ | Edit name, quantity, unit, item, note or `checked`. |
+| `DELETE` | `/api/houses/:houseId/shopping/:entryId` | member+ | Remove a line. |
+| `DELETE` | `/api/houses/:houseId/shopping?checked=1` | member+ | Clear checked lines (omit the query to clear all). |
+| `POST` | `/api/houses/:houseId/shopping/from-recipe` | member+ | Add missing (default) or all ingredients. Body: `{ recipeId, includeOptional?, missingOnly? }`. |
+| `POST` | `/api/houses/:houseId/shopping/from-low-stock` | member+ | Add every item at or below its reorder point, up to `targetStock` (or twice the reorder point). |
+| `POST` | `/api/houses/:houseId/shopping/:entryId/check` | member+ | Check a line and optionally record a normal `in` movement. |
+
+Lines merge by linked `itemId` first, then by normalised name. Compatible units are summed; incompatible
+units stay as separate lines. Every generated line carries a source key (`recipe:…`, `low:…`, `plan:…`)
+and a `shopping_list_sources` row, so repeating the same action is idempotent.
+
+Check body:
+
+```json
+{
+  "quantity": 2,
+  "unit": "l",
+  "unitPrice": 1.49,
+  "locationId": "loc_...",
+  "expiresAt": "2026-12-01",
+  "itemId": "itm_...",
+  "addStock": true
+}
+```
+
+`addStock: false` marks the line bought without touching inventory. Otherwise the unit is converted to the
+item's base unit and the movement is recorded by the stock engine.
+
+## Meal planner
+
+| Method | Path | Min role | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/houses/:houseId/plan?week=YYYY-MM-DD` | viewer+ | Week entries; any date in the week resolves to Monday–Sunday. |
+| `POST` | `/api/houses/:houseId/plan` | member+ | Add a recipe, saved food idea or custom title to a slot. |
+| `PATCH` | `/api/houses/:houseId/plan/:entryId` | member+ | Move, retitle, change servings or swap the recipe/idea. |
+| `POST` | `/api/houses/:houseId/plan/:entryId/duplicate` | member+ | Copy to the next day (or `{ day, slot }`). |
+| `DELETE` | `/api/houses/:houseId/plan/:entryId` | member+ | Remove an entry. |
+| `POST` | `/api/houses/:houseId/plan/shopping-list` | member+ | Aggregate the week's missing ingredients into the shopping list. |
+
+Entry body:
+
+```json
+{ "day": "2026-11-02", "slot": "dinner", "recipeId": "rcp_...", "servings": 6 }
+```
+
+Slots are `breakfast`, `lunch`, `dinner` and `snack`. `servings` scales ingredient quantities at read time;
+the recipe itself is never modified. The shopping list merges identical ingredients across the week,
+subtracts stock once per ingredient, and uses the plan week as the idempotency key.
+
+## Bulk intake
+
+| Method | Path | Min role | Purpose |
+| --- | --- | --- | --- |
+| `POST` | `/api/houses/:houseId/intake/upload` | member+ | Upload a receipt image (`field: image`), returns `{ path }`. |
+| `POST` | `/api/houses/:houseId/intake/parse` | member+ | Parse `{ text?, image?, barcodes? }` and return review rows. Never writes. |
+| `POST` | `/api/houses/:houseId/intake/commit` | member+ | Validate and apply reviewed rows atomically. |
+
+`parse` returns `provider` (`ai`, `local`, `template`, `barcode`), a warning and rows. Each row contains
+`description`, `quantity`, `unit`, `unitPrice`, `barcode`, `itemId`, candidate matches and an initial
+`action`. Barcode mode also looks up OpenFoodFacts for unknown codes. No item, stock or receipt row is
+written during parsing.
+
+Commit body:
+
+```json
+{
+  "rows": [
+    { "description": "Milk", "quantity": 2, "unit": "l", "unitPrice": 1.49, "itemId": "itm_...", "action": "update" },
+    { "description": "Bread", "quantity": 1, "unit": "pcs", "barcode": "520...", "action": "create" }
+  ]
+}
+```
+
+Rows are validated first (unit conversion, duplicate barcodes, item ownership, places). If any row fails,
+nothing is written and the response details include the offending row indexes. Valid rows commit in one
+transaction and use `addStock`, so prices are normalised to the item base unit.
+
+## CSV import
+
+| Method | Path | Min role | Purpose |
+| --- | --- | --- | --- |
+| `POST` | `/api/houses/:houseId/import/csv/preview` | member+ | Parse and validate a CSV without writing. |
+| `POST` | `/api/houses/:houseId/import/csv/commit` | member+ | Re-validate and import in one transaction. |
+
+Body: `{ "csv": "Name;Unit...", "mapping"?: { "name": "Product", ... }, "mode"?: "create" | "update" }`.
+`mapping` keys are `name`, `brand`, `category`, `place`, `unit`, `quantity`, `reorderPoint`, `targetStock`,
+`price`, `barcodes` and `attributes`; values are header names. Missing mapping is auto-detected.
+
+The parser accepts comma or semicolon delimiters, quoted fields, a UTF-8 BOM, CRLF and decimal commas.
+The preview reports `create`, `update`, `skip` and per-line `errors`/`warnings` with line numbers.
+
+- `create` only creates new items; rows matching an existing barcode or exact name are skipped.
+- `update` matches by barcode first, then by exact name; unmatched rows are created.
+- Ambiguous name matches are skipped with a warning.
+- Imported quantities become normal `in` movements with the same unit conversion as the stock engine.
+- Unknown units, duplicate barcodes and missing names are reported per row; any error blocks the commit.
+
+## Ownership transfer
+
+| Method | Path | Min role | Purpose |
+| --- | --- | --- | --- |
+| `POST` | `/api/houses/:houseId/members/:userId/transfer-ownership` | owner | Promote a member to owner and demote the caller to admin. |
+
+Body: `{ "houseName": "The house name" }` or `{ "password": "..." }`. Self-transfer is rejected, the
+target must already be a member, and the two role updates run in one transaction that asserts exactly one
+owner. The new owner receives an in-app notification; the former owner can leave the house afterwards.
+
+## Reminder delivery
+
+Reminder channels live in `house.settings.notifications.channels`. Secrets are masked as `***` in every
+API response, and sending `***` back preserves the stored value.
+
+| Method | Path | Min role | Purpose |
+| --- | --- | --- | --- |
+| `POST` | `/api/houses/:houseId/notifications/test` | admin+ | Send a real test message. Body: `{ channelId }` or an unsaved `{ channel }`. |
+| `GET` | `/api/houses/:houseId/reminder-deliveries` | admin+ | Recent delivery attempts, statuses, HTTP codes and errors. |
+
+Channel shape:
+
+```json
+{
+  "id": "ch_...",
+  "type": "ntfy",
+  "name": "Phone",
+  "enabled": true,
+  "url": "https://ntfy.sh",
+  "topic": "svault-home",
+  "token": "***",
+  "events": { "lowStock": true, "expiring": true, "weeklySummary": false }
+}
+```
+
+`ntfy` posts to `url/topic` with an optional bearer token. `apprise` posts JSON to the configured endpoint
+with an optional `x-api-key`. Webhooks receive
+`{ event, title, body, houseId, houseName, data, sentAt }` and, when a secret is set, an
+`x-svault-signature: sha256=…` header. Delivery is detached from the triggering request, deduped per
+notification key and channel, and retried three times with backoff. Resolved reminders are not re-sent.
+The weekly summary runs from the reminder scan once per ISO week when at least one channel enables it.
+
 ## Status codes
 
 | Code | Meaning |
@@ -648,7 +793,7 @@ addressed to that user only. Other members do not see it.
 | `409` | Conflict (duplicate email, barcode already linked) |
 | `413` | Reverse proxy body limit (raise `client_max_body_size`) |
 | `500` | Unexpected server error (details are logged, not returned) |
-| `502` | Upstream AI provider failed |
+| `502` | Upstream AI provider or reminder channel test failed |
 
 ## Extending the API
 

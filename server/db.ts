@@ -325,6 +325,67 @@ CREATE TABLE IF NOT EXISTS notifications (
 );
 CREATE INDEX IF NOT EXISTS notifications_house ON notifications(house_id, created_at);
 
+CREATE TABLE IF NOT EXISTS shopping_list_items (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  item_id TEXT REFERENCES items(id) ON DELETE SET NULL,
+  name TEXT NOT NULL,
+  quantity REAL,
+  unit TEXT,
+  category_id TEXT REFERENCES categories(id) ON DELETE SET NULL,
+  note TEXT,
+  source TEXT NOT NULL DEFAULT 'manual',
+  checked INTEGER NOT NULL DEFAULT 0,
+  checked_at TEXT,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS shopping_house ON shopping_list_items(house_id, checked, created_at);
+
+/* Remembers which source (a recipe line, a low-stock item, a whole week of
+   planned meals) produced a shopping-list line, so adding it twice is a no-op. */
+CREATE TABLE IF NOT EXISTS shopping_list_sources (
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  source_key TEXT NOT NULL,
+  line_id TEXT NOT NULL REFERENCES shopping_list_items(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (house_id, source_key)
+);
+CREATE INDEX IF NOT EXISTS shopping_sources_line ON shopping_list_sources(line_id);
+
+CREATE TABLE IF NOT EXISTS meal_plan_entries (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  day TEXT NOT NULL,
+  slot TEXT NOT NULL,
+  recipe_id TEXT REFERENCES recipes(id) ON DELETE CASCADE,
+  idea_id TEXT REFERENCES food_ideas(id) ON DELETE CASCADE,
+  idea_index INTEGER,
+  title TEXT,
+  servings REAL,
+  sort INTEGER NOT NULL DEFAULT 0,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS meal_plan_house ON meal_plan_entries(house_id, day, slot, sort);
+
+CREATE TABLE IF NOT EXISTS notification_deliveries (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  channel_id TEXT NOT NULL,
+  dedupe_key TEXT NOT NULL,
+  event TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  http_status INTEGER,
+  error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (house_id, channel_id, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS deliveries_house ON notification_deliveries(house_id, created_at);
+
 CREATE TABLE IF NOT EXISTS recipes (
   id TEXT PRIMARY KEY,
   house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,

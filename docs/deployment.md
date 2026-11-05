@@ -28,15 +28,17 @@ simple, but it also means SVault is a single-node application by design.
 git clone https://github.com/AtaKon/svault.git
 cd svault
 cp .env.example .env        # optional; defaults work
-docker compose up -d --build
+docker compose up -d
 ```
 
 Open `http://localhost:8080` and create the first account.
 
-The compose file builds `svault:latest` locally. A published multi-arch image is planned in
-[issue #12](https://github.com/AtaKon/svault/issues/12); until then, build on the machine that will
-run it (or build and transfer the image, as described in the
-[TrueNAS guide](../deploy/dockge/README.md)).
+The default compose file pulls the published `ghcr.io/atakon/svault:latest`
+image (multi-arch `amd64` + `arm64`). To build from the checkout instead:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+```
 
 Check status:
 
@@ -316,13 +318,15 @@ In-app backup/restore is planned in [issue #3](https://github.com/AtaKon/svault/
 ## Upgrades
 
 1. Take a backup.
-2. Pull the new code (or load/pull the new image).
-3. Rebuild and restart:
+2. Pull the latest image:
+3. Restart:
 
 ```bash
-git pull
-docker compose up -d --build
+docker pull ghcr.io/atakon/svault:latest
+docker compose up -d
 ```
+
+If you build locally, use `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build` instead.
 
 4. Check `docker compose logs -f svault` and `/api/health`.
 
@@ -330,8 +334,7 @@ The schema is created idempotently and only adds tables/indexes. There is no mig
 downgrading across a schema change can break the old binary. Restore the backup if you need to go
 back.
 
-For TrueNAS, build/save the image on a development machine, `docker load` it on the NAS, bump
-`SVAULT_IMAGE`, and press **Deploy** in Dockge.
+For TrueNAS, set `SVAULT_IMAGE=ghcr.io/atakon/svault:<version>` in the Dockge `.env` and press **Deploy**.
 
 ### Automated deploys with Woodpecker
 

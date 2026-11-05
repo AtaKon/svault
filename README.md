@@ -19,14 +19,18 @@ dataset — all from one PWA that runs in a single Docker container.
 
 | | |
 |---|---|
-| **Several houses, several people** | Every house has its own stock, places, categories, recipes and photos. Invite family with owner/admin/member/viewer roles. |
+| **Several houses, several people** | Every house has its own stock, places, categories, recipes and photos. Invite family with owner/admin/member/viewer roles, and hand ownership over explicitly when the household changes. |
 | **Dynamic inventory** | Items get whatever attributes *you* define per house (size, flavour, material, warranty date…). Units are handled properly (g/kg, ml/l, pcs, pairs…). |
 | **Stock that adds up** | Every change is a movement. Batches keep purchase price, location and expiry, so stock counts, value and FIFO consumption stay honest. |
 | **Price history that means something** | Record a unit price on every purchase and see per-unit trends, averages and highs/lows, filtered by shop or across all shops. Every individual buy is listed with its date, quantity and vendor. Prices are normalised when units differ (e.g. 500 ml at €0.80 becomes €1.60/l). |
 | **Barcode scanning** | Camera scan (ZXing) works in the browser; unknown EAN/UPC codes fall back to an OpenFoodFacts lookup and pre-fill a new item. |
 | **OpenFoodFacts enrichment** | Link any inventory item to an OpenFoodFacts product, or let receipt lines and barcode scans do it automatically. Brand, description, image, category and the full nutrition panel are filled only when empty; values you set are never overwritten. Recipes estimate calories and macros per whole recipe and per portion from those panels. A shared receipt-name catalogue ships with the app, learns locally, and can be exported or synced between installs. |
 | **Receipt intake & shops** | Photograph or upload a weekly shop: OCR reads the lines, you fix anything it missed, and the whole basket becomes stock. Built-in layout templates handle Lidl Greece and Sklavenitis Greece quantities, weights, barcodes and discounts; templates for other stores can be built and tested in the app. Each receipt records whether AI, a template or the local parser read it, and discount lines roll up into a **money saved** total instead of becoming products. The shop is detected automatically, with a country-based catalogue. Receipts keep net and VAT, feeding spend-by-shop, tax and category analytics. Corrections and local vector suggestions map shop shorthand to the right products. |
-| **Low stock & expiry reminders** | Set a reorder point, get a reminder when it is reached. Expiring batches warn you days ahead. Checked on every stock change plus every 30 minutes. |
+| **Bulk intake** | Bring in a receipt or a queue of scanned barcodes, review every editable line against suggested matches, then commit in one transaction. Works with AI vision or text-only/local parsing. |
+| **Shopping list** | Fill it from a recipe's missing ingredients, from everything below its reorder point, or from a week of planned meals. Lines merge unit-aware, group by category, and checking one records a normal stock movement with price and expiry. |
+| **Meal planner** | A seven-day breakfast/lunch/dinner/snack grid. Pick saved recipes or food ideas, scale servings per slot, duplicate a meal, and turn the week's missing ingredients into the shopping list. |
+| **CSV import** | Bring a spreadsheet in with automatic column mapping, a dry-run preview and per-line errors. Supports comma/semicolon, quoted fields, BOM, CRLF and decimal commas; commits create normal stock movements. |
+| **Low stock & expiry reminders** | Set a reorder point, get a reminder when it is reached. Expiring batches warn you days ahead. Checked on every stock change plus every 30 minutes. Deliver to the bell, the browser, ntfy, Apprise or a signed webhook. |
 | **Recipes, digitised** | Photograph a handwritten card: English & Greek OCR runs on-device (Tesseract, no upload), then AI or a local parser rebuilds the ingredients and steps. "Improve with AI" fills gaps and rewrites steps. |
 | **Cook what you have** | Meal suggestions built from current stock and saved recipes, with realistic missing-ingredient lists — AI or fully local. |
 | **Vision datasets** | Upload photos into folders, draw boxes, name labels, assign train/val/test splits, and export a ready-to-train YOLO or COCO zip (classes, `data.yaml`, manifest included). |
@@ -246,8 +250,10 @@ turns it into a normal recipe you can edit.
 - Low-stock: fires when quantity ≤ reorder point, re-opens automatically if it happens again, and
   resolves itself when restocked. Disable per house in *Settings → Reminders*.
 - Expiry: warns `expiryDays` ahead (default 7) for every batch with quantity left.
-- Delivery: in-app bell + optional browser notifications. (No external push service — nothing leaves
-  your server.)
+- Delivery: in-app bell + optional browser notifications by default. Add ntfy, Apprise or a webhook in
+  *Settings → Reminders* for reminders while SVault is closed. Channel secrets are masked, deliveries
+  retry three times with backoff, and webhooks can be signed with HMAC-SHA256. Nothing leaves your server
+  unless you configure a channel.
 
 ## API sketch
 
@@ -267,23 +273,34 @@ GET  /api/houses/:id/recipes                 POST /api/houses/:id/recipes
 POST /api/houses/:id/recipes/scan            POST /api/houses/:id/recipes/upload
 POST /api/recipes/:id/ai
 GET  /api/houses/:id/ideas                   POST /api/houses/:id/ideas
+GET  /api/houses/:id/shopping                POST /api/houses/:id/shopping/from-recipe
+POST /api/houses/:id/shopping/from-low-stock POST /api/houses/:id/shopping/:entryId/check
+GET  /api/houses/:id/plan?week=              POST /api/houses/:id/plan
+POST /api/houses/:id/plan/shopping-list
+POST /api/houses/:id/intake/parse            POST /api/houses/:id/intake/commit
+POST /api/houses/:id/import/csv/preview      POST /api/houses/:id/import/csv/commit
 GET  /api/houses/:id/photos                  POST /api/houses/:id/photos
 POST /api/photos/:id/labels                  PUT  /api/photos/:id/labels
 GET  /api/houses/:id/photos/export?format=yolo|coco
 GET  /api/houses/:id/notifications           POST /api/houses/:id/notifications/scan
+POST /api/houses/:id/notifications/test      GET  /api/houses/:id/reminder-deliveries
+POST /api/houses/:id/members/:userId/transfer-ownership
 ```
 
 ## Screens
 
-- **Home** – stock summary, running low, expiring, recent activity, cooking shortcuts.
+- **Home** – stock summary, running low, expiring, recent activity, today's plan, cooking shortcuts.
 - **Inventory** – search, category/location/low-stock/expiry filters, inline ±1, sort by value.
 - **Item** – batch list with expiry, price chart, movement history, barcodes, dynamic attributes.
 - **Scan** – camera + manual entry, quick ±1, create-from-barcode.
+- **Shopping list** – grouped, unit-aware lines from recipes, low stock and the plan; check into stock.
+- **Meal plan** – seven-day grid per house with scaled servings and one-click shopping list.
+- **Bulk intake** – receipt text/photo or barcode queue, editable review table, atomic commit.
 - **Kitchen** – recipes with stock coverage, full recipe view, scan, favourites.
 - **Ideas** – prompt chips, AI/local meal cards, save as recipe.
 - **Photo library** – folders, upload, box labelling, splits, dataset export.
-- **Reminders** – low stock & expiry, browser notification opt-in.
-- **Settings** – general, places, categories, attributes, members/invites, AI, reminders, data export.
+- **Reminders** – low stock & expiry, browser opt-in, ntfy/Apprise/webhook channels.
+- **Settings** – general, places, categories, attributes, members/ownership, AI, reminders, CSV import/export.
 - **More/Profile** – theme, install, account, password.
 
 Dark mode follows the system and can be toggled in the sidebar/more menu.
@@ -344,8 +361,9 @@ Bug reports, feature requests and pull requests are welcome. Read [CONTRIBUTING.
 for the setup, test and review workflow. Security issues should follow [SECURITY.md](SECURITY.md)
 instead of a public issue.
 
-Good first issues: [#10 CSV import](https://github.com/AtaKon/svault/issues/10) and
-[#12 GHCR images](https://github.com/AtaKon/svault/issues/12).
+Good starting points are issues labelled
+[`good first issue`](https://github.com/AtaKon/svault/labels/good%20first%20issue) or the
+[roadmap](docs/roadmap.md).
 
 ## License
 

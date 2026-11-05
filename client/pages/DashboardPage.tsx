@@ -4,6 +4,7 @@ import { api } from "@/api";
 import { useAuth, useHouse } from "@/state";
 import { Badge, Button, Card, PageHeader, Skeleton, Stat, cn } from "@/components/ui";import { Icon, type IconName } from "@/components/icons";
 import { ItemCard } from "@/components/ItemCard";
+import { useToast } from "@/components/toast";
 import { compactMoney, daysUntil, qty, relativeTime, shortDate } from "@/format";
 import type { Dashboard, Item, ItemDetail, Movement, Recipe, StockLot } from "@shared/types";
 
@@ -17,6 +18,7 @@ export function DashboardPage() {
   const { house } = useHouse();
   const { user } = useAuth();
   const navigate = useNavigate();
+  const toast = useToast();
   const [data, setData] = useState<DashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -53,6 +55,20 @@ export function DashboardPage() {
   const hour = new Date().getHours();
   const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
   const name = user?.name.split(" ")[0] ?? "there";
+
+  const addLowStock = async () => {
+    try {
+      const result = await api<{ added: number; merged: number }>(`/api/houses/${house.id}/shopping/from-low-stock`, {
+        method: "POST",
+        body: {},
+      });
+      const count = result.added + result.merged;
+      toast.success(count ? `Added ${count} line${count === 1 ? "" : "s"} to the shopping list` : "Nothing new to add");
+      if (count) navigate("/shopping");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not add low-stock items");
+    }
+  };
 
   return (
     <div className="space-y-5">
@@ -124,9 +140,16 @@ export function DashboardPage() {
           <section>
             <div className="mb-2.5 flex items-center justify-between">
               <h2 className="font-display text-xl">Running low</h2>
-              <Link to="/items?low=1" className="text-xs font-medium text-brand hover:underline">
-                See all
-              </Link>
+              <div className="flex items-center gap-3">
+                {data && data.lowStock.length > 0 && (
+                  <button onClick={() => void addLowStock()} className="text-xs font-medium text-brand hover:underline">
+                    Add to list
+                  </button>
+                )}
+                <Link to="/items?low=1" className="text-xs font-medium text-brand hover:underline">
+                  See all
+                </Link>
+              </div>
             </div>
             {!data ? (
               <div className="space-y-2">
@@ -221,6 +244,34 @@ export function DashboardPage() {
                 })}
               </Card>
             )}
+          </section>
+
+          <section>
+            <div className="mb-2.5 flex items-center justify-between">
+              <h2 className="font-display text-xl">This week</h2>
+              <Link to="/plan" className="text-xs font-medium text-brand hover:underline">
+                Open plan
+              </Link>
+            </div>
+            <Card className="flex items-center gap-3 p-3.5">
+              <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-warn-soft text-warn">
+                <Icon name="calendar" size={18} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-medium">
+                  {qty(data?.plan?.week ?? 0)} meal{(data?.plan?.week ?? 0) === 1 ? "" : "s"} planned
+                </div>
+                <div className="text-[11px] text-muted">
+                  {qty(data?.plan?.today ?? 0)} today · turn the missing ingredients into a list
+                </div>
+              </div>
+              <Link
+                to="/shopping"
+                className="rounded-lg border border-line px-2 py-1 text-[11px] font-medium text-muted transition-colors hover:text-brand"
+              >
+                Shop
+              </Link>
+            </Card>
           </section>
 
           <section>

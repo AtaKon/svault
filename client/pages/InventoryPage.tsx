@@ -5,12 +5,14 @@ import { useHouse } from "@/state";
 import { Button, Card, EmptyState, Input, PageHeader, Select, Skeleton, Tabs, cn, useDebounced } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { ItemCard } from "@/components/ItemCard";
+import { useToast } from "@/components/toast";
 import { qty } from "@/format";
 import type { Category, Item, ItemDetail, Location } from "@shared/types";
 
 export function InventoryPage() {
   const { house } = useHouse();
   const navigate = useNavigate();
+  const toast = useToast();
   const [params, setParams] = useSearchParams();
   const [items, setItems] = useState<Item[] | null>(null);
   const [total, setTotal] = useState(0);
@@ -80,6 +82,20 @@ export function InventoryPage() {
     if (low && !detail.isLow) setItems((current) => current?.filter((item) => item.id !== detail.id) ?? null);
   };
 
+  const addLowStock = async () => {
+    try {
+      const result = await api<{ added: number; merged: number }>(`/api/houses/${house.id}/shopping/from-low-stock`, {
+        method: "POST",
+        body: {},
+      });
+      const count = result.added + result.merged;
+      toast.success(count ? `Added ${count} line${count === 1 ? "" : "s"} to the shopping list` : "Nothing new to add");
+      if (count) navigate("/shopping");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not add low-stock items");
+    }
+  };
+
   const activeFilters = useMemo(
     () =>
       [
@@ -99,6 +115,9 @@ export function InventoryPage() {
         subtitle="Everything stored in this house, with live quantities."
         actions={
           <>
+            <Button variant="secondary" icon="list" onClick={() => void addLowStock()}>
+              Add low stock
+            </Button>
             <div className="hidden sm:block">
               <Button variant="secondary" icon="receipt" onClick={() => navigate("/receipts/scan")}>
                 Receipt

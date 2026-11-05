@@ -44,9 +44,9 @@ Open **More -> House settings -> Members** to invite people.
 
 Notes:
 
-- A house has one owner. Ownership transfer is not implemented yet
-  ([#16](https://github.com/AtaKon/svault/issues/16)); until it lands, the owner cannot be demoted or
-  removed, and cannot leave without deleting the house.
+- A house has one owner. In **Settings -> Members** the owner can press **Make owner** on another member
+  and confirm by typing the house name. The transfer is atomic, the target is notified, the former owner
+  becomes an admin and can then leave. The owner cannot be demoted or removed without transferring first.
 - Invites are links, not emails. Create an invite, copy `/join/<code>` and send it yourself. If you
   enter an email address, only that address can accept it.
 - Revoked invite links stop working immediately. Invites do not expire automatically; revoke them in
@@ -240,8 +240,9 @@ that place.
 - Reminders are recalculated after every stock change and by a scan at boot and every 30 minutes.
 - **Reminders** shows the active list across every house you belong to. Being added to a new house
   creates a notification for you, even before you switch to it.
-- Press the bell icon to enable browser notifications; they only
-  arrive while SVault is open in a tab. See [roadmap](roadmap.md) for external delivery.
+- Press the bell icon to enable browser notifications; they only arrive while SVault is open in a tab.
+  Add ntfy, Apprise or a webhook under **Settings -> Reminders** to get reminders when SVault is closed.
+  Secrets are masked, deliveries retry three times and failed attempts are visible in the same tab.
 
 ### Search, filters and bulk actions
 
@@ -302,6 +303,35 @@ inventory-only ideas. Saving an idea creates a normal recipe tagged `ai` and `id
 
 Nothing about stock, barcodes, prices or reminders is sent to an AI provider.
 
+### Shopping list
+
+**Shopping list** is shared by everyone in the house and survives restarts. Fill it from:
+
+- a recipe: **Add missing to list** uses availability and stock, or **Add all (optional too)**;
+- the dashboard or inventory **Add low stock** action, which adds each item up to `targetStock`;
+- the meal plan: **Shopping list** merges the week's missing ingredients.
+
+Lines merge by linked item first, then by name. Compatible units are summed; incompatible units stay on
+separate lines. Grouping follows the item category. You can edit the quantity and note, add manual lines,
+check an item off, or record the purchase: checking a line opens a compact quantity/price/place/expiry
+form and creates a normal `in` movement. **Clear checked** removes bought lines.
+
+Adding the same recipe or week twice is idempotent, so nothing is duplicated.
+
+### Meal plan
+
+**Meal plan** shows Monday to Sunday with breakfast, lunch, dinner and snacks. Add a saved recipe, a
+saved food idea or a custom title to any slot. Each slot stores its own servings: changing them scales
+the ingredient quantities without editing the recipe. Use the move and duplicate buttons (keyboard
+accessible, no drag and drop) and **Shopping list** to build the week's missing ingredients.
+
+### Bulk intake
+
+**Bulk intake** accepts a receipt photo, pasted text, or a queue of scanned barcodes. Parsing only
+suggests rows and never writes. In the review table you can edit every field, choose an existing item,
+create a new one or skip the line. Commit validates everything first and applies the whole batch in one
+transaction. Without an AI provider the local parser and manual editing still work.
+
 ## 6. Photo library and vision datasets
 
 ![Photo labelling](screenshots/desktop-photo-label.png)
@@ -352,10 +382,10 @@ annotations.json        (COCO format only)
 | Places | Add, rename, nest and delete locations |
 | Categories | Same for categories, with icons |
 | Attributes | Custom fields available on items (admin only) |
-| Members | Invites, roles and removal |
+| Members | Invites, roles, removal, and explicit ownership transfer |
 | AI | Provider preset, base URL, models, key, connection test |
-| Reminders | Low-stock toggle and expiry warning window |
-| Data | Inventory CSV export, dataset export, data location, house deletion |
+| Reminders | Low-stock toggle, expiry window, ntfy/Apprise/webhook channels |
+| Data | Inventory CSV import/export, dataset export, data location, house deletion |
 
 **Profile** (under More) holds your name, email, password, theme and install prompt. Phones and
 desktops can install SVault as a PWA from the browser menu.
@@ -382,6 +412,11 @@ sends only the edited OCR text. A text-only local model never receives images.
 - Everything is stored under `DATA_DIR`: `svault.db` (SQLite, WAL mode) plus `uploads/`.
 - **Settings -> Data -> Inventory CSV** downloads the current inventory as CSV. It uses the API's
   1000-item page, so very large vaults should use the API or database directly.
+- **Import inventory CSV** uploads a spreadsheet, maps its columns and shows a dry run before writing.
+  Comma or semicolon files, quoted fields, a BOM, CRLF and decimal commas all work. `Create only` skips
+  rows that already exist; `Update by barcode/name` matches barcode first and falls back to an exact
+  name. Ambiguous names are skipped with a warning, and any bad row blocks the whole commit. Imported
+  quantities become normal `in` movements.
 - Dataset exports are generated on demand.
 - For a full backup, copy the whole `DATA_DIR` (or the `svault-data` Docker volume). Stop the
   container first for the most consistent SQLite copy, or use `sqlite3 svault.db ".backup ..."`.

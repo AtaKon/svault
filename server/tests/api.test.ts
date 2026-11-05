@@ -1,5 +1,6 @@
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -23,6 +24,7 @@ const { parseWithTemplateRules } = await import("../services/receipt-template-en
 const { LIDL_TEMPLATE_RULES, SKLAVENITIS_TEMPLATE_RULES } = await import("../../shared/receipt-template-example.js");
 const { convert, pricePerUnit } = await import("../units.js");
 const { parseOffNutrition } = await import("../services/nutrition.js");
+const { parseCsv, parseCsvNumber } = await import("../services/csv.js");
 const { encodePng } = await import("../lib/png.js");
 const JSZip = (await import("jszip")).default;
 const http = await import("node:http");
@@ -2041,5 +2043,539 @@ describe("multi-photo receipt OCR", () => {
     const merged = mergeOcrTexts([first, second]);
     assert.equal(merged.text, `${first}\n${second}`);
     assert.equal(merged.removedLines, 0);
+  });
+});
+
+describe("CSV parsing", () => {
+  it("handles a BOM, CRLF, semicolons, quoting and decimal commas", () => {
+    const csv = "\uFEFFName;Brand;Quantity;Price\r\n\"Rice, long\";\"Acme; Ltd\";\"1.234,5\";\"2,50\"\r\n";
+    const parsed = parseCsv(csv);
+    assert.equal(parsed.delimiter, ";");
+    assert.deepEqual(parsed.headers, ["Name", "Brand", "Quantity", "Price"]);
+    assert.equal(parsed.rows[0].Name, "Rice, long");
+    assert.equal(parsed.rows[0].Brand, "Acme; Ltd");
+    assert.equal(parseCsvNumber(parsed.rows[0].Quantity), 1234.5);
+    assert.equal(parseCsvNumber(parsed.rows[0].Price), 2.5);
+  });
+
+  it("reads a quoted newline and comma decimals in a comma file", () => {
+    const csv = 'Name,Quantity,Notes\n"Flour","1,5","Soft, fine"\n';
+    const parsed = parseCsv(csv);
+    assert.equal(parsed.delimiter, ",");
+    assert.equal(parsed.rows[0].Name, "Flour");
+    assert.equal(parseCsvNumber(parsed.rows[0].Quantity), 1.5);
+    assert.equal(parsed.rows[0].Notes, "Soft, fine");
+    assert.equal(parseCsvNumber("1,5"), 1.5);
+    assert.equal(parseCsvNumber("€ 2,40"), 2.4);
+  });
+});
+
+describe("shopping list", () => {
+  it("merges compatible units and keeps incompatible ones separate", async () => {
+    const first = await request(`/api/houses/${houseId}/shopping`, {
+      method: "POST",
+      body: { name: "Olive oil test", quantity: 1, unit: "l" },
+    });
+    assert.equal(first.status, 201);
+    const second = await request(`/api/houses/${houseId}/shopping`, {
+      method: "POST",
+      body: { name: "olive oil TEST", quantity: 500, unit: "ml" },
+    });
+    assert.equal(second.status, 200);
+    assert.equal(second.data.item.quantity, 1.5);
+
+    const separate = await request(`/api/houses/${houseId}/shopping`, {
+      method: "POST",
+      body: { name: "Olive oil test", quantity: 1, unit: "kg" },
+    });
+    assert.equal(separate.status, 201);
+    const list = await request(`/api/houses/${houseId}/shopping`);
+    assert.equal(list.data.items.filter((entry: any) => entry.name.toLowerCase() === "olive oil test").length, 2);
+  });
+
+  it("adds low-stock items once, up to target stock", async () => {
+    const item = await request(`/api/houses/${houseId}/items`, {
+      method: "POST",
+      body: {
+        name: "Low coffee test",
+        unit: "pcs",
+        reorderPoint: 5,
+        targetStock: 10,
+        initialStock: { quantity: 1 },
+      },
+    });
+    assert.equal(item.status, 201);
+
+    const first = await request(`/api/houses/${houseId}/shopping/from-low-stock`, { method: "POST", body: {} });
+    assert.ok(first.data.added >= 1);
+    const line = first.data.items.find((entry: any) => entry.itemId === item.data.id);
+    assert.equal(line.quantity, 9);
+
+    const again = await request(`/api/houses/${houseId}/shopping/from-low-stock`, { method: "POST", body: {} });
+    assert.equal(again.data.added, 0);
+    assert.ok(again.data.skipped >= 1);
+  });
+
+  it("adds only the missing amount from a recipe and records the purchase", async () => {
+    const flour = await request(`/api/houses/${houseId}/items`, {
+      method: "POST",
+      body: { name: "Flour test", unit: "g", initialStock: { quantity: 200 } },
+    });
+    const recipe = await request(`/api/houses/${houseId}/recipes`, {
+      method: "POST",
+      body: {
+        title: "Shopping flour test",
+        servings: 2,
+        ingredients: [{ name: "Flour test", quantity: 500, unit: "g", itemId: flour.data.id }],
+      },
+    });
+    assert.equal(recipe.status, 201);
+
+    const added = await request(`/api/houses/${houseId}/shopping/from-recipe`, {
+      method: "POST",
+      body: { recipeId: recipe.data.id, missingOnly: true },
+    });
+    assert.equal(added.status, 200);
+    const line = added.data.items.find((entry: any) => entry.name === "Flour test");
+    assert.equal(line.quantity, 300);
+
+    const checked = await request(`/api/houses/${houseId}/shopping/${line.id}/check`, {
+      method: "POST",
+      body: { quantity: 300, unit: "g", unitPrice: 0.002 },
+    });
+    assert.equal(checked.status, 200);
+    assert.equal(checked.data.item.checked, true);
+    const detail = await request(`/api/items/${flour.data.id}`);
+    assert.equal(detail.data.quantity, 500);
+    assert.ok(detail.data.priceHistory.some((point: any) => point.price === 0.002));
+
+    const cleared = await request(`/api/houses/${houseId}/shopping?checked=1`, { method: "DELETE" });
+    assert.equal(cleared.status, 200);
+    const remaining = await request(`/api/houses/${houseId}/shopping`);
+    assert.ok(!remaining.data.items.some((entry: any) => entry.id === line.id));
+  });
+});
+
+describe("weekly meal planner", () => {
+  let riceItemId = "";
+  let recipeId = "";
+
+  it("creates, reads and duplicates a planned meal", async () => {
+    const rice = await request(`/api/houses/${houseId}/items`, {
+      method: "POST",
+      body: { name: "Plan rice test", unit: "g", initialStock: { quantity: 100 } },
+    });
+    riceItemId = rice.data.id;
+    const recipe = await request(`/api/houses/${houseId}/recipes`, {
+      method: "POST",
+      body: {
+        title: "Plan rice bowl",
+        servings: 2,
+        ingredients: [{ name: "Plan rice test", quantity: 200, unit: "g", itemId: riceItemId }],
+      },
+    });
+    recipeId = recipe.data.id;
+
+    const entry = await request(`/api/houses/${houseId}/plan`, {
+      method: "POST",
+      body: { day: "2026-11-02", slot: "dinner", recipeId, servings: 4 },
+    });
+    assert.equal(entry.status, 201);
+    assert.equal(entry.data.title, "Plan rice bowl");
+    assert.equal(entry.data.servings, 4);
+
+    const week = await request(`/api/houses/${houseId}/plan?week=2026-11-04`);
+    assert.equal(week.data.weekStart, "2026-11-02");
+    assert.equal(week.data.weekEnd, "2026-11-08");
+    assert.equal(week.data.entries.length, 1);
+
+    const duplicate = await request(`/api/houses/${houseId}/plan/${entry.data.id}/duplicate`, {
+      method: "POST",
+      body: { day: "2026-11-03" },
+    });
+    assert.equal(duplicate.status, 201);
+    assert.equal(duplicate.data.day, "2026-11-03");
+  });
+
+  it("scales the week's ingredients and subtracts stock once", async () => {
+    const result = await request(`/api/houses/${houseId}/plan/shopping-list`, {
+      method: "POST",
+      body: { week: "2026-11-02" },
+    });
+    assert.equal(result.status, 200);
+    const line = result.data.items.find((entry: any) => entry.name === "Plan rice test");
+    // 200 g × 4/2 servings × two identical meals = 800 g, minus 100 g in stock.
+    assert.equal(line.quantity, 700);
+
+    const again = await request(`/api/houses/${houseId}/plan/shopping-list`, {
+      method: "POST",
+      body: { week: "2026-11-02" },
+    });
+    assert.equal(again.data.added, 0);
+
+    const recipe = await request(`/api/recipes/${recipeId}`);
+    assert.equal(recipe.data.ingredients[0].quantity, 200);
+  });
+
+  it("reports planned meals on the dashboard", async () => {
+    const dashboard = await request(`/api/houses/${houseId}/dashboard`);
+    assert.equal(dashboard.status, 200);
+    assert.ok(dashboard.data.plan.week >= 2);
+  });
+});
+
+describe("bulk intake", () => {
+  it("parses receipt text without writing anything", async () => {
+    const milk = await request(`/api/houses/${houseId}/items`, {
+      method: "POST",
+      body: { name: "Intake milk test", unit: "pcs", initialStock: { quantity: 1 } },
+    });
+    const beforeCount = (await request(`/api/houses/${houseId}/items?limit=1000`)).data.total;
+    const parsed = await request(`/api/houses/${houseId}/intake/parse`, {
+      method: "POST",
+      body: { text: "INTAKE MILK TEST 1.50\nBREAD LOAF 2.00\nTOTAL 3.50" },
+    });
+    assert.equal(parsed.status, 200);
+    assert.ok(parsed.data.rows.length >= 1);
+    const afterCount = (await request(`/api/houses/${houseId}/items?limit=1000`)).data.total;
+    assert.equal(afterCount, beforeCount);
+
+    const row = parsed.data.rows[0];
+    const committed = await request(`/api/houses/${houseId}/intake/commit`, {
+      method: "POST",
+      body: {
+        rows: [
+          {
+            description: milk.data.name,
+            quantity: 2,
+            unit: "pcs",
+            itemId: milk.data.id,
+            action: "update",
+          },
+        ],
+      },
+    });
+    assert.equal(committed.status, 200);
+    assert.equal(committed.data.updated[0].quantity, 3);
+    void row;
+  });
+
+  it("rolls back every row when one is invalid", async () => {
+    const fail = await request(`/api/houses/${houseId}/intake/commit`, {
+      method: "POST",
+      body: {
+        rows: [
+          { description: "Intake rollback good", quantity: 1, unit: "pcs", action: "create" },
+          { description: "Intake rollback bad", quantity: 1, unit: "zzz", action: "create" },
+        ],
+      },
+    });
+    assert.equal(fail.status, 400);
+    const search = await request(`/api/houses/${houseId}/items?q=Intake rollback`);
+    assert.equal(search.data.items.length, 0);
+  });
+
+  it("rejects duplicate barcodes in one queue", async () => {
+    const res = await request(`/api/houses/${houseId}/intake/commit`, {
+      method: "POST",
+      body: {
+        rows: [
+          { description: "Queue one", quantity: 1, unit: "pcs", barcode: "queue-dup-1", action: "create" },
+          { description: "Queue two", quantity: 1, unit: "pcs", barcode: "queue-dup-1", action: "create" },
+        ],
+      },
+    });
+    assert.equal(res.status, 400);
+    assert.ok(res.data.details.rows.length >= 1);
+  });
+
+  it("turns a scanned barcode queue into updates without writing during parse", async () => {
+    const parsed = await request(`/api/houses/${houseId}/intake/parse`, {
+      method: "POST",
+      body: { barcodes: [barcode, barcode] },
+    });
+    assert.equal(parsed.status, 200);
+    assert.equal(parsed.data.rows.length, 1);
+    assert.equal(parsed.data.rows[0].itemId, itemId);
+  });
+});
+
+describe("CSV inventory import", () => {
+  it("previews and commits a spreadsheet with categories and places", async () => {
+    const csv = [
+      "\uFEFFName;Unit;Quantity;Price;Barcodes;Category;Place",
+      '"Csv apples";kg;"1,5";"2,50";csv-apple-1;Food;Pantry',
+    ].join("\r\n");
+    const preview = await request(`/api/houses/${houseId}/import/csv/preview`, {
+      method: "POST",
+      body: { csv },
+    });
+    assert.equal(preview.status, 200);
+    assert.equal(preview.data.rows[0].quantity, 1.5);
+    assert.equal(preview.data.rows[0].price, 2.5);
+    assert.equal(preview.data.summary.create, 1);
+
+    const commit = await request(`/api/houses/${houseId}/import/csv/commit`, {
+      method: "POST",
+      body: { csv, mode: "create" },
+    });
+    assert.equal(commit.status, 200);
+    assert.equal(commit.data.created, 1);
+    const item = commit.data.items[0];
+    assert.equal(item.quantity, 1.5);
+    assert.equal(item.categoryName, "Food");
+    assert.equal(item.priceStats.latest, 2.5);
+    const detail = await request(`/api/items/${item.id}`);
+    assert.ok(detail.data.lots.some((lot: any) => lot.locationName === "Pantry"));
+  });
+
+  it("updates by barcode without duplicating the item", async () => {
+    const csv = 'Name;Unit;Quantity;Barcodes\n"Csv apples";kg;"0,5";csv-apple-1\n';
+    const preview = await request(`/api/houses/${houseId}/import/csv/preview`, {
+      method: "POST",
+      body: { csv, mode: "update" },
+    });
+    assert.equal(preview.data.rows[0].action, "update");
+    const commit = await request(`/api/houses/${houseId}/import/csv/commit`, {
+      method: "POST",
+      body: { csv, mode: "update" },
+    });
+    assert.equal(commit.status, 200);
+    assert.equal(commit.data.updated, 1);
+    assert.equal(commit.data.created, 0);
+    assert.equal(commit.data.items[0].quantity, 2);
+  });
+
+  it("writes nothing when any row has an unknown unit", async () => {
+    const csv = 'Name;Unit;Quantity\n"Csv good row";pcs;1\n"Csv bad row";zzz;2\n';
+    const res = await request(`/api/houses/${houseId}/import/csv/commit`, {
+      method: "POST",
+      body: { csv },
+    });
+    assert.equal(res.status, 400);
+    const search = await request(`/api/houses/${houseId}/items?q=Csv good row`);
+    assert.equal(search.data.items.length, 0);
+  });
+
+  it("skips ambiguous name matches with a warning", async () => {
+    for (const suffix of ["A", "B"]) {
+      await request(`/api/houses/${houseId}/items`, {
+        method: "POST",
+        body: { name: "Ambiguous csv", unit: "pcs", brand: suffix },
+      });
+    }
+    const preview = await request(`/api/houses/${houseId}/import/csv/preview`, {
+      method: "POST",
+      body: { csv: 'Name;Unit;Quantity\n"Ambiguous csv";pcs;1\n', mode: "update" },
+    });
+    assert.equal(preview.data.rows[0].action, "skip");
+    assert.match(preview.data.rows[0].warnings.join(" "), /ambiguous/i);
+  });
+});
+
+describe("ownership transfer", () => {
+  it("requires confirmation and a member target", async () => {
+    const house = await request(`/api/houses/${houseId}`);
+    const owner = house.data.members.find((member: any) => member.role === "owner");
+    const stranger = house.data.members.find((member: any) => member.role === "viewer");
+    assert.ok(owner && stranger);
+
+    const self = await request(`/api/houses/${houseId}/members/${owner.id}/transfer-ownership`, {
+      method: "POST",
+      body: { houseName: house.data.name },
+    });
+    assert.equal(self.status, 400);
+
+    const wrong = await request(`/api/houses/${houseId}/members/${stranger.id}/transfer-ownership`, {
+      method: "POST",
+      body: { houseName: "not the house" },
+    });
+    assert.equal(wrong.status, 400);
+    const unchanged = await request(`/api/houses/${houseId}`);
+    assert.equal(unchanged.data.members.find((member: any) => member.id === owner.id).role, "owner");
+    assert.equal(unchanged.data.members.find((member: any) => member.id === stranger.id).role, "viewer");
+
+    const missing = await request(`/api/houses/${houseId}/members/usr_missing/transfer-ownership`, {
+      method: "POST",
+      body: { houseName: house.data.name },
+    });
+    assert.equal(missing.status, 404);
+
+    const nonOwner = await request(`/api/houses/${houseId}/members/${owner.id}/transfer-ownership`, {
+      method: "POST",
+      auth: secondUserCookie,
+      body: { houseName: house.data.name },
+    });
+    assert.equal(nonOwner.status, 403);
+  });
+
+  it("moves exactly one owner and notifies the new one", async () => {
+    const house = await request(`/api/houses/${houseId}`);
+    const stranger = house.data.members.find((member: any) => member.role === "viewer");
+    const transferred = await request(`/api/houses/${houseId}/members/${stranger.id}/transfer-ownership`, {
+      method: "POST",
+      body: { houseName: house.data.name },
+    });
+    assert.equal(transferred.status, 200);
+    const owners = transferred.data.members.filter((member: any) => member.role === "owner");
+    assert.equal(owners.length, 1);
+    assert.equal(owners[0].id, stranger.id);
+    const previous = transferred.data.members.find((member: any) => member.id !== stranger.id);
+    assert.equal(previous.role, "admin");
+
+    const notifications = await request("/api/notifications", { auth: secondUserCookie });
+    assert.ok(notifications.data.notifications.some((entry: any) => /now own/i.test(entry.title)));
+
+    // The new owner can hand it back, so later tests keep a stable owner.
+    const back = await request(`/api/houses/${houseId}/members/${previous.id}/transfer-ownership`, {
+      method: "POST",
+      auth: secondUserCookie,
+      body: { houseName: house.data.name },
+    });
+    assert.equal(back.status, 200);
+  });
+});
+
+describe("reminder delivery channels", () => {
+  let channelServer: import("node:http").Server;
+  let channelBase = "";
+  const channelRequests: { body: string; headers: Record<string, string | string[] | undefined> }[] = [];
+
+  before(async () => {
+    await new Promise<void>((resolve) => {
+      channelServer = http.createServer((req, res) => {
+        const chunks: Buffer[] = [];
+        req.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+        req.on("end", () => {
+          channelRequests.push({ body: Buffer.concat(chunks).toString("utf8"), headers: req.headers });
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ ok: true }));
+        });
+      });
+      channelServer.listen(0, "127.0.0.1", () => {
+        const address = channelServer.address();
+        if (!address || typeof address === "string") throw new Error("no channel address");
+        channelBase = `http://127.0.0.1:${address.port}/hook`;
+        resolve();
+      });
+    });
+  });
+
+  after(() => {
+    channelServer?.close();
+  });
+
+  it("masks channel secrets and keeps them when saving the placeholder", async () => {
+    const saved = await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: {
+        settings: {
+          notifications: {
+            channels: [
+              {
+                id: "ch_test",
+                type: "webhook",
+                name: "Test hook",
+                url: channelBase,
+                enabled: true,
+                secret: "topsecret",
+                events: { lowStock: true, expiring: true, weeklySummary: false },
+              },
+            ],
+          },
+        },
+      },
+    });
+    assert.equal(saved.status, 200);
+    assert.equal(saved.data.settings.notifications.channels[0].secret, "***");
+
+    const resent = await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: {
+        settings: {
+          notifications: {
+            channels: [
+              {
+                id: "ch_test",
+                type: "webhook",
+                name: "Test hook",
+                url: channelBase,
+                enabled: true,
+                secret: "***",
+                events: { lowStock: true, expiring: true, weeklySummary: false },
+              },
+            ],
+          },
+        },
+      },
+    });
+    assert.equal(resent.status, 200);
+
+    const test = await request(`/api/houses/${houseId}/notifications/test`, {
+      method: "POST",
+      body: { channelId: "ch_test" },
+    });
+    assert.equal(test.status, 200);
+    assert.equal(test.data.ok, true);
+    const last = channelRequests.at(-1)!;
+    const expected = `sha256=${createHmac("sha256", "topsecret").update(last.body).digest("hex")}`;
+    assert.equal(last.headers["x-svault-signature"], expected);
+    assert.match(last.body, /test reminder/i);
+  });
+
+  it("delivers one low-stock message per dedupe key", async () => {
+    const item = await request(`/api/houses/${houseId}/items`, {
+      method: "POST",
+      body: { name: "Delivery tea test", unit: "pcs", reorderPoint: 5, initialStock: { quantity: 1 } },
+    });
+    assert.equal(item.status, 201);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    const first = await request(`/api/houses/${houseId}/reminder-deliveries`);
+    const key = `low:${item.data.id}`;
+    assert.equal(first.data.deliveries.filter((entry: any) => entry.dedupeKey === key).length, 1);
+
+    await request(`/api/houses/${houseId}/notifications/scan`, { method: "POST", body: {} });
+    await request(`/api/houses/${houseId}/notifications/scan`, { method: "POST", body: {} });
+    const second = await request(`/api/houses/${houseId}/reminder-deliveries`);
+    assert.equal(second.data.deliveries.filter((entry: any) => entry.dedupeKey === key).length, 1);
+
+    // Restock to resolve the reminder, then drop below the threshold again.
+    // The in-app reminder reopens, but the channel must not see it twice.
+    await request(`/api/items/${item.data.id}/stock`, { method: "POST", body: { action: "add", quantity: 10 } });
+    await request(`/api/items/${item.data.id}/stock`, { method: "POST", body: { action: "remove", quantity: 10 } });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const third = await request(`/api/houses/${houseId}/reminder-deliveries`);
+    assert.equal(third.data.deliveries.filter((entry: any) => entry.dedupeKey === key).length, 1);
+  });
+
+  it("reports a failed delivery without blocking the trigger", async () => {
+    const saved = await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: {
+        settings: {
+          notifications: {
+            channels: [
+              {
+                id: "ch_test",
+                type: "webhook",
+                name: "Test hook",
+                url: "http://127.0.0.1:1/unreachable",
+                enabled: true,
+                secret: "***",
+                events: { lowStock: false, expiring: false, weeklySummary: false },
+              },
+            ],
+          },
+        },
+      },
+    });
+    assert.equal(saved.status, 200);
+    const res = await request(`/api/houses/${houseId}/notifications/test`, {
+      method: "POST",
+      body: { channelId: "ch_test" },
+    });
+    assert.equal(res.status, 502);
+    assert.equal(res.data.ok, false);
   });
 });

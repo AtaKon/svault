@@ -22,6 +22,34 @@ export interface House {
   createdAt: string;
 }
 
+export type NotificationChannelType = "ntfy" | "apprise" | "webhook";
+
+export interface NotificationChannelEvents {
+  lowStock: boolean;
+  expiring: boolean;
+  weeklySummary: boolean;
+}
+
+/** A per-house delivery target for reminders. Secret fields are masked with
+ * "***" by the API once stored, the same way AI keys are. */
+export interface NotificationChannel {
+  id: string;
+  type: NotificationChannelType;
+  name: string;
+  enabled: boolean;
+  /** ntfy server URL (e.g. https://ntfy.sh), Apprise endpoint or webhook URL. */
+  url: string;
+  /** ntfy topic. Empty for Apprise and webhooks. */
+  topic?: string;
+  /** ntfy access token (secret). */
+  token?: string;
+  /** Apprise API key (secret). */
+  key?: string;
+  /** Webhook HMAC secret (secret). */
+  secret?: string;
+  events: NotificationChannelEvents;
+}
+
 export interface HouseSettings {
   ai?: {
     enabled?: boolean;
@@ -33,8 +61,10 @@ export interface HouseSettings {
   notifications?: {
     lowStock?: boolean;
     expiryDays?: number;
+    channels?: NotificationChannel[];
   };
   units?: "metric" | "imperial";
+  purchases?: { country?: string };
 }
 
 export interface Location {
@@ -611,6 +641,7 @@ export interface Dashboard {
   expiring: (StockLot & { itemName: string; itemId: string })[];
   recent: Movement[];
   recentRecipe: Recipe | null;
+  plan?: { today: number; week: number; weekStart: string };
   locations: Location[];
   counts: {
     recipes: number;
@@ -618,4 +649,158 @@ export interface Dashboard {
     unlabeledPhotos: number;
     unreadNotifications: number;
   };
+}
+
+/* --------------------------------------------------------------- shopping list */
+
+export type ShoppingSource = "manual" | "recipe" | "low_stock" | "meal_plan";
+
+export interface ShoppingItem {
+  id: string;
+  houseId: string;
+  itemId: string | null;
+  name: string;
+  quantity: number | null;
+  unit: string | null;
+  categoryId: string | null;
+  categoryName: string | null;
+  categoryIcon: string | null;
+  note: string | null;
+  source: ShoppingSource;
+  checked: boolean;
+  checkedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ShoppingListResult {
+  added: number;
+  merged: number;
+  skipped: number;
+  items: ShoppingItem[];
+}
+
+/* ----------------------------------------------------------------- meal planner */
+
+export type MealSlot = "breakfast" | "lunch" | "dinner" | "snack";
+
+export const MEAL_SLOTS: MealSlot[] = ["breakfast", "lunch", "dinner", "snack"];
+
+export interface MealPlanEntry {
+  id: string;
+  houseId: string;
+  day: string;
+  slot: MealSlot;
+  recipeId: string | null;
+  ideaId: string | null;
+  ideaIndex: number | null;
+  title: string;
+  servings: number | null;
+  sort: number;
+  recipe: { id: string; title: string; servings: number | null; image: string | null } | null;
+  idea: { id: string; title: string; servings: number | null } | null;
+  createdAt: string;
+}
+
+export interface MealPlanWeek {
+  weekStart: string;
+  weekEnd: string;
+  entries: MealPlanEntry[];
+}
+
+/* ------------------------------------------------------------------ bulk intake */
+
+export interface IntakeCandidate {
+  itemId: string;
+  name: string;
+  unit: string;
+  score: number;
+  source: "alias" | "name" | "vector" | null;
+}
+
+export interface IntakeRow {
+  description: string;
+  rawDescription: string | null;
+  quantity: number;
+  unit: string | null;
+  unitPrice: number | null;
+  lineTotal: number | null;
+  barcode: string | null;
+  itemId: string | null;
+  itemName: string | null;
+  itemUnit: string | null;
+  candidates: IntakeCandidate[];
+  offCode: string | null;
+  offName: string | null;
+  offBrand: string | null;
+  offImage: string | null;
+  action: "create" | "update" | "skip";
+}
+
+export interface IntakeParseResult {
+  provider: "ai" | "local" | "template" | "barcode";
+  warning: string | null;
+  vendorName: string | null;
+  purchasedAt: string | null;
+  currency: string | null;
+  rows: IntakeRow[];
+}
+
+export interface IntakeCommitResult {
+  created: Item[];
+  updated: Item[];
+  skipped: number;
+}
+
+/* -------------------------------------------------------------------- CSV import */
+
+export interface CsvColumnMap {
+  name?: string;
+  brand?: string;
+  category?: string;
+  place?: string;
+  unit?: string;
+  quantity?: string;
+  reorderPoint?: string;
+  targetStock?: string;
+  price?: string;
+  barcodes?: string;
+  attributes?: string;
+}
+
+export type CsvImportMode = "create" | "update";
+
+export interface CsvImportRow {
+  line: number;
+  name: string;
+  brand: string | null;
+  category: string | null;
+  place: string | null;
+  unit: string | null;
+  quantity: number | null;
+  reorderPoint: number | null;
+  targetStock: number | null;
+  price: number | null;
+  barcodes: string[];
+  attributes: Record<string, unknown>;
+  matchId: string | null;
+  matchName: string | null;
+  action: "create" | "update" | "skip";
+  errors: string[];
+  warnings: string[];
+}
+
+export interface CsvImportPreview {
+  delimiter: string;
+  headers: string[];
+  map: CsvColumnMap;
+  mode: CsvImportMode;
+  rows: CsvImportRow[];
+  summary: { create: number; update: number; skip: number; errors: number };
+}
+
+export interface CsvImportResult extends CsvImportPreview {
+  created: number;
+  updated: number;
+  skipped: number;
 }

@@ -1,6 +1,7 @@
 import { all, parseJson, bool } from "./db.js";
 import { round } from "./units.js";
 import { normaliseNutrition } from "./services/nutrition.js";
+import { channelsFromSettings, maskChannels } from "./services/channels.js";
 import type {
   Item,
   Recipe,
@@ -34,8 +35,12 @@ export const ITEM_SELECT = `
 
 export function maskHouseSettings(settings: Record<string, any>): Record<string, any> {
   const ai = settings?.ai;
-  if (!ai || !ai.apiKey) return settings;
-  return { ...settings, ai: { ...ai, apiKey: "***" } };
+  const channels = channelsFromSettings(settings);
+  const withChannels = channels.length
+    ? { ...settings, notifications: { ...(settings?.notifications ?? {}), channels: maskChannels(channels) } }
+    : settings;
+  if (!ai || !ai.apiKey) return withChannels;
+  return { ...withChannels, ai: { ...ai, apiKey: "***" } };
 }
 
 export function serializeHouse(row: any, role: string) {

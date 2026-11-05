@@ -1,0 +1,12 @@
+# Local build override for the default compose file.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+#
+# The base file pulls ghcr.io/atakon/svault; this override builds the same
+# Dockerfile from the current checkout and tags it locally.
+services:
+  svault:
+    image: svault:local
+    build:
+      context: .
+      dockerfile: Dockerfile

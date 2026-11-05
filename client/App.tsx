@@ -24,6 +24,9 @@ import { SettingsPage } from "@/pages/SettingsPage";
 import { ProfilePage } from "@/pages/ProfilePage";
 import { MorePage } from "@/pages/MorePage";
 import { ExtraPages } from "@/pages/ExtraPages";
+import { ShoppingPage } from "@/pages/ShoppingPage";
+import { PlanPage } from "@/pages/PlanPage";
+import { IntakePage } from "@/pages/IntakePage";
 
 export function App() {
   return (
@@ -54,6 +57,9 @@ export function App() {
         <Route path="/recipes/:recipeId" element={<RecipePage />} />
         <Route path="/recipes/:recipeId/edit" element={<RecipeFormPage />} />
         <Route path="/ideas" element={<IdeasPage />} />
+        <Route path="/shopping" element={<ShoppingPage />} />
+        <Route path="/plan" element={<PlanPage />} />
+        <Route path="/intake" element={<IntakePage />} />
         <Route path="/photos" element={<PhotosPage />} />
         <Route path="/notifications" element={<NotificationsPage />} />
         <Route path="/settings" element={<SettingsPage />} />
