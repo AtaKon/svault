@@ -36,6 +36,22 @@ export function compactMoney(value: number | null | undefined, currency = "EUR")
   }
 }
 
+/** AI prices are tiny USD amounts, so show enough decimals to tell them apart. */
+export function aiCostLabel(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return "—";
+  if (value > 0 && value < 0.000001) return "< $0.000001";
+  try {
+    return new Intl.NumberFormat(formatLocale, {
+      style: "currency",
+      currency: "USD",
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 6,
+    }).format(value);
+  } catch {
+    return `$${value.toFixed(6)}`;
+  }
+}
+
 export function unitPriceLabel(price: number | null | undefined, unit: string, currency = "EUR"): string {
   if (price == null) return "—";
   return `${money(price, currency)} / ${unit}`;

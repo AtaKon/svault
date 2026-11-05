@@ -1090,11 +1090,19 @@ function AiTab({ house, onSave }: { house: House; onSave: (patch: Record<string,
   const [baseUrl, setBaseUrl] = useState(settings.baseUrl ?? "");
   const [model, setModel] = useState(settings.model ?? "");
   const [visionModel, setVisionModel] = useState(settings.visionModel ?? "");
+  const [inputPrice, setInputPrice] = useState(settings.inputPrice != null ? String(settings.inputPrice) : "");
+  const [outputPrice, setOutputPrice] = useState(settings.outputPrice != null ? String(settings.outputPrice) : "");
   const [apiKey, setApiKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; text: string } | null>(null);
   const masked = settings.apiKey === "***";
+
+  const priceOrNull = (value: string): number | null => {
+    if (!value.trim()) return null;
+    const parsed = Number(value.replace(",", "."));
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+  };
 
   const save = async () => {
     setBusy(true);
@@ -1104,6 +1112,8 @@ function AiTab({ house, onSave }: { house: House; onSave: (patch: Record<string,
         baseUrl: baseUrl.trim() || undefined,
         model: model.trim() || undefined,
         visionModel: visionModel.trim() || undefined,
+        inputPrice: priceOrNull(inputPrice),
+        outputPrice: priceOrNull(outputPrice),
       };
       if (apiKey.trim()) payload.apiKey = apiKey.trim();
       await onSave({ ai: payload });
@@ -1205,6 +1215,34 @@ function AiTab({ house, onSave }: { house: House; onSave: (patch: Record<string,
               <Input value={visionModel} onChange={(event) => setVisionModel(event.target.value)} placeholder="same as text model" disabled={!can("admin")} />
             </Field>
           </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Prompt price" hint="USD per 1M tokens">
+              <Input
+                type="number"
+                min="0"
+                step="any"
+                value={inputPrice}
+                onChange={(event) => setInputPrice(event.target.value)}
+                placeholder="0.15"
+                disabled={!can("admin")}
+              />
+            </Field>
+            <Field label="Completion price" hint="USD per 1M tokens">
+              <Input
+                type="number"
+                min="0"
+                step="any"
+                value={outputPrice}
+                onChange={(event) => setOutputPrice(event.target.value)}
+                placeholder="0.60"
+                disabled={!can("admin")}
+              />
+            </Field>
+          </div>
+          <p className="-mt-1 text-[11px] text-muted">
+            Optional. Used to store what each AI receipt scan and recipe costs when the provider does not report a price.
+            OpenRouter returns its own cost, so leave these empty there.
+          </p>
           <Field
             label="API key"
             hint={masked ? "a key is stored — type to replace" : "local models: use any value"}

@@ -58,6 +58,10 @@ export interface HouseSettings {
     model?: string;
     apiKey?: string;
     visionModel?: string;
+    /** USD per 1M prompt tokens, used to estimate the cost of an AI call. */
+    inputPrice?: number | null;
+    /** USD per 1M completion tokens, used to estimate the cost of an AI call. */
+    outputPrice?: number | null;
   };
   notifications?: {
     lowStock?: boolean;
@@ -371,6 +375,8 @@ export interface Recipe {
   ocrText: string | null;
   source: "manual" | "scan" | "ai";
   aiNotes: string | null;
+  /** USD spent on AI for this recipe (scan cleanup, polish). */
+  aiCost?: number | null;
   favorite: boolean;
   ingredients: RecipeIngredient[];
   createdAt: string;
@@ -463,6 +469,8 @@ export interface Receipt {
   templateId?: string | null;
   templateConfidence?: number | null;
   provider?: "ai" | "local" | "template" | null;
+  /** USD spent on the AI read of this receipt. */
+  aiCost?: number | null;
   savings?: number | null;
   image: string | null;
   ocrText: string | null;
@@ -483,6 +491,7 @@ export interface ReceiptDraft {
   taxBreakdown: TaxBreakdownEntry[];
   templateId?: string | null;
   templateConfidence?: number | null;
+  aiCost?: number | null;
   savings?: number | null;
   notes: string | null;
   lines: {

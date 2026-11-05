@@ -316,6 +316,7 @@ const importBody = z.object({
   templateId: optionalText(60),
   templateConfidence: boundedNumber(0, 1).nullish(),
   provider: z.enum(["ai", "local", "template"]).nullish(),
+  aiCost: boundedNumber(0, 1e9).nullish(),
   savings: boundedNumber(0, 1e9).nullish(),
   lines: z.array(lineInput).min(1).max(200),
 });
@@ -389,6 +390,7 @@ receiptRoutes.post(
     const template = selectReceiptTemplate(rawText, houseId);
     let draft = heuristicReceipt(rawText, house.currency ?? null);
     let provider: "ai" | "local" | "template" = "local";
+    let aiCost: number | null = null;
     let warning: string | null = null;
 
     if (template) {
@@ -412,7 +414,8 @@ receiptRoutes.post(
               ? [await localImageToDataUrl(body.image)].filter((value): value is string => !!value)
               : [];
           const aiDraft = await aiParseReceipt(cfg, rawText, images);
-          draft = normaliseReceiptDraft(aiDraft, house.currency ?? null);
+          draft = normaliseReceiptDraft(aiDraft.data, house.currency ?? null);
+          aiCost = aiDraft.usage.cost;
           provider = "ai";
         } catch (err) {
           warning = `AI cleanup failed, kept the locally parsed version. ${err instanceof Error ? err.message : ""}`.trim();
@@ -469,7 +472,7 @@ receiptRoutes.post(
       warning = [warning, "Could not find any product lines in this text."].filter(Boolean).join(" ");
     }
 
-    res.json({ provider, warning, draft });
+    res.json({ provider, warning, aiCost, draft });
   }),
 );
 
@@ -526,8 +529,8 @@ receiptRoutes.post(
       run(
         `INSERT INTO receipts
           (id, house_id, vendor_id, vendor_name, purchased_at, currency, total, subtotal, tax, tax_breakdown,
-           template_id, template_confidence, provider, savings, image, ocr_text, source, notes, created_by, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           template_id, template_confidence, provider, ai_cost, savings, image, ocr_text, source, notes, created_by, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           receiptId,
           houseId,
@@ -542,6 +545,7 @@ receiptRoutes.post(
           body.templateId ?? null,
           body.templateConfidence ?? null,
           body.provider ?? null,
+          body.aiCost ?? null,
           savings,
           body.image ?? null,
           body.ocrText ?? null,

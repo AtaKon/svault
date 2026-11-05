@@ -242,6 +242,7 @@ export function serializeReceipt(row: any, lines?: any[]): Receipt {
     templateId: row.template_id ?? null,
     templateConfidence: row.template_confidence == null ? null : Number(row.template_confidence),
     provider: row.provider === "ai" || row.provider === "local" || row.provider === "template" ? row.provider : null,
+    aiCost: row.ai_cost == null ? null : Number(row.ai_cost),
     savings: row.savings == null ? null : Number(row.savings),
     image: row.image ?? null,
     ocrText: row.ocr_text ?? null,
@@ -334,6 +335,7 @@ export function serializeRecipe(row: any, ingredients: any[] = [], match?: Recip
     ocrText: row.ocr_text ?? null,
     source: row.source,
     aiNotes: row.ai_notes ?? null,
+    aiCost: row.ai_cost == null ? null : Number(row.ai_cost),
     favorite: bool(row.favorite),
     ingredients: ingredients.map((i) => ({
       id: i.id,

@@ -99,7 +99,7 @@ ideaRoutes.post(
           recipes.map((r) => ({ id: r.id, title: r.title, ingredients: r.ingredients.map((i) => i.name) })),
           prompt,
         );
-        result = normaliseIdeas(raw);
+        result = normaliseIdeas(raw.data);
         if (!result.ideas.length) result = localIdeas(items, recipes, prompt);
       } catch (err) {
         warning = `AI ideas failed, showing local suggestions. ${err instanceof Error ? err.message : ""}`.trim();

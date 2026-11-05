@@ -8,6 +8,31 @@ export interface AiConfig {
   apiKey: string;
   model: string;
   visionModel: string;
+  /** USD per 1M prompt tokens. Used when the provider does not report a price. */
+  inputPrice: number | null;
+  /** USD per 1M completion tokens. Used when the provider does not report a price. */
+  outputPrice: number | null;
+}
+
+/** What an AI call cost, in USD, plus the token counts it was billed for. */
+export interface AiUsage {
+  model: string;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  /** Provider-reported or estimated price in USD, rounded to micro-dollars. */
+  cost: number | null;
+}
+
+export interface AiResult<T> {
+  data: T;
+  usage: AiUsage;
+}
+
+function optionalPrice(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
 export function resolveAi(settings: HouseSettings | Record<string, any>): AiConfig {
@@ -19,6 +44,8 @@ export function resolveAi(settings: HouseSettings | Record<string, any>): AiConf
     apiKey,
     model: ai.model || AI_ENV.model,
     visionModel: ai.visionModel || AI_ENV.visionModel || ai.model || AI_ENV.model,
+    inputPrice: optionalPrice(ai.inputPrice) ?? AI_ENV.inputPrice,
+    outputPrice: optionalPrice(ai.outputPrice) ?? AI_ENV.outputPrice,
   };
 }
 
@@ -35,7 +62,7 @@ export async function chat(
     json?: boolean;
     temperature?: number;
   },
-): Promise<string> {
+): Promise<{ text: string; usage: AiUsage }> {
   if (!cfg.enabled) throw new ApiError(400, "No AI provider configured");
   const content: string | ContentPart[] = opts.images?.length
     ? [
@@ -44,8 +71,9 @@ export async function chat(
       ]
     : opts.user;
 
+  const model = opts.images?.length ? cfg.visionModel : cfg.model;
   const body: Record<string, unknown> = {
-    model: opts.images?.length ? cfg.visionModel : cfg.model,
+    model,
     messages: [
       { role: "system", content: opts.system },
       { role: "user", content },
@@ -78,7 +106,7 @@ export async function chat(
         : Array.isArray(message)
           ? message.map((p: any) => p?.text ?? "").join("\n")
           : "";
-    return { ok: true as const, text };
+    return { ok: true as const, text, rawUsage: data?.usage, model: data?.model || model };
   };
 
   let result = await attempt(Boolean(opts.json)).catch((err) => ({
@@ -97,7 +125,39 @@ export async function chat(
     throw new ApiError(502, `AI provider error (${result.status}): ${result.text || "no response"}`);
   }
   if (!result.text.trim()) throw new ApiError(502, "AI provider returned an empty answer");
-  return result.text;
+  return { text: result.text, usage: buildUsage(result.rawUsage, result.model, cfg) };
+}
+
+function roundCost(value: number): number {
+  return Math.round(value * 1e6) / 1e6;
+}
+
+/**
+ * Work out what a call cost. Providers such as OpenRouter return the exact
+ * charge on `usage.cost`; other OpenAI-compatible endpoints only report token
+ * counts, so fall back to the per-house prices when they are configured.
+ */
+function buildUsage(raw: any, model: string, cfg: AiConfig): AiUsage {
+  const promptTokens = Math.max(0, Math.round(Number(raw?.prompt_tokens ?? 0) || 0));
+  const completionTokens = Math.max(0, Math.round(Number(raw?.completion_tokens ?? 0) || 0));
+  const totalTokens = Math.max(
+    promptTokens + completionTokens,
+    Math.round(Number(raw?.total_tokens ?? 0) || 0),
+  );
+
+  let cost: number | null = null;
+  const reported = raw?.cost ?? raw?.total_cost;
+  if (reported != null) {
+    const parsed = Number(reported);
+    if (Number.isFinite(parsed) && parsed >= 0) cost = roundCost(parsed);
+  }
+  if (cost == null && (cfg.inputPrice != null || cfg.outputPrice != null)) {
+    cost = roundCost(
+      (promptTokens * (cfg.inputPrice ?? 0) + completionTokens * (cfg.outputPrice ?? 0)) / 1_000_000,
+    );
+  }
+
+  return { model, promptTokens, completionTokens, totalTokens, cost };
 }
 
 export function extractJson<T = any>(text: string): T {
@@ -140,8 +200,8 @@ export async function aiParseReceipt(
   cfg: AiConfig,
   rawText: string,
   images: string[] = [],
-): Promise<Record<string, unknown>> {
-  const text = await chat(cfg, {
+): Promise<AiResult<Record<string, unknown>>> {
+  const { text, usage } = await chat(cfg, {
     system:
       "You are a meticulous receipt archivist for a home inventory. Turn shopping-receipt scans or raw OCR text into clean JSON. " +
       "Read the shop name, purchase date, currency, total, net subtotal, VAT/tax and every purchased product line. " +
@@ -160,7 +220,7 @@ export async function aiParseReceipt(
     json: true,
     temperature: 0.1,
   });
-  return extractJson<Record<string, unknown>>(text);
+  return { data: extractJson<Record<string, unknown>>(text), usage };
 }
 
 export const RECIPE_SCHEMA = `{
@@ -179,8 +239,8 @@ export async function aiCleanRecipe(
   cfg: AiConfig,
   rawText: string,
   images: string[] = [],
-): Promise<Record<string, unknown>> {
-  const text = await chat(cfg, {
+): Promise<AiResult<Record<string, unknown>>> {
+  const { text, usage } = await chat(cfg, {
     system:
       "You are a meticulous family-recipe archivist. Turn handwritten recipe scans or raw OCR text into clean, structured JSON. " +
       "Fix OCR mistakes, expand abbreviations (tbsp, tsp, °C), normalise units and split ingredients from steps. " +
@@ -193,11 +253,11 @@ export async function aiCleanRecipe(
     json: true,
     temperature: 0.1,
   });
-  return extractJson<Record<string, unknown>>(text);
+  return { data: extractJson<Record<string, unknown>>(text), usage };
 }
 
-export async function aiCompleteRecipe(cfg: AiConfig, recipe: unknown): Promise<Record<string, unknown>> {
-  const text = await chat(cfg, {
+export async function aiCompleteRecipe(cfg: AiConfig, recipe: unknown): Promise<AiResult<Record<string, unknown>>> {
+  const { text, usage } = await chat(cfg, {
     system:
       "You are a recipe editor restoring an old family recipe. Improve the given JSON: fill missing quantities and units, " +
       "fix unclear or out-of-order steps, add missing temperatures and timings, and add short practical tips. " +
@@ -207,7 +267,7 @@ export async function aiCompleteRecipe(cfg: AiConfig, recipe: unknown): Promise<
     json: true,
     temperature: 0.2,
   });
-  return extractJson<Record<string, unknown>>(text);
+  return { data: extractJson<Record<string, unknown>>(text), usage };
 }
 
 export async function aiSuggestIdeas(
@@ -215,7 +275,7 @@ export async function aiSuggestIdeas(
   inventory: { name: string; quantity: number; unit: string; category?: string | null }[],
   recipes: { id: string; title: string; ingredients: string[] }[],
   prompt: string,
-): Promise<Record<string, unknown>> {
+): Promise<AiResult<Record<string, unknown>>> {
   const inventoryText = inventory
     .slice(0, 150)
     .map((i) => `- ${i.name} (${Math.round(i.quantity * 100) / 100} ${i.unit}${i.category ? `, ${i.category}` : ""})`)
@@ -225,7 +285,7 @@ export async function aiSuggestIdeas(
     .map((r) => `- ${r.title}: ${r.ingredients.join(", ")}`)
     .join("\n");
 
-  const text = await chat(cfg, {
+  const { text, usage } = await chat(cfg, {
     system:
       "You are a practical home cook helping someone cook from what they already own. Suggest 3-5 realistic meals. " +
       "Prefer the saved recipes when they fit. Be honest about missing ingredients and keep missing lists short (only essentials). " +
@@ -239,7 +299,7 @@ export async function aiSuggestIdeas(
     json: true,
     temperature: 0.7,
   });
-  return extractJson<Record<string, unknown>>(text);
+  return { data: extractJson<Record<string, unknown>>(text), usage };
 }
 
 /** Convert a local upload into a data URL for vision models. */

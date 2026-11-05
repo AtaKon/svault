@@ -291,6 +291,7 @@ CREATE TABLE IF NOT EXISTS receipts (
   template_id TEXT,
   template_confidence REAL,
   provider TEXT,
+  ai_cost REAL,
   savings REAL,
   image TEXT,
   ocr_text TEXT,
@@ -486,6 +487,7 @@ CREATE TABLE IF NOT EXISTS recipes (
   ocr_text TEXT,
   source TEXT NOT NULL DEFAULT 'manual',
   ai_notes TEXT,
+  ai_cost REAL,
   favorite INTEGER NOT NULL DEFAULT 0,
   created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL,
@@ -591,11 +593,13 @@ ensureColumn("receipts", "tax_breakdown", "TEXT NOT NULL DEFAULT '[]'");
 ensureColumn("receipts", "template_id", "TEXT");
 ensureColumn("receipts", "template_confidence", "REAL");
 ensureColumn("receipts", "provider", "TEXT");
+ensureColumn("receipts", "ai_cost", "REAL");
 ensureColumn("receipts", "savings", "REAL");
 ensureColumn("receipt_lines", "raw_description", "TEXT");
 ensureColumn("receipt_lines", "tax_rate", "REAL");
 ensureColumn("receipt_lines", "discount", "REAL");
 ensureColumn("receipt_lines", "off_code", "TEXT");
+ensureColumn("recipes", "ai_cost", "REAL");
 ensureColumn("items", "off_code", "TEXT");
 ensureColumn("items", "off_linked_at", "TEXT");
 ensureColumn("items", "off_source", "TEXT");

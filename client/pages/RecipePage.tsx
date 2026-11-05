@@ -17,7 +17,7 @@ import { Icon } from "@/components/icons";
 import { NutritionRows } from "@/components/Nutrition";
 import { ZoomableImage } from "@/components/ZoomableImage";
 import { useToast } from "@/components/toast";
-import { minutesLabel, plural, qty, relativeTime } from "@/format";
+import { aiCostLabel, minutesLabel, plural, qty, relativeTime } from "@/format";
 import type { Recipe } from "@shared/types";
 
 export function RecipePage() {
@@ -262,9 +262,12 @@ export function RecipePage() {
           <Card className="p-4">
             <div className="flex items-center justify-between gap-2">
               <h2 className="font-display text-lg">AI polish</h2>
-              <Button size="sm" variant="soft" icon="sparkles" loading={aiBusy} onClick={() => void improve()} disabled={!can("member")}>
-                Improve
-              </Button>
+              <div className="flex items-center gap-1.5">
+                {recipe.aiCost != null && <Badge tone="outline">{aiCostLabel(recipe.aiCost)}</Badge>}
+                <Button size="sm" variant="soft" icon="sparkles" loading={aiBusy} onClick={() => void improve()} disabled={!can("member")}>
+                  Improve
+                </Button>
+              </div>
             </div>
             {aiBusy ? (
               <div className="mt-3 flex items-center gap-2 rounded-xl bg-brand-soft px-3 py-2.5 text-xs text-brand">

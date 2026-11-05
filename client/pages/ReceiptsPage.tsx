@@ -22,7 +22,7 @@ import {
 import { Icon } from "@/components/icons";
 import { ZoomableImage } from "@/components/ZoomableImage";
 import { useToast } from "@/components/toast";
-import { money, qty, receiptProviderLabel, receiptTemplateLabel, shortDate } from "@/format";
+import { aiCostLabel, money, qty, receiptProviderLabel, receiptTemplateLabel, shortDate } from "@/format";
 import type {
   PurchaseAnalytics,
   Receipt,
@@ -438,6 +438,7 @@ export function ReceiptsPage() {
                 detail.purchasedAt ? shortDate(detail.purchasedAt) : null,
                 detail.lines?.length ? `${detail.lines.length} lines` : null,
                 receiptProviderLabel(detail.provider, detail.source),
+                detail.aiCost != null ? `AI ${aiCostLabel(detail.aiCost)}` : null,
                 receiptTemplateLabel(detail.templateId),
               ]
                 .filter(Boolean)

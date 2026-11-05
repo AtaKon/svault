@@ -166,7 +166,7 @@ intakeRoutes.post(
               ? [await localImageToDataUrl(body.image)].filter((value): value is string => !!value)
               : [];
           const aiDraft = await aiParseReceipt(cfg, rawText, images);
-          draft = normaliseReceiptDraft(aiDraft, house.currency ?? null);
+          draft = normaliseReceiptDraft(aiDraft.data, house.currency ?? null);
           provider = "ai";
         } catch (err) {
           warning = `AI cleanup failed, kept the locally parsed version. ${err instanceof Error ? err.message : ""}`.trim();

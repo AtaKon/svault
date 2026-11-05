@@ -356,7 +356,17 @@ before(async () => {
           };
         }
         res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(payload) } }] }));
+        res.end(
+          JSON.stringify({
+            choices: [{ message: { content: JSON.stringify(payload) } }],
+            usage: {
+              prompt_tokens: 1000,
+              completion_tokens: 500,
+              total_tokens: 1500,
+              ...(body?.model === "priced-model" ? {} : { cost: 0.00125 }),
+            },
+          }),
+        );
       });
     });
     aiServer.listen(0, "127.0.0.1", () => {
@@ -1433,6 +1443,8 @@ describe("receipts and shops", () => {
         currency: "EUR",
         total: 5.5,
         ocrText: "CORNER MARKET\nMilk 1.5 l 2.40\nSOURDOUGH BREAD 3.10",
+        provider: "ai",
+        aiCost: 0.0012,
         lines: [
           { description: "Milk", quantity: 2, unit: "l", unitPrice: 1.2, lineTotal: 2.4 },
           { description: "Sourdough bread", quantity: 1, unitPrice: 3.1, lineTotal: 3.1 },
@@ -1442,6 +1454,8 @@ describe("receipts and shops", () => {
     assert.equal(res.status, 201);
     assert.equal(res.data.vendorName, "Corner Market");
     assert.equal(res.data.lines.length, 2);
+    assert.equal(res.data.provider, "ai");
+    assert.equal(res.data.aiCost, 0.0012);
     assert.equal(res.data.lines[0].itemName, "Milk");
     assert.equal(res.data.lines[1].itemName, "Sourdough bread");
     receiptId = res.data.id;
@@ -1854,6 +1868,8 @@ describe("ai integration", () => {
     assert.equal(res.status, 200);
     assert.equal(res.data.provider, "ai");
     assert.equal(res.data.draft.title, "AI pancakes");
+    assert.equal(res.data.aiCost, 0.00125);
+    assert.equal(res.data.draft.aiCost, 0.00125);
     assert.equal(res.data.warning, null);
     assert.ok(aiRequests.some((entry) => entry.headers.authorization === "Bearer test-key"));
   });
@@ -1867,6 +1883,7 @@ describe("ai integration", () => {
     assert.equal(res.status, 200);
     assert.equal(res.data.provider, "ai");
     assert.equal(res.data.draft.vendorName, "Mock Mart");
+    assert.equal(res.data.aiCost, 0.00125);
     assert.equal(res.data.draft.lines.length, 2);
     assert.ok(aiRequests.some((entry) => entry.headers.authorization === "Bearer test-key"));
   });
@@ -1876,6 +1893,25 @@ describe("ai integration", () => {
     assert.equal(res.status, 200);
     assert.equal(res.data.ok, true);
     assert.equal(res.data.model, "mock-model");
+  });
+
+  it("estimates the price from configured token prices when the provider omits it", async () => {
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { model: "priced-model", inputPrice: 1, outputPrice: 2 } } },
+    });
+    const res = await request(`/api/houses/${houseId}/recipes/scan`, {
+      method: "POST",
+      body: { text: "flour eggs milk" },
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.data.provider, "ai");
+    assert.equal(res.data.aiCost, 0.002);
+
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { model: "mock-model", inputPrice: null, outputPrice: null } } },
+    });
   });
 
   it("only sends scan images when a vision model is configured", async () => {
@@ -1941,6 +1977,7 @@ describe("ai integration", () => {
     assert.equal(res.status, 200);
     assert.equal(res.data.title, "Pancakes improved");
     assert.equal(res.data.aiNotes, "completed by mock");
+    assert.equal(res.data.aiCost, 0.00125);
     assert.ok(res.data.steps.length >= 2);
   });
 
