@@ -18,6 +18,7 @@ const { parseLidlReceipt } = await import("../services/receipt-lidl.js");
 const { parseSklavenitisReceipt } = await import("../services/receipt-sklavenitis.js");
 const { selectReceiptTemplate } = await import("../services/receipt-templates.js");
 const { suggestProductMatches } = await import("../services/product-match.js");
+const { mergeOcrTexts } = await import("../../client/ocr-merge.js");
 const { parseWithTemplateRules } = await import("../services/receipt-template-engine.js");
 const { LIDL_TEMPLATE_RULES, SKLAVENITIS_TEMPLATE_RULES } = await import("../../shared/receipt-template-example.js");
 const { convert, pricePerUnit } = await import("../units.js");
@@ -2001,5 +2002,44 @@ describe("multi-user membership", () => {
     const owner = house.data.members.find((member: any) => member.role === "owner");
     const res = await request(`/api/houses/${houseId}/members/${owner.id}`, { method: "DELETE" });
     assert.equal(res.status, 400);
+  });
+});
+
+describe("multi-photo receipt OCR", () => {
+  it("drops the lines two overlapping pages share", () => {
+    const merged = mergeOcrTexts([
+      "MILK 1.50\nBREAD 2.00\nTOTAL 3.50",
+      "BREAD 2.00\nTOTAL 3.50\nCHEESE 4.20",
+    ]);
+    assert.equal(merged.text, "MILK 1.50\nBREAD 2.00\nTOTAL 3.50\nCHEESE 4.20");
+    assert.equal(merged.removedLines, 2);
+  });
+
+  it("drops a page that repeats the previous shot exactly", () => {
+    const merged = mergeOcrTexts(["MILK 1.50\nBREAD 2.00", "MILK 1.50\nBREAD 2.00"]);
+    assert.equal(merged.text, "MILK 1.50\nBREAD 2.00");
+    assert.equal(merged.removedLines, 2);
+  });
+
+  it("tolerates small OCR differences inside the overlap", () => {
+    const merged = mergeOcrTexts([
+      "MILK 1.50\nBREAD WHOLE 2.00\nTOTAL 3.50",
+      "BREAD WHOLE 2.05\nTOTAL 3.50\nCHEESE 4.20",
+    ]);
+    assert.equal(merged.text, "MILK 1.50\nBREAD WHOLE 2.00\nTOTAL 3.50\nCHEESE 4.20");
+  });
+
+  it("keeps pages with no overlap, including a repeated short total line", () => {
+    const merged = mergeOcrTexts(["MILK 1.50\nTOTAL 1.50", "TOTAL 1.50\nCHEESE 4.20"]);
+    assert.equal(merged.text, "MILK 1.50\nTOTAL 1.50\nTOTAL 1.50\nCHEESE 4.20");
+    assert.equal(merged.removedLines, 0);
+  });
+
+  it("does not mistake two structured but different pages for an overlap", () => {
+    const first = Array.from({ length: 30 }, (_, index) => `PRODUCT A-${index} ${(index + 1).toFixed(2)}`).join("\n");
+    const second = Array.from({ length: 30 }, (_, index) => `PRODUCT B-${index} ${(index + 1).toFixed(2)}`).join("\n");
+    const merged = mergeOcrTexts([first, second]);
+    assert.equal(merged.text, `${first}\n${second}`);
+    assert.equal(merged.removedLines, 0);
   });
 });

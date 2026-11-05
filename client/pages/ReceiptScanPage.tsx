@@ -6,7 +6,9 @@ import { Badge, Button, Card, Field, Input, PageHeader, Select, Spinner, Textare
 import { Icon } from "@/components/icons";
 import { useToast } from "@/components/toast";
 import { ocrImage } from "@/ocr";
+import { mergeOcrTexts } from "@/ocr-merge";
 import { scanDocument } from "@/document-scan";
+import { stitchImages } from "@/image-stitch";
 import { money, receiptTemplateLabel, todayInput } from "@/format";
 import { OffProductPicker } from "@/components/OffProductPicker";
 import { ZoomableImage } from "@/components/ZoomableImage";
@@ -42,6 +44,16 @@ interface ScanResponse {
   provider: "ai" | "local" | "template";
   warning: string | null;
   draft: ReceiptDraft;
+}
+
+/** One photographed page: straightened, OCR'd on its own, then stitched for display. */
+interface ReceiptPage {
+  key: string;
+  file: File;
+  url: string;
+  trimmed: boolean;
+  text: string;
+  status: "queued" | "reading" | "done" | "error";
 }
 
 function looseName(value: string): string {
@@ -144,15 +156,19 @@ export function ReceiptScanPage() {
   const toast = useToast();
   const cameraRef = useRef<HTMLInputElement>(null);
   const libraryRef = useRef<HTMLInputElement>(null);
-  const scanFileRef = useRef<File | null>(null);
-  const previewUrlRef = useRef<string | null>(null);
+  const pagesRef = useRef<ReceiptPage[]>([]);
+  const stitchedUrlRef = useRef<string | null>(null);
+  const stitchSeqRef = useRef(0);
+  const readingRef = useRef(false);
 
-  const [preview, setPreview] = useState<string | null>(null);
-  const [trimmed, setTrimmed] = useState(false);
+  const [pages, setPages] = useState<ReceiptPage[]>([]);
+  const [stitchedUrl, setStitchedUrl] = useState<string | null>(null);
+  const [viewKey, setViewKey] = useState<string>("combined");
   const [uploadedPath, setUploadedPath] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [manualMode, setManualMode] = useState(false);
   const [text, setText] = useState("");
+  const [mergeRemoved, setMergeRemoved] = useState(0);
   const [ocrRunning, setOcrRunning] = useState(false);
   const [ocrProgress, setOcrProgress] = useState(0);
   const [ocrStatus, setOcrStatus] = useState("");
@@ -210,68 +226,179 @@ export function ReceiptScanPage() {
     [included, items],
   );
 
-  const showPreview = (file: File) => {
-    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
-    const url = URL.createObjectURL(file);
-    previewUrlRef.current = url;
-    setPreview(url);
+  /** Keep the rendered list and the async OCR/stitch flows on the same pages. */
+  const commitPages = (next: ReceiptPage[]) => {
+    pagesRef.current = next;
+    setPages(next);
+    // Each page was OCR'd on its own; merging here removes the lines that two
+    // overlapping photos have in common before the parser ever sees them.
+    const merged = mergeOcrTexts(next.map((page) => page.text));
+    setText(merged.text);
+    setMergeRemoved(merged.removedLines);
+    setViewKey((current) => {
+      if (current === "combined") return current;
+      return next.some((page) => page.key === current) ? current : next[0]?.key ?? "combined";
+    });
   };
 
-  const handleFile = async (file: File | null) => {
-    if (!file) return;
-    setOcrError(null);
-    setWarning(null);
-    const prepared = await prepareImage(file, { maxSize: 2800, quality: 0.92 });
-    // Straighten the paper and drop the table before both OCR and upload, so the
-    // stored scan and the recognised text come from the same cropped image.
-    const scan = await scanDocument(prepared);
-    const scanned = scan.file;
-    scanFileRef.current = scanned;
-    setTrimmed(Boolean(scan.corners));
-    showPreview(scanned);
-    setText("");
-    setUploading(true);
-    try {
-      const form = new FormData();
-      form.append("image", scanned);
-      const data = await api<{ path: string }>(`/api/houses/${house.id}/receipts/upload`, { method: "POST", body: form });
-      setUploadedPath(data.path);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not upload the photo");
-    } finally {
-      setUploading(false);
-    }
-    void runOcr(scanned);
+  const patchPage = (key: string, patch: Partial<ReceiptPage>) => {
+    commitPages(pagesRef.current.map((page) => (page.key === key ? { ...page, ...patch } : page)));
   };
 
-  const runOcr = async (file?: File) => {
-    const target = file ?? scanFileRef.current ?? cameraRef.current?.files?.[0] ?? libraryRef.current?.files?.[0];
-    if (!target) return;
+  const runPageOcr = async (key: string, index: number, total: number) => {
+    const page = pagesRef.current.find((entry) => entry.key === key);
+    if (!page) return;
     setOcrRunning(true);
     setOcrProgress(0);
-    setOcrStatus("Starting OCR");
+    setOcrStatus(total > 1 ? `Reading page ${index + 1} of ${total}` : "Starting OCR");
     setOcrError(null);
+    patchPage(key, { status: "reading" });
     try {
       const result = await ocrImage(
-        target,
+        page.file,
         (progress, status) => {
           setOcrProgress(progress);
-          setOcrStatus(status);
+          setOcrStatus(total > 1 ? `Page ${index + 1} of ${total} · ${status}` : status);
         },
         { mode: "receipt" },
       );
-      setText(result.trim());
-      if (!result.trim()) setOcrError("No text was detected. Try a sharper, flatter photo or type the lines manually.");
+      const recognised = result.trim();
+      patchPage(key, { text: recognised, status: "done" });
+      if (!recognised) {
+        setOcrError(
+          `Page ${index + 1} had no detectable text. Try a sharper, flatter photo or type the lines manually.`,
+        );
+      }
     } catch (err) {
-      setOcrError(err instanceof Error ? err.message : "OCR failed");
+      patchPage(key, { status: "error" });
+      setOcrError(err instanceof Error ? err.message : `Page ${index + 1}: OCR failed`);
     } finally {
       setOcrRunning(false);
     }
   };
 
+  const rerunAllOcr = async () => {
+    const current = [...pagesRef.current];
+    for (let index = 0; index < current.length; index++) {
+      await runPageOcr(current[index].key, index, current.length);
+    }
+  };
+
+  /**
+   * Stitches the pages for the stored scan and uploads that one image. OCR
+   * already ran per page, so a seam never affects the recognised text.
+   */
+  const rebuildStitch = async () => {
+    const sequence = ++stitchSeqRef.current;
+    const current = [...pagesRef.current];
+    if (!current.length) {
+      if (stitchedUrlRef.current) URL.revokeObjectURL(stitchedUrlRef.current);
+      stitchedUrlRef.current = null;
+      setStitchedUrl(null);
+      setUploadedPath(null);
+      setUploading(false);
+      return;
+    }
+
+    // The previous stitched path no longer describes these pages.
+    setUploadedPath(null);
+    setUploading(true);
+    try {
+      const combined = current.length === 1 ? current[0].file : await stitchImages(current.map((page) => page.file));
+      if (sequence !== stitchSeqRef.current) return;
+      if (!combined) throw new Error("Could not combine the photos");
+
+      if (current.length > 1) {
+        if (stitchedUrlRef.current) URL.revokeObjectURL(stitchedUrlRef.current);
+        const url = URL.createObjectURL(combined);
+        stitchedUrlRef.current = url;
+        setStitchedUrl(url);
+        setViewKey("combined");
+      } else {
+        if (stitchedUrlRef.current) URL.revokeObjectURL(stitchedUrlRef.current);
+        stitchedUrlRef.current = null;
+        setStitchedUrl(null);
+        setViewKey(current[0].key);
+      }
+
+      const form = new FormData();
+      form.append("image", combined);
+      const data = await api<{ path: string }>(`/api/houses/${house.id}/receipts/upload`, { method: "POST", body: form });
+      if (sequence !== stitchSeqRef.current) return;
+      setUploadedPath(data.path);
+    } catch (err) {
+      if (sequence === stitchSeqRef.current) {
+        setUploadedPath(null);
+        toast.error(err instanceof Error ? err.message : "Could not combine the photos");
+      }
+    } finally {
+      if (sequence === stitchSeqRef.current) setUploading(false);
+    }
+  };
+
+  const handleFiles = async (files: File[]) => {
+    if (!files.length || readingRef.current) return;
+    readingRef.current = true;
+    setOcrError(null);
+    setWarning(null);
+    const start = pagesRef.current.length;
+    try {
+      for (let offset = 0; offset < files.length; offset++) {
+        const file = files[offset];
+        try {
+          const prepared = await prepareImage(file, { maxSize: 2800, quality: 0.92 });
+          // Straighten each shot on its own before OCR: a combined photo would
+          // confuse the corner finder and blur the seam.
+          const scan = await scanDocument(prepared);
+          const page: ReceiptPage = {
+            key: `page-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            file: scan.file,
+            url: URL.createObjectURL(scan.file),
+            trimmed: Boolean(scan.corners),
+            text: "",
+            status: "queued",
+          };
+          commitPages([...pagesRef.current, page]);
+          setViewKey(page.key);
+          await runPageOcr(page.key, start + offset, start + files.length);
+        } catch (err) {
+          toast.error(err instanceof Error ? err.message : "Could not read that photo");
+        }
+      }
+    } finally {
+      readingRef.current = false;
+    }
+    await rebuildStitch();
+  };
+
+  const removePage = async (key: string) => {
+    const page = pagesRef.current.find((entry) => entry.key === key);
+    if (page) URL.revokeObjectURL(page.url);
+    commitPages(pagesRef.current.filter((entry) => entry.key !== key));
+    await rebuildStitch();
+  };
+
+  const movePage = async (key: string, direction: -1 | 1) => {
+    const next = [...pagesRef.current];
+    const index = next.findIndex((entry) => entry.key === key);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= next.length) return;
+    [next[index], next[target]] = [next[target], next[index]];
+    commitPages(next);
+    await rebuildStitch();
+  };
+
   const readReceipt = async () => {
     if (!text.trim() && !uploadedPath) {
       toast.error("Add a photo or paste the receipt text first");
+      return;
+    }
+    if (uploading) {
+      toast.error("The combined scan is still being prepared");
+      return;
+    }
+    if (ocrRunning) {
+      toast.error("OCR is still running");
       return;
     }
     setBusy(true);
@@ -357,6 +484,10 @@ export function ReceiptScanPage() {
   };
 
   const save = async () => {
+    if (uploading) {
+      toast.error("The combined scan is still being stored");
+      return;
+    }
     if (!included.length) {
       toast.error("Include at least one line");
       return;
@@ -419,15 +550,17 @@ export function ReceiptScanPage() {
   };
 
   const reset = () => {
-    if (previewUrlRef.current) {
-      URL.revokeObjectURL(previewUrlRef.current);
-      previewUrlRef.current = null;
-    }
-    scanFileRef.current = null;
-    setPreview(null);
-    setTrimmed(false);
+    stitchSeqRef.current++;
+    for (const page of pagesRef.current) URL.revokeObjectURL(page.url);
+    pagesRef.current = [];
+    if (stitchedUrlRef.current) URL.revokeObjectURL(stitchedUrlRef.current);
+    stitchedUrlRef.current = null;
+    setPages([]);
+    setStitchedUrl(null);
+    setViewKey("combined");
     setUploadedPath(null);
     setText("");
+    setMergeRemoved(0);
     setLines([]);
     setVendorName("");
     setTotal("");
@@ -441,13 +574,25 @@ export function ReceiptScanPage() {
     setWarning(null);
     setOffLineKey(null);
     setOcrError(null);
+    setOcrStatus("");
     setOcrProgress(0);
     setManualMode(false);
     if (cameraRef.current) cameraRef.current.value = "";
     if (libraryRef.current) libraryRef.current.value = "";
   };
 
-  const showWorkspace = Boolean(preview) || manualMode;
+  useEffect(() => {
+    return () => {
+      for (const page of pagesRef.current) URL.revokeObjectURL(page.url);
+      if (stitchedUrlRef.current) URL.revokeObjectURL(stitchedUrlRef.current);
+    };
+  }, []);
+
+  const showWorkspace = pages.length > 0 || manualMode;
+  const activeIndex = pages.findIndex((page) => page.key === viewKey);
+  const activePage = activeIndex >= 0 ? pages[activeIndex] : null;
+  const displayPreview =
+    viewKey === "combined" || !activePage ? stitchedUrl ?? pages[0]?.url ?? null : activePage.url;
   const offLine = lines.find((line) => line.key === offLineKey) ?? null;
 
   return (
@@ -456,7 +601,7 @@ export function ReceiptScanPage() {
         back={() => navigate("/receipts")}
         eyebrow="Receipt intake"
         title="Scan a shopping receipt"
-        subtitle="Photograph the receipt, check the lines, and the whole shop lands in inventory with the shop recorded."
+        subtitle="Photograph the receipt — one shot or several for a long one — check the lines, and the whole shop lands in inventory with the shop recorded."
         actions={
           showWorkspace ? (
             <Button variant="ghost" size="sm" icon="refresh" onClick={reset}>
@@ -473,32 +618,43 @@ export function ReceiptScanPage() {
               <Icon name="receipt" size={28} />
             </span>
             <div>
-              <div className="font-display text-xl">Add the receipt photo</div>
-              <div className="mt-1 text-xs text-muted">Any angle · the paper is straightened on this device</div>
+              <div className="font-display text-xl">Add the receipt photos</div>
+              <div className="mt-1 text-xs text-muted">Any angle · each paper is straightened on this device</div>
             </div>
             <div className="flex flex-wrap justify-center gap-2">
               <Button type="button" icon="camera" onClick={() => cameraRef.current?.click()}>
                 Take photo
               </Button>
               <Button type="button" variant="secondary" icon="upload" onClick={() => libraryRef.current?.click()}>
-                Upload photo
+                Upload photos
               </Button>
             </div>
-            <p className="text-[11px] text-muted">JPG, PNG or HEIC from your camera roll.</p>
+            <p className="text-[11px] text-muted">
+              JPG, PNG or HEIC from your camera roll. A long receipt can be photographed in several overlapping shots.
+            </p>
             <input
               ref={cameraRef}
               type="file"
               accept="image/*"
               capture="environment"
               className="hidden"
-              onChange={(event) => void handleFile(event.target.files?.[0] ?? null)}
+              onChange={(event) => {
+                const files = Array.from(event.target.files ?? []);
+                event.target.value = "";
+                void handleFiles(files);
+              }}
             />
             <input
               ref={libraryRef}
               type="file"
               accept="image/*"
+              multiple
               className="hidden"
-              onChange={(event) => void handleFile(event.target.files?.[0] ?? null)}
+              onChange={(event) => {
+                const files = Array.from(event.target.files ?? []);
+                event.target.value = "";
+                void handleFiles(files);
+              }}
             />
           </Card>
           <Card className="flex flex-col justify-center gap-3 p-5">
@@ -521,8 +677,12 @@ export function ReceiptScanPage() {
         <div className="grid gap-4 lg:grid-cols-[1fr_1.15fr]">
           <div className="space-y-3">
             <Card className="overflow-hidden">
-              {preview ? (
-                <ZoomableImage src={preview} alt="Receipt scan" className="max-h-[380px] w-full bg-raised object-contain" />
+              {displayPreview ? (
+                <ZoomableImage
+                  src={displayPreview}
+                  alt={pages.length > 1 ? "Combined receipt scan" : "Receipt scan"}
+                  className="max-h-[380px] w-full bg-raised object-contain"
+                />
               ) : (
                 <div className="flex flex-col items-center justify-center gap-2 py-10 text-center">
                   <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-soft text-brand">
@@ -532,8 +692,131 @@ export function ReceiptScanPage() {
                   <div className="max-w-xs text-[11px] text-muted">One product per line, price at the end.</div>
                 </div>
               )}
+
+              {pages.length > 0 && (
+                <div className="border-t border-line px-2 pb-1 pt-2">
+                  <div className="flex gap-2 overflow-x-auto pb-1">
+                    {pages.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => setViewKey("combined")}
+                        aria-label="View the combined scan"
+                        className={cn(
+                          "relative h-16 w-14 shrink-0 overflow-hidden rounded-lg border bg-raised",
+                          viewKey === "combined" ? "border-brand ring-2 ring-brand/30" : "border-line",
+                        )}
+                      >
+                        {stitchedUrl ? (
+                          <img src={stitchedUrl} alt="" className="h-full w-full object-cover" />
+                        ) : (
+                          <span className="flex h-full w-full items-center justify-center text-muted">
+                            <Spinner size={13} />
+                          </span>
+                        )}
+                        <span className="absolute inset-x-0 bottom-0 bg-black/55 py-0.5 text-center text-[9px] font-medium text-white">
+                          All
+                        </span>
+                      </button>
+                    )}
+                    {pages.map((page, index) => (
+                      <button
+                        key={page.key}
+                        type="button"
+                        onClick={() => setViewKey(page.key)}
+                        aria-label={`View receipt page ${index + 1}`}
+                        className={cn(
+                          "relative h-16 w-14 shrink-0 overflow-hidden rounded-lg border bg-raised",
+                          viewKey === page.key ? "border-brand ring-2 ring-brand/30" : "border-line",
+                        )}
+                      >
+                        <img src={page.url} alt="" className="h-full w-full object-cover" />
+                        <span className="absolute inset-x-0 bottom-0 bg-black/55 py-0.5 text-center text-[9px] font-medium text-white">
+                          {index + 1}
+                        </span>
+                        <span
+                          className={cn(
+                            "absolute right-1 top-1 h-1.5 w-1.5 rounded-full",
+                            page.status === "done" ? "bg-brand" : page.status === "error" ? "bg-danger" : "bg-warn",
+                          )}
+                        />
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => libraryRef.current?.click()}
+                      aria-label="Add another receipt photo"
+                      className="flex h-16 w-14 shrink-0 flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-line text-muted transition-colors hover:border-brand hover:text-brand"
+                    >
+                      <Icon name="plus" size={15} />
+                      <span className="text-[9px]">Add</span>
+                    </button>
+                  </div>
+
+                  {activePage ? (
+                    <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-muted">
+                      <span>
+                        Page {activeIndex + 1} of {pages.length}
+                        {activePage.trimmed ? " · straightened" : ""}
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => void runPageOcr(activePage.key, activeIndex, pages.length)}
+                          disabled={ocrRunning || uploading || activePage.status === "reading"}
+                          aria-label="Re-run OCR for this page"
+                          className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-raised disabled:opacity-30"
+                        >
+                          <Icon name="refresh" size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void movePage(activePage.key, -1)}
+                          disabled={activeIndex <= 0}
+                          aria-label="Move this page earlier"
+                          className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-raised disabled:opacity-30"
+                        >
+                          <Icon name="arrowLeft" size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void movePage(activePage.key, 1)}
+                          disabled={activeIndex >= pages.length - 1}
+                          aria-label="Move this page later"
+                          className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-raised disabled:opacity-30"
+                        >
+                          <Icon name="chevronRight" size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void removePage(activePage.key)}
+                          aria-label="Remove this page"
+                          className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-raised hover:text-danger"
+                        >
+                          <Icon name="trash" size={13} />
+                        </button>
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="mt-1 text-[11px] text-muted">
+                      {pages.length} photo{pages.length === 1 ? "" : "s"} stitched into one scan
+                      {mergeRemoved > 0 ? ` · ${mergeRemoved} duplicate line${mergeRemoved === 1 ? "" : "s"} skipped` : ""}
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div className="flex items-center justify-between px-3 py-2 text-[11px] text-muted">
-                <span>{uploading ? "Uploading scan…" : uploadedPath ? (trimmed ? "Background trimmed · scan stored" : "Scan stored with the receipt") : "No photo"}</span>
+                <span>
+                  {uploading
+                    ? "Combining and storing the scan…"
+                    : uploadedPath
+                      ? pages.length > 1
+                        ? `${pages.length} photos stitched · scan stored`
+                        : "Scan stored with the receipt"
+                      : pages.length
+                        ? "Scan not stored yet"
+                        : "No photo"}
+                </span>
                 <span className="flex items-center gap-2">
                   <button type="button" onClick={() => cameraRef.current?.click()} className="font-medium text-brand hover:underline">
                     Camera
@@ -550,25 +833,42 @@ export function ReceiptScanPage() {
                 accept="image/*"
                 capture="environment"
                 className="hidden"
-                onChange={(event) => void handleFile(event.target.files?.[0] ?? null)}
+                onChange={(event) => {
+                  const files = Array.from(event.target.files ?? []);
+                  event.target.value = "";
+                  void handleFiles(files);
+                }}
               />
               <input
                 ref={libraryRef}
                 type="file"
                 accept="image/*"
+                multiple
                 className="hidden"
-                onChange={(event) => void handleFile(event.target.files?.[0] ?? null)}
+                onChange={(event) => {
+                  const files = Array.from(event.target.files ?? []);
+                  event.target.value = "";
+                  void handleFiles(files);
+                }}
               />
             </Card>
 
             <Card className="p-4">
               <div className="flex items-center justify-between gap-2">
                 <h2 className="font-display text-lg">Recognised text</h2>
-                {ocrRunning && (
-                  <span className="flex items-center gap-1.5 text-[11px] text-muted">
-                    <Spinner size={12} /> {Math.round(ocrProgress * 100)}%
-                  </span>
-                )}
+                <div className="flex flex-wrap items-center justify-end gap-1.5 text-[11px] text-muted">
+                  {pages.length > 1 && <Badge tone="outline">{pages.length} pages</Badge>}
+                  {mergeRemoved > 0 && (
+                    <Badge tone="brand">
+                      {mergeRemoved} duplicate line{mergeRemoved === 1 ? "" : "s"} skipped
+                    </Badge>
+                  )}
+                  {ocrRunning && (
+                    <span className="flex items-center gap-1.5">
+                      <Spinner size={12} /> {Math.round(ocrProgress * 100)}%
+                    </span>
+                  )}
+                </div>
               </div>
               {ocrRunning && (
                 <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-raised">
@@ -589,8 +889,15 @@ export function ReceiptScanPage() {
                 className="mt-2 text-[13px]"
               />
               <div className="mt-2 flex flex-wrap gap-2">
-                {preview && (
-                  <Button type="button" size="sm" variant="secondary" icon="refresh" onClick={() => void runOcr()} disabled={ocrRunning}>
+                {pages.length > 0 && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    icon="refresh"
+                    onClick={() => void rerunAllOcr()}
+                    disabled={ocrRunning || uploading}
+                  >
                     Re-run OCR
                   </Button>
                 )}
