@@ -3046,3 +3046,514 @@ describe("dataset import", () => {
     assert.equal(inspection.images[0].labels[0].w, 0.5);
   });
 });
+
+describe("receipt scan fixes", () => {
+  let plainHouse = "";
+  let aiHouse = "";
+  let fixAiServer: import("node:http").Server;
+  let fixAiBase = "";
+  const fixAiRequests: any[] = [];
+  let fixReceiptPayload: any = null;
+  let fridgeId = "";
+
+  async function uploadReceiptPng(targetHouse: string, size = 16) {
+    const png = encodePng(size, size, Buffer.alloc(size * size * 4, 180));
+    const bytes = new ArrayBuffer(png.length);
+    new Uint8Array(bytes).set(png);
+    const form = new FormData();
+    form.append("image", new Blob([bytes], { type: "image/png" }), "receipt.png");
+    const res = await fetch(`${base}/api/houses/${targetHouse}/receipts/upload`, {
+      method: "POST",
+      body: form,
+      headers: { cookie },
+    });
+    assert.equal(res.status, 201);
+    return (await res.json()).path as string;
+  }
+
+  function uploadFile(imagePath: string) {
+    return path.join(dataDir, "uploads", "receipts", imagePath.split("/").pop()!);
+  }
+
+  before(async () => {
+    await new Promise<void>((resolve) => {
+      fixAiServer = http.createServer((req, res) => {
+        const chunks: Buffer[] = [];
+        req.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+        req.on("end", () => {
+          const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+          fixAiRequests.push(body);
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(
+            JSON.stringify({
+              choices: [{ message: { content: JSON.stringify(fixReceiptPayload ?? { lines: [] }) } }],
+              usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150, cost: 0.004 },
+            }),
+          );
+        });
+      });
+      fixAiServer.listen(0, "127.0.0.1", () => {
+        const address = fixAiServer.address();
+        if (!address || typeof address === "string") throw new Error("no address");
+        fixAiBase = `http://127.0.0.1:${address.port}/v1`;
+        resolve();
+      });
+    });
+
+    const plain = await request("/api/houses", { method: "POST", body: { name: "Receipt fixes", currency: "EUR" } });
+    assert.equal(plain.status, 201);
+    plainHouse = plain.data.id;
+    const withAi = await request("/api/houses", { method: "POST", body: { name: "Receipt fixes AI", currency: "EUR" } });
+    assert.equal(withAi.status, 201);
+    aiHouse = withAi.data.id;
+    const configured = await request(`/api/houses/${aiHouse}`, {
+      method: "PATCH",
+      body: { settings: { ai: { enabled: true, baseUrl: fixAiBase, apiKey: "fix-key", model: "fix-model" } } },
+    });
+    assert.equal(configured.status, 200);
+
+    const locations = await request(`/api/houses/${plainHouse}/locations`);
+    fridgeId = locations.data.find((entry: any) => entry.name === "Fridge").id;
+  });
+
+  after(() => {
+    fixAiServer?.close();
+  });
+
+  it("reports whether the lines add up to the printed total", async () => {
+    const matching = await request(`/api/houses/${plainHouse}/receipts/scan`, {
+      method: "POST",
+      body: { text: "CORNER SHOP\nMilk 2.40\nBread 3.10\nDiscount -0.50\nTOTAL 5.00" },
+    });
+    assert.equal(matching.status, 200);
+    assert.deepEqual(matching.data.reconciliation, {
+      linesTotal: 5.5,
+      savings: 0.5,
+      printedTotal: 5,
+      difference: 0,
+      ok: true,
+    });
+    assert.equal(matching.data.aiAvailable, false);
+    assert.match(matching.data.scanId, /^scn_/);
+
+    const short = await request(`/api/houses/${plainHouse}/receipts/scan`, {
+      method: "POST",
+      body: { text: "CORNER SHOP\nMilk 2.40\nBread 3.10\nTOTAL 9.99" },
+    });
+    assert.equal(short.data.reconciliation.ok, false);
+    assert.equal(short.data.reconciliation.difference, 4.49);
+
+    // Lidl folds discounts into the line totals; the tolerance absorbs the 0.10 bag fee.
+    const lidl = await request(`/api/houses/${plainHouse}/receipts/scan`, { method: "POST", body: { text: LIDL_SAMPLE } });
+    assert.equal(lidl.data.provider, "template");
+    assert.equal(lidl.data.reconciliation.ok, true);
+    assert.equal(lidl.data.reconciliation.savings, 1.04);
+  });
+
+  it("double-checks a low-confidence template with AI but keeps it when it already adds up", async () => {
+    fixAiRequests.length = 0;
+    fixReceiptPayload = {
+      vendorName: "Lidl",
+      total: 3.5,
+      lines: [{ description: "Γάλα", quantity: 1, lineTotal: 3.5 }],
+    };
+    // Only the logo and the fiscal header match: 0.7 confidence, below the 0.75 bar.
+    const text = ["LIDL", "ΦΟΡΟΛΟΓΙΚΗ ΑΠΟΔΕΙΞΗ", "ΓΑΛΑ 1,50 13,00%", "ΨΩΜΙ 2,00 13,00%", "ΣΥΝΟΛΟ 3,50"].join("\n");
+    const res = await request(`/api/houses/${aiHouse}/receipts/scan`, { method: "POST", body: { text } });
+    assert.equal(res.status, 200);
+    assert.equal(fixAiRequests.length, 1);
+    assert.equal(res.data.provider, "template");
+    assert.equal(res.data.draft.templateId, "lidl-gr");
+    assert.equal(res.data.draft.lines.length, 2);
+    assert.equal(res.data.aiCost, 0.004);
+    assert.match(res.data.warning, /confidence/);
+    assert.match(res.data.warning, /kept the template result/);
+  });
+
+  it("falls back to the AI draft when the template lines do not add up", async () => {
+    fixAiRequests.length = 0;
+    fixReceiptPayload = {
+      vendorName: "Lidl",
+      purchasedAt: "2026-10-08",
+      currency: "EUR",
+      total: 15.73,
+      lines: [
+        { description: "Apples", quantity: 1, lineTotal: 10.63 },
+        { description: "Olive oil", quantity: 1, lineTotal: 5.1 },
+      ],
+    };
+    const text = LIDL_SAMPLE.replaceAll("10,73", "15,73");
+    const res = await request(`/api/houses/${aiHouse}/receipts/scan`, { method: "POST", body: { text } });
+    assert.equal(res.status, 200);
+    assert.equal(fixAiRequests.length, 1);
+    assert.equal(res.data.provider, "ai");
+    assert.equal(res.data.draft.templateId, null);
+    assert.equal(res.data.draft.lines.length, 2);
+    assert.equal(res.data.reconciliation.ok, true);
+    assert.match(res.data.warning, /match the total better/);
+
+    // When the AI draft is no closer, the template stays.
+    fixReceiptPayload = { total: 15.73, lines: [{ description: "Apples", quantity: 1, lineTotal: 1 }] };
+    const kept = await request(`/api/houses/${aiHouse}/receipts/scan`, { method: "POST", body: { text } });
+    assert.equal(kept.data.provider, "template");
+    assert.equal(kept.data.reconciliation.ok, false);
+
+    // "Re-read with AI" bypasses a confident template on request.
+    fixReceiptPayload = { total: 10.73, lines: [{ description: "Everything", quantity: 1, lineTotal: 10.73 }] };
+    const forced = await request(`/api/houses/${aiHouse}/receipts/scan`, {
+      method: "POST",
+      body: { text: LIDL_SAMPLE, preferAi: true },
+    });
+    assert.equal(forced.data.provider, "ai");
+    assert.equal(forced.data.draft.lines[0].description, "Everything");
+  });
+
+  it("sends every page photo to the vision model with its real mime type", async () => {
+    await request(`/api/houses/${aiHouse}`, { method: "PATCH", body: { settings: { ai: { visionModel: "fix-vision" } } } });
+    const first = await uploadReceiptPng(aiHouse);
+    const second = await uploadReceiptPng(aiHouse);
+    fixReceiptPayload = { total: 2, lines: [{ description: "Tea", quantity: 1, lineTotal: 2 }] };
+    fixAiRequests.length = 0;
+    const res = await request(`/api/houses/${aiHouse}/receipts/scan`, {
+      method: "POST",
+      body: { text: "", images: [first, second, "/uploads/receipts/missing-page.jpg"] },
+    });
+    assert.equal(res.status, 200, JSON.stringify(res.data));
+    assert.equal(res.data.provider, "ai");
+    const parts = fixAiRequests[0].messages[1].content;
+    const images = parts.filter((part: any) => part.type === "image_url");
+    assert.equal(images.length, 2);
+    assert.ok(images.every((part: any) => part.image_url.url.startsWith("data:image/png;base64,")));
+    assert.match(res.data.warning, /1 of 3 photos could not be sent/);
+
+    const invalid = await request(`/api/houses/${aiHouse}/receipts/scan`, {
+      method: "POST",
+      body: { images: ["https://tracker.example/pixel.gif"] },
+    });
+    assert.equal(invalid.status, 400);
+    await request(`/api/houses/${aiHouse}`, { method: "PATCH", body: { settings: { ai: { visionModel: null } } } });
+  });
+
+  it("copies provenance from the scan record instead of trusting the client", async () => {
+    fixReceiptPayload = {
+      vendorName: "Provenance Mart",
+      purchasedAt: "2026-09-01",
+      total: 4,
+      lines: [{ description: "Provenance tea", quantity: 1, lineTotal: 4 }],
+    };
+    const scan = await request(`/api/houses/${aiHouse}/receipts/scan`, {
+      method: "POST",
+      body: { text: "PROVENANCE MART\nTea 4.00\nTOTAL 4.00" },
+    });
+    assert.equal(scan.data.provider, "ai");
+    const body = {
+      vendorName: "Provenance Mart",
+      purchasedAt: "2026-09-01",
+      total: 4,
+      provider: "template",
+      aiCost: 99,
+      templateId: "lidl-gr",
+      templateConfidence: 1,
+      lines: [{ description: "Provenance tea", quantity: 1, lineTotal: 4 }],
+    };
+    const saved = await request(`/api/houses/${aiHouse}/receipts`, { method: "POST", body: { ...body, scanId: scan.data.scanId } });
+    assert.equal(saved.status, 201, JSON.stringify(saved.data));
+    assert.equal(saved.data.provider, "ai");
+    assert.equal(saved.data.aiCost, 0.004);
+    assert.equal(saved.data.templateId, null);
+    assert.equal(saved.data.source, "scan");
+
+    const unknown = await request(`/api/houses/${aiHouse}/receipts`, {
+      method: "POST",
+      body: { ...body, purchasedAt: "2026-09-02", scanId: "scn_doesnotexist" },
+    });
+    assert.equal(unknown.status, 201);
+    assert.equal(unknown.data.provider, null);
+    assert.equal(unknown.data.aiCost, null);
+    assert.equal(unknown.data.templateId, null);
+    assert.equal(unknown.data.source, "manual");
+
+    // A scan from one house cannot lend its provenance to another.
+    const foreign = await request(`/api/houses/${plainHouse}/receipts`, {
+      method: "POST",
+      body: { ...body, scanId: scan.data.scanId },
+    });
+    assert.equal(foreign.status, 201);
+    assert.equal(foreign.data.provider, null);
+  });
+
+  it("only stores receipt images that were uploaded as receipt scans", async () => {
+    const body = {
+      vendorName: "Image Mart",
+      purchasedAt: "2026-09-03",
+      lines: [{ description: "Image soap", quantity: 1, lineTotal: 1 }],
+    };
+    const external = await request(`/api/houses/${plainHouse}/receipts`, {
+      method: "POST",
+      body: { ...body, image: "https://tracker.example/pixel.gif" },
+    });
+    assert.equal(external.status, 400);
+    const traversal = await request(`/api/houses/${plainHouse}/receipts`, {
+      method: "POST",
+      body: { ...body, image: "/uploads/receipts/../photos/x.jpg" },
+    });
+    assert.equal(traversal.status, 400);
+    const missing = await request(`/api/houses/${plainHouse}/receipts`, {
+      method: "POST",
+      body: { ...body, image: "/uploads/receipts/not-there.jpg" },
+    });
+    assert.equal(missing.status, 400);
+
+    const image = await uploadReceiptPng(plainHouse);
+    const saved = await request(`/api/houses/${plainHouse}/receipts`, { method: "POST", body: { ...body, image } });
+    assert.equal(saved.status, 201);
+    assert.equal(saved.data.image, image);
+  });
+
+  it("deletes superseded uploads but never one a saved receipt uses", async () => {
+    const { existsSync } = await import("node:fs");
+    const draftImage = await uploadReceiptPng(plainHouse);
+    assert.ok(existsSync(uploadFile(draftImage)));
+
+    const foreign = await request(`/api/houses/${aiHouse}/receipts/upload`, { method: "DELETE", body: { path: draftImage } });
+    assert.equal(foreign.status, 404);
+    const bad = await request(`/api/houses/${plainHouse}/receipts/upload`, {
+      method: "DELETE",
+      body: { path: "/uploads/photos/x.jpg" },
+    });
+    assert.equal(bad.status, 400);
+
+    const removed = await request(`/api/houses/${plainHouse}/receipts/upload`, { method: "DELETE", body: { path: draftImage } });
+    assert.equal(removed.status, 200);
+    assert.equal(removed.data.deleted, true);
+    assert.ok(!existsSync(uploadFile(draftImage)));
+
+    const kept = await uploadReceiptPng(plainHouse);
+    const saved = await request(`/api/houses/${plainHouse}/receipts`, {
+      method: "POST",
+      body: { vendorName: "Kept Mart", purchasedAt: "2026-09-04", image: kept, lines: [{ description: "Kept soap", lineTotal: 1 }] },
+    });
+    assert.equal(saved.status, 201);
+    const refused = await request(`/api/houses/${plainHouse}/receipts/upload`, { method: "DELETE", body: { path: kept } });
+    assert.equal(refused.status, 409);
+    assert.ok(existsSync(uploadFile(kept)));
+  });
+
+  it("refuses an identical receipt unless the duplicate is confirmed", async () => {
+    const body = {
+      vendorName: "Twice Mart",
+      purchasedAt: "2026-09-05",
+      total: 7.5,
+      lines: [{ description: "Twice coffee", quantity: 1, lineTotal: 7.5 }],
+    };
+    const first = await request(`/api/houses/${plainHouse}/receipts`, { method: "POST", body });
+    assert.equal(first.status, 201);
+    const itemId = first.data.lines[0].itemId;
+
+    const again = await request(`/api/houses/${plainHouse}/receipts`, {
+      method: "POST",
+      body: { ...body, vendorName: "TWICE  mart", total: 7.505 },
+    });
+    assert.equal(again.status, 409);
+    assert.equal(again.data.duplicateOf.id, first.data.id);
+    assert.equal(again.data.duplicateOf.total, 7.5);
+    assert.equal(again.data.duplicateOf.vendorName, "Twice Mart");
+    assert.equal((await request(`/api/items/${itemId}`)).data.quantity, 1);
+
+    const validated = await request(`/api/houses/${plainHouse}/receipts/validate`, { method: "POST", body });
+    assert.equal(validated.data.duplicateOf.id, first.data.id);
+
+    const otherDay = await request(`/api/houses/${plainHouse}/receipts`, {
+      method: "POST",
+      body: { ...body, purchasedAt: "2026-09-06" },
+    });
+    assert.equal(otherDay.status, 201);
+
+    const confirmed = await request(`/api/houses/${plainHouse}/receipts`, {
+      method: "POST",
+      body: { ...body, allowDuplicate: true },
+    });
+    assert.equal(confirmed.status, 201);
+    assert.equal((await request(`/api/items/${itemId}`)).data.quantity, 3);
+  });
+
+  it("validates every line without writing and reports all errors on import", async () => {
+    const oil = await request(`/api/houses/${plainHouse}/items`, { method: "POST", body: { name: "Validate oil", unit: "l" } });
+    assert.equal(oil.status, 201);
+    const itemsBefore = (await request(`/api/houses/${plainHouse}/items?limit=1000`)).data.total;
+    const receiptsBefore = (await request(`/api/houses/${plainHouse}/receipts?limit=300`)).data.length;
+    const vendorsBefore = (await request(`/api/houses/${plainHouse}/vendors`)).data.length;
+
+    const body = {
+      vendorName: "Validate Mart",
+      purchasedAt: "2026-09-07",
+      lines: [
+        { description: "Validate oil", quantity: 2, unit: "pcs", lineTotal: 9 },
+        { description: "Validate brand new thing", quantity: 1, lineTotal: 1 },
+        { description: "Validate brand new thing", quantity: 1, lineTotal: 1 },
+        { description: "Chosen", quantity: 1, itemId: "itm_missing" },
+        { description: "Validate oil", quantity: 1, unit: "ml", lineTotal: 2, locationId: "loc_missing" },
+        { description: "Validate oil", quantity: 500, unit: "ml", lineTotal: 2 },
+      ],
+    };
+    const res = await request(`/api/houses/${plainHouse}/receipts/validate`, { method: "POST", body });
+    assert.equal(res.status, 200);
+    assert.equal(res.data.ok, false);
+    assert.equal(res.data.newItems, 1);
+    const [unitError, created, sameNew, chosen, place, fine] = res.data.lines;
+    assert.match(unitError.error, /Cannot add “Validate oil” in pcs to an item stocked in l/);
+    assert.equal(unitError.itemId, oil.data.id);
+    assert.equal(created.willCreate, true);
+    assert.equal(created.error, null);
+    assert.equal(sameNew.willCreate, false);
+    assert.equal(sameNew.itemName, "Validate brand new thing");
+    assert.match(chosen.error, /not in this house/);
+    assert.match(place.error, /place is not in this house/);
+    assert.equal(fine.error, null);
+    assert.equal(fine.itemId, oil.data.id);
+    assert.equal(fine.match, "name");
+
+    assert.equal((await request(`/api/houses/${plainHouse}/items?limit=1000`)).data.total, itemsBefore);
+    assert.equal((await request(`/api/houses/${plainHouse}/vendors`)).data.length, vendorsBefore);
+
+    const imported = await request(`/api/houses/${plainHouse}/receipts`, { method: "POST", body });
+    assert.equal(imported.status, 400);
+    assert.deepEqual(
+      imported.data.details.lines.map((entry: any) => entry.index),
+      [0, 3, 4],
+    );
+    assert.equal((await request(`/api/houses/${plainHouse}/receipts?limit=300`)).data.length, receiptsBefore);
+    assert.equal((await request(`/api/houses/${plainHouse}/items?limit=1000`)).data.total, itemsBefore);
+  });
+
+  it("puts each line in its own place with its own expiry date", async () => {
+    const res = await request(`/api/houses/${plainHouse}/receipts`, {
+      method: "POST",
+      body: {
+        vendorName: "Expiry Mart",
+        purchasedAt: "2026-09-08",
+        lines: [
+          { description: "Expiry yoghurt", quantity: 2, lineTotal: 3, locationId: fridgeId, expiresAt: "2026-09-20" },
+          { description: "Expiry rice", quantity: 1, lineTotal: 2 },
+        ],
+      },
+    });
+    assert.equal(res.status, 201, JSON.stringify(res.data));
+    const yoghurt = await request(`/api/items/${res.data.lines[0].itemId}`);
+    assert.equal(yoghurt.data.lots[0].locationId, fridgeId);
+    assert.equal(yoghurt.data.lots[0].expiresAt, "2026-09-20");
+    const rice = await request(`/api/items/${res.data.lines[1].itemId}`);
+    assert.equal(rice.data.lots[0].locationId, null);
+    assert.equal(rice.data.lots[0].expiresAt, null);
+
+    const badDate = await request(`/api/houses/${plainHouse}/receipts`, {
+      method: "POST",
+      body: { vendorName: "Expiry Mart", lines: [{ description: "Expiry rice", expiresAt: "20/09/2026" }] },
+    });
+    assert.equal(badDate.status, 400);
+  });
+
+  it("deletes the receipt image and can revert the stock it added", async () => {
+    const { existsSync } = await import("node:fs");
+    const image = await uploadReceiptPng(plainHouse);
+    const created = await request(`/api/houses/${plainHouse}/receipts`, {
+      method: "POST",
+      body: {
+        vendorName: "Revert Mart",
+        purchasedAt: "2026-09-09",
+        image,
+        lines: [
+          { description: "Revert apples", quantity: 3, lineTotal: 3 },
+          { description: "Revert pears", quantity: 2, lineTotal: 2 },
+        ],
+      },
+    });
+    assert.equal(created.status, 201);
+    const [applesId, pearsId] = created.data.lines.map((line: any) => line.itemId);
+    const eaten = await request(`/api/items/${applesId}/stock`, { method: "POST", body: { action: "remove", quantity: 1 } });
+    assert.equal(eaten.status, 200);
+    // Stock added by hand is not part of the receipt and must stay.
+    await request(`/api/items/${pearsId}/stock`, { method: "POST", body: { action: "add", quantity: 5 } });
+
+    const removed = await request(`/api/receipts/${created.data.id}?revertStock=true`, { method: "DELETE" });
+    assert.equal(removed.status, 200, JSON.stringify(removed.data));
+    assert.equal(removed.data.imageRemoved, true);
+    assert.ok(!existsSync(uploadFile(image)));
+    const apples = removed.data.reverted.find((entry: any) => entry.itemId === applesId);
+    assert.deepEqual(
+      { added: apples.added, reverted: apples.reverted, consumed: apples.consumed },
+      { added: 3, reverted: 2, consumed: 1 },
+    );
+    const pears = removed.data.reverted.find((entry: any) => entry.itemId === pearsId);
+    assert.equal(pears.reverted, 2);
+
+    const applesAfter = await request(`/api/items/${applesId}`);
+    assert.equal(applesAfter.data.quantity, 0);
+    const adjustment = applesAfter.data.movements.find((movement: any) => movement.type === "adjust");
+    assert.ok(adjustment);
+    assert.equal(adjustment.delta, -2);
+    assert.equal((await request(`/api/items/${pearsId}`)).data.quantity, 5);
+    assert.equal((await request(`/api/receipts/${created.data.id}`)).status, 404);
+
+    // Without the flag the stock stays.
+    const kept = await request(`/api/houses/${plainHouse}/receipts`, {
+      method: "POST",
+      body: { vendorName: "Revert Mart", purchasedAt: "2026-09-10", lines: [{ description: "Revert apples", quantity: 1, lineTotal: 1 }] },
+    });
+    const plainDelete = await request(`/api/receipts/${kept.data.id}`, { method: "DELETE" });
+    assert.equal(plainDelete.status, 200);
+    assert.deepEqual(plainDelete.data.reverted, []);
+    assert.equal((await request(`/api/items/${applesId}`)).data.quantity, 1);
+  });
+
+  it("matches items by whole words, respects units and learns only confirmed links", async () => {
+    const milk = await request(`/api/houses/${plainHouse}/items`, { method: "POST", body: { name: "Oat milk", unit: "l" } });
+    const bread = await request(`/api/houses/${plainHouse}/items`, {
+      method: "POST",
+      body: { name: "Sourdough rye bread", unit: "pcs" },
+    });
+    const greek = await request(`/api/houses/${plainHouse}/items`, { method: "POST", body: { name: "Γάλα φρέσκο", unit: "l" } });
+    const flour = await request(`/api/houses/${plainHouse}/items`, { method: "POST", body: { name: "Stoneground rye flour", unit: "kg" } });
+
+    const res = await request(`/api/houses/${plainHouse}/receipts/validate`, {
+      method: "POST",
+      body: {
+        vendorName: "Match Mart",
+        lines: [
+          { description: "Oat milk chocolate", quantity: 1 },
+          { description: "Sourdough rye bread loaf", quantity: 1 },
+          { description: "ΓΑΛΑ ΦΡΕΣΚΟ 1L", quantity: 1, unit: "l" },
+          { description: "Stoneground rye flour sack", quantity: 1, unit: "pcs" },
+        ],
+      },
+    });
+    assert.equal(res.status, 200);
+    const [chocolate, loaf, gala, sack] = res.data.lines;
+    assert.equal(chocolate.willCreate, true, "“oat milk chocolate” is not oat milk");
+    assert.notEqual(chocolate.itemId, milk.data.id);
+    assert.equal(loaf.itemId, bread.data.id);
+    assert.equal(loaf.match, "fuzzy");
+    assert.equal(gala.itemId, greek.data.id);
+    // Close name, but pieces cannot be stocked as kilograms: a new item instead.
+    assert.notEqual(sack.itemId, flour.data.id);
+    assert.equal(sack.willCreate, true);
+
+    const imported = await request(`/api/houses/${plainHouse}/receipts`, {
+      method: "POST",
+      body: {
+        vendorName: "Match Mart",
+        purchasedAt: "2026-09-11",
+        lines: [
+          { description: "Sourdough rye bread loaf", quantity: 1, lineTotal: 2 },
+          { description: "MILK FRESH 1L", rawDescription: "MILK FRESH 1L", quantity: 1, unit: "l", lineTotal: 1, itemId: milk.data.id },
+        ],
+      },
+    });
+    assert.equal(imported.status, 201, JSON.stringify(imported.data));
+    assert.equal(imported.data.lines[0].itemId, bread.data.id);
+    assert.equal((await request(`/api/items/${bread.data.id}/aliases`)).data.length, 0, "fuzzy matches are not learned");
+    const milkAliases = await request(`/api/items/${milk.data.id}/aliases`);
+    assert.equal(milkAliases.data.length, 1, "a chosen item is learned");
+    assert.equal(milkAliases.data[0].rawName, "MILK FRESH 1L");
+  });
+});
