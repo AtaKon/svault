@@ -2602,6 +2602,37 @@ describe("security hardening", () => {
     assert.equal(changed.status, 200);
     assert.equal(changed.data.user.email, "profile.moved@example.com");
   });
+
+  it("blocks cross-site state changes and sends a CSP", async () => {
+    const post = (headers: Record<string, string>) =>
+      fetch(`${base}/api/houses`, {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json", ...headers },
+        body: JSON.stringify({ name: "CSRF house" }),
+      });
+    assert.equal((await post({ origin: "https://evil.example" })).status, 403);
+    assert.equal((await post({ "sec-fetch-site": "cross-site" })).status, 403);
+    assert.equal((await post({ origin: "null" })).status, 403);
+    const sameOrigin = await post({ origin: base });
+    assert.equal(sameOrigin.status, 201);
+    const fetchMeta = await post({ origin: "https://proxy.example", "sec-fetch-site": "same-origin" });
+    assert.equal(fetchMeta.status, 201);
+    await request(`/api/houses/${(await sameOrigin.json() as any).id}`, { method: "DELETE" });
+    await request(`/api/houses/${(await fetchMeta.json() as any).id}`, { method: "DELETE" });
+    // Reads are never blocked.
+    assert.equal((await fetch(`${base}/api/houses`, { headers: { cookie, origin: "https://evil.example" } })).status, 200);
+
+    const csp = (await fetch(`${base}/api/health`)).headers.get("content-security-policy") ?? "";
+    assert.match(csp, /script-src 'self' 'wasm-unsafe-eval'/);
+    assert.match(csp, /worker-src 'self' blob:/);
+    assert.match(csp, /frame-ancestors 'self'/);
+    const { existsSync } = await import("node:fs");
+    const { CLIENT_DIR } = await import("../config.js");
+    if (existsSync(path.join(CLIENT_DIR, "index.html"))) {
+      // The theme bootstrap is the only inline script and is allowed by hash.
+      assert.match((await fetch(`${base}/`)).headers.get("content-security-policy") ?? "", /'sha256-[A-Za-z0-9+/=]+'/);
+    }
+  });
 });
 
 describe("multi-photo receipt OCR", () => {

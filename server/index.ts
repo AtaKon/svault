@@ -1,7 +1,8 @@
 import express from "express";
 import fs from "node:fs";
 import path from "node:path";
-import { PORT, CLIENT_DIR, IS_PROD, UPLOAD_DIR, ensureDirs } from "./config.js";
+import { createHash } from "node:crypto";
+import { PORT, CLIENT_DIR, IS_PROD, RP_ORIGIN, UPLOAD_DIR, ensureDirs } from "./config.js";
 import { ApiError } from "./http.js";
 import { IMAGE_EXTENSIONS } from "./upload.js";
 import { RateLimitError, limitRequests, limiters, userOrIp } from "./rate-limit.js";
@@ -47,19 +48,104 @@ export const app = express();
 app.disable("x-powered-by");
 app.set("trust proxy", 1);
 
+/**
+ * Content-Security-Policy for the app shell. The only inline script is the
+ * theme bootstrap in index.html, allowed by its hash. Tesseract OCR needs
+ * WebAssembly ('wasm-unsafe-eval') and a blob: worker; product photos come
+ * from OpenFoodFacts over https. Set SV_CSP=off to disable it.
+ */
+function inlineScriptHashes(): string[] {
+  try {
+    const html = fs.readFileSync(path.join(CLIENT_DIR, "index.html"), "utf8");
+    const hashes: string[] = [];
+    for (const match of html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi)) {
+      hashes.push(`'sha256-${createHash("sha256").update(match[1]).digest("base64")}'`);
+    }
+    return hashes;
+  } catch {
+    return [];
+  }
+}
+
+const SHELL_CSP = [
+  "default-src 'self'",
+  ["script-src 'self' 'wasm-unsafe-eval'", ...inlineScriptHashes()].join(" "),
+  "worker-src 'self' blob:",
+  "img-src 'self' data: blob: https:",
+  "media-src 'self' blob:",
+  "connect-src 'self' data: blob:",
+  "style-src 'self' 'unsafe-inline'",
+  "font-src 'self' data:",
+  "manifest-src 'self'",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'self'",
+].join("; ");
+const CSP_ENABLED = (process.env.SV_CSP ?? "on").trim().toLowerCase() !== "off";
+
 app.use((req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   res.setHeader("X-Frame-Options", "SAMEORIGIN");
   res.setHeader("Permissions-Policy", "camera=(self), microphone=(), geolocation=()");
+  if (CSP_ENABLED && !req.path.startsWith("/uploads")) res.setHeader("Content-Security-Policy", SHELL_CSP);
   if (IS_PROD && req.path.startsWith("/api")) {
     res.setHeader("Cache-Control", "no-store");
   }
   next();
 });
 
+/**
+ * CSRF defence in depth on top of SameSite=Lax cookies: a state-changing API
+ * request from a browser must come from this origin. Browsers mark requests
+ * with Sec-Fetch-Site and Origin; non-browser clients send neither and pass.
+ */
+const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+function trustedHosts(req: express.Request): Set<string> {
+  const hosts = new Set<string>();
+  if (req.headers.host) hosts.add(req.headers.host.toLowerCase());
+  const forwarded = String(req.headers["x-forwarded-host"] ?? "").split(",")[0].trim().toLowerCase();
+  if (forwarded) hosts.add(forwarded);
+  if (RP_ORIGIN) {
+    try {
+      hosts.add(new URL(RP_ORIGIN).host.toLowerCase());
+    } catch {
+      /* ignore a malformed ORIGIN */
+    }
+  }
+  return hosts;
+}
+app.use("/api", (req, res, next) => {
+  if (!UNSAFE_METHODS.has(req.method)) {
+    next();
+    return;
+  }
+  const site = String(req.headers["sec-fetch-site"] ?? "").toLowerCase();
+  if (site === "same-origin" || site === "none") {
+    next();
+    return;
+  }
+  const origin = req.headers.origin;
+  if (origin) {
+    let host = "";
+    try {
+      host = new URL(origin).host.toLowerCase();
+    } catch {
+      host = "";
+    }
+    if (host && trustedHosts(req).has(host)) {
+      next();
+      return;
+    }
+  } else if (!site) {
+    next();
+    return;
+  }
+  res.status(403).json({ error: "Cross-site request blocked" });
+});
+
 app.use(express.json({ limit: "2mb" }));
-app.use(express.urlencoded({ extended: false, limit: "1mb" }));
 app.use(attachUser);
 
 app.use((_req, res, next) => {
