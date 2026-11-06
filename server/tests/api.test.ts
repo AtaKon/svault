@@ -2382,6 +2382,62 @@ describe("security hardening", () => {
       delete process.env.SV_OUTBOUND_ALLOW_PRIVATE;
     }
   });
+
+  it("limits wrong TOTP codes per challenge and rejects a reused code", async () => {
+    const login = async () => {
+      const res = await request("/api/auth/login", {
+        method: "POST",
+        auth: "",
+        body: { identifier: "totp.user@example.com", password: "test password" },
+      });
+      assert.equal(res.data.twoFactorRequired, true);
+      return res.data.challenge as string;
+    };
+    const registered = await request("/api/auth/register", {
+      method: "POST",
+      auth: "",
+      body: { name: "Totp User", email: "totp.user@example.com", password: "test password" },
+    });
+    assert.equal(registered.status, 201);
+    const auth = registered.cookie!;
+    const setup = await request("/api/auth/2fa/setup", { method: "POST", auth, body: { password: "test password" } });
+    const secret = setup.data.secret as string;
+    const enabled = await request("/api/auth/2fa/enable", { method: "POST", auth, body: { code: totpCode(secret) } });
+    assert.equal(enabled.status, 200);
+
+    const challenge = await login();
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      const wrong = await request("/api/auth/2fa/verify", {
+        method: "POST",
+        auth: "",
+        body: { challenge, code: "000000" },
+      });
+      assert.equal(wrong.status, 401);
+      if (attempt === 5) assert.match(wrong.data.error, /Too many wrong codes/);
+    }
+    // The challenge is gone after five misses, even with the right code.
+    const burned = await request("/api/auth/2fa/verify", {
+      method: "POST",
+      auth: "",
+      body: { challenge, code: totpCode(secret) },
+    });
+    assert.equal(burned.status, 401);
+    assert.match(burned.data.error, /expired/);
+
+    const code = totpCode(secret);
+    const first = await request("/api/auth/2fa/verify", {
+      method: "POST",
+      auth: "",
+      body: { challenge: await login(), code },
+    });
+    assert.equal(first.status, 200);
+    const replay = await request("/api/auth/2fa/verify", {
+      method: "POST",
+      auth: "",
+      body: { challenge: await login(), code },
+    });
+    assert.equal(replay.status, 401);
+  });
 });
 
 describe("multi-photo receipt OCR", () => {
@@ -3008,9 +3064,10 @@ describe("two-factor authentication", () => {
     assert.equal(verified.status, 200);
     assert.ok(verified.cookie);
 
+    // A code is accepted once per time step, so disabling needs the next code.
     const disabled = await request("/api/auth/2fa/disable", {
       method: "POST",
-      body: { password: "test password", code: totpCode(setup.data.secret) },
+      body: { password: "test password", code: totpCode(setup.data.secret, Date.now() + 30_000) },
     });
     assert.equal(disabled.status, 200);
     const status = await request("/api/auth/2fa");

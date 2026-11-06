@@ -12,6 +12,7 @@ import {
   getTotp,
   otpauthUrl,
   peekLoginChallenge,
+  recordChallengeFailure,
   saveTotpSetup,
   totpStatus,
   verifyTotp,
@@ -109,8 +110,14 @@ twoFactorRoutes.post(
     );
     const userId = await peekLoginChallenge(body.challenge);
     if (!userId) throw new ApiError(401, "That sign-in challenge expired; enter your password again");
-    if (!await verifyTotpOrBackup(userId, body.code)) throw new ApiError(401, "That code is not valid");
-    await consumeLoginChallenge(body.challenge);
+    if (!await verifyTotpOrBackup(userId, body.code)) {
+      const left = await recordChallengeFailure(body.challenge);
+      if (left <= 0) throw new ApiError(401, "Too many wrong codes. Enter your password again.");
+      throw new ApiError(401, "That code is not valid");
+    }
+    if (!await consumeLoginChallenge(body.challenge)) {
+      throw new ApiError(401, "That sign-in challenge expired; enter your password again");
+    }
     const token = await createSession(userId, req.headers["user-agent"]);
     res.setHeader("Set-Cookie", sessionCookie(token));
     res.json(await userPayload(userId));

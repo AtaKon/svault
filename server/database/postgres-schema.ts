@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS user_totp (
   secret TEXT NOT NULL,
   enabled INTEGER NOT NULL DEFAULT 0,
   backup_codes TEXT NOT NULL DEFAULT '[]',
+  last_used_step BIGINT,
   created_at TEXT NOT NULL,
   confirmed_at TEXT
 );
@@ -79,6 +80,7 @@ CREATE TABLE IF NOT EXISTS login_challenges (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   type TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
   expires_at TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
@@ -586,6 +588,17 @@ CREATE TABLE IF NOT EXISTS schema_meta (
   value TEXT NOT NULL
 );
 `;
+
+/**
+ * In-place migrations for databases created by older versions.
+ * CREATE TABLE IF NOT EXISTS never adds columns, so every column added after
+ * the first PostgreSQL release is listed here. Each statement is idempotent.
+ */
+export const POSTGRES_MIGRATIONS: string[] = [
+  "ALTER TABLE users ADD COLUMN IF NOT EXISTS developer_mode INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE user_totp ADD COLUMN IF NOT EXISTS last_used_step BIGINT",
+  "ALTER TABLE login_challenges ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0",
+];
 
 /**
  * Parent-first order used when inserting a logical restore. TRUNCATE ... CASCADE

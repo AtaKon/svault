@@ -72,6 +72,8 @@ export class SqliteDriver implements DatabaseDriver {
     ensureColumn("users", "language", "TEXT");
     ensureColumn("users", "developer_mode", "INTEGER NOT NULL DEFAULT 0");
     ensureColumn("ai_call_logs", "metadata", "TEXT NOT NULL DEFAULT '{}'");
+    ensureColumn("user_totp", "last_used_step", "INTEGER");
+    ensureColumn("login_challenges", "attempts", "INTEGER NOT NULL DEFAULT 0");
     ensureColumn("notifications", "user_id", "TEXT REFERENCES users(id) ON DELETE CASCADE");
     ensureColumn("stock_lots", "vendor_id", "TEXT REFERENCES vendors(id) ON DELETE SET NULL");
     ensureColumn("stock_lots", "receipt_id", "TEXT REFERENCES receipts(id) ON DELETE SET NULL");
@@ -272,6 +274,7 @@ CREATE TABLE IF NOT EXISTS user_totp (
   secret TEXT NOT NULL,
   enabled INTEGER NOT NULL DEFAULT 0,
   backup_codes TEXT NOT NULL DEFAULT '[]',
+  last_used_step INTEGER,
   created_at TEXT NOT NULL,
   confirmed_at TEXT
 );
@@ -315,6 +318,7 @@ CREATE TABLE IF NOT EXISTS login_challenges (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   type TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
   expires_at TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
