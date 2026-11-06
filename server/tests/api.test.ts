@@ -3589,9 +3589,18 @@ describe("backup usability", () => {
     const { randomBytes } = await import("node:crypto");
     const uploadDir = path.join(dataDir, "uploads", "photos");
     const large = path.join(uploadDir, "streaming-test-large.bin");
-    const payload = randomBytes(3 * 1024 * 1024);
+    // Incompressible and large enough that the zip writer falls behind the
+    // reader many times over, so the pause/resume path really runs.
+    const payload = randomBytes(24 * 1024 * 1024);
     fs.mkdirSync(uploadDir, { recursive: true });
     fs.writeFileSync(large, payload);
+    const empty = path.join(uploadDir, "streaming-test-empty.bin");
+    fs.writeFileSync(empty, "");
+    // A CLI --out folder is the user's: an old .partial there is never touched.
+    const userPartial = path.join(mkdtempSync(path.join(tmpdir(), "svault-out-")), "download.zip.partial");
+    fs.writeFileSync(userPartial, "x");
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    fs.utimesSync(userPartial, twoHoursAgo, twoHoursAgo);
     const outDir = mkdtempSync(path.join(tmpdir(), "svault-stream-"));
     try {
       const archive = await createBackupArchive({ outFile: path.join(outDir, "out.zip") });
@@ -3604,13 +3613,21 @@ describe("backup usability", () => {
       const upload = validation.uploads.find((entry) => entry.name === "photos/streaming-test-large.bin");
       assert.ok(upload, "the large upload is in the archive");
       assert.ok(upload.data.equals(payload));
+      const emptyUpload = validation.uploads.find((entry) => entry.name === "photos/streaming-test-empty.bin");
+      assert.ok(emptyUpload, "an empty upload is archived without hanging");
+      assert.equal(emptyUpload.data.length, 0);
       assert.ok(validation.manifest.checksums.uploads["photos/streaming-test-large.bin"]);
 
       const names = Object.keys((await JSZip.loadAsync(buffer)).files);
       assert.ok(names.includes("manifest.json"));
       assert.ok(!names.some((name) => /backups\/|pre-restore|svault-backup-/.test(name)), names.join(", "));
+      const userOut = await createBackupArchive({ outFile: path.join(path.dirname(userPartial), "out.zip") });
+      assert.ok(fs.existsSync(userPartial), "files beside a CLI --out path are left alone");
+      fs.rmSync(userOut.path, { force: true });
     } finally {
       fs.rmSync(large, { force: true });
+      fs.rmSync(empty, { force: true });
+      rmSync(path.dirname(userPartial), { recursive: true, force: true });
       rmSync(outDir, { recursive: true, force: true });
     }
   });

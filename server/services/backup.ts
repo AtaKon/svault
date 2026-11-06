@@ -163,15 +163,17 @@ const STALE_SCRATCH_MS = 60 * 60 * 1000;
 
 /**
  * Remove scratch files a crashed backup left behind: the `.snapshot-*.db`
- * SQLite copy and half-written `*.partial` zips. Neither matches a rotation
- * pattern, so without this they would stay forever. Only files older than an
- * hour are touched, so a backup running in parallel keeps its own.
+ * SQLite copy and half-written `svault-backup-*`/`pre-restore-*` `.partial`
+ * zips. Neither matches a rotation pattern, so without this they would stay
+ * forever. Only the app's own folders and file names are touched (never the
+ * folder of a CLI `--out` path), and only files older than an hour, so a
+ * backup running in parallel keeps its own.
  */
 function removeStaleScratch(dir: string) {
   if (!fs.existsSync(dir)) return;
   const cutoff = Date.now() - STALE_SCRATCH_MS;
   for (const name of fs.readdirSync(dir)) {
-    if (!/^\.snapshot-.*\.db$/.test(name) && !name.endsWith(".partial")) continue;
+    if (!/^(\.snapshot-.*\.db|(svault-backup|pre-restore)-.*\.zip\.partial)$/.test(name)) continue;
     const file = path.join(dir, name);
     try {
       if (fs.statSync(file).mtimeMs < cutoff) fs.rmSync(file, { force: true });
@@ -197,7 +199,6 @@ async function writeArchive(target: string): Promise<BackupArchive> {
   fs.mkdirSync(path.dirname(target), { recursive: true });
   removeStaleScratch(BACKUP_DIR);
   removeStaleScratch(PRE_RESTORE_DIR);
-  removeStaleScratch(path.dirname(target));
   const stamp = backupStamp();
   const postgres = databaseKind() === "postgres";
   const partial = `${target}.partial`;
