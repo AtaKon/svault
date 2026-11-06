@@ -1613,7 +1613,7 @@ function DataTab({ house, detail }: { house: House; detail: HouseDetail | null }
   const [backupBusy, setBackupBusy] = useState(false);
   const [restoreFile, setRestoreFile] = useState<File | null>(null);
   const [restoreConfirm, setRestoreConfirm] = useState("");
-  const [backups, setBackups] = useState<{ name: string; size: number; createdAt: string }[]>([]);
+  const [backups, setBackups] = useState<{ name: string; kind?: "backup" | "pre-restore"; size: number; createdAt: string }[]>([]);
 
   const loadCatalog = useCallback(async () => {
     if (!user?.isAdmin) return;
@@ -1631,7 +1631,7 @@ function DataTab({ house, detail }: { house: House; detail: HouseDetail | null }
   const loadBackups = useCallback(async () => {
     if (!can("owner")) return;
     try {
-      const data = await api<{ backups: { name: string; size: number; createdAt: string }[] }>(`/api/houses/${house.id}/backups`);
+      const data = await api<{ backups: { name: string; kind?: "backup" | "pre-restore"; size: number; createdAt: string }[] }>(`/api/houses/${house.id}/backups`);
       setBackups(data.backups);
     } catch {
       /* backup listing is optional */
@@ -2030,15 +2030,36 @@ function DataTab({ house, detail }: { house: House; detail: HouseDetail | null }
             </Button>
             <span className="text-[11px] text-muted">Last five backups are kept in <code>DATA_DIR/backups</code>.</span>
           </div>
-          {backups.length > 0 && (
+          {backups.some((backup) => backup.kind !== "pre-restore") && (
             <div className="space-y-1 rounded-xl bg-raised p-2">
-              {backups.slice(0, 5).map((backup) => (
-                <div key={backup.name} className="flex items-center gap-2 text-[11px]">
-                  <Icon name="download" size={12} className="text-muted" />
-                  <span className="min-w-0 flex-1 truncate">{backup.name}</span>
-                  <span className="text-muted">{Math.round(backup.size / 1024)} KB</span>
-                </div>
-              ))}
+              {backups
+                .filter((backup) => backup.kind !== "pre-restore")
+                .slice(0, 5)
+                .map((backup) => (
+                  <div key={backup.name} className="flex items-center gap-2 text-[11px]">
+                    <Icon name="download" size={12} className="text-muted" />
+                    <span className="min-w-0 flex-1 truncate">{backup.name}</span>
+                    <span className="text-muted">{Math.round(backup.size / 1024)} KB</span>
+                  </div>
+                ))}
+            </div>
+          )}
+          {backups.some((backup) => backup.kind === "pre-restore") && (
+            <div className="space-y-1 rounded-xl bg-raised p-2">
+              <div className="text-[11px] font-semibold text-muted">Safety copies taken before a restore</div>
+              {backups
+                .filter((backup) => backup.kind === "pre-restore")
+                .map((backup) => (
+                  <div key={backup.name} className="flex items-center gap-2 text-[11px]">
+                    <Icon name="clock" size={12} className="text-muted" />
+                    <span className="min-w-0 flex-1 truncate">{backup.name}</span>
+                    <span className="text-muted">{Math.round(backup.size / 1024)} KB</span>
+                  </div>
+                ))}
+              <p className="text-[10px] text-muted">
+                Stored in <code>/data/backups/pre-restore</code> and rotated separately from regular backups (newest three
+                kept by default). Restore one like any other backup zip to roll back.
+              </p>
             </div>
           )}
           <div className="rounded-xl border border-line p-3">
@@ -2064,7 +2085,10 @@ function DataTab({ house, detail }: { house: House; detail: HouseDetail | null }
               Restore backup
             </Button>
             <p className="mt-1.5 text-[10px] text-muted">
-              The server stages the archive, keeps a pre-restore copy and restarts. API requests return 503 until it finishes.
+              Before anything is replaced, a safety copy of the current data is saved to{" "}
+              <code>/data/backups/pre-restore</code> (<code>DATA_DIR/backups/pre-restore</code>). It is kept apart from
+              regular backups, so new backups never rotate it away. The server then stages the archive and restarts; API
+              requests return 503 until it finishes.
             </p>
           </div>
         </Card>
