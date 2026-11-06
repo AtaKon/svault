@@ -273,8 +273,11 @@ let first;
 try {
   first = await requestReview(buildPrompt(MAX_DIFF_CHARS), maxTokens, reasoning);
 } catch (error) {
-  if (!(reasoning?.enabled === false && error.status === 400)) throw error;
-  console.log(`The model cannot turn thinking off (${error.message}); asking for low effort instead.`);
+  // Only a rejection of the reasoning switch itself is worth a retry; any other
+  // 400 (unknown model, bad request) should fail with its own message.
+  const rejectedReasoning = reasoning?.enabled === false && error.status === 400 && /reason|think/i.test(error.message);
+  if (!rejectedReasoning) throw error;
+  console.log(`The model cannot turn thinking off; asking for low effort instead. Original error: ${error.message}`);
   reasoning = REASONING.low;
   first = await requestReview(buildPrompt(MAX_DIFF_CHARS), maxTokens, reasoning);
 }
@@ -286,7 +289,8 @@ if (!review) {
   if (!review) {
     throw new Error(
       `AI provider returned an empty review twice. ${describeAttempt("attempt 1", first)}; ` +
-        `${describeAttempt("attempt 2", second)}. Raise AI_REVIEW_MAX_TOKENS, set AI_REVIEW_REASONING=off or pick a non-reasoning model.`,
+        `${describeAttempt("attempt 2", second)}. Raise AI_REVIEW_MAX_TOKENS or pick a non-reasoning model ` +
+        `(AI_REVIEW_REASONING=${reasoningMode}${reasoning === REASONING.low && reasoningMode === "off" ? ", but this model cannot turn thinking off" : ""}).`,
     );
   }
 }
