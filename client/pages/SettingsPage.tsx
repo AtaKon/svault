@@ -54,6 +54,8 @@ interface Invite {
   role: Role;
   url: string;
   createdAt: string;
+  expiresAt?: string | null;
+  expired?: boolean;
   acceptedAt: string | null;
 }
 
@@ -861,15 +863,19 @@ function MembersTab({
     event.preventDefault();
     setBusy(true);
     try {
-      const data = await api<{ member?: Member; invite?: { url: string; email: string } }>(`/api/houses/${house.id}/members`, {
-        method: "POST",
-        body: { email, role },
-      });
+      const data = await api<{ member?: Member; invite?: { url: string; email: string; existingAccount?: boolean } }>(
+        `/api/houses/${house.id}/members`,
+        { method: "POST", body: { email, role } },
+      );
       if (data.member) {
         toast.success(`${data.member.name} added to the house`);
       } else if (data.invite) {
         setInvite({ url: data.invite.url, email: data.invite.email });
-        toast.success("Invite created — share the link");
+        toast.success(
+          data.invite.existingAccount
+            ? "Invite created — they join once they open the link and accept"
+            : "Invite created — share the link",
+        );
       }
       setEmail("");
       void loadInvites();
@@ -978,7 +984,10 @@ function MembersTab({
       {can("admin") && (
         <Card className="p-4">
           <h2 className="font-display text-lg">Invite someone</h2>
-          <p className="text-[11px] text-muted">If they already have an account they join immediately; otherwise you get a link to share.</p>
+          <p className="text-[11px] text-muted">
+            You get a link to share. It only works for that email address, expires after two weeks, and the person joins
+            once they open it and accept — even if they already have an account.
+          </p>
           <form onSubmit={invite_} className="mt-3 space-y-2.5">
             <div className="flex flex-col gap-2 sm:flex-row">
               <Input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="name@example.com" type="email" required inputMode="email" />
@@ -1010,10 +1019,23 @@ function MembersTab({
                   <div key={entry.id} className="flex items-center gap-2 py-2 text-xs">
                     <div className="min-w-0 flex-1">
                       <div className="truncate">{entry.email ?? "shareable link"}</div>
-                      <div className="text-[10px] text-muted">{entry.role} · {entry.acceptedAt ? "accepted" : "pending"}</div>
+                      <div className="text-[10px] text-muted">
+                        {entry.role} · {entry.acceptedAt ? "accepted" : entry.expired ? "expired" : "pending"}
+                      </div>
                     </div>
                     {entry.acceptedAt ? (
                       <Badge tone="brand">used</Badge>
+                    ) : entry.expired ? (
+                      <button
+                        onClick={async () => {
+                          await api(`/api/houses/${house.id}/invites/${entry.id}`, { method: "DELETE" });
+                          void loadInvites();
+                        }}
+                        className="text-muted hover:text-danger"
+                        aria-label="Remove expired invite"
+                      >
+                        <Icon name="close" size={13} />
+                      </button>
                     ) : (
                       <>
                         <button onClick={() => void copy(entry.url)} className="font-medium text-brand hover:underline">

@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import { get, newId, now, run, tx } from "../db.js";
 import {
@@ -20,6 +21,7 @@ import { usernameFromEmail, usernameWithSuffix } from "../username.js";
 import { createLoginChallenge, requireTotp } from "../services/totp.js";
 import { RateLimitError, limiters } from "../rate-limit.js";
 import { registrationStatus } from "../services/registration.js";
+import { inviteExpired, inviteExpiresAt } from "../services/invites.js";
 import type { Role } from "../../shared/types.js";
 
 export const authRoutes = Router();
@@ -58,6 +60,10 @@ async function uniqueUsername(email: string, excludeUserId?: string): Promise<st
   }
   return candidate;
 }
+
+/* Verified against when the account does not exist, so a missing account
+   costs the same scrypt work as a wrong password. */
+const DUMMY_PASSWORD_HASH = hashPassword(randomBytes(16).toString("hex"));
 
 function publicUser(row: any) {
   return {
@@ -123,7 +129,7 @@ authRoutes.post(
     const invite = body.inviteCode
       ? await get<any>("SELECT * FROM house_invites WHERE code = ? AND accepted_at IS NULL", [body.inviteCode])
       : undefined;
-    if (body.inviteCode && !invite) throw new ApiError(400, "That invite link is no longer valid");
+    if (body.inviteCode && (!invite || inviteExpired(invite))) throw new ApiError(400, "That invite link is no longer valid");
     if (invite?.email && invite.email.toLowerCase() !== body.email) {
       throw new ApiError(403, "This invite was sent to a different email address");
     }
@@ -189,7 +195,10 @@ authRoutes.post(
           identifier,
         ])
       : undefined;
-    if (!user || !verifyPassword(body.password, user.password_hash)) {
+    const passwordOk = user
+      ? verifyPassword(body.password, user.password_hash)
+      : (verifyPassword(body.password, DUMMY_PASSWORD_HASH), false);
+    if (!user || !passwordOk) {
       limiters.loginAccount.hit(accountKey);
       throw new ApiError(401, "Wrong email/username or password");
     }
@@ -312,13 +321,14 @@ authRoutes.get(
        WHERE i.code = ?`,
       [req.params.code],
     );
-    if (!invite || invite.accepted_at) throw new ApiError(404, "That invite link is no longer valid");
+    if (!invite || invite.accepted_at || inviteExpired(invite)) throw new ApiError(404, "That invite link is no longer valid");
     res.json({
       code: invite.code,
       houseName: invite.house_name,
       houseKind: invite.house_kind,
       role: invite.role,
       email: invite.email,
+      expiresAt: inviteExpiresAt(invite),
       inviterName: invite.inviter_name ?? null,
       memberCount: Number(
         (await get<{ n: number }>("SELECT COUNT(*) AS n FROM house_members WHERE house_id = ?", [invite.house_id]))?.n ?? 0,
@@ -332,7 +342,7 @@ authRoutes.post(
   requireAuth,
   handler(async (req, res) => {
     const invite = await get<any>("SELECT * FROM house_invites WHERE code = ? AND accepted_at IS NULL", [req.params.code]);
-    if (!invite) throw new ApiError(404, "That invite link is no longer valid");
+    if (!invite || inviteExpired(invite)) throw new ApiError(404, "That invite link is no longer valid");
     if (invite.email && invite.email.toLowerCase() !== req.user!.email.toLowerCase()) {
       throw new ApiError(403, "This invite was sent to a different email address");
     }

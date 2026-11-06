@@ -2181,7 +2181,15 @@ describe("multi-user membership", () => {
       body: { email: "stranger@example.com", role: "viewer" },
     });
     assert.equal(invite.status, 201);
-    assert.ok(invite.data.member);
+    // Existing accounts get an invite to accept instead of being added silently.
+    assert.ok(invite.data.invite);
+    assert.equal(invite.data.invite.existingAccount, true);
+    assert.equal((await request(`/api/houses/${houseId}`, { auth: secondUserCookie })).status, 404);
+    const accepted = await request(`/api/auth/invites/${invite.data.invite.code}/accept`, {
+      method: "POST",
+      auth: secondUserCookie,
+    });
+    assert.equal(accepted.status, 200);
 
     const access = await request(`/api/houses/${houseId}`, { auth: secondUserCookie });
     assert.equal(access.status, 200);
@@ -2670,6 +2678,46 @@ describe("security hardening", () => {
     const exported = await exportCatalogMappings();
     assert.equal(exported.mappings.filter((entry) => entry.rawText === raw).length, 1);
     assert.equal((await request("/api/catalog/export")).status, 200);
+  });
+
+  it("expires invites and spends the same work on unknown accounts", async () => {
+    const created = await request(`/api/houses/${houseId}/members`, {
+      method: "POST",
+      body: { email: "slow.joiner@example.com", role: "member" },
+    });
+    assert.equal(created.status, 201);
+    assert.ok(Date.parse(created.data.invite.expiresAt) > Date.now() + 13 * 864e5);
+    const code = created.data.invite.code;
+    assert.equal((await request(`/api/auth/invites/${code}`, { auth: "" })).status, 200);
+
+    await run("UPDATE house_invites SET expires_at = ? WHERE code = ?", [new Date(Date.now() - 1000).toISOString(), code]);
+    assert.equal((await request(`/api/auth/invites/${code}`, { auth: "" })).status, 404);
+    const register = await request("/api/auth/register", {
+      method: "POST",
+      auth: "",
+      body: { name: "Slow", email: "slow.joiner@example.com", password: "test password", inviteCode: code },
+    });
+    assert.equal(register.status, 400);
+    const list = await request(`/api/houses/${houseId}/invites`);
+    assert.equal(list.data.find((entry: any) => entry.code === code).expired, true);
+
+    // Invites from before expiry existed count from their creation date.
+    await run("UPDATE house_invites SET expires_at = NULL, created_at = ? WHERE code = ?", [
+      new Date(Date.now() - 30 * 864e5).toISOString(),
+      code,
+    ]);
+    assert.equal((await request(`/api/auth/invites/${code}`, { auth: "" })).status, 404);
+
+    // A login for an unknown account still runs a password hash (no fast path).
+    const time = async (identifier: string) => {
+      const started = performance.now();
+      await request("/api/auth/login", { method: "POST", auth: "", body: { identifier, password: "wrong password" } });
+      return performance.now() - started;
+    };
+    await time("owner");
+    const missing = Math.min(await time("nobody-here"), await time("nobody-here"));
+    const known = Math.min(await time("owner"), await time("owner"));
+    assert.ok(missing > known * 0.4, `unknown ${missing.toFixed(1)}ms vs known ${known.toFixed(1)}ms`);
   });
 });
 
