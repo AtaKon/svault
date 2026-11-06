@@ -68,6 +68,7 @@ function publicUser(row: any) {
     language: row.language ?? "en",
     isAdmin: !!row.is_admin,
     developerMode: !!row.developer_mode,
+    hasPassword: Number(row.password_set ?? 1) !== 0,
     createdAt: row.created_at,
   };
 }
@@ -237,9 +238,26 @@ authRoutes.patch(
         username: usernameSchema.optional(),
         language: z.enum(["en", "el"]).optional(),
         developerMode: z.boolean().optional(),
+        currentPassword: z.string().max(200).optional(),
       }),
       req.body,
     );
+    // Email and username are sign-in identifiers (and the email receives
+    // invites), so changing them needs the current password, not just a session.
+    const current = (await get<any>("SELECT * FROM users WHERE id = ?", [req.user!.id]))!;
+    const emailChanged = Boolean(body.email && body.email !== String(current.email).toLowerCase());
+    const usernameChanged = Boolean(body.username && body.username !== String(current.username ?? "").toLowerCase());
+    if (emailChanged || usernameChanged) {
+      if (Number(current.password_set ?? 1) === 0) {
+        if (emailChanged) {
+          throw new ApiError(403, "Your email is managed by your single sign-on provider. Change it there.");
+        }
+      } else if (!body.currentPassword) {
+        throw new ApiError(400, "Enter your current password to change your email or username");
+      } else if (!verifyPassword(body.currentPassword, current.password_hash)) {
+        throw new ApiError(400, "Current password is not correct");
+      }
+    }
     if (body.email && await get("SELECT id FROM users WHERE lower(email) = lower(?) AND id <> ?", [body.email, req.user!.id])) {
       throw new ApiError(409, "Another account already uses that email");
     }

@@ -2574,6 +2574,34 @@ describe("security hardening", () => {
     const house = await request("/api/houses", { method: "POST", auth: secondUserCookie, body: { name: "Shed" } });
     assert.equal(house.status, 201);
   });
+
+  it("requires the current password to change email or username", async () => {
+    const registered = await request("/api/auth/register", {
+      method: "POST",
+      auth: "",
+      body: { name: "Profile User", email: "profile.user@example.com", password: "test password" },
+    });
+    const auth = registered.cookie!;
+    assert.equal(registered.data.user.hasPassword, true);
+
+    const renameOnly = await request("/api/auth/me", { method: "PATCH", auth, body: { name: "Renamed", email: "profile.user@example.com" } });
+    assert.equal(renameOnly.status, 200);
+    const noPassword = await request("/api/auth/me", { method: "PATCH", auth, body: { email: "hijacked@example.com" } });
+    assert.equal(noPassword.status, 400);
+    const wrongPassword = await request("/api/auth/me", {
+      method: "PATCH",
+      auth,
+      body: { username: "hijacked", currentPassword: "nope nope" },
+    });
+    assert.equal(wrongPassword.status, 400);
+    const changed = await request("/api/auth/me", {
+      method: "PATCH",
+      auth,
+      body: { email: "profile.moved@example.com", currentPassword: "test password" },
+    });
+    assert.equal(changed.status, 200);
+    assert.equal(changed.data.user.email, "profile.moved@example.com");
+  });
 });
 
 describe("multi-photo receipt OCR", () => {

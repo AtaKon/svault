@@ -92,15 +92,19 @@ async function findOrCreateIdentity(claims: Record<string, any>) {
     }
     const userId = newId("usr");
     const first = registration.firstUser;
-    await run("INSERT INTO users (id, email, username, name, password_hash, is_admin, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", [
-      userId,
-      email,
-      await uniqueUsername(email),
-      String(claims.name ?? claims.preferred_username ?? email.split("@")[0]).slice(0, 80),
-      hashPassword(randomBytes(24).toString("base64url")),
-      first ? 1 : 0,
-      now(),
-    ]);
+    // The random password is never shown, so mark the account as SSO-only.
+    await run(
+      "INSERT INTO users (id, email, username, name, password_hash, password_set, is_admin, created_at) VALUES (?, ?, ?, ?, ?, 0, ?, ?)",
+      [
+        userId,
+        email,
+        await uniqueUsername(email),
+        String(claims.name ?? claims.preferred_username ?? email.split("@")[0]).slice(0, 80),
+        hashPassword(randomBytes(24).toString("base64url")),
+        first ? 1 : 0,
+        now(),
+      ],
+    );
     if (OIDC.defaultHouseId && await get("SELECT id FROM houses WHERE id = ?", [OIDC.defaultHouseId])) {
       await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, 'member', ?)", [
         OIDC.defaultHouseId,

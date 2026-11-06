@@ -71,6 +71,7 @@ export class SqliteDriver implements DatabaseDriver {
     ensureColumn("users", "username", "TEXT");
     ensureColumn("users", "language", "TEXT");
     ensureColumn("users", "developer_mode", "INTEGER NOT NULL DEFAULT 0");
+    ensureColumn("users", "password_set", "INTEGER NOT NULL DEFAULT 1");
     ensureColumn("ai_call_logs", "metadata", "TEXT NOT NULL DEFAULT '{}'");
     ensureColumn("user_totp", "last_used_step", "INTEGER");
     ensureColumn("login_challenges", "attempts", "INTEGER NOT NULL DEFAULT 0");
@@ -253,6 +254,7 @@ CREATE TABLE IF NOT EXISTS users (
   username TEXT UNIQUE COLLATE NOCASE,
   name TEXT NOT NULL,
   password_hash TEXT NOT NULL,
+  password_set INTEGER NOT NULL DEFAULT 1,
   language TEXT,
   is_admin INTEGER NOT NULL DEFAULT 0,
   developer_mode INTEGER NOT NULL DEFAULT 0,

@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS users (
   username TEXT,
   name TEXT NOT NULL,
   password_hash TEXT NOT NULL,
+  password_set INTEGER NOT NULL DEFAULT 1,
   language TEXT,
   is_admin INTEGER NOT NULL DEFAULT 0,
   developer_mode INTEGER NOT NULL DEFAULT 0,
@@ -596,6 +597,7 @@ CREATE TABLE IF NOT EXISTS schema_meta (
  */
 export const POSTGRES_MIGRATIONS: string[] = [
   "ALTER TABLE users ADD COLUMN IF NOT EXISTS developer_mode INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE users ADD COLUMN IF NOT EXISTS password_set INTEGER NOT NULL DEFAULT 1",
   "ALTER TABLE user_totp ADD COLUMN IF NOT EXISTS last_used_step BIGINT",
   "ALTER TABLE login_challenges ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0",
 ];
