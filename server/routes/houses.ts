@@ -149,6 +149,7 @@ houseRoutes.delete(
     const { houseId } = await requireHouse(req, "owner");
     const uploads = await houseUploadUrls(houseId);
     await run("DELETE FROM houses WHERE id = ?", [houseId]);
+    await run("DELETE FROM catalog_mappings WHERE house_id = ?", [houseId]);
     await removeUnreferencedUploads(uploads);
     res.json({ ok: true });
   }),

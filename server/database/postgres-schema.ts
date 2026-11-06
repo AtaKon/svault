@@ -350,6 +350,7 @@ CREATE INDEX IF NOT EXISTS catalog_products_brand ON catalog_products(brand);
 
 CREATE TABLE IF NOT EXISTS catalog_mappings (
   id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL DEFAULT '',
   country TEXT NOT NULL DEFAULT '',
   vendor_key TEXT NOT NULL DEFAULT '',
   vendor_label TEXT,
@@ -364,8 +365,7 @@ CREATE TABLE IF NOT EXISTS catalog_mappings (
   confidence DOUBLE PRECISION NOT NULL DEFAULT 0.5,
   uses INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  UNIQUE (country, vendor_key, raw_key)
+  updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS catalog_mappings_lookup ON catalog_mappings(country, vendor_key, raw_key);
 CREATE INDEX IF NOT EXISTS catalog_mappings_off ON catalog_mappings(off_code);
@@ -600,6 +600,11 @@ export const POSTGRES_MIGRATIONS: string[] = [
   "ALTER TABLE users ADD COLUMN IF NOT EXISTS password_set INTEGER NOT NULL DEFAULT 1",
   "ALTER TABLE user_totp ADD COLUMN IF NOT EXISTS last_used_step BIGINT",
   "ALTER TABLE login_challenges ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0",
+  // Learned catalogue mappings are scoped per house ('' = shared row).
+  "ALTER TABLE catalog_mappings ADD COLUMN IF NOT EXISTS house_id TEXT NOT NULL DEFAULT ''",
+  "ALTER TABLE catalog_mappings DROP CONSTRAINT IF EXISTS catalog_mappings_country_vendor_key_raw_key_key",
+  "CREATE UNIQUE INDEX IF NOT EXISTS catalog_mappings_scope ON catalog_mappings(house_id, country, vendor_key, raw_key)",
+  "CREATE INDEX IF NOT EXISTS catalog_mappings_house ON catalog_mappings(house_id)",
 ];
 
 /**

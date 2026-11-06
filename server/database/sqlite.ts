@@ -109,6 +109,44 @@ export class SqliteDriver implements DatabaseDriver {
     conn.exec("CREATE UNIQUE INDEX IF NOT EXISTS users_username ON users(username COLLATE NOCASE) WHERE username IS NOT NULL");
     conn.exec("CREATE INDEX IF NOT EXISTS notifications_user ON notifications(user_id, created_at)");
 
+    /* catalog_mappings gained house_id and a wider unique key. SQLite cannot
+       change a table constraint in place, so rebuild the table once. Rows
+       learned before this change stay shared (house_id ''). */
+    if (!columns("catalog_mappings").some((entry) => entry.name === "house_id")) {
+      conn.exec(`BEGIN;
+CREATE TABLE catalog_mappings_scoped (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL DEFAULT '',
+  country TEXT NOT NULL DEFAULT '',
+  vendor_key TEXT NOT NULL DEFAULT '',
+  vendor_label TEXT,
+  raw_key TEXT NOT NULL,
+  raw_text TEXT,
+  off_code TEXT,
+  name TEXT,
+  brand TEXT,
+  unit TEXT,
+  category TEXT,
+  source TEXT NOT NULL DEFAULT 'local',
+  confidence REAL NOT NULL DEFAULT 0.5,
+  uses INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (house_id, country, vendor_key, raw_key)
+);
+INSERT INTO catalog_mappings_scoped
+  (id, house_id, country, vendor_key, vendor_label, raw_key, raw_text, off_code, name, brand, unit, category,
+   source, confidence, uses, created_at, updated_at)
+SELECT id, '', country, vendor_key, vendor_label, raw_key, raw_text, off_code, name, brand, unit, category,
+   source, confidence, uses, created_at, updated_at FROM catalog_mappings;
+DROP TABLE catalog_mappings;
+ALTER TABLE catalog_mappings_scoped RENAME TO catalog_mappings;
+CREATE INDEX IF NOT EXISTS catalog_mappings_lookup ON catalog_mappings(country, vendor_key, raw_key);
+CREATE INDEX IF NOT EXISTS catalog_mappings_off ON catalog_mappings(off_code);
+COMMIT;`);
+    }
+    conn.exec("CREATE INDEX IF NOT EXISTS catalog_mappings_house ON catalog_mappings(house_id)");
+
     /**
      * Older versions shipped `brand` both as an items column and as a default
      * custom attribute, so every item showed Brand twice. Keep the column and
@@ -560,8 +598,9 @@ CREATE TABLE IF NOT EXISTS product_aliases (
 );
 CREATE INDEX IF NOT EXISTS product_aliases_house ON product_aliases(house_id, vendor_key);
 
-/* Shared product catalogue. These tables are deliberately not house-scoped:
-   every house on the instance benefits from a mapping or a cached product. */
+/* Shared product catalogue. Cached products and seed/community mappings are
+   instance-wide; mappings learned from one house's receipts carry that
+   house_id ('' marks a shared row) so they never leak into other houses. */
 CREATE TABLE IF NOT EXISTS catalog_products (
   code TEXT PRIMARY KEY,
   name TEXT,
@@ -580,6 +619,7 @@ CREATE INDEX IF NOT EXISTS catalog_products_brand ON catalog_products(brand);
 
 CREATE TABLE IF NOT EXISTS catalog_mappings (
   id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL DEFAULT '',
   country TEXT NOT NULL DEFAULT '',
   vendor_key TEXT NOT NULL DEFAULT '',
   vendor_label TEXT,
@@ -595,7 +635,7 @@ CREATE TABLE IF NOT EXISTS catalog_mappings (
   uses INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  UNIQUE (country, vendor_key, raw_key)
+  UNIQUE (house_id, country, vendor_key, raw_key)
 );
 CREATE INDEX IF NOT EXISTS catalog_mappings_lookup ON catalog_mappings(country, vendor_key, raw_key);
 CREATE INDEX IF NOT EXISTS catalog_mappings_off ON catalog_mappings(off_code);

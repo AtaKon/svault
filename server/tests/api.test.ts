@@ -2633,6 +2633,44 @@ describe("security hardening", () => {
       assert.match((await fetch(`${base}/`)).headers.get("content-security-policy") ?? "", /'sha256-[A-Za-z0-9+/=]+'/);
     }
   });
+
+  it("keeps catalogue mappings learned by one house out of other houses", async () => {
+    const { learnCatalogMapping, findCatalogMapping, exportCatalogMappings } = await import("../services/product-catalog.js");
+    const raw = "PRIVATE HOUSE BLEND 250G";
+    await learnCatalogMapping({ houseId, country: "GR", rawDescription: raw, name: "Owner's coffee", offCode: "5200000000001" });
+
+    const own = await findCatalogMapping({ houseId, country: "GR", rawDescription: raw });
+    assert.equal(own?.name, "Owner's coffee");
+    assert.equal(await findCatalogMapping({ houseId: strangerHouseId, country: "GR", rawDescription: raw }), null);
+    // Callers that do not pass a house only see shared rows.
+    assert.equal(await findCatalogMapping({ country: "GR", rawDescription: raw }), null);
+
+    const outsider = await request("/api/auth/register", {
+      method: "POST",
+      auth: "",
+      body: { name: "Outsider", email: "catalog.outsider@example.com", password: "test password" },
+    });
+    const leaked = await request(`/api/catalog/resolve?raw=${encodeURIComponent(raw)}`, { auth: outsider.cookie! });
+    assert.equal(leaked.data.mapping, null);
+    const probing = await request(`/api/catalog/resolve?raw=${encodeURIComponent(raw)}&houseId=${houseId}`, {
+      auth: outsider.cookie!,
+    });
+    assert.equal(probing.data.mapping, null);
+    const member = await request(`/api/catalog/resolve?raw=${encodeURIComponent(raw)}&houseId=${houseId}`);
+    assert.equal(member.data.mapping.name, "Owner's coffee");
+
+    // A second house can learn its own answer for the same text.
+    await learnCatalogMapping({ houseId: strangerHouseId, country: "GR", rawDescription: raw, name: "Stranger's coffee" });
+    assert.equal((await findCatalogMapping({ houseId: strangerHouseId, country: "GR", rawDescription: raw }))?.name, "Stranger's coffee");
+    assert.equal((await findCatalogMapping({ houseId, country: "GR", rawDescription: raw }))?.name, "Owner's coffee");
+
+    // Rows learned without a house stay shared, and the admin export still works.
+    await learnCatalogMapping({ country: "GR", rawDescription: "SHARED OAT DRINK 1L", name: "Oat drink" });
+    assert.equal((await findCatalogMapping({ houseId: strangerHouseId, country: "GR", rawDescription: "SHARED OAT DRINK 1L" }))?.name, "Oat drink");
+    const exported = await exportCatalogMappings();
+    assert.equal(exported.mappings.filter((entry) => entry.rawText === raw).length, 1);
+    assert.equal((await request("/api/catalog/export")).status, 200);
+  });
 });
 
 describe("multi-photo receipt OCR", () => {

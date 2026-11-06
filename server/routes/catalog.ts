@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { all, get } from "../db.js";
-import { requireAuth } from "../auth.js";
+import { memberRole, requireAuth } from "../auth.js";
 import { ApiError, handler, intParam, parseBody, requireInstanceAdmin } from "../http.js";
 import {
   fetchOffProduct,
@@ -147,10 +147,14 @@ catalogRoutes.get(
   handler(async (req, res) => {
     const raw = String(req.query.raw ?? "").trim();
     if (!raw) throw new ApiError(400, "Missing raw text");
+    // Shared rows for everyone; a house's learned rows only for its members.
+    const houseId = typeof req.query.houseId === "string" ? req.query.houseId : "";
+    const member = houseId ? Boolean(await memberRole(req.user!.id, houseId)) : false;
     const mapping = await get<any>(
       `SELECT * FROM catalog_mappings
-       WHERE raw_key = ? OR raw_text = ? ORDER BY uses DESC LIMIT 1`,
-      [productAliasKey(raw), raw],
+       WHERE (raw_key = ? OR raw_text = ?) AND house_id IN ('', ?)
+       ORDER BY CASE WHEN house_id = '' THEN 1 ELSE 0 END, uses DESC LIMIT 1`,
+      [productAliasKey(raw), raw, member ? houseId : ""],
     );
     if (!mapping) {
       res.json({ mapping: null });
