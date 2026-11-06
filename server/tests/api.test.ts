@@ -2719,6 +2719,52 @@ describe("security hardening", () => {
     const known = Math.min(await time("owner"), await time("owner"));
     assert.ok(missing > known * 0.4, `unknown ${missing.toFixed(1)}ms vs known ${known.toFixed(1)}ms`);
   });
+
+  it("masks card numbers, IDs and contact details in AI log previews", async () => {
+    const { maskSensitiveText, isValidGtin } = await import("../lib/redact.js");
+    const receipt = [
+      "ΣΚΛΑΒΕΝΙΤΗΣ ΤΗΛ.210-9270972",
+      "5208046287576",
+      "ΑΥΓΑ ΜΑΡΑΤΑ 2,70 13,00%",
+      "VISA 4111 1111 1111 1234",
+      "CARD 5500005555555559",
+      "ΚΑΡΤΑ ΠΙΣΤΟΤΗΤΑΣ 99887766554",
+      "IBAN GR16 0110 1250 0000 0001 2300 695",
+      "mail me: jane.doe@example.com, +30 694 123 4567",
+      "ΣΥΝΟΛΟ 24,02 ΕΥΡΩ",
+    ].join("\n");
+    const masked = maskSensitiveText(receipt);
+    assert.ok(isValidGtin("5208046287576"));
+    assert.match(masked, /5208046287576/); // product barcode kept
+    assert.match(masked, /2,70 13,00%/);
+    assert.match(masked, /ΣΥΝΟΛΟ 24,02/);
+    assert.match(masked, /\[card \*\*\*\*1234\]/);
+    assert.match(masked, /\[card \*\*\*\*5559\]/);
+    assert.match(masked, /\[id \*\*\*\*6554\]/);
+    assert.match(masked, /\[iban \*\*\*\*0695\]/);
+    assert.match(masked, /\[email\]/);
+    for (const secret of ["4111 1111", "5500005555555559", "99887766554", "GR16", "jane.doe", "694 123", "9270972"]) {
+      assert.ok(!masked.includes(secret), `${secret} leaked: ${masked}`);
+    }
+
+    const saved = await request(`/api/houses/${strangerHouseId}`, {
+      method: "PATCH",
+      auth: secondUserCookie,
+      body: { settings: { ai: { enabled: true, baseUrl: aiBase, apiKey: "test-key", model: "mock-model" } } },
+    });
+    assert.equal(saved.status, 200);
+    const scan = await request(`/api/houses/${strangerHouseId}/receipts/scan`, {
+      method: "POST",
+      auth: secondUserCookie,
+      body: { text: "MOCK MART\nMilk 2 x 1.20\nLOYALTY 9876543210123456\nTOTAL 2.40" },
+    });
+    assert.equal(scan.status, 200);
+    const { all } = await import("../db.js");
+    const rows = await all<any>("SELECT request_preview FROM ai_call_logs WHERE house_id = ?", [strangerHouseId]);
+    assert.ok(rows.length > 0);
+    assert.ok(rows.every((row) => !String(row.request_preview).includes("9876543210123456")));
+    assert.ok(rows.some((row) => String(row.request_preview).includes("[card ****3456]")));
+  });
 });
 
 describe("multi-photo receipt OCR", () => {
