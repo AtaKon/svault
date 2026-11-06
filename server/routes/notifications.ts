@@ -4,7 +4,7 @@ import { all, get, parseJson, run, now } from "../db.js";
 import { requireAuth } from "../auth.js";
 import { handler, parseBody, requireHouse } from "../http.js";
 import { serializeNotification } from "../serialize.js";
-import { scanAllHouses, syncHouseExpiry, syncItemLowStock } from "../services/notifications.js";
+import { scanAllHouses, cleanupOrphanNotifications, syncHouseExpiry, syncItemLowStock } from "../services/notifications.js";
 
 export const notificationRoutes = Router();
 notificationRoutes.use(requireAuth);
@@ -53,6 +53,7 @@ notificationRoutes.post(
     const house = get<any>("SELECT settings FROM houses WHERE id = ?", [houseId]);
     const settings = parseJson<Record<string, any>>(house?.settings, {});
     const expiryDays = Number(settings?.notifications?.expiryDays ?? 7);
+    cleanupOrphanNotifications(houseId);
     for (const item of all<any>("SELECT id FROM items WHERE house_id = ? AND archived = 0", [houseId])) {
       syncItemLowStock(item.id);
     }

@@ -16,6 +16,7 @@ import {
   serializeMovement,
 } from "../serialize.js";
 import { addStock, afterStockChange, itemQuantity, moveStock, removeStock, setStock } from "../services/stock.js";
+import { clearItemNotifications } from "../services/notifications.js";
 import { normaliseNutrition } from "../services/nutrition.js";
 import { learnProductAlias } from "../services/product-aliases.js";
 import {
@@ -680,6 +681,7 @@ itemRoutes.delete(
   handler((req, res) => {
     const { item } = itemAccess(req, "member");
     run("DELETE FROM items WHERE id = ?", [item.id]);
+    clearItemNotifications(item.id);
     res.json({ ok: true });
   }),
 );
