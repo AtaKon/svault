@@ -47,10 +47,13 @@ Notes:
 - A house has one owner. In **Settings -> Members** the owner can press **Make owner** on another member
   and confirm by typing the house name. The transfer is atomic, the target is notified, the former owner
   becomes an admin and can then leave. The owner cannot be demoted or removed without transferring first.
-- Invites are links, not emails. Create an invite, copy `/join/<code>` and send it yourself. If you
-  enter an email address, only that address can accept it.
-- Revoked invite links stop working immediately. Invites do not expire automatically; revoke them in
-  **Settings -> Members** when they are no longer needed.
+- Invites are links, not emails. Create an invite, copy `/join/<code>` and send it yourself. Only
+  the email address you entered can accept it. This also applies to people who already have an
+  account: they are not added silently, they join when they open the link and accept.
+- After the first account, new people can only sign up through an invite link (unless the server
+  administrator set `SV_REGISTRATION=open`).
+- Invite links expire after 14 days by default. Revoked links stop working immediately; revoke or
+  remove expired ones in **Settings -> Members**.
 - There is no password-reset email. The owner can reset a password from the database or you can
   re-seed a fresh volume. This is a deliberate self-hosted trade-off.
 
@@ -447,6 +450,8 @@ Docker, Loki, Grafana or another log collector.
   container first for the most consistent SQLite copy, or use `sqlite3 svault.db ".backup ..."`.
 - **Settings → Data → Backup & restore** downloads a checksummed zip with a live SQLite snapshot and
   uploads. Restore validates the archive, keeps a pre-restore copy and returns 503 while it restarts.
+  Because a backup holds every house and account on the server, only the instance administrator (the
+  first account) sees this panel.
   The same operations are available as `npm run backup` / `npm run restore`.
 - To move to another server, copy `DATA_DIR` to the new host and start the same image with the same
   `DATA_DIR`.
