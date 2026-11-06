@@ -342,11 +342,13 @@ for unknown products.
 | `DELETE` | `/api/houses/:houseId/vendors/:vendorId` | admin+ | Delete a shop. Batches and movements lose the link; receipts keep the name they were saved with. |
 | `GET` | `/api/houses/:houseId/receipts` | viewer+ | Recent receipts. Filters: `vendorId`, `q`, `limit` (default 50, max 300). |
 | `GET` | `/api/houses/:houseId/purchases/analytics` | viewer+ | Spend totals, net/tax split, by shop, monthly, VAT rates and categories. Filters: `from`, `to` (`YYYY-MM-DD`). |
-| `POST` | `/api/houses/:houseId/receipts` | member+ | Import lines as stock and save the receipt. |
+| `POST` | `/api/houses/:houseId/receipts` | member+ | Import lines as stock and save the receipt. `409` for a likely duplicate unless `allowDuplicate: true`. |
+| `POST` | `/api/houses/:houseId/receipts/validate` | member+ | Dry run of an import (same body): per-line item match, new items and errors. Writes nothing. |
 | `POST` | `/api/houses/:houseId/receipts/upload` | member+ | Upload a receipt photo (`field: image`) and get `{ path }`. |
-| `POST` | `/api/houses/:houseId/receipts/scan` | member+ | Parse OCR text and/or an image into a receipt draft. |
+| `DELETE` | `/api/houses/:houseId/receipts/upload` | member+ | Delete a draft upload `{ "path": "/uploads/receipts/..." }`. `409` when a saved receipt uses it. |
+| `POST` | `/api/houses/:houseId/receipts/scan` | member+ | Parse OCR text and/or page images into a receipt draft with a reconciliation and a `scanId`. |
 | `GET` | `/api/receipts/:receiptId` | viewer+ | Receipt with its lines and linked item names. |
-| `DELETE` | `/api/receipts/:receiptId` | member+ | Delete the receipt record. Stock and price history stay. |
+| `DELETE` | `/api/receipts/:receiptId` | member+ | Delete the receipt and its image. `?revertStock=true` also removes the stock it added that is still there. |
 
 Suggested-shop response:
 
@@ -366,11 +368,28 @@ keyed by `country`, so other countries can be added later without changing the r
 scan resolves known merchant aliases (for example `LIDL HELLAS` or `SKLAVENITIS`) to the catalog name,
 and importing with a `vendorName` reuses an existing house shop when the alias matches.
 
-Scan body (same AI/local fallback behaviour as recipe scans):
+Scan body:
 
 ```json
-{ "text": "OCR text from the browser", "image": "/uploads/receipts/....jpg" }
+{
+  "text": "OCR text from the browser",
+  "image": "/uploads/receipts/stitched.jpg",
+  "images": ["/uploads/receipts/page-1.jpg", "/uploads/receipts/page-2.jpg"],
+  "preferAi": false
+}
 ```
+
+`images` (up to 8) are the individual page photos, sent to the vision model one by one; `image` is the
+stitched scan kept with the receipt and is used for the vision call only when `images` is absent (older
+clients). Every path must match `/uploads/receipts/<file>`, otherwise the request is rejected with 400.
+The mime type sent to the model comes from the file extension. A photo that is missing or larger than
+8 MB is skipped and named in `warning`.
+
+Parsing order: a recognised template wins when it is confident (≥ 0.75) and its lines reconcile with the
+printed total. When the template's confidence is lower or its lines do not add up, and AI is configured,
+the receipt is also read by AI and the AI draft is used only if it reconciles better; `warning` explains
+which one was kept. `preferAi: true` (the "Re-read with AI" button) uses the AI draft whenever it finds
+lines. Without a template the AI/local fallback is the same as for recipe scans.
 
 Response:
 
@@ -378,6 +397,10 @@ Response:
 {
   "provider": "template",
   "warning": null,
+  "aiCost": null,
+  "scanId": "scn_...",
+  "aiAvailable": true,
+  "reconciliation": { "linesTotal": 10.63, "savings": 1.04, "printedTotal": 10.73, "difference": 0.1, "ok": true },
   "draft": {
     "vendorName": "Lidl",
     "purchasedAt": "2026-10-08",
@@ -410,7 +433,19 @@ Response:
 `provider` is `ai`, `local` or `template`. A recognised layout (the built-in `lidl-gr` and
 `sklavenitis-gr` templates) wins before generic/AI parsing. The response includes `templateId`,
 `templateConfidence` and `savings`, and each line can carry the original `rawDescription`, `taxRate`,
-`discount` and `barcode`. The receipt stores `provider` so clients can show whether AI was used.
+`discount` and `barcode`.
+
+`reconciliation` compares the lines with the printed total. `linesTotal` sums `lineTotal` (or
+`unitPrice × quantity`). Templates already subtract a product's discount from its line, so only savings
+not attributed to a line are subtracted; when a line carries a discount but may still be gross (AI
+drafts), the closer of the two readings is used. `difference` is the printed total minus the expected
+total (positive: lines probably missing). `ok` is true when `|difference| ≤ max(0.05, 2 % of the
+total)`; it is false and `difference` null when no total was printed.
+
+`scanId` refers to a short-lived server-side record (6 hours, in memory) of the scan's provider, AI cost,
+template and images. Pass it to the import: the receipt's `provider`, `aiCost`, `templateId` and
+`templateConfidence` are copied from that record, never from the request. Without a valid `scanId` for
+the same house they are stored as `null` and the receipt counts as manual unless it has an image.
 
 Import body:
 
@@ -423,9 +458,8 @@ Import body:
   "subtotal": 4.44,
   "tax": 1.06,
   "taxBreakdown": [{ "rate": 24, "net": 4.44, "tax": 1.06, "gross": 5.5 }],
-  "templateId": "lidl-gr",
-  "templateConfidence": 0.99,
-  "provider": "template",
+  "scanId": "scn_...",
+  "allowDuplicate": false,
   "savings": 1.04,
   "image": "/uploads/receipts/....jpg",
   "ocrText": "raw text, optional",
@@ -442,23 +476,78 @@ Import body:
       "discount": 0,
       "offCode": "5201234567890"
     },
-    { "description": "Sourdough bread", "quantity": 1, "unitPrice": 3.1, "lineTotal": 3.1, "locationId": "loc_..." }
+    {
+      "description": "Sourdough bread",
+      "quantity": 1,
+      "unitPrice": 3.1,
+      "lineTotal": 3.1,
+      "locationId": "loc_...",
+      "expiresAt": "2026-10-16"
+    }
   ]
 }
 ```
 
 Use `vendorId` instead of `vendorName` to pick an existing shop; an unknown `vendorName` creates one.
-A line may set `itemId` to force a match, `barcode` to match by barcode, or `offCode` to link the
-created item to an OpenFoodFacts product. A printed `barcode` is tried before `offCode` for the
-OpenFoodFacts lookup, and the shared catalogue fills gaps when neither is present. Without any of
-these, the server matches an item by name (with a conservative loose match) and otherwise creates a
-new item using the line's unit. Incompatible units are rejected with a 400 before anything is written.
-Every imported line creates a normal `in` movement carrying `vendorId` and `receiptId`; delete the
-receipt later without touching stock.
+`image` must be an existing `/uploads/receipts/<file>` upload (anything else is a 400). The old
+`provider`, `aiCost`, `templateId` and `templateConfidence` fields are still accepted but ignored — see
+`scanId` above. A line may set `locationId` (overrides the place for that line) and `expiresAt`
+(`YYYY-MM-DD`) for its batch.
 
-If `rawDescription` is supplied, the resolved item is remembered as a vendor-specific product alias.
-The next receipt from that shop resolves the same abbreviation to the same item. Correcting a line in
-the UI therefore trains the mapping without a separate training step.
+Item resolution, shared by the import and `/receipts/validate`: `itemId` (the user's choice) → a learned
+product alias for the raw name → `barcode` → exact name → a fuzzy name match → a new item with the
+line's unit. The fuzzy match compares normalised word tokens (accents removed, Greek kept, pack sizes
+dropped) with a Dice score of at least 0.85, skips items whose unit cannot take the line's unit, and
+gives up when two items tie — so "Oat milk chocolate" is not booked as "Oat milk". `offCode` links the
+item to an OpenFoodFacts product; a printed `barcode` is tried before `offCode` for that lookup, and the
+shared catalogue fills gaps when neither is present. Every imported line creates a normal `in` movement
+carrying `vendorId` and `receiptId`.
+
+All lines are checked before anything is written. Problems (incompatible units, an item or place from
+another house) are returned together:
+
+```json
+{ "error": "2 lines cannot be imported", "details": { "lines": [{ "index": 0, "error": "Cannot add “Milk” in pcs to an item stocked in l. Pick another unit or item." }] } }
+```
+
+A receipt with the same shop (id or normalised name), purchase date and total (within 0.01) as a saved
+one is refused unless `allowDuplicate` is `true`:
+
+```json
+{ "error": "This receipt looks like one you already saved", "duplicateOf": { "id": "rct_...", "purchasedAt": "2026-10-12", "total": 5.5, "vendorName": "Corner Market" } }
+```
+
+When the import used a `scanId`, page photos of that scan other than the stored `image` are deleted.
+
+`POST /receipts/validate` takes the same body and answers without writing:
+
+```json
+{
+  "ok": false,
+  "newItems": 1,
+  "duplicateOf": null,
+  "lines": [
+    { "index": 0, "itemId": "itm_...", "itemName": "Milk", "itemUnit": "l", "match": "alias", "willCreate": false, "error": null },
+    { "index": 1, "itemId": null, "itemName": "Sourdough bread", "itemUnit": "pcs", "match": "new", "willCreate": true, "error": null }
+  ]
+}
+```
+
+`match` is `chosen`, `alias`, `barcode`, `name`, `fuzzy` or `new`. A second line for a product the same
+receipt creates has `willCreate: false` and shares the new item.
+
+Deleting a receipt removes its image file unless another receipt record points at the same file. With
+`?revertStock=true`, every batch created by the receipt (including parts moved to another place) is
+emptied and one `adjust` movement per item records it; quantities already used stay used:
+
+```json
+{ "ok": true, "imageRemoved": true, "reverted": [{ "itemId": "itm_...", "itemName": "Apples", "unit": "pcs", "added": 3, "reverted": 2, "consumed": 1 }] }
+```
+
+Product aliases are learned only for lines whose item the user chose (`itemId`) or that created a new
+item, keyed by `rawDescription` and the shop. Automatic fuzzy matches are not learned, so a wrong guess
+does not become permanent. The next receipt from that shop resolves the same abbreviation to the same
+item.
 
 Scan responses also include `suggestedItemId`, `suggestedItemName`, `suggestedItemUnit`,
 `suggestedItemScore` and `suggestedItemSource` on each line, plus `offCode`, `offName`, `offBrand`,

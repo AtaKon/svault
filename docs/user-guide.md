@@ -125,21 +125,42 @@ select, date, boolean and URL.
    and straightened automatically — the table around it is trimmed and perspective is corrected — and
    OCR runs on each page separately in the browser. For a long receipt, photograph it in overlapping
    shots: the duplicate lines where two shots overlap are dropped, and the pages are stitched into one
-   image for the stored scan. Reorder or remove a page from the thumbnail strip, then correct any lines
-   it misread before pressing **Read receipt**.
+   image for the stored scan. Each page photo is also sent on its own to an AI vision model when one is
+   configured. Reorder or remove a page from the thumbnail strip, then correct any lines it misread
+   before pressing **Read receipt**.
 3. The shop printed on the receipt is detected automatically and matched to your existing shops. Known
    layouts are parsed with a shop-specific template — Lidl Greece and Sklavenitis Greece are built in,
    including weights, quantity lines, barcodes and store discounts. The receipt header shows whether it
-   was read by **AI**, a **template** or the **local** parser. Check the shop, purchase date, total,
+   was read by **AI**, a **template** or the **local** parser. When a template is unsure or its lines do
+   not add up to the printed total and AI is configured, AI reads the receipt too and the version that
+   adds up better is kept; a note says which. Check the shop, purchase date, total,
    **net**, **tax/VAT** and **money saved**. When the receipt prints VAT rates they are read as a split;
    you can correct the total, net and tax before importing. Every product line can be excluded, renamed,
-   given a quantity, unit and price, or pinned to an existing item. Lines without a match create new items.
-4. Press **Add lines to inventory**. Each line becomes a stock batch with the price, purchase date and
-   shop attached. The receipt, its photo and the line details stay under **Receipts**. Click the photo
-   there to open the original scan full-size.
+   given a quantity, unit and price, or pinned to an existing item with the search under each line.
+   Lines without a match create new items; the header counts how many. Open a line's **⋯** details to
+   put it in a different place than the rest of the receipt or to give it a best-before date.
+4. Above the save button a bar compares the lines with the receipt total: green when they match, amber
+   with the gap when something is missing or read twice. With AI configured, **Re-read with AI** asks AI
+   to read the receipt again (it replaces the current lines).
+5. Press **Add lines to inventory**. SVault checks every line first and marks the ones that cannot be
+   imported — for example a line in pieces for an item stocked in litres — so you can fix them all at
+   once. If the same shop, date and total were already saved, you are asked before the stock is added a
+   second time, with a link to the saved receipt. Each line becomes a stock batch with the price,
+   purchase date and shop attached. The receipt, its photo and the line details stay under **Receipts**.
+   Click the photo there to open the original scan full-size.
+
+The scan is saved on your device while you work, so a phone that reloads the page after taking a photo
+does not lose it. When you come back you can **Resume** the unsaved receipt or **Discard** it. Saving
+the receipt or pressing **Start over** removes the draft and the photos it uploaded.
+
+**Delete record** on a receipt removes the receipt, its lines and its photo. The stock it added stays in
+inventory unless you tick **Also remove the stock this receipt added** — useful after a receipt was
+imported twice. Only what is still in stock is removed; anything already used is reported and left
+alone.
 
 Correcting a line — for example pinning `ΑΛΕΞ.ΛΕΥΚ.ΑΣΠ.1KG` to your “Flour” item — teaches SVault that
-shop's name for next time. The original receipt name is stored with the line, and the alias is reused on
+shop's name for next time. Automatic matches by a similar name are not remembered: only items you chose
+and new items created from a line are. The original receipt name is stored with the line, and the alias is reused on
 future receipts from the same shop. Lines that are only carrier bags or packaging fees are skipped by
 the Lidl template; Sklavenitis keeps the printed barcodes, so a line can match an item by barcode.
 Separate discount lines are never imported as products: their amounts are applied to the relevant
@@ -180,7 +201,8 @@ Receipt names are often shortened or shop-specific. SVault handles this in two w
 
 - Every correction or pinned line is remembered as a vendor-specific alias (`ΑΛΕΞ.ΛΕΥΚ.ΑΣΠ.1KG` →
   your flour item). The scan screen also suggests products using existing aliases and a local
-  similarity search, showing a confidence percentage.
+  similarity search, showing a confidence percentage; tap **use** to accept a suggestion. Only
+  suggestions from an alias or near-certain ones are picked for you.
 - On an item page, **Receipt names** lists all aliases for that item. You can add a name manually and
   choose “Any shop” or a specific shop, or remove names that are wrong. One item can have many aliases.
 - When a line resolves to an OpenFoodFacts product, the pair is also stored in a **shared product

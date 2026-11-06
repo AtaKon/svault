@@ -522,6 +522,74 @@ export interface ReceiptDraft {
   }[];
 }
 
+/**
+ * How the product lines add up against the printed total. `difference` is
+ * printed total minus what the lines (after savings) add up to: positive means
+ * lines are probably missing, negative means something was read twice.
+ */
+export interface ReceiptReconciliation {
+  linesTotal: number;
+  savings: number;
+  printedTotal: number | null;
+  difference: number | null;
+  ok: boolean;
+}
+
+export interface ReceiptScanResponse {
+  provider: "ai" | "local" | "template";
+  warning: string | null;
+  aiCost: number | null;
+  /** Short-lived server record holding the scan's provenance; pass it to the import. */
+  scanId: string;
+  /** True when the house has an AI provider configured (enables "Re-read with AI"). */
+  aiAvailable: boolean;
+  reconciliation: ReceiptReconciliation;
+  draft: ReceiptDraft;
+}
+
+export interface ReceiptValidationLine {
+  index: number;
+  itemId: string | null;
+  itemName: string | null;
+  itemUnit: string | null;
+  /** How the line was matched: chosen by the user, learned alias, barcode, exact name or fuzzy name. */
+  match: "chosen" | "alias" | "barcode" | "name" | "fuzzy" | "new" | null;
+  willCreate: boolean;
+  error: string | null;
+}
+
+export interface ReceiptDuplicate {
+  id: string;
+  purchasedAt: string | null;
+  total: number | null;
+  vendorName: string | null;
+}
+
+export interface ReceiptValidation {
+  ok: boolean;
+  newItems: number;
+  lines: ReceiptValidationLine[];
+  duplicateOf: ReceiptDuplicate | null;
+}
+
+export interface ReceiptStockRevert {
+  itemId: string;
+  itemName: string;
+  unit: string;
+  /** Quantity the receipt originally added (item unit). */
+  added: number;
+  /** Quantity removed now. */
+  reverted: number;
+  /** Quantity already used or moved out before the receipt was deleted. */
+  consumed: number;
+}
+
+export interface ReceiptDeleteResult {
+  ok: true;
+  imageRemoved: boolean;
+  reverted: ReceiptStockRevert[];
+}
+
 export interface ReceiptAlias {
   id: string;
   rawName: string;
