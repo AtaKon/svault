@@ -17,6 +17,7 @@ import { ApiError, handler } from "../http.js";
 import { OIDC } from "../config.js";
 import { consumeChallenge, storeChallenge } from "../services/passkeys.js";
 import { createHouse } from "../services/houses.js";
+import { registrationStatus } from "../services/registration.js";
 import { usernameFromEmail, usernameWithSuffix } from "../username.js";
 
 export const oidcRoutes = Router();
@@ -84,17 +85,26 @@ async function findOrCreateIdentity(claims: Record<string, any>) {
   let user = await get<any>("SELECT * FROM users WHERE lower(email) = lower(?)", [email]);
   if (!user) {
     if (!OIDC.autoProvision) throw new ApiError(403, "No SVault account matches this identity");
+    // Auto-provisioning creates an account, so it follows SV_REGISTRATION.
+    const registration = await registrationStatus();
+    if (registration.mode !== "open") {
+      throw new ApiError(403, "No SVault account matches this identity. Ask the administrator for an invite.");
+    }
     const userId = newId("usr");
-    const first = !await get("SELECT id FROM users LIMIT 1");
-    await run("INSERT INTO users (id, email, username, name, password_hash, is_admin, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", [
-      userId,
-      email,
-      await uniqueUsername(email),
-      String(claims.name ?? claims.preferred_username ?? email.split("@")[0]).slice(0, 80),
-      hashPassword(randomBytes(24).toString("base64url")),
-      first ? 1 : 0,
-      now(),
-    ]);
+    const first = registration.firstUser;
+    // The random password is never shown, so mark the account as SSO-only.
+    await run(
+      "INSERT INTO users (id, email, username, name, password_hash, password_set, is_admin, created_at) VALUES (?, ?, ?, ?, ?, 0, ?, ?)",
+      [
+        userId,
+        email,
+        await uniqueUsername(email),
+        String(claims.name ?? claims.preferred_username ?? email.split("@")[0]).slice(0, 80),
+        hashPassword(randomBytes(24).toString("base64url")),
+        first ? 1 : 0,
+        now(),
+      ],
+    );
     if (OIDC.defaultHouseId && await get("SELECT id FROM houses WHERE id = ?", [OIDC.defaultHouseId])) {
       await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, 'member', ?)", [
         OIDC.defaultHouseId,

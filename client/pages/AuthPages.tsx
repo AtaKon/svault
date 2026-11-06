@@ -36,13 +36,22 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
   const [backupCode, setBackupCode] = useState(false);
   const [passkeyBusy, setPasskeyBusy] = useState(false);
   const [oidc, setOidc] = useState<{ enabled: boolean; label: string }>({ enabled: false, label: "Single sign-on" });
+  const [registration, setRegistration] = useState<{ mode: "open" | "invite" | "closed" } | null>(null);
 
   useEffect(() => {
     if (oidcError) setError(oidcError);
     void api<{ enabled: boolean; label: string }>("/api/auth/oidc/status")
       .then(setOidc)
       .catch(() => undefined);
+    void api<{ mode: "open" | "invite" | "closed" }>("/api/auth/registration")
+      .then(setRegistration)
+      .catch(() => undefined);
   }, [oidcError]);
+
+  // Without an invite, sign-up is only possible when the server is open.
+  const signupBlocked = Boolean(
+    registration && (registration.mode === "closed" || (registration.mode === "invite" && !invite)),
+  );
 
   const finishLogin = async (data: { user: User; houses: House[] }) => {
     setSession(data);
@@ -239,6 +248,16 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
             </form>
           ) : (
             <>
+              {mode === "register" && signupBlocked ? (
+                <div className="mt-6 flex items-start gap-2 rounded-xl border border-line bg-raised px-3 py-3 text-sm text-muted">
+                  <Icon name="key" size={16} className="mt-0.5 shrink-0" />
+                  <span>
+                    {registration?.mode === "closed"
+                      ? "Registration is closed on this server. Ask the administrator for an account."
+                      : "Registration on this server needs an invite link. Ask a house admin to invite you, then open the link they send."}
+                  </span>
+                </div>
+              ) : (
               <form onSubmit={submit} className="mt-6 space-y-3.5">
                 {mode === "register" && (
                   <Field label="Your name" required>
@@ -290,6 +309,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
                   {mode === "login" ? t("Sign in") : t("Create account")}
                 </Button>
               </form>
+              )}
 
               {mode === "login" && (
                 <div className="mt-3 space-y-2">
@@ -308,12 +328,14 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
 
           <div className="mt-5 text-center text-sm text-muted">
             {mode === "login" ? (
-              <>
-                New here?{" "}
-                <Link className="font-medium text-brand hover:underline" to={`/register${invite ? `?invite=${invite}` : ""}`}>
-                  Create an account
-                </Link>
-              </>
+              signupBlocked ? null : (
+                <>
+                  New here?{" "}
+                  <Link className="font-medium text-brand hover:underline" to={`/register${invite ? `?invite=${invite}` : ""}`}>
+                    Create an account
+                  </Link>
+                </>
+              )
             ) : (
               <>
                 Already have one?{" "}

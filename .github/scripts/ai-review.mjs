@@ -8,20 +8,35 @@
 //   AI_REVIEW_API_KEY   required; when absent the job exits cleanly
 //   AI_REVIEW_BASE_URL  optional; defaults to https://api.openai.com/v1
 //   AI_REVIEW_MODEL     optional; defaults to gpt-4o-mini
+//   AI_REVIEW_MAX_TOKENS optional; answer budget, defaults to 4000. Reasoning
+//                       models spend part of it thinking before they answer.
 
 import { readFile } from "node:fs/promises";
 
 const MARKER = "<!-- svault-ai-review -->";
 const MAX_DIFF_CHARS = 60_000;
+const RETRY_DIFF_CHARS = 30_000;
 const MAX_COMMENT_CHARS = 60_000;
 
 const token = process.env.GITHUB_TOKEN;
 const apiKey = process.env.AI_REVIEW_API_KEY;
 const apiBase = (process.env.AI_REVIEW_BASE_URL || "https://api.openai.com/v1").replace(/\/+$/, "");
 const model = process.env.AI_REVIEW_MODEL || "gpt-4o-mini";
+const maxTokens = Math.max(500, Number(process.env.AI_REVIEW_MAX_TOKENS) || 4_000);
+// OpenRouter accepts a `reasoning` object for every model and ignores it for
+// models that do not think; other OpenAI-compatible APIs may reject it.
+const isOpenRouter = /(^|\.)openrouter\.ai$/i.test(safeHost(apiBase));
 const repository = process.env.GITHUB_REPOSITORY;
 const eventName = process.env.GITHUB_EVENT_NAME;
 const eventPath = process.env.GITHUB_EVENT_PATH;
+
+function safeHost(url) {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return "";
+  }
+}
 
 if (!token) throw new Error("GITHUB_TOKEN is missing");
 if (!repository) throw new Error("GITHUB_REPOSITORY is missing");
@@ -87,19 +102,23 @@ Review rules:
 - If there are no blocking issues, say so explicitly.
 - Output GitHub-flavored Markdown. Do not add a top-level heading that repeats "AI review".`;
 
-function trimDiff(diff) {
-  if (diff.length <= MAX_DIFF_CHARS) return diff;
-  return `${diff.slice(0, MAX_DIFF_CHARS)}\n\n[Diff truncated at ${MAX_DIFF_CHARS} characters]`;
+function trimDiff(diff, limit) {
+  if (diff.length <= limit) return diff;
+  const cut = diff.lastIndexOf("\n", limit);
+  return `${diff.slice(0, cut > 0 ? cut : limit)}\n\n[Diff truncated at ${limit} characters]`;
 }
 
-let prompt;
+/** Builds the prompt; `diffLimit` lets a retry send a shorter diff. */
+let buildPrompt;
 if (isPullRequest) {
   const diffResponse = await github(`/repos/${repository}/pulls/${number}`, {
     headers: { Accept: "application/vnd.github.v3.diff" },
   });
-  const diff = trimDiff(await diffResponse.text());
+  const fullDiff = await diffResponse.text();
   const body = (issue.body || "(no description)").slice(0, 8_000);
-  prompt = `Review this pull request.
+  buildPrompt = (diffLimit) => {
+    const diff = trimDiff(fullDiff, diffLimit);
+    return `Review this pull request.
 
 Title: ${issue.title || "(no title)"}
 Author: ${issue.user?.login || "unknown"}
@@ -126,9 +145,10 @@ Bullet list, or "None."
 
 ### Tests
 Concrete tests or manual checks that are missing.`;
+  };
 } else {
   const body = (issue.body || "(no description)").slice(0, 12_000);
-  prompt = `Triage this issue for SVault and assess whether it deserves implementation.
+  const issuePrompt = `Triage this issue for SVault and assess whether it deserves implementation.
 
 Title: ${issue.title || "(no title)"}
 Author: ${issue.user?.login || "unknown"}
@@ -165,35 +185,86 @@ Actionable questions needed to decide or start work, or "None."
 
 ### Implementation notes
 Two to four concrete pointers to likely files, tests, dependencies, or risks, or "None."`;
+  buildPrompt = () => issuePrompt;
 }
 
-const aiResponse = await fetch(`${apiBase}/chat/completions`, {
-  method: "POST",
-  headers: {
-    Authorization: `Bearer ${apiKey}`,
-    "Content-Type": "application/json",
-    "User-Agent": "svault-ai-review",
-  },
-  signal: AbortSignal.timeout(120_000),
-  body: JSON.stringify({
+/** The answer text, whether the provider returns a string or content parts. */
+function answerText(message) {
+  const content = message?.content;
+  if (typeof content === "string") return content.trim();
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => (typeof part === "string" ? part : part?.type === "text" || !part?.type ? part?.text ?? "" : ""))
+      .join("")
+      .trim();
+  }
+  return "";
+}
+
+async function requestReview(prompt, budget) {
+  const payload = {
     model,
     temperature: 0.2,
-    max_tokens: 1_400,
+    max_tokens: budget,
     messages: [
       { role: "system", content: SYSTEM_PROMPT },
       { role: "user", content: prompt },
     ],
-  }),
-});
+  };
+  // Keep thinking short and out of the reply so the budget goes to the review.
+  if (isOpenRouter) payload.reasoning = { effort: "low", exclude: true };
 
-if (!aiResponse.ok) {
-  const detail = await aiResponse.text();
-  throw new Error(`AI provider returned ${aiResponse.status}: ${detail.slice(0, 500)}`);
+  const response = await fetch(`${apiBase}/chat/completions`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      "User-Agent": "svault-ai-review",
+    },
+    signal: AbortSignal.timeout(180_000),
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`AI provider returned ${response.status}: ${detail.slice(0, 500)}`);
+  }
+  const data = await response.json();
+  const choice = data.choices?.[0];
+  return {
+    text: answerText(choice?.message),
+    finishReason: choice?.finish_reason ?? choice?.native_finish_reason ?? "unknown",
+    usage: data.usage ?? null,
+    error: data.error ?? choice?.error ?? null,
+  };
 }
 
-const aiData = await aiResponse.json();
-const review = (aiData.choices?.[0]?.message?.content || "").trim();
-if (!review) throw new Error("AI provider returned an empty review");
+function describeAttempt(label, attempt) {
+  const usage = attempt.usage || {};
+  const reasoning = usage.completion_tokens_details?.reasoning_tokens;
+  return (
+    `${label}: finish_reason=${attempt.finishReason}, prompt_tokens=${usage.prompt_tokens ?? "?"}, ` +
+    `completion_tokens=${usage.completion_tokens ?? "?"}` +
+    (reasoning != null ? `, reasoning_tokens=${reasoning}` : "") +
+    (attempt.error ? `, error=${JSON.stringify(attempt.error).slice(0, 300)}` : "")
+  );
+}
+
+// An empty answer usually means a reasoning model spent the whole budget
+// thinking (finish_reason "length"), most often on a large diff. Retry once
+// with a shorter diff and a bigger budget before giving up.
+const first = await requestReview(buildPrompt(MAX_DIFF_CHARS), maxTokens);
+let review = first.text;
+if (!review) {
+  console.log(`Empty review. ${describeAttempt("attempt 1", first)}`);
+  const second = await requestReview(buildPrompt(RETRY_DIFF_CHARS), maxTokens * 2);
+  review = second.text;
+  if (!review) {
+    throw new Error(
+      `AI provider returned an empty review twice. ${describeAttempt("attempt 1", first)}; ` +
+        `${describeAttempt("attempt 2", second)}. Raise AI_REVIEW_MAX_TOKENS or pick a non-reasoning model.`,
+    );
+  }
+}
 
 const commentBody = `${MARKER}
 ${review.slice(0, MAX_COMMENT_CHARS)}

@@ -1,6 +1,7 @@
 import { AI_ENV, AI_LOG_PREVIEW_CHARS } from "./config.js";
 import { ApiError } from "./http.js";
 import { recordAiCall } from "./services/ai-logs.js";
+import { OutboundBlockedError, assertOutboundUrl, outboundRedirectMode } from "./lib/outbound.js";
 import type { HouseSettings } from "../shared/types.js";
 
 /** Extra context attached to the AI audit trail. */
@@ -22,6 +23,8 @@ export interface AiConfig {
   inputPrice: number | null;
   /** USD per 1M completion tokens. Used when the provider does not report a price. */
   outputPrice: number | null;
+  /** True when the house points at its own endpoint instead of the server's default. */
+  customEndpoint: boolean;
 }
 
 /** What an AI call cost, in USD, plus the token counts it was billed for. */
@@ -45,17 +48,41 @@ function optionalPrice(value: unknown): number | null {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
+/** Compare endpoints without caring about trailing slashes or host case. */
+export function normaliseBaseUrl(value: unknown): string {
+  const trimmed = String(value ?? "").trim().replace(/\/+$/, "");
+  if (!trimmed) return "";
+  try {
+    const url = new URL(trimmed);
+    return `${url.protocol}//${url.host}${url.pathname.replace(/\/+$/, "")}${url.search}`.toLowerCase();
+  } catch {
+    return trimmed.toLowerCase();
+  }
+}
+
+/**
+ * Resolve the provider for a house. The server's own key (OPENAI_API_KEY) is
+ * only ever sent to the server's own base URL: a house that points SVault at
+ * a different endpoint must bring its own key, or the endpoint must be a
+ * keyless local one (Ollama, LM Studio) that the house explicitly enabled.
+ */
 export function resolveAi(settings: HouseSettings | Record<string, any>): AiConfig {
   const ai = (settings as HouseSettings)?.ai ?? {};
-  const apiKey = (ai.apiKey && ai.apiKey !== "***" ? ai.apiKey : AI_ENV.apiKey) || "";
+  const houseBase = String(ai.baseUrl ?? "").trim().replace(/\/+$/, "");
+  const envBase = String(AI_ENV.baseUrl ?? "").trim().replace(/\/+$/, "");
+  const customEndpoint = Boolean(houseBase) && normaliseBaseUrl(houseBase) !== normaliseBaseUrl(envBase);
+  const houseKey = ai.apiKey && ai.apiKey !== "***" ? String(ai.apiKey) : "";
+  const apiKey = houseKey || (customEndpoint ? "" : AI_ENV.apiKey) || "";
+  const enabled = ai.enabled !== false && (Boolean(apiKey) || (customEndpoint && ai.enabled === true));
   return {
-    enabled: Boolean(apiKey) && ai.enabled !== false,
-    baseUrl: (ai.baseUrl || AI_ENV.baseUrl || "").replace(/\/+$/, ""),
+    enabled,
+    baseUrl: houseBase || envBase,
     apiKey,
     model: ai.model || AI_ENV.model,
     visionModel: ai.visionModel || AI_ENV.visionModel || ai.model || AI_ENV.model,
     inputPrice: optionalPrice(ai.inputPrice) ?? AI_ENV.inputPrice,
     outputPrice: optionalPrice(ai.outputPrice) ?? AI_ENV.outputPrice,
+    customEndpoint,
   };
 }
 
@@ -90,6 +117,14 @@ export async function chat(
   ctx: AiCallContext = { operation: "chat" },
 ): Promise<{ text: string; usage: AiUsage }> {
   if (!cfg.enabled) throw new ApiError(400, "No AI provider configured");
+  if (cfg.customEndpoint) {
+    try {
+      await assertOutboundUrl(cfg.baseUrl, "The AI base URL");
+    } catch (error) {
+      if (error instanceof OutboundBlockedError) throw new ApiError(400, error.message);
+      throw error;
+    }
+  }
 
   const startedAt = Date.now();
   const content: string | ContentPart[] = opts.images?.length
@@ -130,6 +165,7 @@ export async function chat(
         ...(cfg.apiKey ? { authorization: `Bearer ${cfg.apiKey}` } : {}),
       },
       body: payloadText,
+      redirect: cfg.customEndpoint ? outboundRedirectMode() : "follow",
       signal: AbortSignal.timeout(90_000),
     });
     lastStatus = res.status;
@@ -324,7 +360,11 @@ export async function aiParseReceipt(
       "return null instead of guessing. Respond with JSON only, no markdown.",
     user:
       `Extract this shopping receipt into JSON with this exact shape:\n${RECEIPT_SCHEMA}\n\n` +
-      (rawText ? `RAW OCR TEXT:\n${rawText.slice(0, 12000)}` : "The receipt is in the attached image. Read it carefully."),
+      (rawText ? `RAW OCR TEXT:\n${rawText.slice(0, 12000)}` : "The receipt is in the attached image. Read it carefully.") +
+      (images.length > 1
+        ? `\n\nThe receipt was photographed in ${images.length} overlapping parts, attached top to bottom. ` +
+          "Lines visible in two photos are the same purchase: list them once."
+        : ""),
     images,
     json: true,
     temperature: 0.1,
@@ -417,11 +457,38 @@ export async function aiSuggestIdeas(
   return { data: extractJson<Record<string, unknown>>(text), usage };
 }
 
-/** Convert a local upload into a data URL for vision models. */
-export async function fileToDataUrl(filePath: string, mime: string): Promise<string | null> {
+const IMAGE_MIME_BY_EXT: Record<string, string> = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+  ".avif": "image/avif",
+  ".heic": "image/heic",
+  ".heif": "image/heif",
+  ".bmp": "image/bmp",
+  ".tif": "image/tiff",
+  ".tiff": "image/tiff",
+};
+
+/** Largest image sent inline to a vision model. */
+export const MAX_VISION_IMAGE_BYTES = 8 * 1024 * 1024;
+
+/** Mime type for an upload, from its file extension. */
+export function imageMimeForPath(filePath: string, fallback = "image/jpeg"): string {
+  const match = /\.[A-Za-z0-9]+$/.exec(filePath);
+  return (match && IMAGE_MIME_BY_EXT[match[0].toLowerCase()]) || fallback;
+}
+
+/**
+ * Convert a local upload into a data URL for vision models. The mime type
+ * comes from the file extension; `mime` is only the fallback for unknown ones.
+ * Returns null when the file is missing or larger than MAX_VISION_IMAGE_BYTES.
+ */
+export async function fileToDataUrl(filePath: string, mime = "image/jpeg"): Promise<string | null> {
   const fs = await import("node:fs/promises");
   const stat = await fs.stat(filePath).catch(() => null);
-  if (!stat || stat.size > 8 * 1024 * 1024) return null;
+  if (!stat || !stat.isFile() || stat.size > MAX_VISION_IMAGE_BYTES) return null;
   const buf = await fs.readFile(filePath);
-  return `data:${mime};base64,${buf.toString("base64")}`;
+  return `data:${imageMimeForPath(filePath, mime)};base64,${buf.toString("base64")}`;
 }

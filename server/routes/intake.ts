@@ -4,7 +4,7 @@ import { AI_ENV } from "../config.js";
 import { get, newId, now, parseJson, run, tx } from "../db.js";
 import { requireAuth } from "../auth.js";
 import { ApiError, handler, parseBody, requireHouse } from "../http.js";
-import { aiParseReceipt, fileToDataUrl, resolveAi } from "../ai.js";
+import { aiParseReceipt, resolveAi } from "../ai.js";
 import { heuristicReceipt, normaliseReceiptDraft } from "../services/receipt-local.js";
 import { selectReceiptTemplate } from "../services/receipt-templates.js";
 import { suggestProductMatches } from "../services/product-match.js";
@@ -12,7 +12,8 @@ import { fetchOffProduct, getCachedOffProduct } from "../services/openfoodfacts.
 import { canonicalVendor, detectCatalogVendor } from "../services/vendors.js";
 import { addStock, afterStockChange } from "../services/stock.js";
 import { ITEM_SELECT, barcodesForItem, serializeItem } from "../serialize.js";
-import { uploader, uploadPath } from "../upload.js";
+import { uploader } from "../upload.js";
+import { loadVisionImages, rememberUpload, skippedImagesWarning } from "../services/receipt-scans.js";
 import { UNITS, convert } from "../units.js";
 import type { IntakeParseResult, IntakeRow } from "../../shared/types.js";
 
@@ -25,12 +26,6 @@ async function purchaseCountry(houseId: string) {
   const house = await get<any>("SELECT settings FROM houses WHERE id = ?", [houseId]);
   const settings = parseJson<Record<string, any>>(house?.settings, {});
   return String(settings?.purchases?.country ?? "GR").toUpperCase();
-}
-
-async function localImageToDataUrl(image: string): Promise<string | null> {
-  if (!image.startsWith("/uploads/receipts/")) return Promise.resolve(null);
-  const filename = image.split("/").pop()!;
-  return await fileToDataUrl(uploadPath("receipts", filename), "image/jpeg");
 }
 
 async function itemByBarcode(houseId: string, code: string) {
@@ -113,9 +108,11 @@ intakeRoutes.post(
   "/:houseId/intake/upload",
   uploader("receipts").single("image"),
   handler(async (req, res) => {
-    await requireHouse(req, "member");
+    const { houseId } = await requireHouse(req, "member");
     if (!req.file) throw new ApiError(400, "No image uploaded");
-    res.status(201).json({ path: `/uploads/receipts/${req.file.filename}` });
+    const path = `/uploads/receipts/${req.file.filename}`;
+    rememberUpload(path, houseId);
+    res.status(201).json({ path });
   }),
 );
 
@@ -161,10 +158,9 @@ intakeRoutes.post(
     if (provider !== "template") {
       if (cfg.enabled && (rawText || (body.image && hasVisionModel))) {
         try {
-          const images =
-            body.image && hasVisionModel
-              ? [await localImageToDataUrl(body.image)].filter((value): value is string => !!value)
-              : [];
+          const vision = body.image && hasVisionModel ? await loadVisionImages([body.image]) : { images: [], skipped: 0 };
+          const images = vision.images;
+          const imageWarning = skippedImagesWarning(vision.skipped, 1);
           const aiDraft = await aiParseReceipt(cfg, rawText, images, {
             operation: "receipt.intake",
             houseId,
@@ -178,6 +174,7 @@ intakeRoutes.post(
           });
           draft = normaliseReceiptDraft(aiDraft.data, house.currency ?? null);
           provider = "ai";
+          warning = imageWarning;
         } catch (err) {
           warning = `AI cleanup failed, kept the locally parsed version. ${err instanceof Error ? err.message : ""}`.trim();
         }

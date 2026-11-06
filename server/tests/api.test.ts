@@ -9,6 +9,8 @@ const dataDir = mkdtempSync(path.join(tmpdir(), "svault-test-"));
 process.env.DATA_DIR = dataDir;
 process.env.NODE_ENV = "test";
 process.env.OPENAI_API_KEY = "";
+// Most tests register several independent accounts; the registration-mode tests switch this.
+process.env.SV_REGISTRATION = "open";
 process.env.SVAI_API_KEY = "";
 
 const http = await import("node:http");
@@ -1235,6 +1237,31 @@ describe("OpenFoodFacts links and shared catalogue", () => {
 
     const mappings = await request(`/api/catalog/mappings?q=${encodeURIComponent("ΔΩΔΩΝΗ")}`);
     assert.ok(mappings.data.some((mapping: any) => mapping.offCode === dodoniCode));
+
+    // A mapping learned from this house's receipt stays with this house. The
+    // text above also has a bundled seed row (shared by design), so use a
+    // shop shorthand that only this receipt teaches.
+    const privateRaw = "DODONI HOUSE ONLY 1KG";
+    const learned = await request(`/api/houses/${houseId}/receipts`, {
+      method: "POST",
+      body: {
+        vendorName: "Lidl",
+        currency: "EUR",
+        purchasedAt: "2026-01-02",
+        lines: [{ description: privateRaw, rawDescription: privateRaw, quantity: 1, unit: "pcs", lineTotal: 9.9, offCode: dodoniCode }],
+      },
+    });
+    assert.equal(learned.status, 201);
+    const { findCatalogMapping } = await import("../services/product-catalog.js");
+    const own = await findCatalogMapping({ houseId, country: "GR", vendorName: "Lidl", rawDescription: privateRaw });
+    assert.equal(own?.offCode, dodoniCode);
+    const other = await findCatalogMapping({
+      houseId: "hse_someoneelse",
+      country: "GR",
+      vendorName: "Lidl",
+      rawDescription: privateRaw,
+    });
+    assert.equal(other, null);
   });
 
   it("exports and imports the catalogue", async () => {
@@ -1394,9 +1421,7 @@ describe("receipts and shops", () => {
         subtotal: draft.subtotal,
         tax: draft.tax,
         taxBreakdown: draft.taxBreakdown,
-        templateId: draft.templateId,
-        templateConfidence: draft.templateConfidence,
-        provider: scan.data.provider,
+        scanId: scan.data.scanId,
         savings: draft.savings,
         ocrText: SKLAVENITIS_SAMPLE,
         lines: draft.lines.map((line: any) => ({
@@ -1477,8 +1502,9 @@ describe("receipts and shops", () => {
     assert.equal(res.status, 201);
     assert.equal(res.data.vendorName, "Corner Market");
     assert.equal(res.data.lines.length, 2);
-    assert.equal(res.data.provider, "ai");
-    assert.equal(res.data.aiCost, 0.0012);
+    // Provenance comes from a server-side scan record; client-sent values are ignored.
+    assert.equal(res.data.provider, null);
+    assert.equal(res.data.aiCost, null);
     assert.equal(res.data.lines[0].itemName, "Milk");
     assert.equal(res.data.lines[1].itemName, "Sourdough bread");
     receiptId = res.data.id;
@@ -2179,7 +2205,15 @@ describe("multi-user membership", () => {
       body: { email: "stranger@example.com", role: "viewer" },
     });
     assert.equal(invite.status, 201);
-    assert.ok(invite.data.member);
+    // Existing accounts get an invite to accept instead of being added silently.
+    assert.ok(invite.data.invite);
+    assert.equal(invite.data.invite.existingAccount, true);
+    assert.equal((await request(`/api/houses/${houseId}`, { auth: secondUserCookie })).status, 404);
+    const accepted = await request(`/api/auth/invites/${invite.data.invite.code}/accept`, {
+      method: "POST",
+      auth: secondUserCookie,
+    });
+    assert.equal(accepted.status, 200);
 
     const access = await request(`/api/houses/${houseId}`, { auth: secondUserCookie });
     assert.equal(access.status, 200);
@@ -2219,6 +2253,541 @@ describe("multi-user membership", () => {
     const owner = house.data.members.find((member: any) => member.role === "owner");
     const res = await request(`/api/houses/${houseId}/members/${owner.id}`, { method: "DELETE" });
     assert.equal(res.status, 400);
+  });
+});
+
+describe("security hardening", () => {
+  let strangerHouseId = "";
+
+  before(async () => {
+    const me = await request("/api/auth/me", { auth: secondUserCookie });
+    strangerHouseId = me.data.houses.find((house: any) => house.role === "owner").id;
+  });
+
+  it("limits backup and restore to the instance administrator", async () => {
+    // Every user owns a house, so house ownership alone must not unlock a whole-instance backup.
+    const download = await request(`/api/houses/${strangerHouseId}/backup`, { auth: secondUserCookie });
+    assert.equal(download.status, 403);
+    const list = await request(`/api/houses/${strangerHouseId}/backups`, { auth: secondUserCookie });
+    assert.equal(list.status, 403);
+    const form = new FormData();
+    form.append("backup", new Blob([Buffer.from("not a zip")], { type: "application/zip" }), "backup.zip");
+    form.append("houseName", "whatever");
+    const restore = await fetch(`${base}/api/houses/${strangerHouseId}/restore`, {
+      method: "POST",
+      headers: { cookie: secondUserCookie },
+      body: form,
+    });
+    assert.equal(restore.status, 403);
+
+    const adminList = await request(`/api/houses/${houseId}/backups`);
+    assert.equal(adminList.status, 200);
+  });
+
+  async function uploadImage(path: string, bytes: Uint8Array, type: string, name: string, auth = cookie) {
+    const copy = new ArrayBuffer(bytes.length);
+    new Uint8Array(copy).set(bytes);
+    const form = new FormData();
+    form.append("image", new Blob([copy], { type }), name);
+    const res = await fetch(`${base}${path}`, { method: "POST", headers: { cookie: auth }, body: form });
+    const text = await res.text();
+    return { status: res.status, data: text ? JSON.parse(text) : null };
+  }
+
+  it("only stores real images under their mapped extension", async () => {
+    const html = Buffer.from("<html><script>alert(document.cookie)</script></html>");
+    const spoofed = await uploadImage(`/api/houses/${houseId}/recipes/upload`, html, "image/png", "evil.html");
+    assert.equal(spoofed.status, 400);
+    const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
+    const vector = await uploadImage(`/api/houses/${houseId}/recipes/upload`, svg, "image/svg+xml", "evil.svg");
+    assert.equal(vector.status, 400);
+    const unknown = await uploadImage(`/api/houses/${houseId}/recipes/upload`, html, "image/x-html", "evil.html");
+    assert.equal(unknown.status, 400);
+
+    const png = encodePng(4, 4, Buffer.alloc(4 * 4 * 4, 90));
+    const ok = await uploadImage(`/api/houses/${houseId}/recipes/upload`, new Uint8Array(png), "image/png", "photo.html");
+    assert.equal(ok.status, 201);
+    assert.match(ok.data.path, /^\/uploads\/recipes\/[\w-]+\.png$/);
+    const served = await fetch(`${base}${ok.data.path}`);
+    assert.equal(served.status, 200);
+    assert.equal(served.headers.get("x-content-type-options"), "nosniff");
+    assert.match(served.headers.get("content-security-policy") ?? "", /sandbox/);
+    assert.equal(served.headers.get("content-disposition"), null);
+  });
+
+  it("serves non-image files under /uploads as sandboxed downloads", async () => {
+    const { writeFileSync, mkdirSync } = await import("node:fs");
+    mkdirSync(path.join(dataDir, "uploads", "recipes"), { recursive: true });
+    writeFileSync(path.join(dataDir, "uploads", "recipes", "legacy.html"), "<script>alert(1)</script>");
+    const res = await fetch(`${base}/uploads/recipes/legacy.html`);
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get("content-disposition"), "attachment");
+    assert.equal(res.headers.get("content-type"), "application/octet-stream");
+    assert.match(res.headers.get("content-security-policy") ?? "", /default-src 'none'.*sandbox/);
+  });
+
+  it("checks house access before accepting any upload bytes", async () => {
+    const { readdirSync } = await import("node:fs");
+    const count = (dir: string) => readdirSync(path.join(dataDir, "uploads", dir)).length;
+    const png = new Uint8Array(encodePng(4, 4, Buffer.alloc(4 * 4 * 4, 30)));
+    const before = { recipes: count("recipes"), receipts: count("receipts"), items: count("items") };
+
+    const recipe = await uploadImage(`/api/houses/${houseId}/recipes/upload`, png, "image/png", "a.png", secondUserCookie);
+    assert.equal(recipe.status, 403);
+    const receipt = await uploadImage(`/api/houses/${houseId}/receipts/upload`, png, "image/png", "a.png", secondUserCookie);
+    assert.equal(receipt.status, 403);
+    const intake = await uploadImage(`/api/houses/${houseId}/intake/upload`, png, "image/png", "a.png", secondUserCookie);
+    assert.equal(intake.status, 403);
+    const item = await uploadImage(`/api/items/${itemId}/image`, png, "image/png", "a.png", secondUserCookie);
+    assert.equal(item.status, 403);
+    const outsider = await uploadImage(`/api/houses/${strangerHouseId}/recipes/upload`, png, "image/png", "a.png");
+    assert.equal(outsider.status, 404);
+    assert.deepEqual({ recipes: count("recipes"), receipts: count("receipts"), items: count("items") }, before);
+
+    const form = new FormData();
+    form.append("dataset", new Blob([Buffer.from("PK not really")], { type: "application/zip" }), "d.zip");
+    const dataset = await fetch(`${base}/api/houses/${strangerHouseId}/photos/dataset/import`, {
+      method: "POST",
+      headers: { cookie },
+      body: form,
+    });
+    assert.equal(dataset.status, 404);
+  });
+
+  it("never sends the server's AI key to a house-configured endpoint", async () => {
+    const { AI_ENV } = await import("../config.js");
+    const { resolveAi } = await import("../ai.js");
+    const saved = { apiKey: AI_ENV.apiKey, baseUrl: AI_ENV.baseUrl };
+    AI_ENV.apiKey = "server-secret";
+    AI_ENV.baseUrl = "https://api.openai.com/v1";
+    try {
+      assert.equal(resolveAi({ ai: {} }).apiKey, "server-secret");
+      assert.equal(resolveAi({ ai: { baseUrl: "HTTPS://API.OPENAI.COM/v1/" } }).apiKey, "server-secret");
+      const custom = resolveAi({ ai: { baseUrl: "https://attacker.example/v1" } });
+      assert.equal(custom.apiKey, "");
+      assert.equal(custom.enabled, false);
+      const local = resolveAi({ ai: { enabled: true, baseUrl: "http://192.168.1.20:11434/v1" } });
+      assert.equal(local.enabled, true);
+      assert.equal(local.apiKey, "");
+      assert.equal(resolveAi({ ai: { baseUrl: "https://other.example/v1", apiKey: "own" } }).apiKey, "own");
+
+      const saveSettings = await request(`/api/houses/${strangerHouseId}`, {
+        method: "PATCH",
+        auth: secondUserCookie,
+        body: { settings: { ai: { enabled: true, baseUrl: aiBase, model: "mock-model" } } },
+      });
+      assert.equal(saveSettings.status, 200);
+      aiRequests.length = 0;
+      const probe = await request(`/api/houses/${strangerHouseId}/ai/test`, { method: "POST", auth: secondUserCookie });
+      assert.equal(probe.status, 200);
+      assert.ok(aiRequests.length > 0);
+      assert.ok(aiRequests.every((entry) => entry.headers.authorization === undefined));
+    } finally {
+      AI_ENV.apiKey = saved.apiKey;
+      AI_ENV.baseUrl = saved.baseUrl;
+    }
+  });
+
+  it("can refuse house-configured URLs on private networks", async () => {
+    const { isPrivateAddress } = await import("../lib/outbound.js");
+    for (const address of ["127.0.0.1", "10.1.2.3", "172.20.0.1", "192.168.0.10", "169.254.169.254", "::1", "fd00::1", "fe80::1", "::ffff:7f00:1"]) {
+      assert.equal(isPrivateAddress(address), true, address);
+    }
+    for (const address of ["8.8.8.8", "1.1.1.1", "2606:4700::1111"]) {
+      assert.equal(isPrivateAddress(address), false, address);
+    }
+
+    process.env.SV_OUTBOUND_ALLOW_PRIVATE = "false";
+    try {
+      aiRequests.length = 0;
+      const probe = await request(`/api/houses/${strangerHouseId}/ai/test`, { method: "POST", auth: secondUserCookie });
+      assert.equal(probe.status, 400);
+      assert.match(probe.data.error, /private or local network/);
+      assert.equal(aiRequests.length, 0);
+
+      const channel = await request(`/api/houses/${strangerHouseId}/notifications/test`, {
+        method: "POST",
+        auth: secondUserCookie,
+        body: { channel: { id: "new", type: "webhook", name: "Local", enabled: true, url: "http://localhost:9/hook" } },
+      });
+      assert.equal(channel.status, 502);
+      assert.match(channel.data.error, /private or local network/);
+    } finally {
+      delete process.env.SV_OUTBOUND_ALLOW_PRIVATE;
+    }
+  });
+
+  it("limits wrong TOTP codes per challenge and rejects a reused code", async () => {
+    const login = async () => {
+      const res = await request("/api/auth/login", {
+        method: "POST",
+        auth: "",
+        body: { identifier: "totp.user@example.com", password: "test password" },
+      });
+      assert.equal(res.data.twoFactorRequired, true);
+      return res.data.challenge as string;
+    };
+    const registered = await request("/api/auth/register", {
+      method: "POST",
+      auth: "",
+      body: { name: "Totp User", email: "totp.user@example.com", password: "test password" },
+    });
+    assert.equal(registered.status, 201);
+    const auth = registered.cookie!;
+    const setup = await request("/api/auth/2fa/setup", { method: "POST", auth, body: { password: "test password" } });
+    const secret = setup.data.secret as string;
+    const enabled = await request("/api/auth/2fa/enable", { method: "POST", auth, body: { code: totpCode(secret) } });
+    assert.equal(enabled.status, 200);
+
+    const challenge = await login();
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      const wrong = await request("/api/auth/2fa/verify", {
+        method: "POST",
+        auth: "",
+        body: { challenge, code: "000000" },
+      });
+      assert.equal(wrong.status, 401);
+      if (attempt === 5) assert.match(wrong.data.error, /Too many wrong codes/);
+    }
+    // The challenge is gone after five misses, even with the right code.
+    const burned = await request("/api/auth/2fa/verify", {
+      method: "POST",
+      auth: "",
+      body: { challenge, code: totpCode(secret) },
+    });
+    assert.equal(burned.status, 401);
+    assert.match(burned.data.error, /expired/);
+
+    const code = totpCode(secret);
+    const first = await request("/api/auth/2fa/verify", {
+      method: "POST",
+      auth: "",
+      body: { challenge: await login(), code },
+    });
+    assert.equal(first.status, 200);
+    const replay = await request("/api/auth/2fa/verify", {
+      method: "POST",
+      auth: "",
+      body: { challenge: await login(), code },
+    });
+    assert.equal(replay.status, 401);
+  });
+
+  it("rate-limits invite lookups and failed sign-ins with Retry-After", async () => {
+    process.env.SV_RATE_LIMIT = "on";
+    process.env.SV_RATE_LIMIT_INVITE = "3/60";
+    process.env.SV_RATE_LIMIT_LOGIN_ACCOUNT = "2/60";
+    try {
+      const statuses: number[] = [];
+      for (let attempt = 0; attempt < 4; attempt++) {
+        statuses.push((await request("/api/auth/invites/not-a-real-code", { auth: "" })).status);
+      }
+      assert.deepEqual(statuses, [404, 404, 404, 429]);
+      const limited = await fetch(`${base}/api/auth/invites/not-a-real-code`);
+      assert.equal(limited.status, 429);
+      assert.ok(Number(limited.headers.get("retry-after")) > 0);
+
+      const attempt = (password: string) =>
+        request("/api/auth/login", { method: "POST", auth: "", body: { identifier: "Totp.User@example.com", password } });
+      assert.equal((await attempt("wrong one")).status, 401);
+      assert.equal((await attempt("wrong two")).status, 401);
+      // Even the right password waits once the account is locked.
+      assert.equal((await attempt("test password")).status, 429);
+    } finally {
+      delete process.env.SV_RATE_LIMIT;
+      delete process.env.SV_RATE_LIMIT_INVITE;
+      delete process.env.SV_RATE_LIMIT_LOGIN_ACCOUNT;
+    }
+  });
+
+  it("removes uploaded files with their item, recipe and house", async () => {
+    const { existsSync, writeFileSync, utimesSync } = await import("node:fs");
+    const fileOf = (url: string) => path.join(dataDir, url.replace(/^\//, ""));
+    const png = new Uint8Array(encodePng(4, 4, Buffer.alloc(4 * 4 * 4, 140)));
+
+    const item = await request(`/api/houses/${houseId}/items`, { method: "POST", body: { name: "Doomed jar" } });
+    assert.equal(item.status, 201);
+    const itemImage = await uploadImage(`/api/items/${item.data.id}/image`, png, "image/png", "jar.png");
+    assert.equal(itemImage.status, 200);
+    assert.ok(existsSync(fileOf(itemImage.data.image)));
+    assert.equal((await request(`/api/items/${item.data.id}`, { method: "DELETE" })).status, 200);
+    assert.equal(existsSync(fileOf(itemImage.data.image)), false);
+
+    const recipeImage = await uploadImage(`/api/houses/${houseId}/recipes/upload`, png, "image/png", "dish.png");
+    const recipe = await request(`/api/houses/${houseId}/recipes`, {
+      method: "POST",
+      body: { title: "Doomed dish", image: recipeImage.data.path, ingredients: [], steps: [] },
+    });
+    assert.equal(recipe.status, 201);
+    assert.equal((await request(`/api/recipes/${recipe.data.id}`, { method: "DELETE" })).status, 200);
+    assert.equal(existsSync(fileOf(recipeImage.data.path)), false);
+
+    const house = await request("/api/houses", { method: "POST", body: { name: "Doomed house" } });
+    assert.equal(house.status, 201);
+    const houseImage = await uploadImage(`/api/houses/${house.data.id}/recipes/upload`, png, "image/png", "h.png");
+    await request(`/api/houses/${house.data.id}/recipes`, {
+      method: "POST",
+      body: { title: "House dish", image: houseImage.data.path, ingredients: [], steps: [] },
+    });
+    const receiptImage = await uploadImage(`/api/houses/${house.data.id}/receipts/upload`, png, "image/png", "r.png");
+    const receipt = await request(`/api/houses/${house.data.id}/receipts`, {
+      method: "POST",
+      body: { vendorName: "Shop", image: receiptImage.data.path, lines: [{ description: "Bread", quantity: 1 }] },
+    });
+    assert.equal(receipt.status, 201);
+    assert.ok(existsSync(fileOf(receiptImage.data.path)));
+    assert.equal((await request(`/api/houses/${house.data.id}`, { method: "DELETE" })).status, 200);
+    assert.equal(existsSync(fileOf(houseImage.data.path)), false);
+    assert.equal(existsSync(fileOf(receiptImage.data.path)), false);
+
+    // The sweep removes old unreferenced files and keeps fresh or referenced ones.
+    const { sweepOrphanUploads } = await import("../services/upload-cleanup.js");
+    const kept = await uploadImage(`/api/items/${itemId}/image`, png, "image/png", "kept.png");
+    const old = new Date(Date.now() - 3 * 864e5);
+    utimesSync(fileOf(kept.data.image), old, old);
+    const orphan = path.join(dataDir, "uploads", "receipts", "orphan.jpg");
+    const fresh = path.join(dataDir, "uploads", "receipts", "fresh.jpg");
+    writeFileSync(orphan, "x");
+    writeFileSync(fresh, "x");
+    utimesSync(orphan, old, old);
+    assert.ok((await sweepOrphanUploads()) >= 1);
+    assert.equal(existsSync(orphan), false);
+    assert.ok(existsSync(fresh));
+    assert.ok(existsSync(fileOf(kept.data.image)));
+  });
+
+  it("closes registration to invite-only or entirely", async () => {
+    const signUp = (email: string, inviteCode?: string) =>
+      request("/api/auth/register", {
+        method: "POST",
+        auth: "",
+        body: { name: "Late Comer", email, password: "test password", ...(inviteCode ? { inviteCode } : {}) },
+      });
+    try {
+      process.env.SV_REGISTRATION = "invite";
+      const status = await request("/api/auth/registration", { auth: "" });
+      assert.equal(status.status, 200);
+      assert.equal(status.data.mode, "invite");
+      assert.equal(status.data.inviteRequired, true);
+      assert.equal((await signUp("no.invite@example.com")).status, 403);
+
+      const invite = await request(`/api/houses/${houseId}/members`, {
+        method: "POST",
+        body: { email: "invited.person@example.com", role: "viewer" },
+      });
+      assert.equal(invite.status, 201);
+      const joined = await signUp("invited.person@example.com", invite.data.invite.code);
+      assert.equal(joined.status, 201);
+      assert.ok(joined.data.houses.some((house: any) => house.id === houseId));
+
+      process.env.SV_REGISTRATION = "closed";
+      assert.equal((await request("/api/auth/registration", { auth: "" })).data.mode, "closed");
+      assert.equal((await signUp("closed.out@example.com")).status, 403);
+
+      // OIDC auto-provisioning follows the same rule.
+      const start = await fetch(`${base}/api/auth/oidc/start`, { redirect: "manual" });
+      const authorize = new URL(start.headers.get("location")!);
+      const callback = await fetch(
+        `${base}/api/auth/oidc/callback?code=${encodeURIComponent(authorize.searchParams.get("nonce")!)}&state=${encodeURIComponent(
+          authorize.searchParams.get("state")!,
+        )}`,
+        { redirect: "manual" },
+      );
+      assert.equal(callback.status, 302);
+      assert.match(callback.headers.get("location") ?? "", /oidc_error=.*invite/);
+
+      // Unset falls back to invite-only once accounts exist.
+      delete process.env.SV_REGISTRATION;
+      assert.equal((await request("/api/auth/registration", { auth: "" })).data.mode, "invite");
+    } finally {
+      process.env.SV_REGISTRATION = "open";
+    }
+    // Signed-in users can still create houses.
+    const house = await request("/api/houses", { method: "POST", auth: secondUserCookie, body: { name: "Shed" } });
+    assert.equal(house.status, 201);
+  });
+
+  it("requires the current password to change email or username", async () => {
+    const registered = await request("/api/auth/register", {
+      method: "POST",
+      auth: "",
+      body: { name: "Profile User", email: "profile.user@example.com", password: "test password" },
+    });
+    const auth = registered.cookie!;
+    assert.equal(registered.data.user.hasPassword, true);
+
+    const renameOnly = await request("/api/auth/me", { method: "PATCH", auth, body: { name: "Renamed", email: "profile.user@example.com" } });
+    assert.equal(renameOnly.status, 200);
+    const noPassword = await request("/api/auth/me", { method: "PATCH", auth, body: { email: "hijacked@example.com" } });
+    assert.equal(noPassword.status, 400);
+    const wrongPassword = await request("/api/auth/me", {
+      method: "PATCH",
+      auth,
+      body: { username: "hijacked", currentPassword: "nope nope" },
+    });
+    assert.equal(wrongPassword.status, 400);
+    const changed = await request("/api/auth/me", {
+      method: "PATCH",
+      auth,
+      body: { email: "profile.moved@example.com", currentPassword: "test password" },
+    });
+    assert.equal(changed.status, 200);
+    assert.equal(changed.data.user.email, "profile.moved@example.com");
+  });
+
+  it("blocks cross-site state changes and sends a CSP", async () => {
+    const post = (headers: Record<string, string>) =>
+      fetch(`${base}/api/houses`, {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json", ...headers },
+        body: JSON.stringify({ name: "CSRF house" }),
+      });
+    assert.equal((await post({ origin: "https://evil.example" })).status, 403);
+    assert.equal((await post({ "sec-fetch-site": "cross-site" })).status, 403);
+    assert.equal((await post({ origin: "null" })).status, 403);
+    const sameOrigin = await post({ origin: base });
+    assert.equal(sameOrigin.status, 201);
+    const fetchMeta = await post({ origin: "https://proxy.example", "sec-fetch-site": "same-origin" });
+    assert.equal(fetchMeta.status, 201);
+    await request(`/api/houses/${(await sameOrigin.json() as any).id}`, { method: "DELETE" });
+    await request(`/api/houses/${(await fetchMeta.json() as any).id}`, { method: "DELETE" });
+    // Reads are never blocked.
+    assert.equal((await fetch(`${base}/api/houses`, { headers: { cookie, origin: "https://evil.example" } })).status, 200);
+
+    const csp = (await fetch(`${base}/api/health`)).headers.get("content-security-policy") ?? "";
+    assert.match(csp, /script-src 'self' 'wasm-unsafe-eval'/);
+    assert.match(csp, /worker-src 'self' blob:/);
+    assert.match(csp, /frame-ancestors 'self'/);
+    const { existsSync } = await import("node:fs");
+    const { CLIENT_DIR } = await import("../config.js");
+    if (existsSync(path.join(CLIENT_DIR, "index.html"))) {
+      // The theme bootstrap is the only inline script and is allowed by hash.
+      assert.match((await fetch(`${base}/`)).headers.get("content-security-policy") ?? "", /'sha256-[A-Za-z0-9+/=]+'/);
+    }
+  });
+
+  it("keeps catalogue mappings learned by one house out of other houses", async () => {
+    const { learnCatalogMapping, findCatalogMapping, exportCatalogMappings } = await import("../services/product-catalog.js");
+    const raw = "PRIVATE HOUSE BLEND 250G";
+    await learnCatalogMapping({ houseId, country: "GR", rawDescription: raw, name: "Owner's coffee", offCode: "5200000000001" });
+
+    const own = await findCatalogMapping({ houseId, country: "GR", rawDescription: raw });
+    assert.equal(own?.name, "Owner's coffee");
+    assert.equal(await findCatalogMapping({ houseId: strangerHouseId, country: "GR", rawDescription: raw }), null);
+    // Callers that do not pass a house only see shared rows.
+    assert.equal(await findCatalogMapping({ country: "GR", rawDescription: raw }), null);
+
+    const outsider = await request("/api/auth/register", {
+      method: "POST",
+      auth: "",
+      body: { name: "Outsider", email: "catalog.outsider@example.com", password: "test password" },
+    });
+    const leaked = await request(`/api/catalog/resolve?raw=${encodeURIComponent(raw)}`, { auth: outsider.cookie! });
+    assert.equal(leaked.data.mapping, null);
+    const probing = await request(`/api/catalog/resolve?raw=${encodeURIComponent(raw)}&houseId=${houseId}`, {
+      auth: outsider.cookie!,
+    });
+    assert.equal(probing.data.mapping, null);
+    const member = await request(`/api/catalog/resolve?raw=${encodeURIComponent(raw)}&houseId=${houseId}`);
+    assert.equal(member.data.mapping.name, "Owner's coffee");
+
+    // A second house can learn its own answer for the same text.
+    await learnCatalogMapping({ houseId: strangerHouseId, country: "GR", rawDescription: raw, name: "Stranger's coffee" });
+    assert.equal((await findCatalogMapping({ houseId: strangerHouseId, country: "GR", rawDescription: raw }))?.name, "Stranger's coffee");
+    assert.equal((await findCatalogMapping({ houseId, country: "GR", rawDescription: raw }))?.name, "Owner's coffee");
+
+    // Rows learned without a house stay shared, and the admin export still works.
+    await learnCatalogMapping({ country: "GR", rawDescription: "SHARED OAT DRINK 1L", name: "Oat drink" });
+    assert.equal((await findCatalogMapping({ houseId: strangerHouseId, country: "GR", rawDescription: "SHARED OAT DRINK 1L" }))?.name, "Oat drink");
+    const exported = await exportCatalogMappings();
+    assert.equal(exported.mappings.filter((entry) => entry.rawText === raw).length, 1);
+    assert.equal((await request("/api/catalog/export")).status, 200);
+  });
+
+  it("expires invites and spends the same work on unknown accounts", async () => {
+    const created = await request(`/api/houses/${houseId}/members`, {
+      method: "POST",
+      body: { email: "slow.joiner@example.com", role: "member" },
+    });
+    assert.equal(created.status, 201);
+    assert.ok(Date.parse(created.data.invite.expiresAt) > Date.now() + 13 * 864e5);
+    const code = created.data.invite.code;
+    assert.equal((await request(`/api/auth/invites/${code}`, { auth: "" })).status, 200);
+
+    await run("UPDATE house_invites SET expires_at = ? WHERE code = ?", [new Date(Date.now() - 1000).toISOString(), code]);
+    assert.equal((await request(`/api/auth/invites/${code}`, { auth: "" })).status, 404);
+    const register = await request("/api/auth/register", {
+      method: "POST",
+      auth: "",
+      body: { name: "Slow", email: "slow.joiner@example.com", password: "test password", inviteCode: code },
+    });
+    assert.equal(register.status, 400);
+    const list = await request(`/api/houses/${houseId}/invites`);
+    assert.equal(list.data.find((entry: any) => entry.code === code).expired, true);
+
+    // Invites from before expiry existed count from their creation date.
+    await run("UPDATE house_invites SET expires_at = NULL, created_at = ? WHERE code = ?", [
+      new Date(Date.now() - 30 * 864e5).toISOString(),
+      code,
+    ]);
+    assert.equal((await request(`/api/auth/invites/${code}`, { auth: "" })).status, 404);
+
+    // A login for an unknown account still runs a password hash (no fast path).
+    const time = async (identifier: string) => {
+      const started = performance.now();
+      await request("/api/auth/login", { method: "POST", auth: "", body: { identifier, password: "wrong password" } });
+      return performance.now() - started;
+    };
+    await time("owner");
+    const missing = Math.min(await time("nobody-here"), await time("nobody-here"));
+    const known = Math.min(await time("owner"), await time("owner"));
+    assert.ok(missing > known * 0.4, `unknown ${missing.toFixed(1)}ms vs known ${known.toFixed(1)}ms`);
+  });
+
+  it("masks card numbers, IDs and contact details in AI log previews", async () => {
+    const { maskSensitiveText, isValidGtin } = await import("../lib/redact.js");
+    const receipt = [
+      "ΣΚΛΑΒΕΝΙΤΗΣ ΤΗΛ.210-9270972",
+      "5208046287576",
+      "ΑΥΓΑ ΜΑΡΑΤΑ 2,70 13,00%",
+      "VISA 4111 1111 1111 1234",
+      "CARD 5500005555555559",
+      "ΚΑΡΤΑ ΠΙΣΤΟΤΗΤΑΣ 99887766554",
+      "IBAN GR16 0110 1250 0000 0001 2300 695",
+      "mail me: jane.doe@example.com, +30 694 123 4567",
+      "ΣΥΝΟΛΟ 24,02 ΕΥΡΩ",
+    ].join("\n");
+    const masked = maskSensitiveText(receipt);
+    assert.ok(isValidGtin("5208046287576"));
+    assert.match(masked, /5208046287576/); // product barcode kept
+    assert.match(masked, /2,70 13,00%/);
+    assert.match(masked, /ΣΥΝΟΛΟ 24,02/);
+    assert.match(masked, /\[card \*\*\*\*1234\]/);
+    assert.match(masked, /\[card \*\*\*\*5559\]/);
+    assert.match(masked, /\[id \*\*\*\*6554\]/);
+    assert.match(masked, /\[iban \*\*\*\*0695\]/);
+    assert.match(masked, /\[email\]/);
+    for (const secret of ["4111 1111", "5500005555555559", "99887766554", "GR16", "jane.doe", "694 123", "9270972"]) {
+      assert.ok(!masked.includes(secret), `${secret} leaked: ${masked}`);
+    }
+
+    const saved = await request(`/api/houses/${strangerHouseId}`, {
+      method: "PATCH",
+      auth: secondUserCookie,
+      body: { settings: { ai: { enabled: true, baseUrl: aiBase, apiKey: "test-key", model: "mock-model" } } },
+    });
+    assert.equal(saved.status, 200);
+    const scan = await request(`/api/houses/${strangerHouseId}/receipts/scan`, {
+      method: "POST",
+      auth: secondUserCookie,
+      body: { text: "MOCK MART\nMilk 2 x 1.20\nLOYALTY 9876543210123456\nTOTAL 2.40" },
+    });
+    assert.equal(scan.status, 200);
+    const { all } = await import("../db.js");
+    const rows = await all<any>("SELECT request_preview FROM ai_call_logs WHERE house_id = ?", [strangerHouseId]);
+    assert.ok(rows.length > 0);
+    assert.ok(rows.every((row) => !String(row.request_preview).includes("9876543210123456")));
+    assert.ok(rows.some((row) => String(row.request_preview).includes("[card ****3456]")));
   });
 });
 
@@ -2846,9 +3415,10 @@ describe("two-factor authentication", () => {
     assert.equal(verified.status, 200);
     assert.ok(verified.cookie);
 
+    // A code is accepted once per time step, so disabling needs the next code.
     const disabled = await request("/api/auth/2fa/disable", {
       method: "POST",
-      body: { password: "test password", code: totpCode(setup.data.secret) },
+      body: { password: "test password", code: totpCode(setup.data.secret, Date.now() + 30_000) },
     });
     assert.equal(disabled.status, 200);
     const status = await request("/api/auth/2fa");
@@ -3141,5 +3711,516 @@ describe("dataset import", () => {
     assert.equal(inspection.kind, "coco");
     assert.deepEqual(inspection.classes, ["crate"]);
     assert.equal(inspection.images[0].labels[0].w, 0.5);
+  });
+});
+
+describe("receipt scan fixes", () => {
+  let plainHouse = "";
+  let aiHouse = "";
+  let fixAiServer: import("node:http").Server;
+  let fixAiBase = "";
+  const fixAiRequests: any[] = [];
+  let fixReceiptPayload: any = null;
+  let fridgeId = "";
+
+  async function uploadReceiptPng(targetHouse: string, size = 16) {
+    const png = encodePng(size, size, Buffer.alloc(size * size * 4, 180));
+    const bytes = new ArrayBuffer(png.length);
+    new Uint8Array(bytes).set(png);
+    const form = new FormData();
+    form.append("image", new Blob([bytes], { type: "image/png" }), "receipt.png");
+    const res = await fetch(`${base}/api/houses/${targetHouse}/receipts/upload`, {
+      method: "POST",
+      body: form,
+      headers: { cookie },
+    });
+    assert.equal(res.status, 201);
+    return (await res.json()).path as string;
+  }
+
+  function uploadFile(imagePath: string) {
+    return path.join(dataDir, "uploads", "receipts", imagePath.split("/").pop()!);
+  }
+
+  before(async () => {
+    await new Promise<void>((resolve) => {
+      fixAiServer = http.createServer((req, res) => {
+        const chunks: Buffer[] = [];
+        req.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+        req.on("end", () => {
+          const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+          fixAiRequests.push(body);
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(
+            JSON.stringify({
+              choices: [{ message: { content: JSON.stringify(fixReceiptPayload ?? { lines: [] }) } }],
+              usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150, cost: 0.004 },
+            }),
+          );
+        });
+      });
+      fixAiServer.listen(0, "127.0.0.1", () => {
+        const address = fixAiServer.address();
+        if (!address || typeof address === "string") throw new Error("no address");
+        fixAiBase = `http://127.0.0.1:${address.port}/v1`;
+        resolve();
+      });
+    });
+
+    const plain = await request("/api/houses", { method: "POST", body: { name: "Receipt fixes", currency: "EUR" } });
+    assert.equal(plain.status, 201);
+    plainHouse = plain.data.id;
+    const withAi = await request("/api/houses", { method: "POST", body: { name: "Receipt fixes AI", currency: "EUR" } });
+    assert.equal(withAi.status, 201);
+    aiHouse = withAi.data.id;
+    const configured = await request(`/api/houses/${aiHouse}`, {
+      method: "PATCH",
+      body: { settings: { ai: { enabled: true, baseUrl: fixAiBase, apiKey: "fix-key", model: "fix-model" } } },
+    });
+    assert.equal(configured.status, 200);
+
+    const locations = await request(`/api/houses/${plainHouse}/locations`);
+    fridgeId = locations.data.find((entry: any) => entry.name === "Fridge").id;
+  });
+
+  after(() => {
+    fixAiServer?.close();
+  });
+
+  it("reports whether the lines add up to the printed total", async () => {
+    const matching = await request(`/api/houses/${plainHouse}/receipts/scan`, {
+      method: "POST",
+      body: { text: "CORNER SHOP\nMilk 2.40\nBread 3.10\nDiscount -0.50\nTOTAL 5.00" },
+    });
+    assert.equal(matching.status, 200);
+    assert.deepEqual(matching.data.reconciliation, {
+      linesTotal: 5.5,
+      savings: 0.5,
+      printedTotal: 5,
+      difference: 0,
+      ok: true,
+    });
+    assert.equal(matching.data.aiAvailable, false);
+    assert.match(matching.data.scanId, /^scn_/);
+
+    const short = await request(`/api/houses/${plainHouse}/receipts/scan`, {
+      method: "POST",
+      body: { text: "CORNER SHOP\nMilk 2.40\nBread 3.10\nTOTAL 9.99" },
+    });
+    assert.equal(short.data.reconciliation.ok, false);
+    assert.equal(short.data.reconciliation.difference, 4.49);
+
+    // Lidl folds discounts into the line totals; the tolerance absorbs the 0.10 bag fee.
+    const lidl = await request(`/api/houses/${plainHouse}/receipts/scan`, { method: "POST", body: { text: LIDL_SAMPLE } });
+    assert.equal(lidl.data.provider, "template");
+    assert.equal(lidl.data.reconciliation.ok, true);
+    assert.equal(lidl.data.reconciliation.savings, 1.04);
+  });
+
+  it("double-checks a low-confidence template with AI but keeps it when it already adds up", async () => {
+    fixAiRequests.length = 0;
+    fixReceiptPayload = {
+      vendorName: "Lidl",
+      total: 3.5,
+      lines: [{ description: "Γάλα", quantity: 1, lineTotal: 3.5 }],
+    };
+    // Only the logo and the fiscal header match: 0.7 confidence, below the 0.75 bar.
+    const text = ["LIDL", "ΦΟΡΟΛΟΓΙΚΗ ΑΠΟΔΕΙΞΗ", "ΓΑΛΑ 1,50 13,00%", "ΨΩΜΙ 2,00 13,00%", "ΣΥΝΟΛΟ 3,50"].join("\n");
+    const res = await request(`/api/houses/${aiHouse}/receipts/scan`, { method: "POST", body: { text } });
+    assert.equal(res.status, 200);
+    assert.equal(fixAiRequests.length, 1);
+    assert.equal(res.data.provider, "template");
+    assert.equal(res.data.draft.templateId, "lidl-gr");
+    assert.equal(res.data.draft.lines.length, 2);
+    assert.equal(res.data.aiCost, 0.004);
+    assert.match(res.data.warning, /confidence/);
+    assert.match(res.data.warning, /kept the template result/);
+  });
+
+  it("falls back to the AI draft when the template lines do not add up", async () => {
+    fixAiRequests.length = 0;
+    fixReceiptPayload = {
+      vendorName: "Lidl",
+      purchasedAt: "2026-10-08",
+      currency: "EUR",
+      total: 15.73,
+      lines: [
+        { description: "Apples", quantity: 1, lineTotal: 10.63 },
+        { description: "Olive oil", quantity: 1, lineTotal: 5.1 },
+      ],
+    };
+    const text = LIDL_SAMPLE.replaceAll("10,73", "15,73");
+    const res = await request(`/api/houses/${aiHouse}/receipts/scan`, { method: "POST", body: { text } });
+    assert.equal(res.status, 200);
+    assert.equal(fixAiRequests.length, 1);
+    assert.equal(res.data.provider, "ai");
+    assert.equal(res.data.draft.templateId, null);
+    assert.equal(res.data.draft.lines.length, 2);
+    assert.equal(res.data.reconciliation.ok, true);
+    assert.match(res.data.warning, /match the total better/);
+
+    // When the AI draft is no closer, the template stays.
+    fixReceiptPayload = { total: 15.73, lines: [{ description: "Apples", quantity: 1, lineTotal: 1 }] };
+    const kept = await request(`/api/houses/${aiHouse}/receipts/scan`, { method: "POST", body: { text } });
+    assert.equal(kept.data.provider, "template");
+    assert.equal(kept.data.reconciliation.ok, false);
+
+    // "Re-read with AI" bypasses a confident template on request.
+    fixReceiptPayload = { total: 10.73, lines: [{ description: "Everything", quantity: 1, lineTotal: 10.73 }] };
+    const forced = await request(`/api/houses/${aiHouse}/receipts/scan`, {
+      method: "POST",
+      body: { text: LIDL_SAMPLE, preferAi: true },
+    });
+    assert.equal(forced.data.provider, "ai");
+    assert.equal(forced.data.draft.lines[0].description, "Everything");
+  });
+
+  it("sends every page photo to the vision model with its real mime type", async () => {
+    await request(`/api/houses/${aiHouse}`, { method: "PATCH", body: { settings: { ai: { visionModel: "fix-vision" } } } });
+    const first = await uploadReceiptPng(aiHouse);
+    const second = await uploadReceiptPng(aiHouse);
+    fixReceiptPayload = { total: 2, lines: [{ description: "Tea", quantity: 1, lineTotal: 2 }] };
+    fixAiRequests.length = 0;
+    const res = await request(`/api/houses/${aiHouse}/receipts/scan`, {
+      method: "POST",
+      body: { text: "", images: [first, second, "/uploads/receipts/missing-page.jpg"] },
+    });
+    assert.equal(res.status, 200, JSON.stringify(res.data));
+    assert.equal(res.data.provider, "ai");
+    const parts = fixAiRequests[0].messages[1].content;
+    const images = parts.filter((part: any) => part.type === "image_url");
+    assert.equal(images.length, 2);
+    assert.ok(images.every((part: any) => part.image_url.url.startsWith("data:image/png;base64,")));
+    assert.match(res.data.warning, /1 of 3 photos could not be sent/);
+
+    const invalid = await request(`/api/houses/${aiHouse}/receipts/scan`, {
+      method: "POST",
+      body: { images: ["https://tracker.example/pixel.gif"] },
+    });
+    assert.equal(invalid.status, 400);
+    await request(`/api/houses/${aiHouse}`, { method: "PATCH", body: { settings: { ai: { visionModel: null } } } });
+  });
+
+  it("copies provenance from the scan record instead of trusting the client", async () => {
+    fixReceiptPayload = {
+      vendorName: "Provenance Mart",
+      purchasedAt: "2026-09-01",
+      total: 4,
+      lines: [{ description: "Provenance tea", quantity: 1, lineTotal: 4 }],
+    };
+    const scan = await request(`/api/houses/${aiHouse}/receipts/scan`, {
+      method: "POST",
+      body: { text: "PROVENANCE MART\nTea 4.00\nTOTAL 4.00" },
+    });
+    assert.equal(scan.data.provider, "ai");
+    const body = {
+      vendorName: "Provenance Mart",
+      purchasedAt: "2026-09-01",
+      total: 4,
+      provider: "template",
+      aiCost: 99,
+      templateId: "lidl-gr",
+      templateConfidence: 1,
+      lines: [{ description: "Provenance tea", quantity: 1, lineTotal: 4 }],
+    };
+    const saved = await request(`/api/houses/${aiHouse}/receipts`, { method: "POST", body: { ...body, scanId: scan.data.scanId } });
+    assert.equal(saved.status, 201, JSON.stringify(saved.data));
+    assert.equal(saved.data.provider, "ai");
+    assert.equal(saved.data.aiCost, 0.004);
+    assert.equal(saved.data.templateId, null);
+    assert.equal(saved.data.source, "scan");
+
+    const unknown = await request(`/api/houses/${aiHouse}/receipts`, {
+      method: "POST",
+      body: { ...body, purchasedAt: "2026-09-02", scanId: "scn_doesnotexist" },
+    });
+    assert.equal(unknown.status, 201);
+    assert.equal(unknown.data.provider, null);
+    assert.equal(unknown.data.aiCost, null);
+    assert.equal(unknown.data.templateId, null);
+    assert.equal(unknown.data.source, "manual");
+
+    // A scan from one house cannot lend its provenance to another.
+    const foreign = await request(`/api/houses/${plainHouse}/receipts`, {
+      method: "POST",
+      body: { ...body, scanId: scan.data.scanId },
+    });
+    assert.equal(foreign.status, 201);
+    assert.equal(foreign.data.provider, null);
+  });
+
+  it("only stores receipt images that were uploaded as receipt scans", async () => {
+    const body = {
+      vendorName: "Image Mart",
+      purchasedAt: "2026-09-03",
+      lines: [{ description: "Image soap", quantity: 1, lineTotal: 1 }],
+    };
+    const external = await request(`/api/houses/${plainHouse}/receipts`, {
+      method: "POST",
+      body: { ...body, image: "https://tracker.example/pixel.gif" },
+    });
+    assert.equal(external.status, 400);
+    const traversal = await request(`/api/houses/${plainHouse}/receipts`, {
+      method: "POST",
+      body: { ...body, image: "/uploads/receipts/../photos/x.jpg" },
+    });
+    assert.equal(traversal.status, 400);
+    const missing = await request(`/api/houses/${plainHouse}/receipts`, {
+      method: "POST",
+      body: { ...body, image: "/uploads/receipts/not-there.jpg" },
+    });
+    assert.equal(missing.status, 400);
+
+    const image = await uploadReceiptPng(plainHouse);
+    const saved = await request(`/api/houses/${plainHouse}/receipts`, { method: "POST", body: { ...body, image } });
+    assert.equal(saved.status, 201);
+    assert.equal(saved.data.image, image);
+  });
+
+  it("deletes superseded uploads but never one a saved receipt uses", async () => {
+    const { existsSync } = await import("node:fs");
+    const draftImage = await uploadReceiptPng(plainHouse);
+    assert.ok(existsSync(uploadFile(draftImage)));
+
+    const foreign = await request(`/api/houses/${aiHouse}/receipts/upload`, { method: "DELETE", body: { path: draftImage } });
+    assert.equal(foreign.status, 404);
+    const bad = await request(`/api/houses/${plainHouse}/receipts/upload`, {
+      method: "DELETE",
+      body: { path: "/uploads/photos/x.jpg" },
+    });
+    assert.equal(bad.status, 400);
+
+    const removed = await request(`/api/houses/${plainHouse}/receipts/upload`, { method: "DELETE", body: { path: draftImage } });
+    assert.equal(removed.status, 200);
+    assert.equal(removed.data.deleted, true);
+    assert.ok(!existsSync(uploadFile(draftImage)));
+
+    const kept = await uploadReceiptPng(plainHouse);
+    const saved = await request(`/api/houses/${plainHouse}/receipts`, {
+      method: "POST",
+      body: { vendorName: "Kept Mart", purchasedAt: "2026-09-04", image: kept, lines: [{ description: "Kept soap", lineTotal: 1 }] },
+    });
+    assert.equal(saved.status, 201);
+    const refused = await request(`/api/houses/${plainHouse}/receipts/upload`, { method: "DELETE", body: { path: kept } });
+    assert.equal(refused.status, 409);
+    assert.ok(existsSync(uploadFile(kept)));
+  });
+
+  it("refuses an identical receipt unless the duplicate is confirmed", async () => {
+    const body = {
+      vendorName: "Twice Mart",
+      purchasedAt: "2026-09-05",
+      total: 7.5,
+      lines: [{ description: "Twice coffee", quantity: 1, lineTotal: 7.5 }],
+    };
+    const first = await request(`/api/houses/${plainHouse}/receipts`, { method: "POST", body });
+    assert.equal(first.status, 201);
+    const itemId = first.data.lines[0].itemId;
+
+    const again = await request(`/api/houses/${plainHouse}/receipts`, {
+      method: "POST",
+      body: { ...body, vendorName: "TWICE  mart", total: 7.505 },
+    });
+    assert.equal(again.status, 409);
+    assert.equal(again.data.duplicateOf.id, first.data.id);
+    assert.equal(again.data.duplicateOf.total, 7.5);
+    assert.equal(again.data.duplicateOf.vendorName, "Twice Mart");
+    assert.equal((await request(`/api/items/${itemId}`)).data.quantity, 1);
+
+    const validated = await request(`/api/houses/${plainHouse}/receipts/validate`, { method: "POST", body });
+    assert.equal(validated.data.duplicateOf.id, first.data.id);
+
+    const otherDay = await request(`/api/houses/${plainHouse}/receipts`, {
+      method: "POST",
+      body: { ...body, purchasedAt: "2026-09-06" },
+    });
+    assert.equal(otherDay.status, 201);
+
+    const confirmed = await request(`/api/houses/${plainHouse}/receipts`, {
+      method: "POST",
+      body: { ...body, allowDuplicate: true },
+    });
+    assert.equal(confirmed.status, 201);
+    assert.equal((await request(`/api/items/${itemId}`)).data.quantity, 3);
+  });
+
+  it("validates every line without writing and reports all errors on import", async () => {
+    const oil = await request(`/api/houses/${plainHouse}/items`, { method: "POST", body: { name: "Validate oil", unit: "l" } });
+    assert.equal(oil.status, 201);
+    const itemsBefore = (await request(`/api/houses/${plainHouse}/items?limit=1000`)).data.total;
+    const receiptsBefore = (await request(`/api/houses/${plainHouse}/receipts?limit=300`)).data.length;
+    const vendorsBefore = (await request(`/api/houses/${plainHouse}/vendors`)).data.length;
+
+    const body = {
+      vendorName: "Validate Mart",
+      purchasedAt: "2026-09-07",
+      lines: [
+        { description: "Validate oil", quantity: 2, unit: "pcs", lineTotal: 9 },
+        { description: "Validate brand new thing", quantity: 1, lineTotal: 1 },
+        { description: "Validate brand new thing", quantity: 1, lineTotal: 1 },
+        { description: "Chosen", quantity: 1, itemId: "itm_missing" },
+        { description: "Validate oil", quantity: 1, unit: "ml", lineTotal: 2, locationId: "loc_missing" },
+        { description: "Validate oil", quantity: 500, unit: "ml", lineTotal: 2 },
+      ],
+    };
+    const res = await request(`/api/houses/${plainHouse}/receipts/validate`, { method: "POST", body });
+    assert.equal(res.status, 200);
+    assert.equal(res.data.ok, false);
+    assert.equal(res.data.newItems, 1);
+    const [unitError, created, sameNew, chosen, place, fine] = res.data.lines;
+    assert.match(unitError.error, /Cannot add “Validate oil” in pcs to an item stocked in l/);
+    assert.equal(unitError.itemId, oil.data.id);
+    assert.equal(created.willCreate, true);
+    assert.equal(created.error, null);
+    assert.equal(sameNew.willCreate, false);
+    assert.equal(sameNew.itemName, "Validate brand new thing");
+    assert.match(chosen.error, /not in this house/);
+    assert.match(place.error, /place is not in this house/);
+    assert.equal(fine.error, null);
+    assert.equal(fine.itemId, oil.data.id);
+    assert.equal(fine.match, "name");
+
+    assert.equal((await request(`/api/houses/${plainHouse}/items?limit=1000`)).data.total, itemsBefore);
+    assert.equal((await request(`/api/houses/${plainHouse}/vendors`)).data.length, vendorsBefore);
+
+    const imported = await request(`/api/houses/${plainHouse}/receipts`, { method: "POST", body });
+    assert.equal(imported.status, 400);
+    assert.deepEqual(
+      imported.data.details.lines.map((entry: any) => entry.index),
+      [0, 3, 4],
+    );
+    assert.equal((await request(`/api/houses/${plainHouse}/receipts?limit=300`)).data.length, receiptsBefore);
+    assert.equal((await request(`/api/houses/${plainHouse}/items?limit=1000`)).data.total, itemsBefore);
+  });
+
+  it("puts each line in its own place with its own expiry date", async () => {
+    const res = await request(`/api/houses/${plainHouse}/receipts`, {
+      method: "POST",
+      body: {
+        vendorName: "Expiry Mart",
+        purchasedAt: "2026-09-08",
+        lines: [
+          { description: "Expiry yoghurt", quantity: 2, lineTotal: 3, locationId: fridgeId, expiresAt: "2026-09-20" },
+          { description: "Expiry rice", quantity: 1, lineTotal: 2 },
+        ],
+      },
+    });
+    assert.equal(res.status, 201, JSON.stringify(res.data));
+    const yoghurt = await request(`/api/items/${res.data.lines[0].itemId}`);
+    assert.equal(yoghurt.data.lots[0].locationId, fridgeId);
+    assert.equal(yoghurt.data.lots[0].expiresAt, "2026-09-20");
+    const rice = await request(`/api/items/${res.data.lines[1].itemId}`);
+    assert.equal(rice.data.lots[0].locationId, null);
+    assert.equal(rice.data.lots[0].expiresAt, null);
+
+    const badDate = await request(`/api/houses/${plainHouse}/receipts`, {
+      method: "POST",
+      body: { vendorName: "Expiry Mart", lines: [{ description: "Expiry rice", expiresAt: "20/09/2026" }] },
+    });
+    assert.equal(badDate.status, 400);
+  });
+
+  it("deletes the receipt image and can revert the stock it added", async () => {
+    const { existsSync } = await import("node:fs");
+    const image = await uploadReceiptPng(plainHouse);
+    const created = await request(`/api/houses/${plainHouse}/receipts`, {
+      method: "POST",
+      body: {
+        vendorName: "Revert Mart",
+        purchasedAt: "2026-09-09",
+        image,
+        lines: [
+          { description: "Revert apples", quantity: 3, lineTotal: 3 },
+          { description: "Revert pears", quantity: 2, lineTotal: 2 },
+        ],
+      },
+    });
+    assert.equal(created.status, 201);
+    const [applesId, pearsId] = created.data.lines.map((line: any) => line.itemId);
+    const eaten = await request(`/api/items/${applesId}/stock`, { method: "POST", body: { action: "remove", quantity: 1 } });
+    assert.equal(eaten.status, 200);
+    // Stock added by hand is not part of the receipt and must stay.
+    await request(`/api/items/${pearsId}/stock`, { method: "POST", body: { action: "add", quantity: 5 } });
+
+    const removed = await request(`/api/receipts/${created.data.id}?revertStock=true`, { method: "DELETE" });
+    assert.equal(removed.status, 200, JSON.stringify(removed.data));
+    assert.equal(removed.data.imageRemoved, true);
+    assert.ok(!existsSync(uploadFile(image)));
+    const apples = removed.data.reverted.find((entry: any) => entry.itemId === applesId);
+    assert.deepEqual(
+      { added: apples.added, reverted: apples.reverted, consumed: apples.consumed },
+      { added: 3, reverted: 2, consumed: 1 },
+    );
+    const pears = removed.data.reverted.find((entry: any) => entry.itemId === pearsId);
+    assert.equal(pears.reverted, 2);
+
+    const applesAfter = await request(`/api/items/${applesId}`);
+    assert.equal(applesAfter.data.quantity, 0);
+    const adjustment = applesAfter.data.movements.find((movement: any) => movement.type === "adjust");
+    assert.ok(adjustment);
+    assert.equal(adjustment.delta, -2);
+    assert.equal((await request(`/api/items/${pearsId}`)).data.quantity, 5);
+    assert.equal((await request(`/api/receipts/${created.data.id}`)).status, 404);
+
+    // Without the flag the stock stays.
+    const kept = await request(`/api/houses/${plainHouse}/receipts`, {
+      method: "POST",
+      body: { vendorName: "Revert Mart", purchasedAt: "2026-09-10", lines: [{ description: "Revert apples", quantity: 1, lineTotal: 1 }] },
+    });
+    const plainDelete = await request(`/api/receipts/${kept.data.id}`, { method: "DELETE" });
+    assert.equal(plainDelete.status, 200);
+    assert.deepEqual(plainDelete.data.reverted, []);
+    assert.equal((await request(`/api/items/${applesId}`)).data.quantity, 1);
+  });
+
+  it("matches items by whole words, respects units and learns only confirmed links", async () => {
+    const milk = await request(`/api/houses/${plainHouse}/items`, { method: "POST", body: { name: "Oat milk", unit: "l" } });
+    const bread = await request(`/api/houses/${plainHouse}/items`, {
+      method: "POST",
+      body: { name: "Sourdough rye bread", unit: "pcs" },
+    });
+    const greek = await request(`/api/houses/${plainHouse}/items`, { method: "POST", body: { name: "Γάλα φρέσκο", unit: "l" } });
+    const flour = await request(`/api/houses/${plainHouse}/items`, { method: "POST", body: { name: "Stoneground rye flour", unit: "kg" } });
+
+    const res = await request(`/api/houses/${plainHouse}/receipts/validate`, {
+      method: "POST",
+      body: {
+        vendorName: "Match Mart",
+        lines: [
+          { description: "Oat milk chocolate", quantity: 1 },
+          { description: "Sourdough rye bread loaf", quantity: 1 },
+          { description: "ΓΑΛΑ ΦΡΕΣΚΟ 1L", quantity: 1, unit: "l" },
+          { description: "Stoneground rye flour sack", quantity: 1, unit: "pcs" },
+        ],
+      },
+    });
+    assert.equal(res.status, 200);
+    const [chocolate, loaf, gala, sack] = res.data.lines;
+    assert.equal(chocolate.willCreate, true, "“oat milk chocolate” is not oat milk");
+    assert.notEqual(chocolate.itemId, milk.data.id);
+    assert.equal(loaf.itemId, bread.data.id);
+    assert.equal(loaf.match, "fuzzy");
+    assert.equal(gala.itemId, greek.data.id);
+    // Close name, but pieces cannot be stocked as kilograms: a new item instead.
+    assert.notEqual(sack.itemId, flour.data.id);
+    assert.equal(sack.willCreate, true);
+
+    const imported = await request(`/api/houses/${plainHouse}/receipts`, {
+      method: "POST",
+      body: {
+        vendorName: "Match Mart",
+        purchasedAt: "2026-09-11",
+        lines: [
+          { description: "Sourdough rye bread loaf", quantity: 1, lineTotal: 2 },
+          { description: "MILK FRESH 1L", rawDescription: "MILK FRESH 1L", quantity: 1, unit: "l", lineTotal: 1, itemId: milk.data.id },
+        ],
+      },
+    });
+    assert.equal(imported.status, 201, JSON.stringify(imported.data));
+    assert.equal(imported.data.lines[0].itemId, bread.data.id);
+    assert.equal((await request(`/api/items/${bread.data.id}/aliases`)).data.length, 0, "fuzzy matches are not learned");
+    const milkAliases = await request(`/api/items/${milk.data.id}/aliases`);
+    assert.equal(milkAliases.data.length, 1, "a chosen item is learned");
+    assert.equal(milkAliases.data[0].rawName, "MILK FRESH 1L");
   });
 });

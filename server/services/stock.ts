@@ -340,6 +340,71 @@ export async function moveStock(opts: { itemId: string; houseId: string; userId:
   });
 }
 
+/**
+ * Take back what a receipt added: every lot created by the receipt (including
+ * parts moved to another place, which keep their receipt link) is emptied and
+ * one adjustment movement per item is recorded. Quantity that was already
+ * used is left alone and reported as consumed. Call inside the transaction
+ * that deletes the receipt, and run `afterStockChange` for the items after.
+ */
+export async function revertReceiptStock(opts: {
+  receiptId: string;
+  houseId: string;
+  userId: string;
+  reason?: string;
+}): Promise<{ itemId: string; itemName: string; unit: string; added: number; reverted: number; consumed: number }[]> {
+  return await tx(async () => {
+    const lots = await all<any>(
+      "SELECT * FROM stock_lots WHERE receipt_id = ? AND house_id = ? ORDER BY created_at ASC",
+      [opts.receiptId, opts.houseId],
+    );
+    const addedRows = await all<{ item_id: string; added: number }>(
+      `SELECT item_id, SUM(delta) AS added FROM stock_movements
+       WHERE receipt_id = ? AND house_id = ? AND type = 'in' GROUP BY item_id`,
+      [opts.receiptId, opts.houseId],
+    );
+    const added = new Map(addedRows.map((row) => [row.item_id, round(Number(row.added ?? 0))]));
+    const itemIds = [...new Set([...lots.map((lot) => String(lot.item_id)), ...added.keys()])];
+
+    const results: { itemId: string; itemName: string; unit: string; added: number; reverted: number; consumed: number }[] = [];
+    for (const itemId of itemIds) {
+      const item = await get<any>("SELECT * FROM items WHERE id = ? AND house_id = ?", [itemId, opts.houseId]);
+      if (!item) continue;
+      let remaining = 0;
+      for (const lot of lots) {
+        if (lot.item_id !== itemId) continue;
+        const quantity = Number(lot.quantity);
+        if (quantity <= 0) continue;
+        remaining += quantity;
+        await run("UPDATE stock_lots SET quantity = 0 WHERE id = ?", [lot.id]);
+      }
+      remaining = round(remaining);
+      const originally = added.get(itemId) ?? remaining;
+      if (remaining > 0) {
+        await recordMovement({
+          item,
+          type: "adjust",
+          delta: -remaining,
+          unit: item.unit,
+          quantity: remaining,
+          userId: opts.userId,
+          receiptId: opts.receiptId,
+          reason: opts.reason ?? "Receipt deleted",
+        });
+      }
+      results.push({
+        itemId,
+        itemName: String(item.name),
+        unit: String(item.unit),
+        added: originally,
+        reverted: remaining,
+        consumed: round(Math.max(0, originally - remaining)),
+      });
+    }
+    return results;
+  });
+}
+
 export async function afterStockChange(itemId: string) {
   await syncItemLowStock(itemId);
 }

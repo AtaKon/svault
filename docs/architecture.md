@@ -252,17 +252,29 @@ stock, prices, barcodes, reminders, photo labelling and authentication.
   items keep a different existing OFF link — only an explicit user action replaces it.
 - `server/services/product-catalog.ts` maps normalised receipt text to an OFF code. Bundled mappings
   live in `assets/catalog/off-mappings.json` and are marked `seed`; corrections learned on the
-  instance are `local` and win over seed/community rows. Exports are an explicit instance-admin
-  action, and imports/syncs never overwrite local rows.
+  instance are `local` and win over seed/community rows. Rows learned from a house's receipts carry
+  its `house_id` and are only used for that house; seed, community and legacy rows have `house_id`
+  `''` and are shared. Exports are an explicit instance-admin action, and imports/syncs never
+  overwrite local rows.
 
 ## Uploads
 
 - `multer` writes to `DATA_DIR/uploads/<photos|items|recipes|receipts>` with a timestamp plus random
-  suffix. Original filenames are stored in the database but not used on disk.
+  suffix and an extension chosen from the image MIME type. Original filenames are stored in the
+  database but not used on disk.
+- The house/item access check runs before multer, so nothing reaches the disk for a caller without
+  access. After upload every file's magic bytes must match JPEG, PNG, WebP, GIF, AVIF/HEIC, BMP or
+  TIFF; anything else is deleted and rejected. Restore and dataset archives go to a temp file after
+  the check and are removed when the request ends.
 - Limits: `MAX_UPLOAD_MB` per file (20 MB default), 30 files per request, images only.
+- Deleting an item, recipe or house removes its files unless another row still references them.
+  `server/services/upload-cleanup.ts` also sweeps files older than a day that no row references
+  (on start and daily). New columns that store `/uploads/...` paths must be added to
+  `UPLOAD_URL_COLUMNS` there.
 - `/uploads` is served as static content **without authentication**. Filenames are unguessable, but
   anyone with a URL can read the file. Put the app behind a proxy if that matters; this is documented
-  as a limitation rather than hidden.
+  as a limitation rather than hidden. Responses carry `nosniff` and a sandboxing CSP, and any file
+  whose extension is not an image is sent as a download.
 - Uploaded images referenced by `/uploads/...` are resolved server-side for AI vision by reading the
   file and converting it to a data URL.
 

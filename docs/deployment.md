@@ -82,7 +82,7 @@ Docker Compose reads `.env` next to `docker-compose.yml`.
 | `SVAULT_PORT` | `8080` | Compose | Host port published for the app. |
 | `COOKIE_SECURE` | `false` in the example, `true` in production unless explicitly false | Server | Adds `Secure` to the session cookie. Set `true` once HTTPS works. |
 | `SEED_DEMO` | `false` | Entrypoint | Seed the demo vault on first start (empty DB only). |
-| `OPENAI_API_KEY` | empty | Server | Optional global AI key. Per-house settings win. |
+| `OPENAI_API_KEY` | empty | Server | Optional global AI key. Per-house settings win. Only ever sent to `OPENAI_BASE_URL`: a house that sets its own base URL must supply its own key (or use a keyless local endpoint). |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Server | Any OpenAI-compatible endpoint. |
 | `OPENAI_MODEL` | `gpt-4o-mini` | Server | Text model. |
 | `OPENAI_VISION_MODEL` | falls back to text model | Server | Vision model for recipe photos. |
@@ -96,7 +96,7 @@ Docker Compose reads `.env` next to `docker-compose.yml`.
 | `OIDC_CLIENT_SECRET` | empty | Server | OIDC client secret (never sent to the browser). |
 | `OIDC_REDIRECT_URI` | `<origin>/api/auth/oidc/callback` | Server | Must match the provider registration. |
 | `OIDC_ALLOWED_DOMAINS` | empty | Server | Comma-separated verified email domains; empty allows any. |
-| `OIDC_AUTO_PROVISION` | `true` | Server | Create a user for unknown verified identities. |
+| `OIDC_AUTO_PROVISION` | `true` | Server | Create a user for unknown verified identities. Only applies while `SV_REGISTRATION` is `open`. |
 | `OIDC_DEFAULT_HOUSE_ID` | empty | Server | Join new SSO users to this house instead of creating one. |
 | `OFF_API_BASE` | `https://world.openfoodfacts.org` | Server | Product endpoint, overridable for a proxy. |
 | `OFF_SEARCH_BASE` | `https://search.openfoodfacts.org` | Server | Name-search endpoint. |
@@ -110,6 +110,14 @@ Docker Compose reads `.env` next to `docker-compose.yml`.
 | `PG_POOL_SIZE` | `10` | Server | PostgreSQL connection pool size. |
 | `PGSSLMODE` | off | Server | PostgreSQL TLS mode (`require`, `prefer`, `no-verify`, `verify-full`). |
 | `MAX_UPLOAD_MB` | `20` | Server | Per-file upload limit. Add it to the compose `environment` block if you change it. |
+| `SV_RESTORE_MAX_MB` | `512` | Server | Largest backup zip the in-app restore accepts (instance admin only). |
+| `SV_DATASET_MAX_MB` | `256` | Server | Largest YOLO/COCO zip the dataset import accepts. |
+| `SV_REGISTRATION` | `open` until the first account exists, then `invite` | Server | `open`: anyone can sign up. `invite`: sign-up only with a valid house invite. `closed`: no self sign-up. The first account (the instance admin) can always be created. |
+| `SV_INVITE_DAYS` | `14` | Server | Lifetime of new house invites. Older invites without an expiry count from their creation date. |
+| `SV_OUTBOUND_ALLOW_PRIVATE` | `true` | Server | Set `false` to refuse house-configured AI base URLs and reminder channel URLs that resolve to loopback, private or link-local addresses (and to stop following redirects for them). Keep `true` if houses use a LAN Ollama, LM Studio or ntfy server. |
+| `SV_RATE_LIMIT` | on | Server | `off` disables the built-in rate limits (for example when the proxy already limits). |
+| `SV_RATE_LIMIT_<NAME>` | see [Rate limits](#rate-limits) | Server | Override one limit as `<max>/<seconds>`, e.g. `SV_RATE_LIMIT_LOGIN=30/600`. |
+| `SV_CSP` | on | Server | `off` disables the Content-Security-Policy header (only for debugging a custom build). |
 | `NODE_ENV` | `production` in Docker | Server | Enables production caching, disables request logs. |
 
 See [Bring your own database](database.md) for PostgreSQL setup, migration and the example Compose
@@ -136,6 +144,38 @@ On Linux, `host.docker.internal` usually does not resolve. Use the Docker bridge
 
 AI is optional. Without a provider, OCR still runs locally, recipes are parsed by the local parser and
 meal ideas come from stock and saved recipes.
+
+The server-wide `OPENAI_API_KEY` is only used for houses that keep the default base URL (empty or the
+same as `OPENAI_BASE_URL`). A house that points SVault at another endpoint must enter that endpoint's
+key, or enable AI without a key for a keyless local server such as Ollama or LM Studio. This stops a
+house admin from pointing the base URL at their own server and receiving the instance key.
+
+### Rate limits
+
+SVault limits credential, invite and AI endpoints in memory (counters reset on restart). A limited
+request gets `429 Too Many Requests` with a `Retry-After` header.
+
+| Name | Default | Applies to |
+| --- | --- | --- |
+| `LOGIN` | `30/600` per IP | `POST /api/auth/login` |
+| `LOGIN_ACCOUNT` | `10/900` failed attempts per email/username | `POST /api/auth/login`; once reached even the right password waits |
+| `REGISTER` | `10/3600` per IP | `POST /api/auth/register` |
+| `TWO_FACTOR` | `20/600` per IP | `POST /api/auth/2fa/verify` (each challenge also allows only 5 wrong codes) |
+| `PASSKEY` | `30/600` per IP | passkey sign-in options and verification |
+| `INVITE` | `30/600` per IP | invite lookup and accept |
+| `AI` | `60/600` per user | receipt and recipe scans, intake parse, ideas, recipe completion, AI connection test |
+
+Override with `SV_RATE_LIMIT_<NAME>=<max>/<seconds>`. Limits are keyed by `req.ip`, which honours one
+reverse-proxy hop (`X-Forwarded-For`); make sure your proxy sets it, otherwise every client shares the
+proxy's address.
+
+### Registration
+
+By default anyone can create the first account (it becomes the instance admin); after that, sign-up
+needs an invite link from a house admin (`SV_REGISTRATION=invite`). Set `SV_REGISTRATION=open` to let
+anyone who can reach the server sign up, or `closed` to stop self sign-up entirely. OIDC
+auto-provisioning creates accounts too, so it only runs while registration is `open`; existing
+accounts with a matching verified email still link. `GET /api/auth/registration` reports the mode.
 
 ## HTTPS and reverse proxies
 
@@ -275,7 +315,8 @@ Choose one of these:
 
 ### In-app backup (recommended)
 
-Open **Settings → Data → Backup & restore** as the house owner and press **Download backup**. The zip
+Open **Settings → Data → Backup & restore** as the instance administrator (the first account; backups
+cover every house and account, so house owners cannot download them) and press **Download backup**. The zip
 contains a consistent `svault.db`, `uploads/`, and `manifest.json` with the app/schema version and
 SHA-256 checksums. The last five copies stay in `DATA_DIR/backups`.
 
@@ -442,9 +483,16 @@ client_max_body_size 25m;
 - [ ] Use strong, unique passwords; do not expose the app to the internet with demo data enabled.
 - [ ] Keep the host, Docker and the SVault image updated.
 - [ ] Restrict the app port to the proxy or LAN; do not publish it directly to the internet.
-- [ ] Add rate limiting at the proxy if the instance is internet-facing.
+- [ ] Make sure the proxy sets `X-Forwarded-For` so the built-in [rate limits](#rate-limits) see real
+      client addresses. Add proxy-level limits too if the instance is internet-facing.
+- [ ] Keep `SV_REGISTRATION` at its default (`invite`) or `closed` unless you want open sign-up.
+- [ ] Set `ORIGIN` to the public URL; it is used for passkeys and for the cross-site request check.
+- [ ] On a shared instance where house admins are not fully trusted, set `SV_OUTBOUND_ALLOW_PRIVATE=false`
+      so house settings cannot make the server call your internal network.
 - [ ] Remember that `/uploads/*` is unauthenticated. Treat upload URLs as secrets and keep the whole
-      site behind your proxy.
+      site behind your proxy. Uploads are checked to be real images and served with `nosniff` and a
+      sandboxing CSP; files of deleted items, recipes and houses are removed, and unreferenced files
+      are swept after a day.
 - [ ] Prefer AI keys in environment variables if you do not want them stored in the database.
 - [ ] Back up regularly and test a restore.
 - [ ] Review the [security policy](../SECURITY.md) for reporting vulnerabilities.

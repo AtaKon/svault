@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import { get, newId, now, run, tx } from "../db.js";
 import {
@@ -18,6 +19,9 @@ import { createHouse } from "../services/houses.js";
 import { notifyHouseAdded } from "../services/notifications.js";
 import { usernameFromEmail, usernameWithSuffix } from "../username.js";
 import { createLoginChallenge, requireTotp } from "../services/totp.js";
+import { RateLimitError, limiters } from "../rate-limit.js";
+import { registrationStatus } from "../services/registration.js";
+import { inviteExpired, inviteExpiresAt } from "../services/invites.js";
 import type { Role } from "../../shared/types.js";
 
 export const authRoutes = Router();
@@ -57,6 +61,10 @@ async function uniqueUsername(email: string, excludeUserId?: string): Promise<st
   return candidate;
 }
 
+/* Verified against when the account does not exist, so a missing account
+   costs the same scrypt work as a wrong password. */
+const DUMMY_PASSWORD_HASH = hashPassword(randomBytes(16).toString("hex"));
+
 function publicUser(row: any) {
   return {
     id: row.id,
@@ -66,6 +74,7 @@ function publicUser(row: any) {
     language: row.language ?? "en",
     isAdmin: !!row.is_admin,
     developerMode: !!row.developer_mode,
+    hasPassword: Number(row.password_set ?? 1) !== 0,
     createdAt: row.created_at,
   };
 }
@@ -75,6 +84,15 @@ export async function userPayload(userId: string) {
   const houses = (await userHouses(userId)).map((h) => serializeHouse(h, h.role));
   return { user: publicUser(user), houses };
 }
+
+/** Public: lets the sign-up page explain whether an invite is needed. */
+authRoutes.get(
+  "/registration",
+  handler(async (_req, res) => {
+    const status = await registrationStatus();
+    res.json({ mode: status.mode, inviteRequired: status.mode === "invite", firstUser: status.firstUser });
+  }),
+);
 
 authRoutes.post(
   "/register",
@@ -100,11 +118,18 @@ authRoutes.post(
     const username = body.username ?? await uniqueUsername(body.email);
 
     const userId = newId("usr");
-    const isFirst = !await get("SELECT id FROM users LIMIT 1");
+    const registration = await registrationStatus();
+    const isFirst = registration.firstUser;
+    if (registration.mode === "closed") {
+      throw new ApiError(403, "Registration is closed on this server. Ask the administrator for an account.");
+    }
+    if (registration.mode === "invite" && !body.inviteCode) {
+      throw new ApiError(403, "Registration on this server needs an invite link from a house admin.");
+    }
     const invite = body.inviteCode
       ? await get<any>("SELECT * FROM house_invites WHERE code = ? AND accepted_at IS NULL", [body.inviteCode])
       : undefined;
-    if (body.inviteCode && !invite) throw new ApiError(400, "That invite link is no longer valid");
+    if (body.inviteCode && (!invite || inviteExpired(invite))) throw new ApiError(400, "That invite link is no longer valid");
     if (invite?.email && invite.email.toLowerCase() !== body.email) {
       throw new ApiError(403, "This invite was sent to a different email address");
     }
@@ -159,15 +184,25 @@ authRoutes.post(
       req.body,
     );
     const identifier = (body.identifier || body.email || body.username || "").trim();
+    const accountKey = identifier.toLowerCase();
+    const wait = limiters.loginAccount.blocked(accountKey);
+    if (wait > 0) {
+      throw new RateLimitError(wait, "Too many failed sign-ins for this account. Wait a few minutes and try again.");
+    }
     const user = identifier
       ? await get<any>("SELECT * FROM users WHERE lower(email) = lower(?) OR lower(username) = lower(?)", [
           identifier,
           identifier,
         ])
       : undefined;
-    if (!user || !verifyPassword(body.password, user.password_hash)) {
+    const passwordOk = user
+      ? verifyPassword(body.password, user.password_hash)
+      : (verifyPassword(body.password, DUMMY_PASSWORD_HASH), false);
+    if (!user || !passwordOk) {
+      limiters.loginAccount.hit(accountKey);
       throw new ApiError(401, "Wrong email/username or password");
     }
+    limiters.loginAccount.reset(accountKey);
     if (await requireTotp(user.id)) {
       const challenge = await createLoginChallenge(user.id, "totp");
       res.json({
@@ -212,9 +247,26 @@ authRoutes.patch(
         username: usernameSchema.optional(),
         language: z.enum(["en", "el"]).optional(),
         developerMode: z.boolean().optional(),
+        currentPassword: z.string().max(200).optional(),
       }),
       req.body,
     );
+    // Email and username are sign-in identifiers (and the email receives
+    // invites), so changing them needs the current password, not just a session.
+    const current = (await get<any>("SELECT * FROM users WHERE id = ?", [req.user!.id]))!;
+    const emailChanged = Boolean(body.email && body.email !== String(current.email).toLowerCase());
+    const usernameChanged = Boolean(body.username && body.username !== String(current.username ?? "").toLowerCase());
+    if (emailChanged || usernameChanged) {
+      if (Number(current.password_set ?? 1) === 0) {
+        if (emailChanged) {
+          throw new ApiError(403, "Your email is managed by your single sign-on provider. Change it there.");
+        }
+      } else if (!body.currentPassword) {
+        throw new ApiError(400, "Enter your current password to change your email or username");
+      } else if (!verifyPassword(body.currentPassword, current.password_hash)) {
+        throw new ApiError(400, "Current password is not correct");
+      }
+    }
     if (body.email && await get("SELECT id FROM users WHERE lower(email) = lower(?) AND id <> ?", [body.email, req.user!.id])) {
       throw new ApiError(409, "Another account already uses that email");
     }
@@ -269,13 +321,14 @@ authRoutes.get(
        WHERE i.code = ?`,
       [req.params.code],
     );
-    if (!invite || invite.accepted_at) throw new ApiError(404, "That invite link is no longer valid");
+    if (!invite || invite.accepted_at || inviteExpired(invite)) throw new ApiError(404, "That invite link is no longer valid");
     res.json({
       code: invite.code,
       houseName: invite.house_name,
       houseKind: invite.house_kind,
       role: invite.role,
       email: invite.email,
+      expiresAt: inviteExpiresAt(invite),
       inviterName: invite.inviter_name ?? null,
       memberCount: Number(
         (await get<{ n: number }>("SELECT COUNT(*) AS n FROM house_members WHERE house_id = ?", [invite.house_id]))?.n ?? 0,
@@ -289,7 +342,7 @@ authRoutes.post(
   requireAuth,
   handler(async (req, res) => {
     const invite = await get<any>("SELECT * FROM house_invites WHERE code = ? AND accepted_at IS NULL", [req.params.code]);
-    if (!invite) throw new ApiError(404, "That invite link is no longer valid");
+    if (!invite || inviteExpired(invite)) throw new ApiError(404, "That invite link is no longer valid");
     if (invite.email && invite.email.toLowerCase() !== req.user!.email.toLowerCase()) {
       throw new ApiError(403, "This invite was sent to a different email address");
     }

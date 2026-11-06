@@ -1,24 +1,34 @@
 import { Router } from "express";
-import multer from "multer";
+import fs from "node:fs";
 import { get } from "../db.js";
 import { requireAuth, verifyPassword } from "../auth.js";
-import { ApiError, handler, requireHouse } from "../http.js";
+import { ApiError, handler, requireHouse, requireInstanceAdmin } from "../http.js";
 import { setMaintenance } from "../maintenance.js";
 import { createBackupArchive, createPreRestoreCopy, listBackups, stageRestore, validateBackup } from "../services/backup.js";
-import { IS_PROD } from "../config.js";
+import { IS_PROD, RESTORE_MAX_BYTES } from "../config.js";
+import { archiveUploader } from "../upload.js";
 
 export const backupRoutes = Router();
 backupRoutes.use(requireAuth);
 
-const restoreUpload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 1024 * 1024 * 1024 },
-}).single("backup");
+/*
+ * Backups contain the whole instance (every house, every user, all uploads),
+ * so they are limited to the instance administrator. The house-scoped URL is
+ * kept for client compatibility; the caller must still be a member of it.
+ */
+
+/* The admin check runs before multer and the archive goes to a temp file, so
+   nobody else can push a large body onto the server. */
+const restoreUpload = archiveUploader("backup", RESTORE_MAX_BYTES, async (req) => {
+  requireInstanceAdmin(req);
+  await requireHouse(req);
+});
 
 backupRoutes.get(
   "/:houseId/backup",
   handler(async (req, res) => {
-    await requireHouse(req, "owner");
+    requireInstanceAdmin(req);
+    await requireHouse(req);
     const archive = await createBackupArchive();
     // Stream the finished zip from disk. The path is server-generated; allow
     // dot folders so a DATA_DIR such as ~/.svault does not turn into a 404.
@@ -29,7 +39,8 @@ backupRoutes.get(
 backupRoutes.get(
   "/:houseId/backups",
   handler(async (req, res) => {
-    await requireHouse(req, "owner");
+    requireInstanceAdmin(req);
+    await requireHouse(req);
     res.json({ backups: listBackups() });
   }),
 );
@@ -38,7 +49,8 @@ backupRoutes.post(
   "/:houseId/restore",
   restoreUpload,
   handler(async (req, res) => {
-    const { houseId } = await requireHouse(req, "owner");
+    requireInstanceAdmin(req);
+    const { houseId } = await requireHouse(req);
     if (!req.file) throw new ApiError(400, "Attach a SVault backup zip");
     const body = (req.body ?? {}) as Record<string, string>;
     const house = (await get<any>("SELECT * FROM houses WHERE id = ?", [houseId]))!;
@@ -51,7 +63,7 @@ backupRoutes.post(
 
     let validation;
     try {
-      validation = await validateBackup(req.file.buffer);
+      validation = await validateBackup(await fs.promises.readFile(req.file.path));
     } catch (error) {
       throw new ApiError(400, error instanceof Error ? error.message : "Invalid backup archive");
     }
