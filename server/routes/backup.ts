@@ -2,13 +2,19 @@ import { Router } from "express";
 import multer from "multer";
 import { get } from "../db.js";
 import { requireAuth, verifyPassword } from "../auth.js";
-import { ApiError, handler, requireHouse } from "../http.js";
+import { ApiError, handler, requireHouse, requireInstanceAdmin } from "../http.js";
 import { setMaintenance } from "../maintenance.js";
 import { createBackupArchive, listBackups, stageRestore, validateBackup } from "../services/backup.js";
 import { IS_PROD } from "../config.js";
 
 export const backupRoutes = Router();
 backupRoutes.use(requireAuth);
+
+/*
+ * Backups contain the whole instance (every house, every user, all uploads),
+ * so they are limited to the instance administrator. The house-scoped URL is
+ * kept for client compatibility; the caller must still be a member of it.
+ */
 
 const restoreUpload = multer({
   storage: multer.memoryStorage(),
@@ -18,7 +24,8 @@ const restoreUpload = multer({
 backupRoutes.get(
   "/:houseId/backup",
   handler(async (req, res) => {
-    await requireHouse(req, "owner");
+    requireInstanceAdmin(req);
+    await requireHouse(req);
     const { buffer, name } = await createBackupArchive();
     res.setHeader("Content-Type", "application/zip");
     res.setHeader("Content-Disposition", `attachment; filename="${name}"`);
@@ -30,7 +37,8 @@ backupRoutes.get(
 backupRoutes.get(
   "/:houseId/backups",
   handler(async (req, res) => {
-    await requireHouse(req, "owner");
+    requireInstanceAdmin(req);
+    await requireHouse(req);
     res.json({ backups: listBackups() });
   }),
 );
@@ -39,7 +47,8 @@ backupRoutes.post(
   "/:houseId/restore",
   restoreUpload,
   handler(async (req, res) => {
-    const { houseId } = await requireHouse(req, "owner");
+    requireInstanceAdmin(req);
+    const { houseId } = await requireHouse(req);
     if (!req.file) throw new ApiError(400, "Attach a SVault backup zip");
     const body = (req.body ?? {}) as Record<string, string>;
     const house = (await get<any>("SELECT * FROM houses WHERE id = ?", [houseId]))!;

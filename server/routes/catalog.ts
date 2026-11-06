@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { all, get } from "../db.js";
 import { requireAuth } from "../auth.js";
-import { ApiError, handler, intParam, parseBody } from "../http.js";
+import { ApiError, handler, intParam, parseBody, requireInstanceAdmin } from "../http.js";
 import {
   fetchOffProduct,
   getCachedOffPayload,
@@ -21,10 +21,6 @@ import type { OffSearchResult } from "../../shared/types.js";
 
 export const catalogRoutes = Router();
 catalogRoutes.use(requireAuth);
-
-function requireInstanceAdmin(req: any) {
-  if (!req.user?.isAdmin) throw new ApiError(403, "Requires the instance administrator");
-}
 
 async function localProducts(query: string, limit: number) {
   const q = String(query ?? "").trim();

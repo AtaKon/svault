@@ -1629,14 +1629,14 @@ function DataTab({ house, detail }: { house: House; detail: HouseDetail | null }
   }, [loadCatalog]);
 
   const loadBackups = useCallback(async () => {
-    if (!can("owner")) return;
+    if (!user?.isAdmin) return;
     try {
       const data = await api<{ backups: { name: string; size: number; createdAt: string }[] }>(`/api/houses/${house.id}/backups`);
       setBackups(data.backups);
     } catch {
       /* backup listing is optional */
     }
-  }, [house.id, can]);
+  }, [house.id, user?.isAdmin]);
 
   useEffect(() => {
     void loadBackups();
@@ -2016,12 +2016,23 @@ function DataTab({ house, detail }: { house: House; detail: HouseDetail | null }
         </Card>
       )}
 
-      {can("owner") && (
+      {!user?.isAdmin && can("owner") && (
+        <Card className="p-4">
+          <h2 className="font-display text-lg">Backup &amp; restore</h2>
+          <p className="mt-0.5 text-[11px] leading-relaxed text-muted">
+            A backup contains every house and account on this server, so only the instance administrator can download or
+            restore one. Ask them for a copy, or use the CSV and dataset exports for this house.
+          </p>
+        </Card>
+      )}
+
+      {user?.isAdmin && (
         <Card className="space-y-3 p-4">
           <div>
             <h2 className="font-display text-lg">Backup &amp; restore</h2>
             <p className="mt-0.5 text-[11px] leading-relaxed text-muted">
-              A zip with a consistent SQLite snapshot, the uploads folder and a manifest with checksums. Owner only.
+              A zip with a consistent database snapshot, the uploads folder and a manifest with checksums. It covers every
+              house and account on this server, so it is limited to the instance administrator.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">

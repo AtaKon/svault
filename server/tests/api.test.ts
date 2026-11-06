@@ -2222,6 +2222,35 @@ describe("multi-user membership", () => {
   });
 });
 
+describe("security hardening", () => {
+  let strangerHouseId = "";
+
+  before(async () => {
+    const me = await request("/api/auth/me", { auth: secondUserCookie });
+    strangerHouseId = me.data.houses.find((house: any) => house.role === "owner").id;
+  });
+
+  it("limits backup and restore to the instance administrator", async () => {
+    // Every user owns a house, so house ownership alone must not unlock a whole-instance backup.
+    const download = await request(`/api/houses/${strangerHouseId}/backup`, { auth: secondUserCookie });
+    assert.equal(download.status, 403);
+    const list = await request(`/api/houses/${strangerHouseId}/backups`, { auth: secondUserCookie });
+    assert.equal(list.status, 403);
+    const form = new FormData();
+    form.append("backup", new Blob([Buffer.from("not a zip")], { type: "application/zip" }), "backup.zip");
+    form.append("houseName", "whatever");
+    const restore = await fetch(`${base}/api/houses/${strangerHouseId}/restore`, {
+      method: "POST",
+      headers: { cookie: secondUserCookie },
+      body: form,
+    });
+    assert.equal(restore.status, 403);
+
+    const adminList = await request(`/api/houses/${houseId}/backups`);
+    assert.equal(adminList.status, 200);
+  });
+});
+
 describe("multi-photo receipt OCR", () => {
   it("drops the lines two overlapping pages share", () => {
     const merged = mergeOcrTexts([
