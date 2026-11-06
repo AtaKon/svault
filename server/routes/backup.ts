@@ -4,7 +4,7 @@ import { get } from "../db.js";
 import { requireAuth, verifyPassword } from "../auth.js";
 import { ApiError, handler, requireHouse } from "../http.js";
 import { setMaintenance } from "../maintenance.js";
-import { createBackupArchive, listBackups, stageRestore, validateBackup } from "../services/backup.js";
+import { createBackupArchive, createPreRestoreCopy, listBackups, stageRestore, validateBackup } from "../services/backup.js";
 import { IS_PROD } from "../config.js";
 
 export const backupRoutes = Router();
@@ -19,11 +19,10 @@ backupRoutes.get(
   "/:houseId/backup",
   handler(async (req, res) => {
     await requireHouse(req, "owner");
-    const { buffer, name } = await createBackupArchive();
-    res.setHeader("Content-Type", "application/zip");
-    res.setHeader("Content-Disposition", `attachment; filename="${name}"`);
-    res.setHeader("Content-Length", String(buffer.length));
-    res.send(buffer);
+    const archive = await createBackupArchive();
+    // Stream the finished zip from disk. The path is server-generated; allow
+    // dot folders so a DATA_DIR such as ~/.svault does not turn into a 404.
+    res.download(archive.path, archive.name, { dotfiles: "allow" });
   }),
 );
 
@@ -58,7 +57,7 @@ backupRoutes.post(
     }
 
     // Keep a safety copy of the current data before replacing anything.
-    await createBackupArchive();
+    await createPreRestoreCopy();
     stageRestore(validation);
     setMaintenance(true);
     res.json({

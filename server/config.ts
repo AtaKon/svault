@@ -13,6 +13,16 @@ export const BACKUP_DIR = path.join(DATA_DIR, "backups");
 export const DB_FILE = path.join(DATA_DIR, "svault.db");
 
 /**
+ * Backup retention. Regular backups rotate in BACKUP_DIR; the safety copies
+ * taken before a restore live in their own folder and rotate separately, so a
+ * burst of regular backups can never delete the copy needed to roll back.
+ */
+export const BACKUP_KEEP = 5;
+export const PRE_RESTORE_DIR = path.join(BACKUP_DIR, "pre-restore");
+const preRestoreKeep = Math.floor(Number(process.env.SV_PRE_RESTORE_KEEP ?? 3));
+export const PRE_RESTORE_KEEP = Number.isFinite(preRestoreKeep) && preRestoreKeep >= 1 ? preRestoreKeep : 3;
+
+/**
  * Bring-your-own-database configuration.
  *
  * Set DATABASE_URL to a PostgreSQL connection string (or SV_DATABASE_KIND to

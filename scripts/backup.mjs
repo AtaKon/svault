@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { initDb, closeDb } from "../server/db.ts";
 import { createBackupArchive } from "../server/services/backup.ts";
@@ -10,8 +9,11 @@ function arg(name, fallback) {
 
 await initDb();
 const out = path.resolve(arg("--out", `svault-backup-${new Date().toISOString().slice(0, 10)}.zip`));
-const { buffer, name } = await createBackupArchive({ keepLocal: false });
-await closeDb();
-fs.mkdirSync(path.dirname(out), { recursive: true });
-fs.writeFileSync(out, buffer);
-console.log(`Backup written to ${out} (${buffer.length} bytes, ${name})`);
+// The archive is streamed straight to --out; it is not added to the in-app rotation.
+let archive;
+try {
+  archive = await createBackupArchive({ outFile: out });
+} finally {
+  await closeDb();
+}
+console.log(`Backup written to ${archive.path} (${archive.size} bytes)`);

@@ -23,6 +23,20 @@ export function applyStagedUploads(): void {
   }
 }
 
+/**
+ * Delete all but the newest `keep` files in `dir` whose names match `pattern`.
+ * Names carry ISO timestamps, so the name breaks ties between equal mtimes.
+ */
+export function pruneOldFiles(dir: string, pattern: RegExp, keep: number): void {
+  if (!fs.existsSync(dir)) return;
+  const files = fs
+    .readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && pattern.test(entry.name))
+    .map((entry) => ({ name: entry.name, at: fs.statSync(path.join(dir, entry.name)).mtimeMs }))
+    .sort((a, b) => b.at - a.at || b.name.localeCompare(a.name));
+  for (const file of files.slice(Math.max(0, keep))) fs.rmSync(path.join(dir, file.name), { force: true });
+}
+
 export function clearStagedRestore(): void {
   fs.rmSync(path.join(DATA_DIR, ".restore-staging"), { recursive: true, force: true });
   fs.rmSync(path.join(DATA_DIR, ".restore-pending.json"), { force: true });

@@ -2,7 +2,8 @@ import { DatabaseSync } from "node:sqlite";
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
-import { BACKUP_DIR, DB_FILE, UPLOAD_DIR, ensureDirs } from "../config.js";
+import { DB_FILE, PRE_RESTORE_DIR, PRE_RESTORE_KEEP, UPLOAD_DIR, ensureDirs } from "../config.js";
+import { pruneOldFiles } from "../services/restore-files.js";
 import { RESERVED_ATTRIBUTE_KEYS } from "../../shared/types.js";
 import type { DatabaseDriver, RunResult } from "./types.js";
 
@@ -11,8 +12,13 @@ export function applyPendingSqliteRestore() {
   const marker = path.join(path.dirname(DB_FILE), ".restore-pending.json");
   const staging = path.join(path.dirname(DB_FILE), ".restore-staging");
   if (!fs.existsSync(marker) || !fs.existsSync(path.join(staging, "svault.db"))) return;
-  fs.mkdirSync(BACKUP_DIR, { recursive: true });
-  if (fs.existsSync(DB_FILE)) fs.copyFileSync(DB_FILE, path.join(BACKUP_DIR, `pre-restore-${Date.now()}.db`));
+  // Raw copy of the database being replaced, next to the pre-restore zips and
+  // rotated with them (the zip taken when the restore was staged also has uploads).
+  if (fs.existsSync(DB_FILE)) {
+    fs.mkdirSync(PRE_RESTORE_DIR, { recursive: true });
+    fs.copyFileSync(DB_FILE, path.join(PRE_RESTORE_DIR, `pre-restore-${Date.now()}.db`));
+    pruneOldFiles(PRE_RESTORE_DIR, /^pre-restore-.*\.db$/, PRE_RESTORE_KEEP);
+  }
   for (const suffix of ["-wal", "-shm"]) fs.rmSync(`${DB_FILE}${suffix}`, { force: true });
   fs.copyFileSync(path.join(staging, "svault.db"), DB_FILE);
   fs.rmSync(UPLOAD_DIR, { recursive: true, force: true });

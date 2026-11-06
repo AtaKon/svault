@@ -2945,6 +2945,102 @@ describe("offline mutation idempotency", () => {
   });
 });
 
+describe("backup usability", () => {
+  const backupDir = path.join(dataDir, "backups");
+  const preRestoreDir = path.join(backupDir, "pre-restore");
+  const zips = async (dir: string, pattern: RegExp) => {
+    const fs = await import("node:fs");
+    return fs.existsSync(dir) ? fs.readdirSync(dir).filter((name) => pattern.test(name)) : [];
+  };
+
+  it("keeps a pre-restore safety copy through more than five regular backups", async () => {
+    const { createBackupArchive, createPreRestoreCopy, listBackups } = await import("../services/backup.js");
+    const fs = await import("node:fs");
+    const copy = await createPreRestoreCopy();
+    assert.equal(path.dirname(copy.path), preRestoreDir);
+    assert.match(copy.name, /^pre-restore-.*\.zip$/);
+
+    for (let i = 0; i < 7; i++) await createBackupArchive();
+
+    assert.ok(fs.existsSync(copy.path), "the pre-restore copy must not be rotated by regular backups");
+    assert.equal((await zips(backupDir, /^svault-backup-.*\.zip$/)).length, 5);
+    assert.deepEqual(await zips(backupDir, /^pre-restore-/), [], "safety copies never sit in the regular folder");
+
+    const listed = listBackups();
+    assert.equal(listed.filter((entry) => entry.kind === "backup").length, 5);
+    const safety = listed.filter((entry) => entry.kind === "pre-restore");
+    assert.ok(safety.some((entry) => entry.name === copy.name));
+    for (const entry of listed) {
+      assert.ok(entry.kind === "backup" || entry.kind === "pre-restore");
+      assert.ok(entry.size > 0);
+      assert.ok(!Number.isNaN(Date.parse(entry.createdAt)));
+    }
+    // The safety copy is a complete, restorable archive.
+    const validation = await validateBackup(fs.readFileSync(copy.path));
+    assert.ok(validation.manifest.checksums.database);
+  });
+
+  it("rotates pre-restore copies separately, keeping the newest three", async () => {
+    const { createPreRestoreCopy } = await import("../services/backup.js");
+    const fs = await import("node:fs");
+    const regularBefore = (await zips(backupDir, /^svault-backup-.*\.zip$/)).sort();
+    const copies = [];
+    for (let i = 0; i < 4; i++) copies.push(await createPreRestoreCopy());
+    const kept = (await zips(preRestoreDir, /^pre-restore-.*\.zip$/)).sort();
+    assert.equal(kept.length, 3);
+    for (const copy of copies.slice(-3)) assert.ok(fs.existsSync(copy.path));
+    assert.deepEqual((await zips(backupDir, /^svault-backup-.*\.zip$/)).sort(), regularBefore);
+  });
+
+  it("streams uploads into an archive that validates, without backup folders inside", async () => {
+    const { createBackupArchive } = await import("../services/backup.js");
+    const fs = await import("node:fs");
+    const { randomBytes } = await import("node:crypto");
+    const uploadDir = path.join(dataDir, "uploads", "photos");
+    const large = path.join(uploadDir, "streaming-test-large.bin");
+    const payload = randomBytes(3 * 1024 * 1024);
+    fs.mkdirSync(uploadDir, { recursive: true });
+    fs.writeFileSync(large, payload);
+    const outDir = mkdtempSync(path.join(tmpdir(), "svault-stream-"));
+    try {
+      const archive = await createBackupArchive({ outFile: path.join(outDir, "out.zip") });
+      assert.equal(archive.path, path.join(outDir, "out.zip"));
+      assert.equal(archive.size, fs.statSync(archive.path).size);
+      assert.deepEqual(fs.readdirSync(outDir), ["out.zip"], "no .partial file is left behind");
+
+      const buffer = fs.readFileSync(archive.path);
+      const validation = await validateBackup(buffer);
+      const upload = validation.uploads.find((entry) => entry.name === "photos/streaming-test-large.bin");
+      assert.ok(upload, "the large upload is in the archive");
+      assert.ok(upload.data.equals(payload));
+      assert.ok(validation.manifest.checksums.uploads["photos/streaming-test-large.bin"]);
+
+      const names = Object.keys((await JSZip.loadAsync(buffer)).files);
+      assert.ok(names.includes("manifest.json"));
+      assert.ok(!names.some((name) => /backups\/|pre-restore|svault-backup-/.test(name)), names.join(", "));
+    } finally {
+      fs.rmSync(large, { force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it("serves the backup download as a valid streamed zip", async () => {
+    const res = await fetch(`${base}/api/houses/${houseId}/backup`, { headers: { cookie } });
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get("content-type") ?? "", /zip/);
+    assert.match(res.headers.get("content-disposition") ?? "", /attachment; filename="?svault-backup-.*\.zip"?/);
+    const bytes = Buffer.from(await res.arrayBuffer());
+    assert.equal(Number(res.headers.get("content-length")), bytes.length);
+    const validation = await validateBackup(bytes);
+    assert.ok(validation.manifest.checksums.database);
+
+    const list = await request(`/api/houses/${houseId}/backups`);
+    assert.equal(list.status, 200);
+    assert.ok(list.data.backups.some((entry: { kind: string }) => entry.kind === "backup"));
+    assert.ok(list.data.backups.some((entry: { kind: string }) => entry.kind === "pre-restore"));
+  });
+});
+
 describe("backup and restore", () => {
   it("creates a valid zip with a manifest and checksums", async () => {
     const { buffer, validation } = await backupForTest();

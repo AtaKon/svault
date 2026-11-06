@@ -1,10 +1,24 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { DatabaseSync } from "node:sqlite";
 import JSZip from "jszip";
-import { APP_VERSION, BACKUP_DIR, DATA_DIR, SCHEMA_VERSION, UPLOAD_DIR, ensureDirs } from "../config.js";
-import { all, databaseKind, exec, get, tables } from "../db.js";
+import {
+  APP_VERSION,
+  BACKUP_DIR,
+  BACKUP_KEEP,
+  DATA_DIR,
+  PRE_RESTORE_DIR,
+  PRE_RESTORE_KEEP,
+  SCHEMA_VERSION,
+  UPLOAD_DIR,
+  ensureDirs,
+} from "../config.js";
+import { all, closeDb, databaseKind, exec, get, initDb, tables } from "../db.js";
+import { pruneOldFiles } from "./restore-files.js";
 
 export interface BackupManifest {
   format: 1 | 2;
@@ -54,15 +68,6 @@ function safeEntryName(name: string): boolean {
   return !normalized.startsWith("/") && !normalized.split("/").includes("..");
 }
 
-function pruneBackups(keep = 5) {
-  const files = fs
-    .readdirSync(BACKUP_DIR)
-    .filter((name) => /^svault-backup-.*\.zip$/.test(name))
-    .map((name) => ({ name, at: fs.statSync(path.join(BACKUP_DIR, name)).mtimeMs }))
-    .sort((a, b) => b.at - a.at);
-  for (const file of files.slice(keep)) fs.rmSync(path.join(BACKUP_DIR, file.name), { force: true });
-}
-
 function countRows(): Promise<{ items: number; photos: number; recipes: number; users: number }> {
   return (async () => {
     const [items, photos, recipes, users] = await Promise.all([
@@ -90,35 +95,108 @@ async function logicalDump(): Promise<Buffer> {
   return Buffer.from(JSON.stringify(dump), "utf8");
 }
 
+/** SHA-256 of a file, read as a stream so large uploads never sit in memory. */
+function sha256File(file: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const hash = createHash("sha256");
+    fs.createReadStream(file)
+      .on("error", reject)
+      .on("data", (chunk) => hash.update(chunk))
+      .on("end", () => resolve(hash.digest("hex")));
+  });
+}
+
 /**
- * Build a consistent snapshot, checksum every uploaded file and zip everything
- * with a manifest. SQLite keeps its raw file (format 1); PostgreSQL uses a
- * logical JSON dump (format 2) because a database server has no single file to
- * copy. Also leaves a timestamped copy in DATA_DIR/backups.
+ * A readable that opens its file on the first read. JSZip binds every stream
+ * when the entry is added but drains them one at a time, so this keeps at most
+ * one upload open (and one chunk buffered) however many photos there are.
  */
-export async function createBackupArchive(opts: { keepLocal?: boolean } = {}): Promise<{ buffer: Buffer; name: string }> {
+class LazyFileStream extends Readable {
+  private source: fs.ReadStream | null = null;
+
+  constructor(private readonly file: string) {
+    super();
+  }
+
+  override _read() {
+    if (this.source) {
+      this.source.resume();
+      return;
+    }
+    this.source = fs.createReadStream(this.file);
+    this.source
+      .on("data", (chunk) => {
+        if (!this.push(chunk)) this.source?.pause();
+      })
+      .on("end", () => this.push(null))
+      .on("error", (error) => this.destroy(error));
+  }
+
+  override _destroy(error: Error | null, callback: (error?: Error | null) => void) {
+    this.source?.destroy();
+    callback(error);
+  }
+}
+
+export interface BackupArchive {
+  /** Absolute path of the finished zip. */
+  path: string;
+  name: string;
+  size: number;
+}
+
+export type BackupKind = "backup" | "pre-restore";
+
+export interface BackupListEntry {
+  name: string;
+  kind: BackupKind;
+  size: number;
+  createdAt: string;
+}
+
+const BACKUP_PATTERN = /^svault-backup-.*\.zip$/;
+const PRE_RESTORE_PATTERN = /^pre-restore-.*\.zip$/;
+
+function backupStamp(): string {
+  return new Date().toISOString().replace(/[:.]/g, "-");
+}
+
+/**
+ * Build a consistent snapshot, checksum every uploaded file and stream a zip
+ * with a manifest to `target`. SQLite keeps its raw file (format 1);
+ * PostgreSQL uses a logical JSON dump (format 2) because a database server has
+ * no single file to copy. Uploads are hashed in a first streaming pass (the
+ * manifest needs the checksums) and then streamed into the archive, so memory
+ * use does not grow with the size of the uploads folder. The zip is written to
+ * a `.partial` file and renamed when complete, so rotation and listings never
+ * see a half-written archive. Only UPLOAD_DIR is walked: BACKUP_DIR (and its
+ * pre-restore copies) never ends up inside an archive.
+ */
+async function writeArchive(target: string): Promise<BackupArchive> {
   ensureDirs();
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  const stamp = backupStamp();
   const postgres = databaseKind() === "postgres";
-  let database: Buffer;
+  const partial = `${target}.partial`;
   let snapshot: string | null = null;
   try {
+    const zip = new JSZip();
+    let databaseChecksum: string;
     if (postgres) {
-      database = await logicalDump();
+      const dump = await logicalDump();
+      databaseChecksum = sha256(dump);
+      zip.file("database.json", dump);
     } else {
       snapshot = path.join(BACKUP_DIR, `.snapshot-${stamp}.db`);
       await exec(`VACUUM INTO '${snapshot.replace(/'/g, "''")}'`);
-      database = fs.readFileSync(snapshot);
+      databaseChecksum = await sha256File(snapshot);
+      zip.file("svault.db", new LazyFileStream(snapshot), { binary: true });
     }
 
-    const files = walk(UPLOAD_DIR);
-    const zip = new JSZip();
-    zip.file(postgres ? "database.json" : "svault.db", database);
     const uploads: Record<string, string> = {};
-    for (const file of files) {
-      const data = fs.readFileSync(file.absolute);
-      uploads[file.relative] = sha256(data);
-      zip.file(`uploads/${file.relative}`, data);
+    for (const file of walk(UPLOAD_DIR)) {
+      uploads[file.relative] = await sha256File(file.absolute);
+      zip.file(`uploads/${file.relative}`, new LazyFileStream(file.absolute), { binary: true });
     }
     const manifest: BackupManifest = {
       format: postgres ? 2 : 1,
@@ -126,31 +204,66 @@ export async function createBackupArchive(opts: { keepLocal?: boolean } = {}): P
       schemaVersion: SCHEMA_VERSION,
       createdAt: new Date().toISOString(),
       counts: await countRows(),
-      checksums: { database: sha256(database), uploads },
+      checksums: { database: databaseChecksum, uploads },
     };
     zip.file("manifest.json", JSON.stringify(manifest, null, 2));
-    const buffer = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
-    const name = `svault-backup-${stamp}.zip`;
-    if (opts.keepLocal !== false) {
-      fs.writeFileSync(path.join(BACKUP_DIR, name), buffer);
-      pruneBackups(5);
-    }
-    return { buffer, name };
+
+    await pipeline(
+      zip.generateNodeStream({ type: "nodebuffer", streamFiles: true, compression: "DEFLATE" }),
+      fs.createWriteStream(partial),
+    );
+    fs.renameSync(partial, target);
+    return { path: target, name: path.basename(target), size: fs.statSync(target).size };
+  } catch (error) {
+    fs.rmSync(partial, { force: true });
+    throw error;
   } finally {
     if (snapshot) fs.rmSync(snapshot, { force: true });
   }
 }
 
-export function listBackups() {
-  ensureDirs();
+/**
+ * Write a regular backup. By default it lands in BACKUP_DIR as
+ * `svault-backup-<stamp>.zip` and the newest BACKUP_KEEP copies are kept.
+ * Pass `outFile` to write somewhere else (the CLI does); that file is not
+ * rotated. Pre-restore safety copies are never counted by this rotation.
+ */
+export async function createBackupArchive(opts: { outFile?: string } = {}): Promise<BackupArchive> {
+  if (opts.outFile) return writeArchive(path.resolve(opts.outFile));
+  const archive = await writeArchive(path.join(BACKUP_DIR, `svault-backup-${backupStamp()}.zip`));
+  pruneOldFiles(BACKUP_DIR, BACKUP_PATTERN, BACKUP_KEEP);
+  return archive;
+}
+
+/**
+ * Safety copy of the current data, taken before a restore replaces it. Stored
+ * as `pre-restore-<stamp>.zip` in BACKUP_DIR/pre-restore and rotated on its
+ * own (newest PRE_RESTORE_KEEP, env SV_PRE_RESTORE_KEEP, default 3).
+ */
+export async function createPreRestoreCopy(): Promise<BackupArchive> {
+  const archive = await writeArchive(path.join(PRE_RESTORE_DIR, `pre-restore-${backupStamp()}.zip`));
+  pruneOldFiles(PRE_RESTORE_DIR, PRE_RESTORE_PATTERN, PRE_RESTORE_KEEP);
+  return archive;
+}
+
+function listDir(dir: string, pattern: RegExp, kind: BackupKind): BackupListEntry[] {
+  if (!fs.existsSync(dir)) return [];
   return fs
-    .readdirSync(BACKUP_DIR)
-    .filter((name) => /^svault-backup-.*\.zip$/.test(name))
-    .map((name) => {
-      const stat = fs.statSync(path.join(BACKUP_DIR, name));
-      return { name, size: stat.size, createdAt: stat.mtime.toISOString() };
-    })
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    .readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && pattern.test(entry.name))
+    .map((entry) => {
+      const stat = fs.statSync(path.join(dir, entry.name));
+      return { name: entry.name, kind, size: stat.size, createdAt: stat.mtime.toISOString() };
+    });
+}
+
+/** Retained regular backups and pre-restore safety copies, newest first. */
+export function listBackups(): BackupListEntry[] {
+  ensureDirs();
+  return [
+    ...listDir(BACKUP_DIR, BACKUP_PATTERN, "backup"),
+    ...listDir(PRE_RESTORE_DIR, PRE_RESTORE_PATTERN, "pre-restore"),
+  ].sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.name.localeCompare(a.name));
 }
 
 /** Validate the archive without touching live data. */
@@ -261,20 +374,41 @@ export function stageRestore(validation: BackupValidation): string {
 
 /** Copy staged uploads into place. Shared by both restore paths. */
 /** CLI path: apply an archive immediately when no server is running. */
-export async function restoreArchiveNow(buffer: Buffer) {
+export async function restoreArchiveNow(
+  buffer: Buffer,
+  opts: { safetyCopy?: boolean } = {},
+): Promise<{ manifest: BackupManifest; safetyCopy: BackupArchive | null }> {
   const validation = await validateBackup(buffer);
+  // Same safety net as the in-app restore: a pre-restore zip of the current
+  // data, rotated separately from regular backups. Taken only after the
+  // archive validated, so a bad file never rotates an older copy away.
+  let safetyCopy: BackupArchive | null = null;
+  if (opts.safetyCopy) {
+    await initDb();
+    try {
+      safetyCopy = await createPreRestoreCopy();
+    } finally {
+      await closeDb();
+    }
+  }
   stageRestore(validation);
   if (validation.database) {
     // SQLite swaps the file before the next open; callers run this before start.
     const { applyPendingSqliteRestore } = await import("../database/sqlite.js");
     applyPendingSqliteRestore();
   }
-  return validation.manifest;
+  return { manifest: validation.manifest, safetyCopy };
 }
 
 /** Build an archive from the current data and return its manifest for tests. */
 export async function backupForTest() {
-  const { buffer } = await createBackupArchive({ keepLocal: false });
-  const validation = await validateBackup(buffer);
-  return { buffer, validation };
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "svault-backup-test-"));
+  try {
+    const archive = await createBackupArchive({ outFile: path.join(dir, "backup.zip") });
+    const buffer = fs.readFileSync(archive.path);
+    const validation = await validateBackup(buffer);
+    return { buffer, validation };
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
