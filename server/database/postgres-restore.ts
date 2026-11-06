@@ -48,8 +48,13 @@ export async function applyPendingPostgresRestore(pool: pg.Pool): Promise<void> 
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    if (order.length) {
-      await client.query(`TRUNCATE TABLE ${order.map(quoteIdent).join(", ")} RESTART IDENTITY CASCADE`);
+    const existing = await client.query<{ table_name: string }>(
+      `SELECT table_name FROM information_schema.tables
+        WHERE table_schema = current_schema() AND table_type = 'BASE TABLE' AND table_name <> 'schema_meta'`,
+    );
+    const truncate = existing.rows.map((row) => row.table_name);
+    if (truncate.length) {
+      await client.query(`TRUNCATE TABLE ${truncate.map(quoteIdent).join(", ")} RESTART IDENTITY CASCADE`);
     }
     for (const table of order) {
       const rows = dump.tables[table] ?? [];

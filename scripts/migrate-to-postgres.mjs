@@ -27,6 +27,16 @@ function quote(name) {
   return `"${name.replace(/"/g, '""')}"`;
 }
 
+function redact(url) {
+  try {
+    const parsed = new URL(url);
+    if (parsed.password) parsed.password = "***";
+    return parsed.toString();
+  } catch {
+    return "(invalid connection string)";
+  }
+}
+
 function value(input) {
   if (input === undefined) return null;
   if (typeof input === "boolean") return input ? 1 : 0;
@@ -39,7 +49,7 @@ const postgres = new PostgresDriver();
 try {
   console.log(`Reading ${DB_FILE}`);
   await sqlite.init();
-  console.log(`Preparing PostgreSQL schema at ${process.env.DATABASE_URL}`);
+  console.log(`Preparing PostgreSQL schema at ${redact(process.env.DATABASE_URL)}`);
   await postgres.init();
 
   const sourceTables = new Set(await sqlite.tables());

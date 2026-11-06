@@ -91,12 +91,15 @@ export class PostgresDriver implements DatabaseDriver {
   private pool!: pg.Pool;
 
   async init(): Promise<void> {
-    this.pool = new Pool({
-      connectionString: DATABASE_URL,
+    const config: pg.PoolConfig = {
       max: PG_POOL_SIZE,
       ssl: PG_SSL,
       application_name: "svault",
-    });
+    };
+    // Without DATABASE_URL, node-postgres falls back to the standard PGHOST /
+    // PGUSER / PGPASSWORD / PGDATABASE environment variables.
+    if (DATABASE_URL) config.connectionString = DATABASE_URL;
+    this.pool = new Pool(config);
     // Fail fast with a useful message instead of waiting for the first request.
     const client = await this.pool.connect();
     try {
