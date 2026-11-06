@@ -16,6 +16,11 @@ breaking changes are possible in minor releases until a versioned public API exi
 - **IDs:** prefixed strings such as `itm_...`. Treat them as opaque.
 - **Dates:** ISO-8601 timestamps for events; `YYYY-MM-DD` for dates.
 - **Pagination:** endpoints that paginate use `limit` and `offset` and usually return a `total`.
+- **Cross-site requests:** `POST`/`PUT`/`PATCH`/`DELETE` from a browser must be same-origin. A request
+  whose `Origin` does not match the host (or `ORIGIN`), or that a browser marks `Sec-Fetch-Site:
+  cross-site` without an `Origin`, gets `403`. Scripts that send neither header are unaffected.
+- **Rate limits:** credential, invite and AI endpoints answer `429` with `Retry-After` when over their
+  limit (see [deployment](deployment.md#rate-limits)).
 
 ### Roles
 
@@ -54,14 +59,15 @@ Mounted at `/api/auth`.
 
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
-| `POST` | `/register` | public | Create an account; first user becomes instance admin. Accepts an optional `username`, `inviteCode`, or creates a house. |
-| `POST` | `/login` | public | Email **or** username + password; sets the session cookie. |
+| `GET` | `/registration` | public | `{ mode: "open" \| "invite" \| "closed", inviteRequired, firstUser }` for the sign-up page. |
+| `POST` | `/register` | public | Create an account; first user becomes instance admin. Accepts an optional `username`, `inviteCode`, or creates a house. `403` when registration is `closed`, or `invite` and no `inviteCode` is sent; `400` for an unknown, used or expired invite. |
+| `POST` | `/login` | public | Email **or** username + password; sets the session cookie. `429` after too many attempts from one IP or failed attempts for one account. |
 | `POST` | `/logout` | any | Deletes the current session and clears the cookie. |
 | `GET` | `/me` | user | Current user plus all houses with roles. |
-| `PATCH` | `/me` | user | Change `name`, `email`, `username`, `language` and/or `developerMode`. |
+| `PATCH` | `/me` | user | Change `name`, `email`, `username`, `language` and/or `developerMode`. Changing `email` or `username` needs `currentPassword` (`400` when missing or wrong). Single sign-on accounts without a password (`user.hasPassword: false`) cannot change their email here (`403`). |
 | `POST` | `/me/password` | user | Requires `currentPassword`; rotates every session and issues a new cookie. |
-| `GET` | `/invites/:code` | public | Preview an invite (house name, role, inviter). Does not accept it. |
-| `POST` | `/invites/:code/accept` | user | Join the house if the invite is valid and the email matches. |
+| `GET` | `/invites/:code` | public | Preview an invite (house name, role, inviter, `expiresAt`). Does not accept it. `404` when unknown, used or expired. |
+| `POST` | `/invites/:code/accept` | user | Join the house if the invite is valid, unexpired and the email matches. |
 
 Register body:
 
@@ -87,7 +93,7 @@ Login accepts `{ "identifier": "alex", "password": "..." }`, or `email`/`usernam
 
 ```json
 {
-  "user": { "id": "usr_...", "email": "alex@example.com", "username": "alex", "name": "Alex", "isAdmin": false, "developerMode": false, "createdAt": "..." },
+  "user": { "id": "usr_...", "email": "alex@example.com", "username": "alex", "name": "Alex", "isAdmin": false, "developerMode": false, "hasPassword": true, "createdAt": "..." },
   "houses": [ { "id": "hse_...", "name": "Alex's Home", "role": "owner", "...": "..." } ]
 }
 ```
@@ -103,15 +109,15 @@ Mounted at `/api/houses`.
 | `GET` | `/:houseId` | viewer+ | House detail with members and counts. |
 | `PATCH` | `/:houseId` | admin+ | Name, kind, address, currency and `settings` (merged, not replaced). |
 | `DELETE` | `/:houseId` | owner | Delete the house and all database rows. Uploaded files stay on disk. |
-| `POST` | `/:houseId/ai/test` | admin+ | Send a ping to the configured provider. |
+| `POST` | `/:houseId/ai/test` | admin+ | Send a ping to the configured provider. The server key is only used with the server's base URL; `400` when `SV_OUTBOUND_ALLOW_PRIVATE=false` and the house base URL is on a private network. |
 | `GET` | `/:houseId/ai/logs` | developer | AI call audit trail. Filters: `scope=mine\|all`, `operation`, `status=ok\|error`, `limit`, `offset`. |
 | `GET` | `/:houseId/ai/logs/:logId` | developer | Full call detail, including request/response previews and metadata. |
 | `DELETE` | `/:houseId/ai/logs` | admin+ & developer | Clear the AI call log for this house. |
 | `GET` | `/:houseId/members` | viewer+ | List members. |
-| `POST` | `/:houseId/members` | admin+ | Add an existing user by email, or create an invite for a new one. |
+| `POST` | `/:houseId/members` | admin+ | Create an email-bound invite (`{ invite: { code, url, expiresAt, existingAccount } }`). Existing accounts are no longer added directly; they join by accepting the invite. Invites expire after `SV_INVITE_DAYS` (14). |
 | `PATCH` | `/:houseId/members/:userId` | owner | Change a role (`admin`, `member` or `viewer`). Ownership transfer is not implemented yet ([#16](https://github.com/AtaKon/svault/issues/16)). |
 | `DELETE` | `/:houseId/members/:userId` | admin+ | Remove a member. Only the owner can remove an admin. |
-| `GET` | `/:houseId/invites` | admin+ | List invites with codes and URLs. |
+| `GET` | `/:houseId/invites` | admin+ | List invites with codes, URLs, `expiresAt` and `expired`. |
 | `DELETE` | `/:houseId/invites/:inviteId` | admin+ | Revoke an invite. |
 | `POST` | `/:houseId/leave` | viewer+ | Leave the house. The sole owner cannot leave until ownership transfer exists ([#16](https://github.com/AtaKon/svault/issues/16)). |
 
@@ -307,7 +313,7 @@ a seed file or import.
 | --- | --- | --- | --- |
 | `GET` | `/api/catalog/search?q=...` | signed in | Search the cache, then OpenFoodFacts. `online=0` skips the network; `limit` 1-20. |
 | `GET` | `/api/catalog/product/:code` | signed in | Cached or live product. `full=1` adds the stored OFF payload. |
-| `GET` | `/api/catalog/resolve?raw=...` | signed in | Best shared mapping for a raw receipt line. |
+| `GET` | `/api/catalog/resolve?raw=...&houseId=...` | signed in | Best mapping for a raw receipt line: shared rows, plus that house's learned rows when the caller is a member. |
 | `GET` | `/api/catalog/mappings` | signed in | List/search shared mappings (`q`, `limit` 1-500). |
 | `GET` | `/api/catalog/stats` | instance admin | Mapping and cache counts plus the configured sync URL. |
 | `GET` | `/api/catalog/export` | instance admin | Download the catalogue JSON (includes local mappings and raw receipt text). |
@@ -659,7 +665,7 @@ addressed to that user only. Other members do not see it.
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
 | `GET` | `/api/health` | public | `{ ok: true, version, time }`; used by Docker health checks. |
-| `GET` | `/uploads/<kind>/<file>` | public | Static uploaded image. Unauthenticated by design. |
+| `GET` | `/uploads/<kind>/<file>` | public | Static uploaded image. Unauthenticated by design. Served with `nosniff` and a sandboxing CSP; anything that is not an image extension is sent as a download. |
 
 ## Shopping list
 
@@ -819,7 +825,10 @@ The weekly summary runs from the reminder scan once per ISO week when at least o
 
 When 2FA is enabled, `POST /api/auth/login` returns
 `{ twoFactorRequired: true, challenge }` and **does not** set a session cookie. The challenge expires
-after five minutes; a wrong code does not consume it. Backup codes are stored hashed and consumed once.
+after five minutes. A wrong code does not consume it, but after five wrong codes the challenge is
+deleted and the password has to be entered again. A TOTP code is accepted once: a code from the same or
+an earlier 30-second step than the last accepted one is rejected. Backup codes are stored hashed and
+consumed once.
 
 ## Passkeys (WebAuthn)
 
@@ -848,7 +857,8 @@ non-advancing counter is rejected as a replay. Passkeys still require HTTPS or l
 
 Configure `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, optional `OIDC_REDIRECT_URI`,
 `OIDC_ALLOWED_DOMAINS`, `OIDC_AUTO_PROVISION` and `OIDC_DEFAULT_HOUSE_ID`. Only verified email addresses
-are accepted. Existing users are linked by email; new users are provisioned when allowed. Password login
+are accepted. Existing users are linked by email; new users are provisioned only when
+`OIDC_AUTO_PROVISION` is on and registration is `open` (`SV_REGISTRATION`). Password login
 and the first local owner remain as the break-glass path. Errors redirect to `/login?oidc_error=...`.
 
 ## Offline stock mutations
@@ -862,9 +872,12 @@ with `details: { conflict, currentUpdatedAt, currentQuantity }` so the client ca
 
 | Method | Path | Min role | Purpose |
 | --- | --- | --- | --- |
-| `GET` | `/api/houses/:houseId/backup` | owner | Download a zip with `svault.db`, `uploads/` and `manifest.json`. |
-| `GET` | `/api/houses/:houseId/backups` | owner | List retained local backups (last five). |
-| `POST` | `/api/houses/:houseId/restore` | owner | Upload `backup` plus `houseName` or `password`. |
+| `GET` | `/api/houses/:houseId/backup` | instance admin, member of the house | Download a zip with `svault.db`, `uploads/` and `manifest.json`. |
+| `GET` | `/api/houses/:houseId/backups` | instance admin, member of the house | List retained local backups (last five). |
+| `POST` | `/api/houses/:houseId/restore` | instance admin, member of the house | Upload `backup` plus `houseName` or `password`. At most `SV_RESTORE_MAX_MB` (512). |
+
+A backup contains every house and account on the instance, so these endpoints answer `403` for anyone
+but the instance administrator, whatever their house role. The check runs before the upload is read.
 
 The snapshot uses `VACUUM INTO`, runs while the server is live, and is checked with
 `PRAGMA integrity_check`. The manifest records the app version, schema version, counts and SHA-256
@@ -884,7 +897,7 @@ npm run restore -- --in svault-backup.zip
 | Method | Path | Min role | Purpose |
 | --- | --- | --- | --- |
 | `POST` | `/api/houses/:houseId/photos/dataset/preview` | member+ | Inspect a YOLO/COCO zip without writing. |
-| `POST` | `/api/houses/:houseId/photos/dataset/import` | member+ | Import images, boxes, classes and splits. |
+| `POST` | `/api/houses/:houseId/photos/dataset/import` | member+ | Import images, boxes, classes and splits. Zips up to `SV_DATASET_MAX_MB` (256). |
 | `GET` | `/api/houses/:houseId/photos/review` | viewer+ | Unlabelled and classification-only review queue. |
 | `POST` | `/api/houses/:houseId/photos/labels/bulk` | member+ | Rename, merge or delete a label across the house. |
 | `POST` | `/api/houses/:houseId/photos/splits` | member+ | Bulk reassign train/val/test/unassigned. |
@@ -906,11 +919,12 @@ and drives the client dictionary and `Intl` date/number/currency formatting.
 | --- | --- |
 | `200` | Success |
 | `201` | Created (house, item, recipe, upload, label) |
-| `400` | Validation error, bad unit conversion, insufficient stock, or an upload above `MAX_UPLOAD_MB` |
+| `400` | Validation error, bad unit conversion, insufficient stock, an upload above `MAX_UPLOAD_MB`, or a file that is not a supported image (JPEG, PNG, WebP, GIF, AVIF, HEIC, BMP, TIFF; checked by content) |
 | `401` | Not signed in |
-| `403` | Signed in but below the required role |
+| `403` | Signed in but below the required role, registration closed, or a blocked cross-site request |
 | `404` | Resource not found or not visible to this user |
 | `409` | Conflict (duplicate email, barcode already linked) |
+| `429` | Rate limited; wait for `Retry-After` seconds |
 | `413` | Reverse proxy body limit (raise `client_max_body_size`) |
 | `500` | Unexpected server error (details are logged, not returned) |
 | `502` | Upstream AI provider or reminder channel test failed |

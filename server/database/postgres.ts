@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import pg from "pg";
 import { DATABASE_URL, PG_POOL_SIZE, PG_SSL } from "../config.js";
-import { POSTGRES_SCHEMA } from "./postgres-schema.js";
+import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA } from "./postgres-schema.js";
 import { applyPendingPostgresRestore } from "./postgres-restore.js";
 import type { DatabaseDriver, RunResult } from "./types.js";
 
@@ -109,9 +109,7 @@ export class PostgresDriver implements DatabaseDriver {
     }
     await this.pool.query(POSTGRES_SCHEMA);
     // CREATE TABLE IF NOT EXISTS does not add columns to existing installations.
-    await this.pool.query(
-      "ALTER TABLE users ADD COLUMN IF NOT EXISTS developer_mode INTEGER NOT NULL DEFAULT 0",
-    );
+    for (const statement of POSTGRES_MIGRATIONS) await this.pool.query(statement);
     await this.pool.query(
       "INSERT INTO schema_meta (key, value) VALUES ('version', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
       ["3"],

@@ -1,21 +1,25 @@
-import { Router } from "express";
-import multer from "multer";
+import { Router, type Request } from "express";
 import { z } from "zod";
 import { all, get, run } from "../db.js";
 import { requireAuth } from "../auth.js";
 import { ApiError, handler, parseBody, requireHouse } from "../http.js";
 import { serializePhoto } from "../serialize.js";
 import { inspectDataset, importDataset, type DatasetSplit } from "../services/dataset-import.js";
-import { uploadPath } from "../upload.js";
+import { archiveUploader, uploadPath } from "../upload.js";
+import { DATASET_MAX_BYTES } from "../config.js";
 import fs from "node:fs";
 
 export const datasetRoutes = Router();
 datasetRoutes.use(requireAuth);
 
-const datasetUpload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 512 * 1024 * 1024 },
-}).single("dataset");
+/* The membership check runs before multer, and the archive goes to a temp
+   file instead of memory so non-members cannot fill RAM or disk. */
+const datasetUpload = archiveUploader("dataset", DATASET_MAX_BYTES, "member");
+
+async function withArchive<T>(req: Request, fn: (buffer: Buffer) => Promise<T>): Promise<T> {
+  if (!req.file) throw new ApiError(400, "Attach a YOLO or COCO zip");
+  return await fn(await fs.promises.readFile(req.file.path));
+}
 
 async function labelsFor(photoIds: string[]) {
   if (!photoIds.length) return new Map<string, any[]>();
@@ -34,26 +38,27 @@ datasetRoutes.post(
   datasetUpload,
   handler(async (req, res) => {
     await requireHouse(req, "member");
-    if (!req.file) throw new ApiError(400, "Attach a YOLO or COCO zip");
-    try {
-      const inspection = await inspectDataset(req.file.buffer);
-      res.json({
-        kind: inspection.kind,
-        classes: inspection.classes,
-        splits: inspection.splits,
-        labelled: inspection.labelled,
-        total: inspection.images.length,
-        errors: inspection.errors,
-        files: inspection.images.slice(0, 500).map((image) => ({
-          path: image.path,
-          name: image.name,
-          split: image.split,
-          labels: image.labels.length,
-        })),
-      });
-    } catch (error) {
-      throw new ApiError(400, error instanceof Error ? error.message : "Could not read the dataset");
-    }
+    const inspection = await withArchive(req, async (buffer) => {
+      try {
+        return await inspectDataset(buffer);
+      } catch (error) {
+        throw new ApiError(400, error instanceof Error ? error.message : "Could not read the dataset");
+      }
+    });
+    res.json({
+      kind: inspection.kind,
+      classes: inspection.classes,
+      splits: inspection.splits,
+      labelled: inspection.labelled,
+      total: inspection.images.length,
+      errors: inspection.errors,
+      files: inspection.images.slice(0, 500).map((image) => ({
+        path: image.path,
+        name: image.name,
+        split: image.split,
+        labels: image.labels.length,
+      })),
+    });
   }),
 );
 
@@ -62,28 +67,29 @@ datasetRoutes.post(
   datasetUpload,
   handler(async (req, res) => {
     const { houseId } = await requireHouse(req, "member");
-    if (!req.file) throw new ApiError(400, "Attach a YOLO or COCO zip");
-    let mapping: Record<string, string> = {};
-    if (req.body?.mapping) {
-      try {
-        mapping = JSON.parse(String(req.body.mapping));
-      } catch {
-        throw new ApiError(400, "Class mapping must be JSON");
+    const result = await withArchive(req, async (buffer) => {
+      let mapping: Record<string, string> = {};
+      if (req.body?.mapping) {
+        try {
+          mapping = JSON.parse(String(req.body.mapping));
+        } catch {
+          throw new ApiError(400, "Class mapping must be JSON");
+        }
       }
-    }
-    try {
-      const result = await importDataset({
-        houseId,
-        userId: req.user!.id,
-        buffer: req.file.buffer,
-        mapping,
-        collectionName: req.body?.collectionName ? String(req.body.collectionName) : undefined,
-        splitOverride: req.body?.splitOverride ? (String(req.body.splitOverride) as DatasetSplit) : null,
-      });
-      res.status(201).json(result);
-    } catch (error) {
-      throw new ApiError(400, error instanceof Error ? error.message : "Could not import the dataset");
-    }
+      try {
+        return await importDataset({
+          houseId,
+          userId: req.user!.id,
+          buffer,
+          mapping,
+          collectionName: req.body?.collectionName ? String(req.body.collectionName) : undefined,
+          splitOverride: req.body?.splitOverride ? (String(req.body.splitOverride) as DatasetSplit) : null,
+        });
+      } catch (error) {
+        throw new ApiError(400, error instanceof Error ? error.message : "Could not import the dataset");
+      }
+    });
+    res.status(201).json(result);
   }),
 );
 

@@ -1,5 +1,6 @@
 import { AI_LOG_PREVIEW_CHARS, AI_LOG_RETENTION_DAYS } from "../config.js";
 import { all, get, newId, now, parseJson, run } from "../db.js";
+import { maskSensitiveText } from "../lib/redact.js";
 import type { AiCallLog, AiCallLogPage, AiCallLogSummary } from "../../shared/types.js";
 
 export interface AiCallLogInput {
@@ -61,9 +62,11 @@ export async function recordAiCall(input: AiCallLogInput): Promise<void> {
     imageCount: Math.max(0, Math.round(input.imageCount ?? 0)),
     requestBytes: Math.max(0, Math.round(input.requestBytes ?? 0)),
     responseBytes: Math.max(0, Math.round(input.responseBytes ?? 0)),
-    requestPreview: truncate(input.requestPreview, AI_LOG_PREVIEW_CHARS),
-    responsePreview: truncate(input.responsePreview, AI_LOG_PREVIEW_CHARS),
-    error: truncate(input.error, 2000),
+    // Receipt OCR can contain card digits, loyalty IDs, IBANs, emails and
+    // phone numbers; mask them before anything is stored or printed.
+    requestPreview: truncate(maskSensitiveText(input.requestPreview), AI_LOG_PREVIEW_CHARS),
+    responsePreview: truncate(maskSensitiveText(input.responsePreview), AI_LOG_PREVIEW_CHARS),
+    error: truncate(maskSensitiveText(input.error), 2000),
     metadata: input.metadata ?? {},
     createdAt: now(),
   };

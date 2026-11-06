@@ -3,7 +3,7 @@ import path from "node:path";
 import { randomBytes } from "node:crypto";
 import JSZip from "jszip";
 import { newId, now, run } from "../db.js";
-import { uploadPath } from "../upload.js";
+import { sniffImage, uploadPath } from "../upload.js";
 
 export type DatasetKind = "yolo" | "coco";
 export type DatasetSplit = "unassigned" | "train" | "val" | "test";
@@ -318,6 +318,8 @@ export async function importDataset(opts: {
       const ext = path.extname(image.path).toLowerCase();
       const mime = IMAGE_TYPES[ext];
       if (!mime) throw new Error(`Unsupported image type: ${ext}`);
+      // Files are served from /uploads, so the content must really be an image.
+      if (!sniffImage(data.subarray(0, 32))) throw new Error("File content is not a supported image");
       const filename = `ds_${randomBytes(10).toString("hex")}${ext}`;
       fs.writeFileSync(uploadPath("photos", filename), data);
       const dims = image.width && image.height ? { width: image.width, height: image.height } : dimensions(data);

@@ -1,5 +1,6 @@
 import { createHmac } from "node:crypto";
 import { all, get, newId, now, parseJson, run } from "../db.js";
+import { assertOutboundUrl, outboundRedirectMode } from "../lib/outbound.js";
 import type { NotificationChannel, NotificationChannelEvents, NotificationChannelType } from "../../shared/types.js";
 
 export type DeliveryEvent = "low_stock" | "expiring" | "weekly_summary" | "test";
@@ -103,6 +104,12 @@ function asciiHeader(value: string) {
 export async function sendChannelMessage(channel: NotificationChannel, message: ChannelMessage): Promise<DeliveryResult> {
   if (!channel.url) return { ok: false, status: null, error: "No URL configured" };
   try {
+    await assertOutboundUrl(channel.url, "The channel URL");
+  } catch (error) {
+    return { ok: false, status: null, error: error instanceof Error ? error.message : "Channel URL is not allowed" };
+  }
+  const redirect = outboundRedirectMode();
+  try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 10_000);
     let response: Response;
@@ -117,6 +124,7 @@ export async function sendChannelMessage(channel: NotificationChannel, message: 
         method: "POST",
         headers,
         body: message.body,
+        redirect,
         signal: controller.signal,
       });
     } else if (channel.type === "apprise") {
@@ -134,6 +142,7 @@ export async function sendChannelMessage(channel: NotificationChannel, message: 
           body: message.body,
           type: message.event === "low_stock" ? "warning" : "info",
         }),
+        redirect,
         signal: controller.signal,
       });
     } else {
@@ -153,7 +162,7 @@ export async function sendChannelMessage(channel: NotificationChannel, message: 
       if (channel.secret) {
         headers["x-svault-signature"] = `sha256=${createHmac("sha256", channel.secret).update(body).digest("hex")}`;
       }
-      response = await fetch(channel.url, { method: "POST", headers, body, signal: controller.signal });
+      response = await fetch(channel.url, { method: "POST", headers, body, redirect, signal: controller.signal });
     }
     clearTimeout(timer);
     const ok = response.ok;
