@@ -98,7 +98,7 @@ await new Promise<void>((resolve) => {
 });
 
 const { app } = await import("../index.js");
-const { db, run } = await import("../db.js");
+const { closeDb, run } = await import("../db.js");
 const { heuristicRecipe, parseIngredientLine, localIdeas } = await import("../services/recipe-local.js");
 const { heuristicReceipt } = await import("../services/receipt-local.js");
 const { parseLidlReceipt } = await import("../services/receipt-lidl.js");
@@ -392,11 +392,11 @@ before(async () => {
   secondUserCookie = second.cookie!;
 });
 
-after(() => {
+after(async () => {
   server?.close();
   aiServer?.close();
   oidcServer?.close();
-  db.close();
+  await closeDb();
   rmSync(dataDir, { recursive: true, force: true });
 });
 
@@ -586,8 +586,8 @@ describe("receipt text parsing", () => {
 });
 
 describe("Lidl receipt template", () => {
-  it("detects the template and parses quantities, weights and discounts", () => {
-    const template = selectReceiptTemplate(LIDL_SAMPLE, "");
+  it("detects the template and parses quantities, weights and discounts", async () => {
+    const template = await selectReceiptTemplate(LIDL_SAMPLE, "");
     assert.equal(template?.id, "lidl-gr");
     assert.ok((template?.confidence ?? 0) >= 0.7);
 
@@ -685,8 +685,8 @@ describe("Lidl receipt template", () => {
 });
 
 describe("Sklavenitis receipt template", () => {
-  it("detects the template and parses compact lines, barcodes and discounts", () => {
-    const template = selectReceiptTemplate(SKLAVENITIS_SAMPLE, "");
+  it("detects the template and parses compact lines, barcodes and discounts", async () => {
+    const template = await selectReceiptTemplate(SKLAVENITIS_SAMPLE, "");
     assert.equal(template?.id, "sklavenitis-gr");
     assert.ok((template?.confidence ?? 0) >= 0.7);
 
@@ -1091,7 +1091,7 @@ describe("OpenFoodFacts links and shared catalogue", () => {
   const fetaCode = "5201704054183";
   const dodoniCode = "5201168218114";
 
-  function seedProduct(code: string, name: string, brand: string, quantity: string, image: string) {
+  async function seedProduct(code: string, name: string, brand: string, quantity: string, image: string) {
     const timestamp = new Date().toISOString();
     const summary = {
       code,
@@ -1128,7 +1128,7 @@ describe("OpenFoodFacts links and shared catalogue", () => {
       source: "openfoodfacts",
       fetchedAt: timestamp,
     };
-    run(
+    await run(
       `INSERT INTO catalog_products
          (code, name, brand, quantity, image, categories, summary, payload, source, fetched_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, '{}', 'openfoodfacts', ?, ?)
@@ -1140,9 +1140,9 @@ describe("OpenFoodFacts links and shared catalogue", () => {
     );
   }
 
-  before(() => {
-    seedProduct(fetaCode, "Feta", "Kolios", "150 g", "https://example.test/feta.png");
-    seedProduct(dodoniCode, "Feta cheese (P.D.O.)", "Dodoni", "1 kg", "https://example.test/dodoni.png");
+  before(async () => {
+    await seedProduct(fetaCode, "Feta", "Kolios", "150 g", "https://example.test/feta.png");
+    await seedProduct(dodoniCode, "Feta cheese (P.D.O.)", "Dodoni", "1 kg", "https://example.test/dodoni.png");
   });
 
   it("searches the shared cache without going online", async () => {
@@ -1594,12 +1594,12 @@ describe("receipts and shops", () => {
     assert.equal(twoAliases.data.length, 2);
 
     const lidl = (await request(`/api/houses/${houseId}/vendors`)).data.find((vendor: any) => vendor.name === "Lidl");
-    const suggestions = suggestProductMatches(houseId, lidl.id, "ΑΛΕΞ.ΛΕΥΚ.ΑΣΠ.1KG");
+    const suggestions = await suggestProductMatches(houseId, lidl.id, "ΑΛΕΞ.ΛΕΥΚ.ΑΣΠ.1KG");
     assert.equal(suggestions[0].itemId, flourId);
     assert.equal(suggestions[0].source, "alias");
     assert.ok(suggestions[0].score >= 0.99);
 
-    const fuzzy = suggestProductMatches(houseId, lidl.id, "FLOUR LIDL");
+    const fuzzy = await suggestProductMatches(houseId, lidl.id, "FLOUR LIDL");
     assert.ok(fuzzy.some((entry) => entry.itemId === flourId && entry.score >= 0.7));
 
     const scan = await request(`/api/houses/${houseId}/receipts/scan`, {
@@ -1916,6 +1916,72 @@ describe("ai integration", () => {
     assert.equal(res.status, 200);
     assert.equal(res.data.ok, true);
     assert.equal(res.data.model, "mock-model");
+  });
+
+  it("records successful and failed AI calls for the developer page", async () => {
+    const setup = await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { enabled: true, baseUrl: aiBase, apiKey: "test-key", model: "mock-model" } } },
+    });
+    assert.equal(setup.status, 200);
+
+    const me = await request("/api/auth/me", { method: "PATCH", body: { developerMode: true } });
+    assert.equal(me.status, 200);
+    assert.equal(me.data.user.developerMode, true);
+
+    const scan = await request(`/api/houses/${houseId}/recipes/scan`, {
+      method: "POST",
+      body: { text: "flour eggs milk" },
+    });
+    assert.equal(scan.status, 200);
+    assert.equal(scan.data.provider, "ai");
+
+    const page = await request(`/api/houses/${houseId}/ai/logs?scope=mine`);
+    assert.equal(page.status, 200);
+    assert.ok(page.data.logs.length > 0);
+    assert.equal(page.data.logs[0].operation, "recipe.scan");
+    assert.equal(page.data.logs[0].status, "ok");
+    assert.equal(page.data.logs[0].model, "mock-model");
+    assert.equal(page.data.logs[0].cost, 0.00125);
+    assert.ok(page.data.logs[0].totalTokens > 0);
+    assert.ok(page.data.summary.calls >= 1);
+
+    const detail = await request(`/api/houses/${houseId}/ai/logs/${page.data.logs[0].id}`);
+    assert.equal(detail.status, 200);
+    assert.ok(detail.data.requestPreview.includes("flour eggs milk"));
+    assert.ok(detail.data.responsePreview.includes("AI pancakes"));
+    assert.equal(detail.data.metadata.json, true);
+
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { baseUrl: "http://127.0.0.1:1/v1" } } },
+    });
+    const failedScan = await request(`/api/houses/${houseId}/recipes/scan`, {
+      method: "POST",
+      body: { text: "flour eggs milk" },
+    });
+    assert.equal(failedScan.status, 200);
+    assert.equal(failedScan.data.provider, "local");
+
+    const failures = await request(`/api/houses/${houseId}/ai/logs?scope=mine&status=error`);
+    assert.equal(failures.status, 200);
+    assert.ok(
+      failures.data.logs.some(
+        (entry: any) => entry.operation === "recipe.scan" && entry.status === "error" && entry.error,
+      ),
+    );
+
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { baseUrl: aiBase, apiKey: "test-key", model: "mock-model" } } },
+    });
+  });
+
+  it("hides the AI log when developer mode is off", async () => {
+    await request("/api/auth/me", { method: "PATCH", body: { developerMode: false } });
+    const res = await request(`/api/houses/${houseId}/ai/logs`);
+    assert.equal(res.status, 403);
+    await request("/api/auth/me", { method: "PATCH", body: { developerMode: true } });
   });
 
   it("estimates the price from configured token prices when the provider omits it", async () => {
@@ -2883,9 +2949,9 @@ describe("backup and restore", () => {
   it("creates a valid zip with a manifest and checksums", async () => {
     const { buffer, validation } = await backupForTest();
     assert.ok(buffer.length > 0);
-    assert.equal(validation.manifest.format, 1);
+    assert.ok(validation.manifest.format === 1 || validation.manifest.format === 2);
     assert.ok(validation.manifest.checksums.database);
-    assert.ok(validation.database.length > 0);
+    assert.ok((validation.database?.length ?? 0) > 0 || Object.keys(validation.dump?.tables ?? {}).length > 0);
   });
 
   it("serves the backup download to an owner", async () => {

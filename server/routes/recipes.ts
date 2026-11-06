@@ -49,8 +49,8 @@ export const recipeInput = z.object({
   ingredients: z.array(ingredientSchema).max(150).optional(),
 });
 
-function stockMaps(houseId: string) {
-  const rows = all<any>(
+async function stockMaps(houseId: string) {
+  const rows = await all<any>(
     `SELECT i.id, i.name, COALESCE((SELECT SUM(l.quantity) FROM stock_lots l WHERE l.item_id = i.id), 0) AS quantity
      FROM items i WHERE i.house_id = ? AND i.archived = 0`,
     [houseId],
@@ -64,13 +64,13 @@ function stockMaps(houseId: string) {
   return { byName, byId };
 }
 
-function nutritionItems(houseId: string): NutritionSourceItem[] {
-  return all<any>(
+async function nutritionItems(houseId: string): Promise<NutritionSourceItem[]> {
+  return (await all<any>(
     `SELECT i.id, i.name, i.unit, i.nutrition, cp.summary AS off_summary
      FROM items i LEFT JOIN catalog_products cp ON cp.code = i.off_code
      WHERE i.house_id = ? AND i.archived = 0`,
     [houseId],
-  ).map((row) => ({
+  )).map((row) => ({
     id: row.id,
     name: row.name,
     unit: row.unit,
@@ -112,18 +112,18 @@ function decorateRecipe(
   };
 }
 
-function ingredientsFor(recipeId: string) {
-  return all<any>("SELECT * FROM recipe_ingredients WHERE recipe_id = ? ORDER BY sort, rowid", [recipeId]);
+async function ingredientsFor(recipeId: string) {
+  return await all<any>("SELECT * FROM recipe_ingredients WHERE recipe_id = ? ORDER BY sort, id", [recipeId]);
 }
 
-function recipeRow(recipeId: string) {
-  return get<any>("SELECT * FROM recipes WHERE id = ?", [recipeId]);
+async function recipeRow(recipeId: string) {
+  return await get<any>("SELECT * FROM recipes WHERE id = ?", [recipeId]);
 }
 
-function recipeAccess(req: any, minRole: Role = "viewer") {
-  const recipe = recipeRow(req.params.recipeId);
+async function recipeAccess(req: any, minRole: Role = "viewer") {
+  const recipe = await recipeRow(req.params.recipeId);
   if (!recipe) throw new ApiError(404, "Recipe not found");
-  const role = memberRole(req.user!.id, recipe.house_id);
+  const role = await memberRole(req.user!.id, recipe.house_id);
   if (!role) throw new ApiError(404, "Recipe not found");
   if (!roleAtLeast(role, minRole)) throw new ApiError(403, `Requires ${minRole} access`);
   return { recipe, houseId: recipe.house_id as string, role };
@@ -142,7 +142,7 @@ function normaliseIngredientList(ings: z.infer<typeof ingredientSchema>[] | Pars
     }));
 }
 
-export function saveRecipe(houseId: string, userId: string, body: z.infer<typeof recipeInput>, existingId?: string): string {
+export async function saveRecipe(houseId: string, userId: string, body: z.infer<typeof recipeInput>, existingId?: string): Promise<string> {
   const steps = (body.steps ?? []).map((s) =>
     typeof s === "string" ? { text: s, timerSeconds: null } : { text: s.text, timerSeconds: s.timerSeconds ?? null },
   );
@@ -155,13 +155,13 @@ export function saveRecipe(houseId: string, userId: string, body: z.infer<typeof
   // Editing a recipe must not erase what its AI scan already cost. Callers that
   // do not send aiCost keep the stored value.
   const currentAiCost = existingId
-    ? (get<{ ai_cost: number | null }>("SELECT ai_cost FROM recipes WHERE id = ?", [existingId])?.ai_cost ?? null)
+    ? ((await get<{ ai_cost: number | null }>("SELECT ai_cost FROM recipes WHERE id = ?", [existingId]))?.ai_cost ?? null)
     : null;
   const aiCost = body.aiCost === undefined ? currentAiCost : (body.aiCost ?? null);
-  return tx(() => {
+  return await tx(async () => {
     const id = existingId ?? newId("rcp");
     if (existingId) {
-      run(
+      await run(
         `UPDATE recipes SET title = ?, description = ?, servings = ?, prep_minutes = ?, cook_minutes = ?, steps = ?,
            tags = ?, image = ?, source_image = ?, ocr_text = ?, source = ?, ai_notes = ?, ai_cost = ?, favorite = ?, updated_at = ?
          WHERE id = ?`,
@@ -184,9 +184,9 @@ export function saveRecipe(houseId: string, userId: string, body: z.infer<typeof
           id,
         ],
       );
-      run("DELETE FROM recipe_ingredients WHERE recipe_id = ?", [id]);
+      await run("DELETE FROM recipe_ingredients WHERE recipe_id = ?", [id]);
     } else {
-      run(
+      await run(
         `INSERT INTO recipes (id, house_id, title, description, servings, prep_minutes, cook_minutes, steps, tags,
            image, source_image, ocr_text, source, ai_notes, ai_cost, favorite, created_by, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -213,8 +213,8 @@ export function saveRecipe(houseId: string, userId: string, body: z.infer<typeof
         ],
       );
     }
-    normaliseIngredientList(body.ingredients ?? []).forEach((ing, index) => {
-      run(
+    for (const [index, ing] of normaliseIngredientList(body.ingredients ?? []).entries()) {
+      await run(
         `INSERT INTO recipe_ingredients (id, recipe_id, name, quantity, unit, item_id, optional, note, sort)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
@@ -229,7 +229,7 @@ export function saveRecipe(houseId: string, userId: string, body: z.infer<typeof
           index,
         ],
       );
-    });
+    }
     return id;
   });
 }
@@ -253,61 +253,61 @@ function draftToInput(draft: ParsedRecipe, meta: { source?: "manual" | "scan" | 
   };
 }
 
-function localImageToDataUrl(image: string): Promise<string | null> {
+async function localImageToDataUrl(image: string): Promise<string | null> {
   if (!image.startsWith("/uploads/recipes/")) return Promise.resolve(null);
   const filename = image.split("/").pop()!;
-  return fileToDataUrl(uploadPath("recipes", filename), "image/jpeg");
+  return await fileToDataUrl(uploadPath("recipes", filename), "image/jpeg");
 }
 
 /* ------------------------------------------------------------- house routes */
 
 recipeRoutes.get(
   "/:houseId/recipes",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req);
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req);
     const q = String(req.query.q ?? "").trim();
     const tag = req.query.tag ? String(req.query.tag) : null;
     const favorite = req.query.favorite === "1";
     const where = ["r.house_id = ?"];
     const params: unknown[] = [houseId];
     if (q) {
-      where.push("(r.title LIKE ? OR r.description LIKE ? OR EXISTS (SELECT 1 FROM recipe_ingredients ri WHERE ri.recipe_id = r.id AND ri.name LIKE ?))");
+      where.push("(lower(r.title) LIKE lower(?) OR lower(r.description) LIKE lower(?) OR EXISTS (SELECT 1 FROM recipe_ingredients ri WHERE ri.recipe_id = r.id AND lower(ri.name) LIKE lower(?)))");
       params.push(`%${q}%`, `%${q}%`, `%${q}%`);
     }
     if (tag) {
-      where.push("r.tags LIKE ?");
+      where.push("lower(r.tags) LIKE lower(?)");
       params.push(`%${tag}%`);
     }
     if (favorite) where.push("r.favorite = 1");
-    const rows = all<any>(`SELECT * FROM recipes r WHERE ${where.join(" AND ")} ORDER BY r.favorite DESC, r.updated_at DESC`, params);
-    const maps = stockMaps(houseId);
-    const items = nutritionItems(houseId);
-    const recipes = rows.map((row) => {
-      const ingredients = ingredientsFor(row.id);
+    const rows = await all<any>(`SELECT * FROM recipes r WHERE ${where.join(" AND ")} ORDER BY r.favorite DESC, r.updated_at DESC`, params);
+    const maps = await stockMaps(houseId);
+    const items = await nutritionItems(houseId);
+    const recipes = await Promise.all(rows.map(async (row) => {
+      const ingredients = await ingredientsFor(row.id);
       const serialized = serializeRecipe(row, ingredients);
       return decorateRecipe(serialized, maps, items);
-    });
+    }));
     res.json(recipes);
   }),
 );
 
 recipeRoutes.post(
   "/:houseId/recipes",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req, "member");
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req, "member");
     const body = parseBody(recipeInput, req.body);
-    const id = saveRecipe(houseId, req.user!.id, body);
-    const row = recipeRow(id)!;
-    const serialized = serializeRecipe(row, ingredientsFor(id));
-    res.status(201).json(decorateRecipe(serialized, stockMaps(houseId), nutritionItems(houseId)));
+    const id = await saveRecipe(houseId, req.user!.id, body);
+    const row = (await recipeRow(id))!;
+    const serialized = serializeRecipe(row, await ingredientsFor(id));
+    res.status(201).json(decorateRecipe(serialized, await stockMaps(houseId), await nutritionItems(houseId)));
   }),
 );
 
 recipeRoutes.post(
   "/:houseId/recipes/upload",
   uploader("recipes").single("image"),
-  handler((req, res) => {
-    requireHouse(req, "member");
+  handler(async (req, res) => {
+    await requireHouse(req, "member");
     if (!req.file) throw new ApiError(400, "No image uploaded");
     res.status(201).json({ path: `/uploads/recipes/${req.file.filename}` });
   }),
@@ -316,7 +316,7 @@ recipeRoutes.post(
 recipeRoutes.post(
   "/:houseId/recipes/scan",
   handler(async (req, res) => {
-    const { houseId } = requireHouse(req, "member");
+    const { houseId } = await requireHouse(req, "member");
     const body = parseBody(
       z.object({
         text: z.string().max(30000).optional(),
@@ -329,7 +329,7 @@ recipeRoutes.post(
     const rawText = (body.text ?? "").trim();
     if (!rawText && !body.image) throw new ApiError(400, "Provide recipe text or a scan image");
 
-    const house = get<any>("SELECT * FROM houses WHERE id = ?", [houseId])!;
+    const house = (await get<any>("SELECT * FROM houses WHERE id = ?", [houseId]))!;
     const settings = parseJson<Record<string, any>>(house.settings, {});
     const cfg = resolveAi(settings);
     // Only send the photo when a vision model is explicitly configured. With a
@@ -346,7 +346,17 @@ recipeRoutes.post(
           body.image && hasVisionModel
             ? [await localImageToDataUrl(body.image)].filter((value): value is string => !!value)
             : [];
-        const aiDraft = await aiCleanRecipe(cfg, rawText, images);
+        const aiDraft = await aiCleanRecipe(cfg, rawText, images, {
+          operation: "recipe.scan",
+          houseId,
+          userId: req.user!.id,
+          metadata: {
+            hasImage: Boolean(body.image),
+            hasVisionModel,
+            ocrChars: rawText.length,
+            save: Boolean(body.save),
+          },
+        });
         draft = normaliseRecipeDraft(aiDraft.data, body.title || draft.title || "Scanned recipe");
         aiCost = aiDraft.usage.cost;
         provider = "ai";
@@ -361,15 +371,15 @@ recipeRoutes.post(
     }
 
     if (body.save) {
-      const id = saveRecipe(houseId, req.user!.id, draftToInput(draft, { source: "scan", sourceImage: body.image ?? null, ocrText: rawText, aiCost }));
-      const row = recipeRow(id)!;
-      const serialized = serializeRecipe(row, ingredientsFor(id));
+      const id = await saveRecipe(houseId, req.user!.id, draftToInput(draft, { source: "scan", sourceImage: body.image ?? null, ocrText: rawText, aiCost }));
+      const row = (await recipeRow(id))!;
+      const serialized = serializeRecipe(row, await ingredientsFor(id));
       res.status(201).json({
         provider,
         warning,
         aiCost,
         saved: true,
-        recipe: decorateRecipe(serialized, stockMaps(houseId), nutritionItems(houseId)),
+        recipe: decorateRecipe(serialized, await stockMaps(houseId), await nutritionItems(houseId)),
       });
       return;
     }
@@ -388,19 +398,19 @@ recipeRoutes.post(
 
 singleRecipeRoutes.get(
   "/:recipeId",
-  handler((req, res) => {
-    const { recipe, houseId } = recipeAccess(req);
-    const serialized = serializeRecipe(recipe, ingredientsFor(recipe.id));
-    res.json(decorateRecipe(serialized, stockMaps(houseId), nutritionItems(houseId)));
+  handler(async (req, res) => {
+    const { recipe, houseId } = await recipeAccess(req);
+    const serialized = serializeRecipe(recipe, await ingredientsFor(recipe.id));
+    res.json(decorateRecipe(serialized, await stockMaps(houseId), await nutritionItems(houseId)));
   }),
 );
 
 singleRecipeRoutes.patch(
   "/:recipeId",
-  handler((req, res) => {
-    const { recipe, houseId } = recipeAccess(req, "member");
+  handler(async (req, res) => {
+    const { recipe, houseId } = await recipeAccess(req, "member");
     const body = parseBody(recipeInput.partial(), req.body);
-    const current = serializeRecipe(recipe, ingredientsFor(recipe.id));
+    const current = serializeRecipe(recipe, await ingredientsFor(recipe.id));
     const merged = recipeInput.parse({
       ...current,
       ...body,
@@ -408,29 +418,29 @@ singleRecipeRoutes.patch(
       ingredients: body.ingredients ?? current.ingredients,
       steps: body.steps ?? current.steps,
     });
-    saveRecipe(houseId, req.user!.id, merged, recipe.id);
-    const updated = recipeRow(recipe.id)!;
-    const serialized = serializeRecipe(updated, ingredientsFor(recipe.id));
-    res.json(decorateRecipe(serialized, stockMaps(houseId), nutritionItems(houseId)));
+    await saveRecipe(houseId, req.user!.id, merged, recipe.id);
+    const updated = (await recipeRow(recipe.id))!;
+    const serialized = serializeRecipe(updated, await ingredientsFor(recipe.id));
+    res.json(decorateRecipe(serialized, await stockMaps(houseId), await nutritionItems(houseId)));
   }),
 );
 
 singleRecipeRoutes.delete(
   "/:recipeId",
-  handler((req, res) => {
-    const { recipe } = recipeAccess(req, "member");
-    run("DELETE FROM recipes WHERE id = ?", [recipe.id]);
+  handler(async (req, res) => {
+    const { recipe } = await recipeAccess(req, "member");
+    await run("DELETE FROM recipes WHERE id = ?", [recipe.id]);
     res.json({ ok: true });
   }),
 );
 
 singleRecipeRoutes.post(
   "/:recipeId/favorite",
-  handler((req, res) => {
-    const { recipe } = recipeAccess(req, "member");
+  handler(async (req, res) => {
+    const { recipe } = await recipeAccess(req, "member");
     const body = parseBody(z.object({ favorite: z.boolean().optional() }), req.body ?? {});
     const next = body.favorite === undefined ? !recipe.favorite : body.favorite;
-    run("UPDATE recipes SET favorite = ?, updated_at = ? WHERE id = ?", [next ? 1 : 0, now(), recipe.id]);
+    await run("UPDATE recipes SET favorite = ?, updated_at = ? WHERE id = ?", [next ? 1 : 0, now(), recipe.id]);
     res.json({ favorite: next });
   }),
 );
@@ -438,15 +448,15 @@ singleRecipeRoutes.post(
 singleRecipeRoutes.post(
   "/:recipeId/ai",
   handler(async (req, res) => {
-    const { recipe, houseId } = recipeAccess(req, "member");
-    const house = get<any>("SELECT * FROM houses WHERE id = ?", [houseId])!;
+    const { recipe, houseId } = await recipeAccess(req, "member");
+    const house = (await get<any>("SELECT * FROM houses WHERE id = ?", [houseId]))!;
     const cfg = resolveAi(parseJson(house.settings, {}));
     if (!cfg.enabled) {
       throw new ApiError(400, "Add an AI provider in Settings → AI to use recipe assistance");
     }
     const body = parseBody(z.object({ action: z.enum(["complete"]).default("complete") }), req.body ?? {});
     void body;
-    const current = serializeRecipe(recipe, ingredientsFor(recipe.id));
+    const current = serializeRecipe(recipe, await ingredientsFor(recipe.id));
     const aiResult = await aiCompleteRecipe(cfg, {
       title: current.title,
       description: current.description,
@@ -462,6 +472,12 @@ singleRecipeRoutes.post(
         note: i.note,
       })),
       steps: current.steps,
+    }, {
+      operation: "recipe.complete",
+      houseId,
+      userId: req.user!.id,
+      targetId: recipe.id,
+      metadata: { ingredientCount: current.ingredients.length, stepCount: current.steps.length },
     });
     const normalised = normaliseRecipeDraft(aiResult.data, current.title);
     // A recipe can be scanned and polished several times: keep the total AI spend.
@@ -487,9 +503,9 @@ singleRecipeRoutes.post(
       favorite: current.favorite,
       ingredients: normalised.ingredients.length ? normalised.ingredients : current.ingredients,
     });
-    saveRecipe(houseId, req.user!.id, payload, recipe.id);
-    const updated = recipeRow(recipe.id)!;
-    const serialized = serializeRecipe(updated, ingredientsFor(recipe.id));
-    res.json(decorateRecipe(serialized, stockMaps(houseId), nutritionItems(houseId)));
+    await saveRecipe(houseId, req.user!.id, payload, recipe.id);
+    const updated = (await recipeRow(recipe.id))!;
+    const serialized = serializeRecipe(updated, await ingredientsFor(recipe.id));
+    res.json(decorateRecipe(serialized, await stockMaps(houseId), await nutritionItems(houseId)));
   }),
 );

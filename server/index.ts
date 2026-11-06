@@ -23,17 +23,21 @@ import { intakeRoutes } from "./routes/intake.js";
 import { importRoutes } from "./routes/imports.js";
 import { backupRoutes } from "./routes/backup.js";
 import { datasetRoutes } from "./routes/dataset.js";
+import { aiLogRoutes } from "./routes/ai-logs.js";
 import { inMaintenance } from "./maintenance.js";
 import { scanAllHouses } from "./services/notifications.js";
 import { seedVendorCatalog } from "./services/vendors.js";
 import { seedProductCatalog } from "./services/product-catalog.js";
 import { pruneOffProductCache } from "./services/openfoodfacts.js";
-import { db } from "./db.js";
+import { pruneAiCallLogs } from "./services/ai-logs.js";
+import { initDb, closeDb, databaseKind } from "./db.js";
 
+await initDb();
 ensureDirs();
-seedVendorCatalog();
-seedProductCatalog();
-pruneOffProductCache();
+await seedVendorCatalog();
+await seedProductCatalog();
+await pruneOffProductCache();
+await pruneAiCallLogs();
 
 export const app = express();
 app.disable("x-powered-by");
@@ -79,6 +83,7 @@ app.use("/api/auth", passkeyRoutes);
 app.use("/api/auth", twoFactorRoutes);
 app.use("/api/auth", oidcRoutes);
 app.use("/api/houses", houseRoutes);
+app.use("/api/houses", aiLogRoutes);
 app.use("/api/houses", inventoryRoutes);
 app.use("/api/houses", receiptRoutes);
 app.use("/api/houses", receiptTemplateRoutes);
@@ -102,7 +107,7 @@ app.use("/api/ideas", singleIdeaRoutes);
 app.use("/api/photos", singlePhotoRoutes);
 
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, version: 1, time: new Date().toISOString() });
+  res.json({ ok: true, version: 1, database: databaseKind(), time: new Date().toISOString() });
 });
 
 app.use("/uploads", express.static(UPLOAD_DIR, { maxAge: "30d", fallthrough: true, index: false }));
@@ -140,28 +145,30 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 });
 
 if (process.env.NODE_ENV !== "test") {
-  const server = app.listen(PORT, "0.0.0.0", () => {
+  const server = app.listen(PORT, "0.0.0.0", async () => {
     console.log(`SVault API listening on http://localhost:${PORT}`);
     try {
-      scanAllHouses();
+      await scanAllHouses();
     } catch (err) {
       console.error("Reminder scan failed:", err);
     }
-    const timer = setInterval(() => {
+    const timer = setInterval(async () => {
       try {
-        scanAllHouses();
+        await scanAllHouses();
       } catch (err) {
         console.error("Reminder scan failed:", err);
       }
     }, 30 * 60 * 1000);
     timer.unref();
+
+    const logTimer = setInterval(() => void pruneAiCallLogs(), 24 * 60 * 60 * 1000);
+    logTimer.unref();
     void server;
   });
 
   const shutdown = () => {
     server.close(() => {
-      db.close();
-      process.exit(0);
+      void closeDb().finally(() => process.exit(0));
     });
   };
   process.on("SIGINT", shutdown);

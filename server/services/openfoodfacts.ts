@@ -140,12 +140,12 @@ function cacheIsFresh(row: any): boolean {
   return Number.isFinite(fetched) && Date.now() - fetched < OFF_CACHE_DAYS * 864e5;
 }
 
-function cachedRow(code: string): any | null {
+async function cachedRow(code: string): Promise<any | null> {
   const candidates = barcodeCandidates(code);
   if (!candidates.length) return null;
   const placeholders = candidates.map(() => "?").join(", ");
   return (
-    get<any>(
+    await get<any>(
       `SELECT * FROM catalog_products WHERE code IN (${placeholders})
        ORDER BY CASE WHEN payload <> '{}' THEN 0 ELSE 1 END, fetched_at DESC LIMIT 1`,
       candidates,
@@ -154,25 +154,25 @@ function cachedRow(code: string): any | null {
 }
 
 /** Cached product without touching the network. Used by receipt drafts. */
-export function getCachedOffProduct(code: string): OffProduct | null {
-  return offProductFromRow(cachedRow(code));
+export async function getCachedOffProduct(code: string): Promise<OffProduct | null> {
+  return offProductFromRow(await cachedRow(code));
 }
 
 /** Full cached payload, when one has been stored. */
-export function getCachedOffPayload(code: string): Record<string, unknown> | null {
-  const row = cachedRow(code);
+export async function getCachedOffPayload(code: string): Promise<Record<string, unknown> | null> {
+  const row = await cachedRow(code);
   if (!row) return null;
   const payload = parseJson<Record<string, unknown> | null>(row.payload, null);
   return payload && Object.keys(payload).length ? payload : null;
 }
 
-function saveOffProduct(payload: any, requestedCode: string) {
+async function saveOffProduct(payload: any, requestedCode: string) {
   const summary = offSummaryFromPayload(payload);
   const code = String(summary.code || requestedCode).trim();
   if (!code) return summary;
   summary.code = code;
   const timestamp = now();
-  run(
+  await run(
     `INSERT INTO catalog_products
        (code, name, brand, quantity, image, categories, summary, payload, source, fetched_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'openfoodfacts', ?, ?)
@@ -203,7 +203,7 @@ function saveOffProduct(payload: any, requestedCode: string) {
   // Keep the scanned spelling as an alias so a future scan hits the cache even
   // when OpenFoodFacts canonicalises the code (for example by adding a zero).
   if (code !== requestedCode) {
-    run(
+    await run(
       `INSERT INTO catalog_products
          (code, name, brand, quantity, image, categories, summary, payload, source, fetched_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, '{}', 'catalog', ?, ?)
@@ -246,12 +246,12 @@ export async function fetchOffProduct(rawCode: string, options: { force?: boolea
   const candidates = barcodeCandidates(rawCode);
   if (!candidates.length) return null;
 
-  const cached = cachedRow(rawCode);
+  const cached = await cachedRow(rawCode);
   if (cached && !options.force && cacheIsFresh(cached)) return offProductFromRow(cached);
 
   for (const candidate of candidates) {
     const payload = await fetchProductPayload(candidate);
-    if (payload) return saveOffProduct(payload, candidate);
+    if (payload) return await saveOffProduct(payload, candidate);
   }
   return cached ? offProductFromRow(cached) : null;
 }
@@ -310,8 +310,8 @@ function blank(value: unknown): boolean {
   return value == null || String(value).trim() === "";
 }
 
-function matchHouseCategory(houseId: string, product: OffProduct): string | null {
-  const categories = all<{ id: string; name: string }>(
+async function matchHouseCategory(houseId: string, product: OffProduct): Promise<string | null> {
+  const categories = await all<{ id: string; name: string }>(
     "SELECT id, name FROM categories WHERE house_id = ? ORDER BY created_at",
     [houseId],
   );
@@ -347,12 +347,12 @@ export interface OffFillResult {
  * never overwritten: only blank columns (and, when explicitly allowed, the
  * default `pcs` unit of a brand-new receipt item) are updated.
  */
-export function fillItemFromOff(opts: {
+export async function fillItemFromOff(opts: {
   item: any;
   product: OffProduct;
   source: "barcode" | "receipt" | "manual" | "catalog";
   allowDefaultUnit?: boolean;
-}): OffFillResult {
+}): Promise<OffFillResult> {
   const { item, product } = opts;
   const filled: string[] = [];
   const skipped: { field: string; reason: string }[] = [];
@@ -377,7 +377,7 @@ export function fillItemFromOff(opts: {
     filled.push("image");
   }
   if (blank(item.category_id)) {
-    const categoryId = matchHouseCategory(item.house_id, product);
+    const categoryId = await matchHouseCategory(item.house_id, product);
     if (categoryId) {
       patch.category_id = categoryId;
       filled.push("category");
@@ -399,13 +399,13 @@ export function fillItemFromOff(opts: {
   }
   if (!Object.keys(patch).length) {
     // Still record the link timestamp so the UI can show a successful sync.
-    run("UPDATE items SET off_synced_at = ? WHERE id = ?", [now(), item.id]);
+    await run("UPDATE items SET off_synced_at = ? WHERE id = ?", [now(), item.id]);
     return { filled, skipped, item };
   }
 
   const columns = Object.keys(patch);
   const assignments = columns.map((column) => `${column} = ?`).join(", ");
-  run(`UPDATE items SET ${assignments}, off_synced_at = ? WHERE id = ?`, [
+  await run(`UPDATE items SET ${assignments}, off_synced_at = ? WHERE id = ?`, [
     ...columns.map((column) => patch[column]),
     now(),
     item.id,
@@ -413,7 +413,7 @@ export function fillItemFromOff(opts: {
   return {
     filled,
     skipped,
-    item: get<any>("SELECT * FROM items WHERE id = ?", [item.id]) ?? item,
+    item: await get<any>("SELECT * FROM items WHERE id = ?", [item.id]) ?? item,
   };
 }
 
@@ -422,30 +422,30 @@ export function fillItemFromOff(opts: {
  * does not collide, and fill empty fields. A different existing link is replaced
  * only by an explicit user action; callers should not do this implicitly.
  */
-export function linkItemToOff(opts: {
+export async function linkItemToOff(opts: {
   item: any;
   product: OffProduct;
   source: "barcode" | "receipt" | "manual" | "catalog";
   allowDefaultUnit?: boolean;
-}): OffFillResult {
+}): Promise<OffFillResult> {
   const { item, product, source } = opts;
-  const other = get<any>(
+  const other = await get<any>(
     "SELECT id, name FROM items WHERE house_id = ? AND off_code = ? AND id <> ?",
     [item.house_id, product.code, item.id],
   );
   if (other) throw new ApiError(409, `OpenFoodFacts product ${product.code} is already linked to ${other.name}`);
 
   const skipped: { field: string; reason: string }[] = [];
-  const conflict = get<any>(
+  const conflict = await get<any>(
     `SELECT i.name FROM item_barcodes b JOIN items i ON i.id = b.item_id
      WHERE b.house_id = ? AND b.code = ? AND b.item_id <> ?`,
     [item.house_id, product.code, item.id],
   );
-  const already = get<any>("SELECT id FROM item_barcodes WHERE item_id = ? AND code = ?", [item.id, product.code]);
+  const already = await get<any>("SELECT id FROM item_barcodes WHERE item_id = ? AND code = ?", [item.id, product.code]);
   if (conflict) {
     skipped.push({ field: "barcode", reason: `code already belongs to ${conflict.name}` });
   } else if (!already) {
-    run("INSERT INTO item_barcodes (id, item_id, house_id, code, format, created_at) VALUES (?, ?, ?, ?, 'openfoodfacts', ?)", [
+    await run("INSERT INTO item_barcodes (id, item_id, house_id, code, format, created_at) VALUES (?, ?, ?, ?, 'openfoodfacts', ?)", [
       newId("bar"),
       item.id,
       item.house_id,
@@ -454,8 +454,8 @@ export function linkItemToOff(opts: {
     ]);
   }
 
-  const result = fillItemFromOff({ item, product, source, allowDefaultUnit: opts.allowDefaultUnit });
-  run(
+  const result = await fillItemFromOff({ item, product, source, allowDefaultUnit: opts.allowDefaultUnit });
+  await run(
     `UPDATE items SET off_code = ?, off_source = ?, off_linked_at = ?, off_synced_at = ?,
        off_filled = ?, updated_at = ? WHERE id = ?`,
     [
@@ -471,12 +471,12 @@ export function linkItemToOff(opts: {
   return {
     filled: result.filled,
     skipped: [...skipped, ...result.skipped],
-    item: get<any>("SELECT * FROM items WHERE id = ?", [item.id]) ?? item,
+    item: await get<any>("SELECT * FROM items WHERE id = ?", [item.id]) ?? item,
   };
 }
 
-export function unlinkItemFromOff(itemId: string) {
-  run(
+export async function unlinkItemFromOff(itemId: string) {
+  await run(
     "UPDATE items SET off_code = NULL, off_source = NULL, off_linked_at = NULL, off_synced_at = NULL, off_filled = '[]', updated_at = ? WHERE id = ?",
     [now(), itemId],
   );
@@ -488,9 +488,9 @@ export function offProductIsFresh(product: OffProduct | null): boolean {
 }
 
 /** Drop stale cache rows that no item still links to. */
-export function pruneOffProductCache() {
+export async function pruneOffProductCache() {
   const cutoff = new Date(Date.now() - OFF_CACHE_DAYS * 4 * 864e5).toISOString();
-  run(
+  await run(
     "DELETE FROM catalog_products WHERE fetched_at < ? AND code NOT IN (SELECT off_code FROM items WHERE off_code IS NOT NULL)",
     [cutoff],
   );

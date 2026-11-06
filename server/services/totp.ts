@@ -90,12 +90,12 @@ export function generateBackupCodes(count = 8): { plain: string[]; hashed: strin
   return { plain, hashed: plain.map(hashBackupCode) };
 }
 
-export function getTotp(userId: string) {
-  return get<any>("SELECT * FROM user_totp WHERE user_id = ?", [userId]);
+export async function getTotp(userId: string) {
+  return await get<any>("SELECT * FROM user_totp WHERE user_id = ?", [userId]);
 }
 
-export function totpStatus(userId: string) {
-  const row = getTotp(userId);
+export async function totpStatus(userId: string) {
+  const row = await getTotp(userId);
   return {
     enabled: Boolean(row?.enabled),
     configured: Boolean(row),
@@ -103,8 +103,8 @@ export function totpStatus(userId: string) {
   };
 }
 
-export function saveTotpSetup(userId: string, secret: string) {
-  run(
+export async function saveTotpSetup(userId: string, secret: string) {
+  await run(
     `INSERT INTO user_totp (user_id, secret, enabled, backup_codes, created_at, confirmed_at)
      VALUES (?, ?, 0, '[]', ?, NULL)
      ON CONFLICT(user_id) DO UPDATE SET secret = excluded.secret, enabled = 0, confirmed_at = NULL`,
@@ -112,9 +112,9 @@ export function saveTotpSetup(userId: string, secret: string) {
   );
 }
 
-export function enableTotp(userId: string) {
+export async function enableTotp(userId: string) {
   const codes = generateBackupCodes();
-  run("UPDATE user_totp SET enabled = 1, backup_codes = ?, confirmed_at = ? WHERE user_id = ?", [
+  await run("UPDATE user_totp SET enabled = 1, backup_codes = ?, confirmed_at = ? WHERE user_id = ?", [
     JSON.stringify(codes.hashed),
     now(),
     userId,
@@ -122,13 +122,13 @@ export function enableTotp(userId: string) {
   return codes.plain;
 }
 
-export function disableTotp(userId: string) {
-  run("DELETE FROM user_totp WHERE user_id = ?", [userId]);
+export async function disableTotp(userId: string) {
+  await run("DELETE FROM user_totp WHERE user_id = ?", [userId]);
 }
 
 /** Accept a TOTP code or consume one of the hashed backup codes. */
-export function verifyTotpOrBackup(userId: string, code: string): boolean {
-  const row = getTotp(userId);
+export async function verifyTotpOrBackup(userId: string, code: string): Promise<boolean> {
+  const row = await getTotp(userId);
   if (!row || !row.enabled) return false;
   if (verifyTotp(row.secret, code)) return true;
   const hashed = JSON.parse(row.backup_codes || "[]") as string[];
@@ -136,19 +136,19 @@ export function verifyTotpOrBackup(userId: string, code: string): boolean {
   const index = hashed.findIndex((entry) => timingSafeEqual(Buffer.from(entry), Buffer.from(wanted)));
   if (index < 0) return false;
   hashed.splice(index, 1);
-  run("UPDATE user_totp SET backup_codes = ? WHERE user_id = ?", [JSON.stringify(hashed), userId]);
+  await run("UPDATE user_totp SET backup_codes = ? WHERE user_id = ?", [JSON.stringify(hashed), userId]);
   return true;
 }
 
-export function requireTotp(userId: string): boolean {
-  return Boolean(getTotp(userId)?.enabled);
+export async function requireTotp(userId: string): Promise<boolean> {
+  return Boolean((await getTotp(userId))?.enabled);
 }
 
-export function createLoginChallenge(userId: string, type = "totp"): string {
+export async function createLoginChallenge(userId: string, type = "totp"): Promise<string> {
   const id = randomBytes(18).toString("base64url");
   const expires = new Date(Date.now() + 5 * 60_000).toISOString();
-  run("DELETE FROM login_challenges WHERE expires_at < ?", [now()]);
-  run("INSERT INTO login_challenges (id, user_id, type, expires_at, created_at) VALUES (?, ?, ?, ?, ?)", [
+  await run("DELETE FROM login_challenges WHERE expires_at < ?", [now()]);
+  await run("INSERT INTO login_challenges (id, user_id, type, expires_at, created_at) VALUES (?, ?, ?, ?, ?)", [
     id,
     userId,
     type,
@@ -158,20 +158,20 @@ export function createLoginChallenge(userId: string, type = "totp"): string {
   return id;
 }
 
-export function consumeLoginChallenge(id: string, type = "totp"): string | null {
-  const row = get<any>("SELECT * FROM login_challenges WHERE id = ? AND type = ?", [id, type]);
+export async function consumeLoginChallenge(id: string, type = "totp"): Promise<string | null> {
+  const row = await get<any>("SELECT * FROM login_challenges WHERE id = ? AND type = ?", [id, type]);
   if (!row) return null;
-  run("DELETE FROM login_challenges WHERE id = ?", [id]);
+  await run("DELETE FROM login_challenges WHERE id = ?", [id]);
   if (new Date(row.expires_at).getTime() < Date.now()) return null;
   return row.user_id as string;
 }
 
 /** Look at a challenge without invalidating it, so a mistyped code can be retried. */
-export function peekLoginChallenge(id: string, type = "totp"): string | null {
-  const row = get<any>("SELECT * FROM login_challenges WHERE id = ? AND type = ?", [id, type]);
+export async function peekLoginChallenge(id: string, type = "totp"): Promise<string | null> {
+  const row = await get<any>("SELECT * FROM login_challenges WHERE id = ? AND type = ?", [id, type]);
   if (!row) return null;
   if (new Date(row.expires_at).getTime() < Date.now()) {
-    run("DELETE FROM login_challenges WHERE id = ?", [id]);
+    await run("DELETE FROM login_challenges WHERE id = ?", [id]);
     return null;
   }
   return row.user_id as string;

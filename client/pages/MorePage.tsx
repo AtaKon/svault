@@ -83,6 +83,23 @@ export function MorePage() {
         ))}
       </div>
 
+      {user?.developerMode && (
+        <button
+          onClick={() => navigate("/developer")}
+          className="flex w-full items-center gap-3 rounded-xl border border-brand/30 bg-brand-soft/50 px-3.5 py-3 text-left transition-colors hover:bg-brand-soft"
+        >
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-soft text-brand">
+            <Icon name="list" size={18} />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-[13px] font-medium">Developer</span>
+            <span className="block truncate text-[11px] text-muted">AI call log, tokens, cost and errors</span>
+          </span>
+          <Badge tone="brand">dev</Badge>
+          <Icon name="chevronRight" size={15} className="text-muted" />
+        </button>
+      )}
+
       <Card className="p-4">
         <h2 className="mb-3 font-display text-lg">App</h2>
         <div className="space-y-1">

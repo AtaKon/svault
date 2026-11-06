@@ -21,27 +21,27 @@ intakeRoutes.use(requireAuth);
 
 const UNIT_SET = new Set(UNITS.map((unit) => unit.toLowerCase()));
 
-function purchaseCountry(houseId: string) {
-  const house = get<any>("SELECT settings FROM houses WHERE id = ?", [houseId]);
+async function purchaseCountry(houseId: string) {
+  const house = await get<any>("SELECT settings FROM houses WHERE id = ?", [houseId]);
   const settings = parseJson<Record<string, any>>(house?.settings, {});
   return String(settings?.purchases?.country ?? "GR").toUpperCase();
 }
 
-function localImageToDataUrl(image: string): Promise<string | null> {
+async function localImageToDataUrl(image: string): Promise<string | null> {
   if (!image.startsWith("/uploads/receipts/")) return Promise.resolve(null);
   const filename = image.split("/").pop()!;
-  return fileToDataUrl(uploadPath("receipts", filename), "image/jpeg");
+  return await fileToDataUrl(uploadPath("receipts", filename), "image/jpeg");
 }
 
-function itemByBarcode(houseId: string, code: string) {
-  return get<any>(
+async function itemByBarcode(houseId: string, code: string) {
+  return await get<any>(
     `SELECT i.* FROM items i JOIN item_barcodes b ON b.item_id = i.id WHERE b.house_id = ? AND b.code = ? LIMIT 1`,
     [houseId, code],
   );
 }
 
-function candidatesFor(houseId: string, vendorId: string | null, text: string): IntakeRow["candidates"] {
-  return suggestProductMatches(houseId, vendorId, text, 3).map((entry) => ({
+async function candidatesFor(houseId: string, vendorId: string | null, text: string): Promise<IntakeRow["candidates"]> {
+  return (await suggestProductMatches(houseId, vendorId, text, 3)).map((entry) => ({
     itemId: entry.itemId,
     name: entry.itemName,
     unit: entry.unit,
@@ -57,7 +57,7 @@ async function parseBarcodes(houseId: string, codes: string[]): Promise<IntakePa
     const code = raw.trim();
     if (!code || seen.has(code)) continue;
     seen.add(code);
-    const item = itemByBarcode(houseId, code);
+    const item = await itemByBarcode(houseId, code);
     if (item) {
       rows.push({
         description: item.name,
@@ -70,7 +70,7 @@ async function parseBarcodes(houseId: string, codes: string[]): Promise<IntakePa
         itemId: item.id,
         itemName: item.name,
         itemUnit: item.unit,
-        candidates: candidatesFor(houseId, null, item.name),
+        candidates: await candidatesFor(houseId, null, item.name),
         offCode: item.off_code ?? null,
         offName: null,
         offBrand: null,
@@ -91,7 +91,7 @@ async function parseBarcodes(houseId: string, codes: string[]): Promise<IntakePa
       itemId: null,
       itemName: null,
       itemUnit: null,
-      candidates: product ? candidatesFor(houseId, null, product.name) : [],
+      candidates: product ? await candidatesFor(houseId, null, product.name) : [],
       offCode: product?.code ?? code,
       offName: product?.name ?? null,
       offBrand: product?.brand ?? null,
@@ -112,8 +112,8 @@ async function parseBarcodes(houseId: string, codes: string[]): Promise<IntakePa
 intakeRoutes.post(
   "/:houseId/intake/upload",
   uploader("receipts").single("image"),
-  handler((req, res) => {
-    requireHouse(req, "member");
+  handler(async (req, res) => {
+    await requireHouse(req, "member");
     if (!req.file) throw new ApiError(400, "No image uploaded");
     res.status(201).json({ path: `/uploads/receipts/${req.file.filename}` });
   }),
@@ -122,7 +122,7 @@ intakeRoutes.post(
 intakeRoutes.post(
   "/:houseId/intake/parse",
   handler(async (req, res) => {
-    const { houseId } = requireHouse(req, "member");
+    const { houseId } = await requireHouse(req, "member");
     const body = parseBody(
       z.object({
         text: z.string().max(50000).optional(),
@@ -138,12 +138,12 @@ intakeRoutes.post(
 
     const rawText = (body.text ?? "").trim();
     if (!rawText && !body.image) throw new ApiError(400, "Provide receipt text, an image or barcodes");
-    const house = get<any>("SELECT * FROM houses WHERE id = ?", [houseId])!;
+    const house = (await get<any>("SELECT * FROM houses WHERE id = ?", [houseId]))!;
     const settings = parseJson<Record<string, any>>(house.settings, {});
     const cfg = resolveAi(settings);
     const hasVisionModel = Boolean(settings?.ai?.visionModel || AI_ENV.visionModel);
 
-    const template = selectReceiptTemplate(rawText, houseId);
+    const template = await selectReceiptTemplate(rawText, houseId);
     let draft = heuristicReceipt(rawText, house.currency ?? null);
     let provider: "ai" | "local" | "template" = "local";
     let warning: string | null = null;
@@ -165,7 +165,17 @@ intakeRoutes.post(
             body.image && hasVisionModel
               ? [await localImageToDataUrl(body.image)].filter((value): value is string => !!value)
               : [];
-          const aiDraft = await aiParseReceipt(cfg, rawText, images);
+          const aiDraft = await aiParseReceipt(cfg, rawText, images, {
+            operation: "receipt.intake",
+            houseId,
+            userId: req.user!.id,
+            metadata: {
+              hasImage: Boolean(body.image),
+              hasVisionModel,
+              ocrChars: rawText.length,
+              lineCount: draft.lines.length,
+            },
+          });
           draft = normaliseReceiptDraft(aiDraft.data, house.currency ?? null);
           provider = "ai";
         } catch (err) {
@@ -178,18 +188,18 @@ intakeRoutes.post(
       }
     }
 
-    const country = purchaseCountry(houseId);
-    const catalogVendor = canonicalVendor(draft.vendorName, country) ?? detectCatalogVendor(rawText, country);
+    const country = await purchaseCountry(houseId);
+    const catalogVendor = await canonicalVendor(draft.vendorName, country) ?? await detectCatalogVendor(rawText, country);
     if (catalogVendor) draft.vendorName = catalogVendor.name;
     const vendor = draft.vendorName
-      ? get<any>("SELECT * FROM vendors WHERE house_id = ? AND name = ? COLLATE NOCASE", [houseId, draft.vendorName])
+      ? await get<any>("SELECT * FROM vendors WHERE house_id = ? AND lower(name) = lower(?)", [houseId, draft.vendorName])
       : null;
 
-    const rows: IntakeRow[] = draft.lines.map((line) => {
+    const rows: IntakeRow[] = await Promise.all(draft.lines.map(async (line) => {
       const text = line.rawDescription ?? line.description;
-      const candidates = candidatesFor(houseId, vendor?.id ?? null, text);
+      const candidates = await candidatesFor(houseId, vendor?.id ?? null, text);
       const top = candidates[0];
-      const product = line.offCode ? getCachedOffProduct(line.offCode) : null;
+      const product = line.offCode ? await getCachedOffProduct(line.offCode) : null;
       return {
         description: line.description,
         rawDescription: line.rawDescription ?? null,
@@ -208,7 +218,7 @@ intakeRoutes.post(
         offImage: product?.image ?? null,
         action: top ? "update" : "create",
       };
-    });
+    }));
 
     if (!rows.length) {
       warning = [warning, "Could not find any product lines in this text."].filter(Boolean).join(" ");
@@ -238,8 +248,8 @@ const commitRow = z.object({
 
 intakeRoutes.post(
   "/:houseId/intake/commit",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req, "member");
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req, "member");
     const body = parseBody(
       z.object({
         rows: z.array(commitRow).min(1).max(200),
@@ -249,24 +259,24 @@ intakeRoutes.post(
       }),
       req.body,
     );
-    if (body.vendorId && !get("SELECT id FROM vendors WHERE id = ? AND house_id = ?", [body.vendorId, houseId])) {
+    if (body.vendorId && !await get("SELECT id FROM vendors WHERE id = ? AND house_id = ?", [body.vendorId, houseId])) {
       throw new ApiError(400, "Shop does not exist in this house");
     }
 
     const seenBarcodes = new Map<string, number>();
     const errors: { index: number; errors: string[] }[] = [];
-    const prepared = body.rows.map((row, index) => {
+    const prepared = await Promise.all(body.rows.map(async (row, index) => {
       const rowErrors: string[] = [];
       let item: any = null;
       if (row.action !== "skip") {
         if (row.itemId) {
-          item = get<any>("SELECT * FROM items WHERE id = ? AND house_id = ?", [row.itemId, houseId]);
+          item = await get<any>("SELECT * FROM items WHERE id = ? AND house_id = ?", [row.itemId, houseId]);
           if (!item) rowErrors.push("The chosen item does not exist in this house");
         } else if (row.barcode) {
-          item = itemByBarcode(houseId, row.barcode);
+          item = await itemByBarcode(houseId, row.barcode);
         }
         if (!item && row.action === "update") {
-          item = get<any>("SELECT * FROM items WHERE house_id = ? AND archived = 0 AND LOWER(name) = LOWER(?)", [
+          item = await get<any>("SELECT * FROM items WHERE house_id = ? AND archived = 0 AND LOWER(name) = LOWER(?)", [
             houseId,
             row.description,
           ]);
@@ -281,16 +291,16 @@ intakeRoutes.post(
           const previous = seenBarcodes.get(row.barcode);
           if (previous != null) rowErrors.push(`Barcode ${row.barcode} also appears on row ${previous + 1}`);
           else seenBarcodes.set(row.barcode, index);
-          const owner = itemByBarcode(houseId, row.barcode);
+          const owner = await itemByBarcode(houseId, row.barcode);
           if (owner && owner.id !== item?.id) rowErrors.push(`Barcode ${row.barcode} is already linked to ${owner.name}`);
         }
-        if (row.locationId && !get("SELECT id FROM locations WHERE id = ? AND house_id = ?", [row.locationId, houseId])) {
+        if (row.locationId && !await get("SELECT id FROM locations WHERE id = ? AND house_id = ?", [row.locationId, houseId])) {
           rowErrors.push("The chosen place does not exist in this house");
         }
       }
       if (rowErrors.length) errors.push({ index, errors: rowErrors });
       return { row, item };
-    });
+    }));
 
     if (errors.length) {
       throw new ApiError(400, "Fix the highlighted rows before committing", { rows: errors });
@@ -299,23 +309,23 @@ intakeRoutes.post(
     const created: string[] = [];
     const updated: string[] = [];
     const touched = new Set<string>();
-    const currency = (body.currency ?? get<any>("SELECT currency FROM houses WHERE id = ?", [houseId])?.currency ?? "EUR")
+    const currency = (body.currency ?? (await get<any>("SELECT currency FROM houses WHERE id = ?", [houseId]))?.currency ?? "EUR")
       .toUpperCase()
       .slice(0, 3);
 
-    tx(() => {
+    await tx(async () => {
       for (const { row, item } of prepared) {
         if (row.action === "skip") continue;
         let target = item;
         if (row.action === "create" && !target) {
-          target = get<any>("SELECT * FROM items WHERE house_id = ? AND LOWER(name) = LOWER(?)", [
+          target = await get<any>("SELECT * FROM items WHERE house_id = ? AND LOWER(name) = LOWER(?)", [
             houseId,
             row.description,
           ]);
         }
         if (row.action === "create" && !target) {
           const id = newId("itm");
-          run(
+          await run(
             `INSERT INTO items (id, house_id, name, description, brand, category_id, unit, reorder_point, target_stock,
                attributes, tags, image, archived, created_by, created_at, updated_at)
              VALUES (?, ?, ?, NULL, NULL, NULL, ?, 0, NULL, '{}', '[]', NULL, 0, ?, ?, ?)`,
@@ -330,7 +340,7 @@ intakeRoutes.post(
             ],
           );
           if (row.barcode) {
-            run("INSERT INTO item_barcodes (id, item_id, house_id, code, format, created_at) VALUES (?, ?, ?, ?, 'intake', ?)", [
+            await run("INSERT INTO item_barcodes (id, item_id, house_id, code, format, created_at) VALUES (?, ?, ?, ?, 'intake', ?)", [
               newId("bar"),
               id,
               houseId,
@@ -338,11 +348,11 @@ intakeRoutes.post(
               now(),
             ]);
           }
-          target = get<any>("SELECT * FROM items WHERE id = ?", [id]);
+          target = await get<any>("SELECT * FROM items WHERE id = ?", [id]);
           created.push(id);
         } else if (target) {
-          if (row.barcode && !itemByBarcode(houseId, row.barcode)) {
-            run("INSERT INTO item_barcodes (id, item_id, house_id, code, format, created_at) VALUES (?, ?, ?, ?, 'intake', ?)", [
+          if (row.barcode && !await itemByBarcode(houseId, row.barcode)) {
+            await run("INSERT INTO item_barcodes (id, item_id, house_id, code, format, created_at) VALUES (?, ?, ?, ?, 'intake', ?)", [
               newId("bar"),
               target.id,
               houseId,
@@ -352,7 +362,7 @@ intakeRoutes.post(
           }
           updated.push(target.id);
         }
-        addStock({
+        await addStock({
           itemId: target.id,
           houseId,
           userId: req.user!.id,
@@ -369,14 +379,16 @@ intakeRoutes.post(
       }
     });
 
-    for (const itemId of touched) afterStockChange(itemId);
-    const serialize = (id: string) => {
-      const row = get<any>(`${ITEM_SELECT} WHERE i.id = ?`, [id]);
-      return row ? serializeItem(row, barcodesForItem(id)) : null;
+    for (const itemId of touched) await afterStockChange(itemId);
+    const serialize = async (id: string) => {
+      const row = await get<any>(`${ITEM_SELECT} WHERE i.id = ?`, [id]);
+      return row ? serializeItem(row, await barcodesForItem(id)) : null;
     };
+    const createdRows = await Promise.all(created.map(serialize));
+    const updatedRows = await Promise.all([...new Set(updated)].map(serialize));
     res.json({
-      created: created.map(serialize).filter(Boolean),
-      updated: [...new Set(updated)].map(serialize).filter(Boolean),
+      created: createdRows.filter(Boolean),
+      updated: updatedRows.filter(Boolean),
       skipped: body.rows.filter((row) => row.action === "skip").length,
     });
   }),

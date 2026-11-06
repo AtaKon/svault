@@ -207,19 +207,22 @@ export function Switch({
   onChange,
   label,
   description,
+  disabled,
 }: {
   checked: boolean;
   onChange: (next: boolean) => void;
   label: string;
   description?: string;
+  disabled?: boolean;
 }) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
+      disabled={disabled}
       onClick={() => onChange(!checked)}
-      className="flex w-full items-center justify-between gap-4 py-1 text-left"
+      className="flex w-full items-center justify-between gap-4 py-1 text-left disabled:cursor-not-allowed disabled:opacity-60"
     >
       <span>
         <span className="block text-sm font-medium">{label}</span>

@@ -86,6 +86,8 @@ Docker Compose reads `.env` next to `docker-compose.yml`.
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Server | Any OpenAI-compatible endpoint. |
 | `OPENAI_MODEL` | `gpt-4o-mini` | Server | Text model. |
 | `OPENAI_VISION_MODEL` | falls back to text model | Server | Vision model for recipe photos. |
+| `SV_AI_LOG_RETENTION_DAYS` | `90` | Server | Days to keep rows in the AI call log; `0` keeps them forever. |
+| `SV_AI_LOG_PREVIEW_CHARS` | `4000` | Server | Maximum prompt/response characters stored per AI call (200–20000). |
 | `SV_CATALOG_URL` | empty | Server | Optional shared OpenFoodFacts receipt-name catalogue (JSON) for **Settings → Data → Sync catalogue**. |
 | `RP_ID` | request host | Server | WebAuthn relying-party domain, e.g. `svault.example.com`. |
 | `ORIGIN` | request origin | Server | Public HTTPS origin for passkeys, e.g. `https://svault.example.com`. |
@@ -102,8 +104,15 @@ Docker Compose reads `.env` next to `docker-compose.yml`.
 | `OFF_CACHE_DAYS` | `30` | Server | How long a product stays fresh in the shared cache. |
 | `PORT` | `4000` | Server | Internal listen port. Keep it at 4000 inside the container. |
 | `DATA_DIR` | `./data` locally, `/data` in Docker | Server | Database and uploads directory. |
+| `DATABASE_URL` | empty | Server | PostgreSQL connection string. Empty keeps the bundled SQLite file. |
+| `SV_DATABASE_KIND` | inferred | Server | Force `postgres` or `sqlite`. |
+| `PG_POOL_SIZE` | `10` | Server | PostgreSQL connection pool size. |
+| `PGSSLMODE` | off | Server | PostgreSQL TLS mode (`require`, `prefer`, `no-verify`, `verify-full`). |
 | `MAX_UPLOAD_MB` | `20` | Server | Per-file upload limit. Add it to the compose `environment` block if you change it. |
 | `NODE_ENV` | `production` in Docker | Server | Enables production caching, disables request logs. |
+
+See [Bring your own database](database.md) for PostgreSQL setup, migration and the example Compose
+override (`docker-compose.postgres.yml`).
 
 `SVAI_*` aliases exist for `OPENAI_*` (`SVAI_API_KEY`, `SVAI_BASE_URL`, `SVAI_MODEL`,
 `SVAI_VISION_MODEL`).
@@ -256,6 +265,10 @@ Everything is in `DATA_DIR`:
 /data/svault.db          SQLite database (plus -wal and -shm while running)
 /data/uploads/           item, recipe and photo images
 ```
+
+With PostgreSQL (`DATABASE_URL`), the relational data lives in the database server and only
+`/data/uploads/` stays in `DATA_DIR`. The in-app backup then contains a logical `database.json`
+dump instead of `svault.db`; both formats include the same `manifest.json` and upload checksums.
 
 Choose one of these:
 

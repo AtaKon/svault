@@ -33,29 +33,29 @@ function serialize(row: any): StoredPasskey {
   };
 }
 
-export function listPasskeys(userId: string): StoredPasskey[] {
-  return all<any>("SELECT * FROM passkeys WHERE user_id = ? ORDER BY created_at", [userId]).map(serialize);
+export async function listPasskeys(userId: string): Promise<StoredPasskey[]> {
+  return (await all<any>("SELECT * FROM passkeys WHERE user_id = ? ORDER BY created_at", [userId])).map(serialize);
 }
 
-export function listPasskeysForLogin(userId: string) {
-  return listPasskeys(userId);
+export async function listPasskeysForLogin(userId: string) {
+  return await listPasskeys(userId);
 }
 
-export function passkeyByCredentialId(credentialId: string): StoredPasskey | null {
-  const row = get<any>("SELECT * FROM passkeys WHERE credential_id = ?", [credentialId]);
-  return row ? serialize(row) : null;
+export async function passkeyByCredentialId(credentialId: string): Promise<StoredPasskey | null> {
+  const row = await get<any>("SELECT * FROM passkeys WHERE credential_id = ?", [credentialId]);
+  return row ? await serialize(row) : null;
 }
 
-export function savePasskey(opts: {
+export async function savePasskey(opts: {
   userId: string;
   credentialId: string;
   publicKey: string;
   counter: number;
   transports: AuthenticatorTransportFuture[];
   name?: string;
-}): StoredPasskey {
+}): Promise<StoredPasskey> {
   const id = newId("pky");
-  run(
+  await run(
     `INSERT INTO passkeys (id, user_id, credential_id, public_key, counter, transports, name, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [
@@ -69,36 +69,36 @@ export function savePasskey(opts: {
       now(),
     ],
   );
-  return serialize(get<any>("SELECT * FROM passkeys WHERE id = ?", [id]));
+  return await serialize(await get<any>("SELECT * FROM passkeys WHERE id = ?", [id]));
 }
 
-export function updatePasskeyCounter(id: string, counter: number) {
-  run("UPDATE passkeys SET counter = ?, last_used_at = ? WHERE id = ?", [counter, now(), id]);
+export async function updatePasskeyCounter(id: string, counter: number) {
+  await run("UPDATE passkeys SET counter = ?, last_used_at = ? WHERE id = ?", [counter, now(), id]);
 }
 
-export function deletePasskey(userId: string, id: string) {
-  run("DELETE FROM passkeys WHERE id = ? AND user_id = ?", [id, userId]);
+export async function deletePasskey(userId: string, id: string) {
+  await run("DELETE FROM passkeys WHERE id = ? AND user_id = ?", [id, userId]);
 }
 
-export function deleteAllPasskeys(userId: string) {
-  run("DELETE FROM passkeys WHERE user_id = ?", [userId]);
+export async function deleteAllPasskeys(userId: string) {
+  await run("DELETE FROM passkeys WHERE user_id = ?", [userId]);
 }
 
-export function passkeyCount(userId: string): number {
-  return Number(get<{ n: number }>("SELECT COUNT(*) AS n FROM passkeys WHERE user_id = ?", [userId])?.n ?? 0);
+export async function passkeyCount(userId: string): Promise<number> {
+  return Number((await get<{ n: number }>("SELECT COUNT(*) AS n FROM passkeys WHERE user_id = ?", [userId]))?.n ?? 0);
 }
 
-export function storeChallenge(opts: {
+export async function storeChallenge(opts: {
   id?: string;
   userId?: string | null;
   type: "registration" | "authentication" | "oidc";
   challenge: string;
   data?: Record<string, unknown>;
   ttlMs?: number;
-}): string {
+}): Promise<string> {
   const id = opts.id ?? newId("wch");
-  run("DELETE FROM webauthn_challenges WHERE expires_at < ?", [now()]);
-  run(
+  await run("DELETE FROM webauthn_challenges WHERE expires_at < ?", [now()]);
+  await run(
     "INSERT INTO webauthn_challenges (id, user_id, type, challenge, data, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
     [
       id,
@@ -113,13 +113,13 @@ export function storeChallenge(opts: {
   return id;
 }
 
-export function consumeChallenge(
+export async function consumeChallenge(
   id: string,
   type: "registration" | "authentication" | "oidc",
-): { userId: string | null; challenge: string; data: Record<string, any> } | null {
-  const row = get<any>("SELECT * FROM webauthn_challenges WHERE id = ? AND type = ?", [id, type]);
+): Promise<{ userId: string | null; challenge: string; data: Record<string, any> } | null> {
+  const row = await get<any>("SELECT * FROM webauthn_challenges WHERE id = ? AND type = ?", [id, type]);
   if (!row) return null;
-  run("DELETE FROM webauthn_challenges WHERE id = ?", [id]);
+  await run("DELETE FROM webauthn_challenges WHERE id = ?", [id]);
   if (new Date(row.expires_at).getTime() < Date.now()) return null;
   let data: Record<string, any> = {};
   try {

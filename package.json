@@ -22,6 +22,7 @@
     "seed": "node --import tsx --disable-warning=ExperimentalWarning server/seed.ts",
     "backup": "node --import tsx --disable-warning=ExperimentalWarning scripts/backup.mjs",
     "restore": "node --import tsx --disable-warning=ExperimentalWarning scripts/restore.mjs",
+    "migrate:postgres": "node --import tsx --disable-warning=ExperimentalWarning scripts/migrate-to-postgres.mjs",
     "icons": "node scripts/make-icons.mjs"
   },
   "dependencies": {
@@ -35,6 +36,7 @@
     "jszip": "^3.10.1",
     "multer": "^2.5.0",
     "openid-client": "^6.8.9",
+    "pg": "^8.23.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-router-dom": "^7.18.5",
@@ -46,6 +48,7 @@
     "@types/express": "^5.0.6",
     "@types/multer": "^2.0.0",
     "@types/node": "^22.18.0",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^6.1.2",

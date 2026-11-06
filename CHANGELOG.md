@@ -8,6 +8,15 @@ All notable changes to SVault are documented here. The format follows
 
 ### Added
 
+- A detailed AI call log now records every request sent to the configured provider: receipt scans,
+  bulk intake, recipe scans, recipe completion, food ideas and connection tests. Each entry keeps the
+  operation, house, user, model, provider host, HTTP status, retry count, duration, token counts, cost,
+  image count, request/response sizes, truncated prompt and answer previews, error text and operation
+  metadata. Failed calls are logged too, and the same records are mirrored to stdout as structured
+  `[ai] {...}` JSON lines for Docker, Loki, Grafana or another log collector.
+- Developer mode on the profile page. Turning it on reveals a **Developer → AI call log** page with
+  filters for operation, result and member scope, live totals for calls, errors, tokens and spend,
+  auto-refresh, JSON export and a clear action for admins. API keys never appear in the log.
 - AI receipt scans and recipe scans now record what the AI call cost. The price is taken from the
   provider when it reports one, or estimated from optional prompt/completion prices in
   **Settings → AI**, and is shown next to the scan and on the saved receipt or recipe.

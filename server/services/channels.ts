@@ -167,15 +167,15 @@ export async function sendChannelMessage(channel: NotificationChannel, message: 
   }
 }
 
-function deliveryRow(houseId: string, channelId: string, dedupeKey: string) {
-  return get<any>(
+async function deliveryRow(houseId: string, channelId: string, dedupeKey: string) {
+  return await get<any>(
     "SELECT * FROM notification_deliveries WHERE house_id = ? AND channel_id = ? AND dedupe_key = ?",
     [houseId, channelId, dedupeKey],
   );
 }
 
-function updateDelivery(id: string, status: string, attempts: number, httpStatus: number | null, error: string | null) {
-  run("UPDATE notification_deliveries SET status = ?, attempts = ?, http_status = ?, error = ?, updated_at = ? WHERE id = ?", [
+async function updateDelivery(id: string, status: string, attempts: number, httpStatus: number | null, error: string | null) {
+  await run("UPDATE notification_deliveries SET status = ?, attempts = ?, http_status = ?, error = ?, updated_at = ? WHERE id = ?", [
     status,
     attempts,
     httpStatus,
@@ -188,49 +188,49 @@ function updateDelivery(id: string, status: string, attempts: number, httpStatus
 async function runDelivery(id: string, channel: NotificationChannel, message: ChannelMessage, attempt = 1) {
   const result = await sendChannelMessage(channel, message);
   if (result.ok) {
-    updateDelivery(id, "sent", attempt, result.status, null);
+    await updateDelivery(id, "sent", attempt, result.status, null);
     return;
   }
   if (attempt >= 3) {
-    updateDelivery(id, "failed", attempt, result.status, result.error);
+    await updateDelivery(id, "failed", attempt, result.status, result.error);
     return;
   }
-  updateDelivery(id, "pending", attempt, result.status, result.error);
-  const timer = setTimeout(() => {
-    void runDelivery(id, channel, message, attempt + 1);
+  await updateDelivery(id, "pending", attempt, result.status, result.error);
+  const timer = setTimeout(async () => {
+    void await runDelivery(id, channel, message, attempt + 1);
   }, 500 * attempt * attempt);
   timer.unref?.();
 }
 
 /** Queue one delivery per configured channel, deduped by key. Network work is
  * detached from the request that triggered it. */
-export function queueDeliveries(message: ChannelMessage, dedupeKey: string): number {
-  const house = get<any>("SELECT id, name, settings FROM houses WHERE id = ?", [message.houseId]);
+export async function queueDeliveries(message: ChannelMessage, dedupeKey: string): Promise<number> {
+  const house = await get<any>("SELECT id, name, settings FROM houses WHERE id = ?", [message.houseId]);
   if (!house) return 0;
   const channels = channelsFromSettings(parseJson(house.settings, {}));
   let queued = 0;
   for (const channel of channels) {
     if (!eventEnabled(channel, message.event)) continue;
-    if (deliveryRow(house.id, channel.id, dedupeKey)) continue;
+    if (await deliveryRow(house.id, channel.id, dedupeKey)) continue;
     const id = newId("dlv");
-    run(
+    await run(
       `INSERT INTO notification_deliveries
         (id, house_id, channel_id, dedupe_key, event, status, attempts, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?)`,
       [id, house.id, channel.id, dedupeKey, message.event, now(), now()],
     );
     queued++;
-    void runDelivery(id, channel, { ...message, houseName: house.name });
+    void await runDelivery(id, channel, { ...message, houseName: house.name });
   }
   return queued;
 }
 
-export function deliveryLog(houseId: string, limit = 40) {
-  return all<any>(
+export async function deliveryLog(houseId: string, limit = 40) {
+  return (await all<any>(
     `SELECT id, channel_id, dedupe_key, event, status, attempts, http_status, error, created_at, updated_at
      FROM notification_deliveries WHERE house_id = ? ORDER BY created_at DESC LIMIT ?`,
     [houseId, limit],
-  ).map((row) => ({
+  )).map((row) => ({
     id: row.id,
     channelId: row.channel_id,
     dedupeKey: row.dedupe_key,
@@ -246,23 +246,26 @@ export function deliveryLog(houseId: string, limit = 40) {
 
 /** Build the weekly summary message body from the same reminders the in-app
  * list shows. */
-export function weeklySummaryMessage(houseId: string): ChannelMessage | null {
-  const house = get<any>("SELECT id, name, settings FROM houses WHERE id = ?", [houseId]);
+export async function weeklySummaryMessage(houseId: string): Promise<ChannelMessage | null> {
+  const house = await get<any>("SELECT id, name, settings FROM houses WHERE id = ?", [houseId]);
   if (!house) return null;
-  const low = get<{ n: number }>(
+  const low = await get<{ n: number }>(
     `SELECT COUNT(*) AS n FROM items i WHERE i.house_id = ? AND i.archived = 0 AND i.reorder_point > 0
        AND (SELECT COALESCE(SUM(l.quantity), 0) FROM stock_lots l WHERE l.item_id = i.id) <= i.reorder_point`,
     [houseId],
   );
-  const expiring = get<{ n: number }>(
+  const today = new Date().toISOString().slice(0, 10);
+  const weekAhead = new Date(Date.now() + 7 * 864e5).toISOString().slice(0, 10);
+  const sixDaysAhead = new Date(Date.now() + 6 * 864e5).toISOString().slice(0, 10);
+  const expiring = await get<{ n: number }>(
     `SELECT COUNT(*) AS n FROM stock_lots l JOIN items i ON i.id = l.item_id
      WHERE l.house_id = ? AND l.quantity > 0 AND l.expires_at IS NOT NULL
-       AND l.expires_at <= date('now', '+7 day') AND i.archived = 0`,
-    [houseId],
+       AND l.expires_at <= ? AND i.archived = 0`,
+    [houseId, weekAhead],
   );
-  const planned = get<{ n: number }>(
-    "SELECT COUNT(*) AS n FROM meal_plan_entries WHERE house_id = ? AND day >= date('now') AND day <= date('now', '+6 day')",
-    [houseId],
+  const planned = await get<{ n: number }>(
+    "SELECT COUNT(*) AS n FROM meal_plan_entries WHERE house_id = ? AND day >= ? AND day <= ?",
+    [houseId, today, sixDaysAhead],
   );
   const lowCount = Number(low?.n ?? 0);
   const expiringCount = Number(expiring?.n ?? 0);
@@ -284,25 +287,25 @@ export function weeklySummaryMessage(houseId: string): ChannelMessage | null {
 }
 
 /** Send the weekly summary once per ISO week, only to houses that opted in. */
-export function maybeSendWeeklySummaries() {
+export async function maybeSendWeeklySummaries() {
   const start = new Date();
   const week = Math.floor(
     (Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()) - Date.UTC(start.getUTCFullYear(), 0, 1)) /
       864e5,
   );
   const weekKey = `${start.getUTCFullYear()}-W${String(Math.floor(week / 7) + 1).padStart(2, "0")}`;
-  const houses = all<any>("SELECT id, settings FROM houses");
+  const houses = await all<any>("SELECT id, settings FROM houses");
   for (const house of houses) {
     const channels = channelsFromSettings(parseJson(house.settings, {}));
     if (!channels.some((channel) => channel.enabled && channel.events.weeklySummary)) continue;
-    const message = weeklySummaryMessage(house.id);
+    const message = await weeklySummaryMessage(house.id);
     if (!message) continue;
-    queueDeliveries(message, `weekly:${weekKey}`);
+    await queueDeliveries(message, `weekly:${weekKey}`);
   }
 }
 
-export function deliveryStats(houseId: string) {
-  const rows = all<any>(
+export async function deliveryStats(houseId: string) {
+  const rows = await all<any>(
     "SELECT status, COUNT(*) AS n FROM notification_deliveries WHERE house_id = ? GROUP BY status",
     [houseId],
   );

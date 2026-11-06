@@ -22,8 +22,8 @@ export function serializeShoppingItem(row: any): ShoppingItem {
   };
 }
 
-export function shoppingRow(houseId: string, id: string) {
-  return get<any>(
+export async function shoppingRow(houseId: string, id: string) {
+  return await get<any>(
     `SELECT s.*, c.name AS category_name, c.icon AS category_icon
      FROM shopping_list_items s LEFT JOIN categories c ON c.id = s.category_id
      WHERE s.id = ? AND s.house_id = ?`,
@@ -31,14 +31,14 @@ export function shoppingRow(houseId: string, id: string) {
   );
 }
 
-export function listShopping(houseId: string, includeChecked = true): ShoppingItem[] {
-  return all<any>(
+export async function listShopping(houseId: string, includeChecked = true): Promise<ShoppingItem[]> {
+  return (await all<any>(
     `SELECT s.*, c.name AS category_name, c.icon AS category_icon
      FROM shopping_list_items s LEFT JOIN categories c ON c.id = s.category_id
      WHERE s.house_id = ? ${includeChecked ? "" : "AND s.checked = 0"}
-     ORDER BY s.checked ASC, COALESCE(c.name, '') COLLATE NOCASE, s.created_at`,
+     ORDER BY s.checked ASC, lower(COALESCE(c.name, '')), s.created_at`,
     [houseId],
-  ).map(serializeShoppingItem);
+  )).map(serializeShoppingItem);
 }
 
 export function normalizeName(value: string): string {
@@ -63,11 +63,11 @@ function mergedQuantity(existing: any, quantity: number | null | undefined, unit
 /** Find an open line this addition can merge into. Linked items win, then an
  * exact normalised name. Units must be compatible, otherwise the caller keeps
  * the line separate. */
-export function findMergeTarget(
+export async function findMergeTarget(
   houseId: string,
   input: { itemId?: string | null; name: string; unit?: string | null; excludeId?: string },
 ) {
-  const rows = all<any>(
+  const rows = await all<any>(
     `SELECT * FROM shopping_list_items WHERE house_id = ? AND checked = 0 ${input.excludeId ? "AND id <> ?" : ""}`,
     [houseId, ...(input.excludeId ? [input.excludeId] : [])],
   );
@@ -104,20 +104,20 @@ export type AddShoppingStatus = "added" | "merged" | "skipped";
 /** Add one line, merging by linked item and then by name. A source key makes
  * the operation idempotent: repeating the same recipe/week never duplicates
  * the lines it already produced. */
-export function addShoppingLine(opts: AddShoppingOpts): { status: AddShoppingStatus; item: ShoppingItem } {
-  return tx(() => {
+export async function addShoppingLine(opts: AddShoppingOpts): Promise<{ status: AddShoppingStatus; item: ShoppingItem }> {
+  return await tx(async () => {
     if (opts.sourceKey) {
-      const source = get<any>("SELECT line_id FROM shopping_list_sources WHERE house_id = ? AND source_key = ?", [
+      const source = await get<any>("SELECT line_id FROM shopping_list_sources WHERE house_id = ? AND source_key = ?", [
         opts.houseId,
         opts.sourceKey,
       ]);
       if (source) {
-        const existing = shoppingRow(opts.houseId, source.line_id);
+        const existing = await shoppingRow(opts.houseId, source.line_id);
         if (existing) return { status: "skipped" as const, item: serializeShoppingItem(existing) };
       }
     }
 
-    const target = findMergeTarget(opts.houseId, {
+    const target = await findMergeTarget(opts.houseId, {
       itemId: opts.itemId ?? null,
       name: opts.name,
       unit: opts.unit ?? null,
@@ -126,7 +126,7 @@ export function addShoppingLine(opts: AddShoppingOpts): { status: AddShoppingSta
     let status: AddShoppingStatus;
     if (target) {
       const quantity = mergedQuantity(target, opts.quantity ?? null, opts.unit ?? null);
-      run(
+      await run(
         `UPDATE shopping_list_items SET quantity = ?, unit = ?, item_id = COALESCE(item_id, ?),
            category_id = COALESCE(category_id, ?), updated_at = ? WHERE id = ?`,
         [
@@ -142,7 +142,7 @@ export function addShoppingLine(opts: AddShoppingOpts): { status: AddShoppingSta
       status = "merged";
     } else {
       lineId = newId("shp");
-      run(
+      await run(
         `INSERT INTO shopping_list_items
           (id, house_id, item_id, name, quantity, unit, category_id, note, source, checked, created_by, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
@@ -165,16 +165,16 @@ export function addShoppingLine(opts: AddShoppingOpts): { status: AddShoppingSta
     }
 
     if (opts.sourceKey) {
-      run(
-        "INSERT OR IGNORE INTO shopping_list_sources (house_id, source_key, line_id, created_at) VALUES (?, ?, ?, ?)",
+      await run(
+        "INSERT INTO shopping_list_sources (house_id, source_key, line_id, created_at) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
         [opts.houseId, opts.sourceKey, lineId, now()],
       );
     }
 
-    return { status, item: serializeShoppingItem(shoppingRow(opts.houseId, lineId)) };
+    return { status, item: serializeShoppingItem(await shoppingRow(opts.houseId, lineId)) };
   });
 }
 
-export function deleteShoppingLine(houseId: string, id: string) {
-  run("DELETE FROM shopping_list_items WHERE id = ? AND house_id = ?", [id, houseId]);
+export async function deleteShoppingLine(houseId: string, id: string) {
+  await run("DELETE FROM shopping_list_items WHERE id = ? AND house_id = ?", [id, houseId]);
 }

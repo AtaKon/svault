@@ -9,6 +9,8 @@ export interface User {
   name: string;
   language?: "en" | "el";
   isAdmin: boolean;
+  /** Reveals the developer page, including the AI call log. */
+  developerMode: boolean;
   createdAt: string;
 }
 
@@ -813,4 +815,48 @@ export interface CsvImportResult extends CsvImportPreview {
   created: number;
   updated: number;
   skipped: number;
+}
+
+/** One request SVault made to an OpenAI-compatible provider. */
+export interface AiCallLog {
+  id: string;
+  houseId: string | null;
+  userId: string | null;
+  userName: string | null;
+  /** Logical operation, e.g. `receipt.scan`, `recipe.complete` or `ai.test`. */
+  operation: string;
+  provider: string | null;
+  model: string | null;
+  status: "ok" | "error";
+  httpStatus: number | null;
+  attempts: number;
+  durationMs: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  cost: number | null;
+  imageCount: number;
+  requestBytes: number;
+  responseBytes: number;
+  requestPreview: string | null;
+  responsePreview: string | null;
+  error: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface AiCallLogSummary {
+  calls: number;
+  errors: number;
+  cost: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+}
+
+export interface AiCallLogPage {
+  scope: "mine" | "all";
+  logs: AiCallLog[];
+  total: number;
+  summary: AiCallLogSummary;
 }

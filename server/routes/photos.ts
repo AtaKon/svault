@@ -24,10 +24,10 @@ const boxSchema = z.object({
   h: z.number().min(0).max(1).nullish(),
 });
 
-function labelsFor(photoIds: string[]) {
+async function labelsFor(photoIds: string[]) {
   if (!photoIds.length) return new Map<string, any[]>();
   const placeholders = photoIds.map(() => "?").join(",");
-  const rows = all<any>(`SELECT * FROM photo_labels WHERE photo_id IN (${placeholders}) ORDER BY created_at`, photoIds);
+  const rows = await all<any>(`SELECT * FROM photo_labels WHERE photo_id IN (${placeholders}) ORDER BY created_at`, photoIds);
   const map = new Map<string, any[]>();
   for (const row of rows) {
     const list = map.get(row.photo_id) ?? [];
@@ -37,10 +37,10 @@ function labelsFor(photoIds: string[]) {
   return map;
 }
 
-function photoAccess(req: any, minRole: Role = "viewer") {
-  const photo = get<any>("SELECT * FROM photos WHERE id = ?", [req.params.photoId]);
+async function photoAccess(req: any, minRole: Role = "viewer") {
+  const photo = await get<any>("SELECT * FROM photos WHERE id = ?", [req.params.photoId]);
   if (!photo) throw new ApiError(404, "Photo not found");
-  const role = memberRole(req.user!.id, photo.house_id);
+  const role = await memberRole(req.user!.id, photo.house_id);
   if (!role) throw new ApiError(404, "Photo not found");
   if (!roleAtLeast(role, minRole)) throw new ApiError(403, `Requires ${minRole} access`);
   return { photo, role };
@@ -48,14 +48,14 @@ function photoAccess(req: any, minRole: Role = "viewer") {
 
 photoRoutes.get(
   "/:houseId/collections",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req);
-    const rows = all<any>(
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req);
+    const rows = await all<any>(
       `SELECT c.*,
         (SELECT COUNT(*) FROM photos p WHERE p.collection_id = c.id) AS photo_count,
         (SELECT COUNT(*) FROM photos p WHERE p.collection_id = c.id
            AND EXISTS (SELECT 1 FROM photo_labels l WHERE l.photo_id = p.id)) AS labeled_count
-       FROM photo_collections c WHERE c.house_id = ? ORDER BY c.name COLLATE NOCASE`,
+       FROM photo_collections c WHERE c.house_id = ? ORDER BY lower(c.name)`,
       [houseId],
     );
     res.json(
@@ -74,14 +74,14 @@ photoRoutes.get(
 
 photoRoutes.post(
   "/:houseId/collections",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req, "member");
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req, "member");
     const body = parseBody(
       z.object({ name: z.string().trim().min(1).max(80), description: z.string().trim().max(500).nullish() }),
       req.body,
     );
     const id = newId("col");
-    run("INSERT INTO photo_collections (id, house_id, name, description, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)", [
+    await run("INSERT INTO photo_collections (id, house_id, name, description, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)", [
       id,
       houseId,
       body.name,
@@ -103,15 +103,15 @@ photoRoutes.post(
 
 photoRoutes.patch(
   "/:houseId/collections/:collectionId",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req, "member");
-    const current = get<any>("SELECT * FROM photo_collections WHERE id = ? AND house_id = ?", [req.params.collectionId, houseId]);
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req, "member");
+    const current = await get<any>("SELECT * FROM photo_collections WHERE id = ? AND house_id = ?", [req.params.collectionId, houseId]);
     if (!current) throw new ApiError(404, "Folder not found");
     const body = parseBody(
       z.object({ name: z.string().trim().min(1).max(80).optional(), description: z.string().trim().max(500).nullish() }),
       req.body,
     );
-    run("UPDATE photo_collections SET name = ?, description = ? WHERE id = ?", [
+    await run("UPDATE photo_collections SET name = ?, description = ? WHERE id = ?", [
       body.name ?? current.name,
       body.description === undefined ? current.description : body.description,
       current.id,
@@ -122,18 +122,18 @@ photoRoutes.patch(
 
 photoRoutes.delete(
   "/:houseId/collections/:collectionId",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req, "member");
-    run("DELETE FROM photo_collections WHERE id = ? AND house_id = ?", [req.params.collectionId, houseId]);
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req, "member");
+    await run("DELETE FROM photo_collections WHERE id = ? AND house_id = ?", [req.params.collectionId, houseId]);
     res.json({ ok: true });
   }),
 );
 
 photoRoutes.get(
   "/:houseId/labels",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req);
-    const rows = all<any>(
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req);
+    const rows = await all<any>(
       `SELECT label, COUNT(*) AS count FROM photo_labels WHERE house_id = ? GROUP BY label ORDER BY count DESC, label`,
       [houseId],
     );
@@ -143,8 +143,8 @@ photoRoutes.get(
 
 photoRoutes.get(
   "/:houseId/photos",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req);
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req);
     const limit = intParam(req.query.limit, 60, 500);
     const offset = Math.max(0, Number(req.query.offset ?? 0) || 0);
     const where = ["p.house_id = ?"];
@@ -169,13 +169,13 @@ photoRoutes.get(
       params.push(String(req.query.itemId));
     }
     const total = Number(
-      get<{ n: number }>(`SELECT COUNT(*) AS n FROM photos p WHERE ${where.join(" AND ")}`, params)?.n ?? 0,
+      (await get<{ n: number }>(`SELECT COUNT(*) AS n FROM photos p WHERE ${where.join(" AND ")}`, params))?.n ?? 0,
     );
-    const rows = all<any>(
+    const rows = await all<any>(
       `SELECT p.* FROM photos p WHERE ${where.join(" AND ")} ORDER BY p.created_at DESC LIMIT ? OFFSET ?`,
       [...params, limit, offset],
     );
-    const labelMap = labelsFor(rows.map((r) => r.id));
+    const labelMap = await labelsFor(rows.map((r) => r.id));
     res.json({ photos: rows.map((r) => serializePhoto(r, labelMap.get(r.id) ?? [])), total });
   }),
 );
@@ -183,12 +183,12 @@ photoRoutes.get(
 photoRoutes.post(
   "/:houseId/photos",
   uploader("photos").array("photos", 30),
-  handler((req, res) => {
-    const { houseId } = requireHouse(req, "member");
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req, "member");
     const files = (req.files as Express.Multer.File[]) ?? [];
     if (!files.length) throw new ApiError(400, "No photos uploaded");
     const collectionId = req.body.collectionId ? String(req.body.collectionId) : null;
-    if (collectionId && !get("SELECT id FROM photo_collections WHERE id = ? AND house_id = ?", [collectionId, houseId])) {
+    if (collectionId && !await get("SELECT id FROM photo_collections WHERE id = ? AND house_id = ?", [collectionId, houseId])) {
       throw new ApiError(400, "Folder does not belong to this house");
     }
     const split = splitSchema.catch("unassigned").parse(req.body.split ?? "unassigned");
@@ -201,10 +201,10 @@ photoRoutes.post(
       }
     }
     const created: string[] = [];
-    files.forEach((file, index) => {
+    for (const [index, file] of files.entries()) {
       const m = meta[index] ?? {};
       const id = newId("pho");
-      run(
+      await run(
         `INSERT INTO photos (id, house_id, collection_id, filename, original_name, mime, size, width, height, notes,
            item_id, split, captured_at, uploaded_by, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -227,8 +227,8 @@ photoRoutes.post(
         ],
       );
       created.push(id);
-    });
-    const rows = all<any>(`SELECT * FROM photos WHERE id IN (${created.map(() => "?").join(",")})`, created);
+    }
+    const rows = await all<any>(`SELECT * FROM photos WHERE id IN (${created.map(() => "?").join(",")})`, created);
     res.status(201).json({ photos: rows.map((r) => serializePhoto(r, [])) });
   }),
 );
@@ -237,8 +237,8 @@ photoRoutes.post(
 
 singlePhotoRoutes.patch(
   "/:photoId",
-  handler((req, res) => {
-    const { photo } = photoAccess(req, "member");
+  handler(async (req, res) => {
+    const { photo } = await photoAccess(req, "member");
     const body = parseBody(
       z.object({
         collectionId: z.string().max(60).nullish(),
@@ -251,7 +251,7 @@ singlePhotoRoutes.patch(
       }),
       req.body,
     );
-    run(
+    await run(
       `UPDATE photos SET collection_id = ?, notes = ?, split = ?, item_id = ?, width = ?, height = ?, captured_at = ?
        WHERE id = ?`,
       [
@@ -265,30 +265,30 @@ singlePhotoRoutes.patch(
         photo.id,
       ],
     );
-    const labels = labelsFor([photo.id]).get(photo.id) ?? [];
-    res.json(serializePhoto(get<any>("SELECT * FROM photos WHERE id = ?", [photo.id]), labels));
+    const labels = (await labelsFor([photo.id])).get(photo.id) ?? [];
+    res.json(serializePhoto(await get<any>("SELECT * FROM photos WHERE id = ?", [photo.id]), labels));
   }),
 );
 
 singlePhotoRoutes.delete(
   "/:photoId",
   handler(async (req, res) => {
-    const { photo } = photoAccess(req, "admin");
+    const { photo } = await photoAccess(req, "admin");
     const file = uploadPath("photos", photo.filename);
     await fs.unlink(file).catch(() => undefined);
-    run("DELETE FROM photos WHERE id = ?", [photo.id]);
+    await run("DELETE FROM photos WHERE id = ?", [photo.id]);
     res.json({ ok: true });
   }),
 );
 
 singlePhotoRoutes.post(
   "/:photoId/labels",
-  handler((req, res) => {
-    const { photo } = photoAccess(req, "member");
+  handler(async (req, res) => {
+    const { photo } = await photoAccess(req, "member");
     const body = parseBody(boxSchema, req.body);
     const id = newId("lbl");
     const hasBox = [body.x, body.y, body.w, body.h].every((v) => v != null);
-    run("INSERT INTO photo_labels (id, photo_id, house_id, label, x, y, w, h, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", [
+    await run("INSERT INTO photo_labels (id, photo_id, house_id, label, x, y, w, h, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", [
       id,
       photo.id,
       photo.house_id,
@@ -305,13 +305,13 @@ singlePhotoRoutes.post(
 
 singlePhotoRoutes.put(
   "/:photoId/labels",
-  handler((req, res) => {
-    const { photo } = photoAccess(req, "member");
+  handler(async (req, res) => {
+    const { photo } = await photoAccess(req, "member");
     const body = parseBody(z.object({ labels: z.array(boxSchema).max(100) }), req.body);
-    run("DELETE FROM photo_labels WHERE photo_id = ?", [photo.id]);
+    await run("DELETE FROM photo_labels WHERE photo_id = ?", [photo.id]);
     for (const box of body.labels) {
       const hasBox = [box.x, box.y, box.w, box.h].every((v) => v != null);
-      run("INSERT INTO photo_labels (id, photo_id, house_id, label, x, y, w, h, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", [
+      await run("INSERT INTO photo_labels (id, photo_id, house_id, label, x, y, w, h, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", [
         newId("lbl"),
         photo.id,
         photo.house_id,
@@ -323,15 +323,15 @@ singlePhotoRoutes.put(
         now(),
       ]);
     }
-    res.json(serializePhoto(get<any>("SELECT * FROM photos WHERE id = ?", [photo.id]), labelsFor([photo.id]).get(photo.id) ?? []));
+    res.json(serializePhoto(await get<any>("SELECT * FROM photos WHERE id = ?", [photo.id]), (await labelsFor([photo.id])).get(photo.id) ?? []));
   }),
 );
 
 singlePhotoRoutes.delete(
   "/:photoId/labels/:labelId",
-  handler((req, res) => {
-    const { photo } = photoAccess(req, "member");
-    run("DELETE FROM photo_labels WHERE id = ? AND photo_id = ?", [req.params.labelId, photo.id]);
+  handler(async (req, res) => {
+    const { photo } = await photoAccess(req, "member");
+    await run("DELETE FROM photo_labels WHERE id = ? AND photo_id = ?", [req.params.labelId, photo.id]);
     res.json({ ok: true });
   }),
 );
@@ -355,8 +355,8 @@ async function exportBundle(houseId: string, format: "yolo" | "coco", collection
     where.push("p.collection_id = ?");
     params.push(collectionId);
   }
-  const rows = all<any>(`SELECT * FROM photos p WHERE ${where.join(" AND ")} ORDER BY p.created_at`, params);
-  const labelMap = labelsFor(rows.map((r) => r.id));
+  const rows = await all<any>(`SELECT * FROM photos p WHERE ${where.join(" AND ")} ORDER BY p.created_at`, params);
+  const labelMap = await labelsFor(rows.map((r) => r.id));
   const photos: ExportPhoto[] = rows.map((r) => ({
     id: r.id,
     filename: r.filename,
@@ -483,7 +483,7 @@ async function exportBundle(houseId: string, format: "yolo" | "coco", collection
 photoRoutes.get(
   "/:houseId/photos/export",
   handler(async (req, res) => {
-    const { houseId } = requireHouse(req);
+    const { houseId } = await requireHouse(req);
     const format = req.query.format === "coco" ? "coco" : "yolo";
     const collectionId = req.query.collectionId ? String(req.query.collectionId) : null;
     const { buffer, photoCount } = await exportBundle(houseId, format, collectionId);

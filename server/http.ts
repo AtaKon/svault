@@ -41,10 +41,10 @@ export function handler(fn: (req: Request, res: Response, next: NextFunction) =>
 }
 
 /** Resolve a house the caller can access, or throw 403/404. */
-export function requireHouse(req: Request, minRole: Role = "viewer") {
+export async function requireHouse(req: Request, minRole: Role = "viewer") {
   const houseId = String(req.params.houseId ?? req.params.id ?? "");
   const user = req.user!;
-  const role = memberRole(user.id, houseId);
+  const role = await memberRole(user.id, houseId);
   if (!role) throw new ApiError(404, "House not found");
   if (!roleAtLeast(role, minRole)) throw new ApiError(403, `Requires ${minRole} access`);
   return { houseId, role };

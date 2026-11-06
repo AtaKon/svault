@@ -17,11 +17,11 @@ const datasetUpload = multer({
   limits: { fileSize: 512 * 1024 * 1024 },
 }).single("dataset");
 
-function labelsFor(photoIds: string[]) {
+async function labelsFor(photoIds: string[]) {
   if (!photoIds.length) return new Map<string, any[]>();
   const placeholders = photoIds.map(() => "?").join(",");
   const map = new Map<string, any[]>();
-  for (const row of all<any>(`SELECT * FROM photo_labels WHERE photo_id IN (${placeholders}) ORDER BY created_at`, photoIds)) {
+  for (const row of await all<any>(`SELECT * FROM photo_labels WHERE photo_id IN (${placeholders}) ORDER BY created_at`, photoIds)) {
     const list = map.get(row.photo_id) ?? [];
     list.push(row);
     map.set(row.photo_id, list);
@@ -33,7 +33,7 @@ datasetRoutes.post(
   "/:houseId/photos/dataset/preview",
   datasetUpload,
   handler(async (req, res) => {
-    requireHouse(req, "member");
+    await requireHouse(req, "member");
     if (!req.file) throw new ApiError(400, "Attach a YOLO or COCO zip");
     try {
       const inspection = await inspectDataset(req.file.buffer);
@@ -61,7 +61,7 @@ datasetRoutes.post(
   "/:houseId/photos/dataset/import",
   datasetUpload,
   handler(async (req, res) => {
-    const { houseId } = requireHouse(req, "member");
+    const { houseId } = await requireHouse(req, "member");
     if (!req.file) throw new ApiError(400, "Attach a YOLO or COCO zip");
     let mapping: Record<string, string> = {};
     if (req.body?.mapping) {
@@ -89,18 +89,20 @@ datasetRoutes.post(
 
 datasetRoutes.get(
   "/:houseId/photos/review",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req);
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req);
     const limit = Math.min(Number(req.query.limit ?? 60) || 60, 200);
-    const rows = all<any>(
+    const rows = await all<any>(
       `SELECT p.*,
          (SELECT COUNT(*) FROM photo_labels l WHERE l.photo_id = p.id) AS label_count,
          (SELECT COUNT(*) FROM photo_labels l WHERE l.photo_id = p.id AND l.x IS NOT NULL AND l.w IS NOT NULL) AS box_count
        FROM photos p WHERE p.house_id = ?
-       ORDER BY label_count = 0 DESC, box_count = 0 DESC, p.created_at ASC LIMIT ?`,
+       ORDER BY (SELECT COUNT(*) FROM photo_labels l WHERE l.photo_id = p.id) = 0 DESC,
+         (SELECT COUNT(*) FROM photo_labels l WHERE l.photo_id = p.id AND l.x IS NOT NULL AND l.w IS NOT NULL) = 0 DESC,
+         p.created_at ASC LIMIT ?`,
       [houseId, limit],
     );
-    const labelMap = labelsFor(rows.map((row) => row.id));
+    const labelMap = await labelsFor(rows.map((row) => row.id));
     const photos = rows.map((row) => ({
       ...serializePhoto(row, labelMap.get(row.id) ?? []),
       labelCount: Number(row.label_count ?? 0),
@@ -125,8 +127,8 @@ datasetRoutes.get(
 
 datasetRoutes.post(
   "/:houseId/photos/labels/bulk",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req, "member");
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req, "member");
     const body = parseBody(
       z.object({
         action: z.enum(["rename", "merge", "delete"]),
@@ -136,20 +138,20 @@ datasetRoutes.post(
       req.body,
     );
     if (body.action === "delete") {
-      const result = run("DELETE FROM photo_labels WHERE house_id = ? AND label = ?", [houseId, body.from]);
+      const result = await run("DELETE FROM photo_labels WHERE house_id = ? AND label = ?", [houseId, body.from]);
       res.json({ ok: true, affected: Number(result.changes ?? 0) });
       return;
     }
     if (!body.to) throw new ApiError(400, "Choose the target label");
-    const result = run("UPDATE photo_labels SET label = ? WHERE house_id = ? AND label = ?", [body.to, houseId, body.from]);
+    const result = await run("UPDATE photo_labels SET label = ? WHERE house_id = ? AND label = ?", [body.to, houseId, body.from]);
     res.json({ ok: true, affected: Number(result.changes ?? 0) });
   }),
 );
 
 datasetRoutes.post(
   "/:houseId/photos/splits",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req, "member");
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req, "member");
     const body = parseBody(
       z.object({
         photoIds: z.array(z.string().max(60)).min(1).max(500),
@@ -158,7 +160,7 @@ datasetRoutes.post(
       req.body,
     );
     for (const id of body.photoIds) {
-      run("UPDATE photos SET split = ? WHERE id = ? AND house_id = ?", [body.split, id, houseId]);
+      await run("UPDATE photos SET split = ? WHERE id = ? AND house_id = ?", [body.split, id, houseId]);
     }
     res.json({ ok: true, updated: body.photoIds.length });
   }),
@@ -166,19 +168,19 @@ datasetRoutes.post(
 
 datasetRoutes.post(
   "/:houseId/photos/delete-bulk",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req, "admin");
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req, "admin");
     const body = parseBody(z.object({ photoIds: z.array(z.string().max(60)).min(1).max(500) }), req.body);
     let deleted = 0;
     for (const id of body.photoIds) {
-      const photo = get<any>("SELECT * FROM photos WHERE id = ? AND house_id = ?", [id, houseId]);
+      const photo = await get<any>("SELECT * FROM photos WHERE id = ? AND house_id = ?", [id, houseId]);
       if (!photo) continue;
       try {
         fs.rmSync(uploadPath("photos", photo.filename), { force: true });
       } catch {
         /* missing files are fine */
       }
-      run("DELETE FROM photos WHERE id = ?", [photo.id]);
+      await run("DELETE FROM photos WHERE id = ?", [photo.id]);
       deleted++;
     }
     res.json({ ok: true, deleted });

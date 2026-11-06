@@ -1,6 +1,16 @@
-import { AI_ENV } from "./config.js";
+import { AI_ENV, AI_LOG_PREVIEW_CHARS } from "./config.js";
 import { ApiError } from "./http.js";
+import { recordAiCall } from "./services/ai-logs.js";
 import type { HouseSettings } from "../shared/types.js";
+
+/** Extra context attached to the AI audit trail. */
+export interface AiCallContext {
+  operation: string;
+  houseId?: string | null;
+  userId?: string | null;
+  targetId?: string | null;
+  metadata?: Record<string, unknown>;
+}
 
 export interface AiConfig {
   enabled: boolean;
@@ -53,6 +63,21 @@ type ContentPart =
   | { type: "text"; text: string }
   | { type: "image_url"; image_url: { url: string } };
 
+/** Strip credentials and query strings before storing an endpoint in a log. */
+function providerLabel(baseUrl: string): string {
+  try {
+    const url = new URL(baseUrl);
+    return `${url.host}${url.pathname.replace(/\/+$/, "")}`.slice(0, 200);
+  } catch {
+    return (baseUrl || "").replace(/\/+$/, "").slice(0, 200);
+  }
+}
+
+function previewRequest(system: string, user: string): string {
+  const joined = [`SYSTEM:\n${system}`, `USER:\n${user}`].join("\n\n");
+  return joined.length <= AI_LOG_PREVIEW_CHARS ? joined : joined.slice(0, AI_LOG_PREVIEW_CHARS);
+}
+
 export async function chat(
   cfg: AiConfig,
   opts: {
@@ -62,8 +87,11 @@ export async function chat(
     json?: boolean;
     temperature?: number;
   },
+  ctx: AiCallContext = { operation: "chat" },
 ): Promise<{ text: string; usage: AiUsage }> {
   if (!cfg.enabled) throw new ApiError(400, "No AI provider configured");
+
+  const startedAt = Date.now();
   const content: string | ContentPart[] = opts.images?.length
     ? [
         { type: "text", text: opts.user },
@@ -82,23 +110,43 @@ export async function chat(
   };
   if (opts.json) body.response_format = { type: "json_object" };
 
+  let attempts = 0;
+  let lastStatus: number | null = null;
+  let lastError: string | null = null;
+  let responseText = "";
+  let requestBytes = 0;
+  let responseBytes = 0;
+
   const attempt = async (withJson: boolean) => {
+    attempts += 1;
     const payload = { ...body };
     if (!withJson) delete payload.response_format;
+    const payloadText = JSON.stringify(payload);
+    requestBytes = Math.max(requestBytes, payloadText.length);
     const res = await fetch(`${cfg.baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         ...(cfg.apiKey ? { authorization: `Bearer ${cfg.apiKey}` } : {}),
       },
-      body: JSON.stringify(payload),
+      body: payloadText,
       signal: AbortSignal.timeout(90_000),
     });
+    lastStatus = res.status;
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      return { ok: false as const, status: res.status, text: text.slice(0, 500) };
+      lastError = `AI provider error (${res.status}): ${text.slice(0, 500) || "no response"}`;
+      return { ok: false as const, status: res.status, text: text.slice(0, 2000) };
     }
-    const data: any = await res.json();
+    const raw = await res.text().catch(() => "");
+    responseBytes = Math.max(responseBytes, raw.length);
+    let data: any;
+    try {
+      data = raw ? JSON.parse(raw) : {};
+    } catch {
+      lastError = "AI provider returned invalid JSON";
+      return { ok: false as const, status: res.status, text: raw.slice(0, 2000) };
+    }
     const message = data?.choices?.[0]?.message?.content;
     const text =
       typeof message === "string"
@@ -106,26 +154,86 @@ export async function chat(
         : Array.isArray(message)
           ? message.map((p: any) => p?.text ?? "").join("\n")
           : "";
+    lastError = null;
     return { ok: true as const, text, rawUsage: data?.usage, model: data?.model || model };
   };
 
-  let result = await attempt(Boolean(opts.json)).catch((err) => ({
-    ok: false as const,
-    status: 0,
-    text: err instanceof Error ? err.message : "network error",
-  }));
+  const metadata: Record<string, unknown> = {
+    ...(ctx.metadata ?? {}),
+    json: Boolean(opts.json),
+    temperature: opts.temperature ?? 0.2,
+    hasImages: Boolean(opts.images?.length),
+    systemChars: opts.system.length,
+    userChars: opts.user.length,
+    ...(ctx.targetId ? { targetId: ctx.targetId } : {}),
+  };
+
+  let result = await attempt(Boolean(opts.json)).catch((err) => {
+    lastStatus = 0;
+    lastError = err instanceof Error ? err.message : "network error";
+    return { ok: false as const, status: 0, text: lastError ?? "network error" };
+  });
   if (!result.ok && opts.json && result.status >= 400 && result.status < 500) {
-    result = await attempt(false).catch((err) => ({
-      ok: false as const,
-      status: 0,
-      text: err instanceof Error ? err.message : "network error",
-    }));
+    result = await attempt(false).catch((err) => {
+      lastStatus = 0;
+      lastError = err instanceof Error ? err.message : "network error";
+      return { ok: false as const, status: 0, text: lastError ?? "network error" };
+    });
   }
-  if (!result.ok) {
-    throw new ApiError(502, `AI provider error (${result.status}): ${result.text || "no response"}`);
+  responseText = result.text ?? "";
+
+  try {
+    if (!result.ok) {
+      throw new ApiError(502, `AI provider error (${result.status}): ${result.text || "no response"}`);
+    }
+    if (!result.text.trim()) {
+      lastError = "AI provider returned an empty answer";
+      throw new ApiError(502, lastError);
+    }
+    const usage = buildUsage(result.rawUsage, result.model, cfg);
+    await recordAiCall({
+      houseId: ctx.houseId,
+      userId: ctx.userId,
+      operation: ctx.operation,
+      provider: providerLabel(cfg.baseUrl),
+      model: usage.model,
+      status: "ok",
+      httpStatus: lastStatus,
+      attempts,
+      durationMs: Date.now() - startedAt,
+      promptTokens: usage.promptTokens,
+      completionTokens: usage.completionTokens,
+      totalTokens: usage.totalTokens,
+      cost: usage.cost,
+      imageCount: opts.images?.length ?? 0,
+      requestBytes,
+      responseBytes,
+      requestPreview: previewRequest(opts.system, opts.user),
+      responsePreview: result.text,
+      metadata,
+    });
+    return { text: result.text, usage };
+  } catch (error) {
+    await recordAiCall({
+      houseId: ctx.houseId,
+      userId: ctx.userId,
+      operation: ctx.operation,
+      provider: providerLabel(cfg.baseUrl),
+      model,
+      status: "error",
+      httpStatus: lastStatus,
+      attempts,
+      durationMs: Date.now() - startedAt,
+      imageCount: opts.images?.length ?? 0,
+      requestBytes,
+      responseBytes,
+      requestPreview: previewRequest(opts.system, opts.user),
+      responsePreview: responseText.slice(0, AI_LOG_PREVIEW_CHARS),
+      error: error instanceof Error ? error.message : lastError ?? "AI call failed",
+      metadata,
+    });
+    throw error;
   }
-  if (!result.text.trim()) throw new ApiError(502, "AI provider returned an empty answer");
-  return { text: result.text, usage: buildUsage(result.rawUsage, result.model, cfg) };
 }
 
 function roundCost(value: number): number {
@@ -200,6 +308,7 @@ export async function aiParseReceipt(
   cfg: AiConfig,
   rawText: string,
   images: string[] = [],
+  ctx: AiCallContext = { operation: "receipt.scan" },
 ): Promise<AiResult<Record<string, unknown>>> {
   const { text, usage } = await chat(cfg, {
     system:
@@ -219,7 +328,7 @@ export async function aiParseReceipt(
     images,
     json: true,
     temperature: 0.1,
-  });
+  }, ctx);
   return { data: extractJson<Record<string, unknown>>(text), usage };
 }
 
@@ -239,6 +348,7 @@ export async function aiCleanRecipe(
   cfg: AiConfig,
   rawText: string,
   images: string[] = [],
+  ctx: AiCallContext = { operation: "recipe.scan" },
 ): Promise<AiResult<Record<string, unknown>>> {
   const { text, usage } = await chat(cfg, {
     system:
@@ -252,11 +362,15 @@ export async function aiCleanRecipe(
     images,
     json: true,
     temperature: 0.1,
-  });
+  }, ctx);
   return { data: extractJson<Record<string, unknown>>(text), usage };
 }
 
-export async function aiCompleteRecipe(cfg: AiConfig, recipe: unknown): Promise<AiResult<Record<string, unknown>>> {
+export async function aiCompleteRecipe(
+  cfg: AiConfig,
+  recipe: unknown,
+  ctx: AiCallContext = { operation: "recipe.complete" },
+): Promise<AiResult<Record<string, unknown>>> {
   const { text, usage } = await chat(cfg, {
     system:
       "You are a recipe editor restoring an old family recipe. Improve the given JSON: fill missing quantities and units, " +
@@ -266,7 +380,7 @@ export async function aiCompleteRecipe(cfg: AiConfig, recipe: unknown): Promise<
     user: `Recipe JSON:\n${JSON.stringify(recipe).slice(0, 12000)}\n\nReturn JSON with this shape:\n${RECIPE_SCHEMA}`,
     json: true,
     temperature: 0.2,
-  });
+  }, ctx);
   return { data: extractJson<Record<string, unknown>>(text), usage };
 }
 
@@ -275,6 +389,7 @@ export async function aiSuggestIdeas(
   inventory: { name: string; quantity: number; unit: string; category?: string | null }[],
   recipes: { id: string; title: string; ingredients: string[] }[],
   prompt: string,
+  ctx: AiCallContext = { operation: "ideas.suggest" },
 ): Promise<AiResult<Record<string, unknown>>> {
   const inventoryText = inventory
     .slice(0, 150)
@@ -298,7 +413,7 @@ export async function aiSuggestIdeas(
       `"steps": string[], "recipeId": string|null}]}`,
     json: true,
     temperature: 0.7,
-  });
+  }, ctx);
   return { data: extractJson<Record<string, unknown>>(text), usage };
 }
 

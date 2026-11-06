@@ -102,7 +102,7 @@ exports readable. Timestamps are ISO-8601 strings; dates (`expires_at`, `purchas
 | Reminders | `notifications` |
 | Cooking | `recipes`, `recipe_ingredients`, `food_ideas` |
 | Vision | `photo_collections`, `photos`, `photo_labels` |
-| AI | `ai_cache` (reserved; not currently used) |
+| AI | `ai_cache` (reserved; not currently used), `ai_call_logs` (provider audit trail) |
 
 Key constraints:
 
@@ -171,8 +171,13 @@ Browser notifications are sent by the client while a tab is open. There is no pu
   completion prices (USD per 1M tokens) or the `OPENAI_INPUT_PRICE` / `OPENAI_OUTPUT_PRICE`
   environment variables are used. Receipt scans store the cost on `receipts.ai_cost`; recipe scans and
   AI polish accumulate it on `recipes.ai_cost`.
+- Every call is also appended to `ai_call_logs` with its operation, house/user, model, HTTP status,
+  attempts, duration, tokens, cost, image count, request/response sizes, truncated previews, error and
+  metadata. `server/services/ai-logs.ts` owns the insert and retention pruning; `server/ai.ts` calls it
+  from a `finally`-style wrapper so failed and retried calls are recorded too. A compact one-line
+  `[ai] {...}` JSON record is mirrored to stdout for external log collectors.
 - When a provider is configured but fails, callers fall back to local parsing/suggestions and return a
-  warning instead of failing the request.
+  warning instead of failing the request. The failure is still visible in the AI call log.
 
 What uses AI: recipe scan cleanup, receipt parsing, recipe completion and food ideas. What never does:
 stock, prices, barcodes, reminders, photo labelling and authentication.

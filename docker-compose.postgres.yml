@@ -1,0 +1,36 @@
+# PostgreSQL example for SVault.
+#
+# Usage:
+#   cp .env.example .env
+#   # set SVAULT_DB_PASSWORD
+#   docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d
+#
+# Uploads stay in the svault-data volume; PostgreSQL data lives in svault-pg.
+services:
+  svault:
+    environment:
+      DATABASE_URL: postgres://svault:${SVAULT_DB_PASSWORD:-svault}@db:5432/svault
+      PGSSLMODE: disable
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:17-alpine
+    container_name: svault-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: svault
+      POSTGRES_USER: svault
+      POSTGRES_PASSWORD: ${SVAULT_DB_PASSWORD:-svault}
+    volumes:
+      - svault-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U svault -d svault"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  svault-pg:

@@ -26,12 +26,12 @@ function requireInstanceAdmin(req: any) {
   if (!req.user?.isAdmin) throw new ApiError(403, "Requires the instance administrator");
 }
 
-function localProducts(query: string, limit: number) {
+async function localProducts(query: string, limit: number) {
   const q = String(query ?? "").trim();
   if (!q) return [];
-  const rows = all<any>(
+  const rows = await all<any>(
     `SELECT * FROM catalog_products
-     WHERE name LIKE ? OR brand LIKE ? OR code LIKE ?
+     WHERE lower(name) LIKE lower(?) OR lower(brand) LIKE lower(?) OR lower(code) LIKE lower(?)
      ORDER BY updated_at DESC LIMIT ?`,
     [`%${q}%`, `%${q}%`, `%${q}%`, Math.min(limit, 20)],
   );
@@ -48,7 +48,7 @@ catalogRoutes.get(
     const q = String(req.query.q ?? "").trim();
     const online = String(req.query.online ?? "1") !== "0";
     const limit = intParam(req.query.limit, 8, 20);
-    const cached = localProducts(q, limit);
+    const cached = await localProducts(q, limit);
     let products = cached;
     let warning: string | null = null;
     let usedOnline = false;
@@ -80,32 +80,32 @@ catalogRoutes.get(
     const product = await fetchOffProduct(code);
     if (!product) throw new ApiError(404, "Product not found on OpenFoodFacts");
     const full = String(req.query.full ?? "") === "1";
-    res.json(full ? { ...product, payload: getCachedOffPayload(product.code) } : product);
+    res.json(full ? { ...product, payload: await getCachedOffPayload(product.code) } : product);
   }),
 );
 
 catalogRoutes.get(
   "/mappings",
-  handler((req, res) => {
+  handler(async (req, res) => {
     requireInstanceAdmin(req);
     const limit = intParam(req.query.limit, 100, 500);
-    res.json(listCatalogMappings(String(req.query.q ?? ""), limit));
+    res.json(await listCatalogMappings(String(req.query.q ?? ""), limit));
   }),
 );
 
 catalogRoutes.get(
   "/stats",
-  handler((req, res) => {
+  handler(async (req, res) => {
     requireInstanceAdmin(req);
-    res.json(catalogStats());
+    res.json(await catalogStats());
   }),
 );
 
 catalogRoutes.get(
   "/export",
-  handler((req, res) => {
+  handler(async (req, res) => {
     requireInstanceAdmin(req);
-    const data = exportCatalogMappings();
+    const data = await exportCatalogMappings();
     res.setHeader("content-disposition", 'attachment; filename="svault-openfoodfacts-catalog.json"');
     res.json(data);
   }),
@@ -119,10 +119,10 @@ const importBody = z.object({
 
 catalogRoutes.post(
   "/import",
-  handler((req, res) => {
+  handler(async (req, res) => {
     requireInstanceAdmin(req);
     const body = parseBody(importBody, req.body);
-    res.json(importCatalogMappings(body));
+    res.json(await importCatalogMappings(body));
   }),
 );
 
@@ -148,10 +148,10 @@ catalogRoutes.post(
 /** Resolve one raw receipt line, used by clients that want to preview a match. */
 catalogRoutes.get(
   "/resolve",
-  handler((req, res) => {
+  handler(async (req, res) => {
     const raw = String(req.query.raw ?? "").trim();
     if (!raw) throw new ApiError(400, "Missing raw text");
-    const mapping = get<any>(
+    const mapping = await get<any>(
       `SELECT * FROM catalog_mappings
        WHERE raw_key = ? OR raw_text = ? ORDER BY uses DESC LIMIT 1`,
       [productAliasKey(raw), raw],
@@ -160,7 +160,7 @@ catalogRoutes.get(
       res.json({ mapping: null });
       return;
     }
-    const product = mapping.off_code ? get<any>("SELECT * FROM catalog_products WHERE code = ?", [mapping.off_code]) : null;
+    const product = mapping.off_code ? await get<any>("SELECT * FROM catalog_products WHERE code = ?", [mapping.off_code]) : null;
     res.json({
       mapping: {
         country: mapping.country,

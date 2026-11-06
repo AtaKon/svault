@@ -419,6 +419,19 @@ local meal suggestions.
 If you use a vision model, SVault can read the recipe photo when OCR finds no text. Without one, it
 sends only the edited OCR text. A text-only local model never receives images.
 
+### AI call log and developer mode
+
+Turn on **Profile → Developer mode → Show developer tools** to reveal **More → Developer**. The AI call
+log shows every request sent to the provider: receipt scans, bulk intake, recipe scans, recipe
+cleanup, food ideas and connection tests. Each row expands into the model, provider, HTTP status,
+duration, retries, token counts, cost, request/response sizes and truncated prompt/answer previews.
+Failed calls are included with their error, which makes a failing model or proxy easy to spot.
+
+Use the filters to narrow by operation or result. Owners and admins can switch from **My calls** to
+**Everyone in this house**, clear the log, or export the current view as JSON. API keys are never
+stored in the log. The same records are printed to the server console as `[ai] {...}` JSON lines for
+Docker, Loki, Grafana or another log collector.
+
 ## 9. Data, backup and moving house
 
 - Everything is stored under `DATA_DIR`: `svault.db` (SQLite, WAL mode) plus `uploads/`.

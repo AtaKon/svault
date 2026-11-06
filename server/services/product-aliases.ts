@@ -26,15 +26,15 @@ export interface ProductAliasMatch {
  * Resolve a raw receipt line. A vendor-specific alias wins over an
  * all-vendor alias; both are learned from previous imports/corrections.
  */
-export function findProductAlias(
+export async function findProductAlias(
   houseId: string,
   vendorId: string | null | undefined,
   rawDescription: string,
-): ProductAliasMatch | null {
+): Promise<ProductAliasMatch | null> {
   const key = productAliasKey(rawDescription);
   if (!key) return null;
   const row = vendorId
-    ? get<any>("SELECT * FROM product_aliases WHERE house_id = ? AND vendor_key = ? AND raw_key = ?", [
+    ? await get<any>("SELECT * FROM product_aliases WHERE house_id = ? AND vendor_key = ? AND raw_key = ?", [
         houseId,
         vendorId,
         key,
@@ -42,15 +42,15 @@ export function findProductAlias(
     : null;
   const fallback =
     row ??
-    get<any>("SELECT * FROM product_aliases WHERE house_id = ? AND vendor_key = '' AND raw_key = ?", [houseId, key]);
+    await get<any>("SELECT * FROM product_aliases WHERE house_id = ? AND vendor_key = '' AND raw_key = ?", [houseId, key]);
   if (!fallback?.item_id) return null;
-  const item = get<any>("SELECT * FROM items WHERE id = ? AND house_id = ? AND archived = 0", [fallback.item_id, houseId]);
+  const item = await get<any>("SELECT * FROM items WHERE id = ? AND house_id = ? AND archived = 0", [fallback.item_id, houseId]);
   if (!item) return null;
   return { item, alias: fallback };
 }
 
 /** Remember (or correct) the item behind a raw receipt line. */
-export function learnProductAlias(opts: {
+export async function learnProductAlias(opts: {
   houseId: string;
   vendorId: string | null | undefined;
   rawDescription: string;
@@ -58,7 +58,7 @@ export function learnProductAlias(opts: {
 }) {
   const key = productAliasKey(opts.rawDescription);
   if (!key || key.length < 2 || !opts.item?.id) return;
-  run(
+  await run(
     `INSERT INTO product_aliases
       (id, house_id, vendor_key, raw_key, raw_text, item_id, unit, category_id, attributes, uses, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)

@@ -18,11 +18,11 @@ dashboardRoutes.use(requireAuth);
 
 dashboardRoutes.get(
   "/:houseId/dashboard",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req);
-    const barcodeMap = barcodesForHouse(houseId);
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req);
+    const barcodeMap = await barcodesForHouse(houseId);
 
-    const stats = get<any>(
+    const stats = await get<any>(
       `SELECT
         (SELECT COUNT(*) FROM items WHERE house_id = ? AND archived = 0) AS item_count,
         (SELECT COALESCE(SUM(l.quantity), 0) FROM stock_lots l WHERE l.house_id = ?) AS unit_count,
@@ -31,7 +31,7 @@ dashboardRoutes.get(
       [houseId, houseId, houseId, houseId],
     );
 
-    const lowRows = all<any>(
+    const lowRows = await all<any>(
       `${ITEM_SELECT} WHERE i.house_id = ? AND i.archived = 0 AND i.reorder_point > 0
         AND (SELECT COALESCE(SUM(l.quantity), 0) FROM stock_lots l WHERE l.item_id = i.id) <= i.reorder_point
        ORDER BY quantity ASC LIMIT 8`,
@@ -39,16 +39,16 @@ dashboardRoutes.get(
     );
 
     const horizon = new Date(Date.now() + 14 * 864e5).toISOString().slice(0, 10);
-    const expiring = all<any>(
+    const expiring = (await all<any>(
       `SELECT l.*, i.name AS item_name, loc.name AS location_name FROM stock_lots l
        JOIN items i ON i.id = l.item_id
        LEFT JOIN locations loc ON loc.id = l.location_id
        WHERE l.house_id = ? AND l.quantity > 0 AND l.expires_at IS NOT NULL AND l.expires_at <= ?
        ORDER BY l.expires_at ASC LIMIT 12`,
       [houseId, horizon],
-    ).map((row) => ({ ...serializeLot(row), itemName: row.item_name, itemId: row.item_id }));
+    )).map((row) => ({ ...serializeLot(row), itemName: row.item_name, itemId: row.item_id }));
 
-    const recent = all<any>(
+    const recent = (await all<any>(
       `SELECT m.*, i.name AS item_name, i.unit AS item_unit, loc.name AS location_name, u.name AS user_name
        FROM stock_movements m
        JOIN items i ON i.id = m.item_id
@@ -56,18 +56,18 @@ dashboardRoutes.get(
        LEFT JOIN users u ON u.id = m.user_id
        WHERE m.house_id = ? ORDER BY m.created_at DESC LIMIT 10`,
       [houseId],
-    ).map((row) => ({ ...serializeMovement(row), itemName: row.item_name }));
+    )).map((row) => ({ ...serializeMovement(row), itemName: row.item_name }));
 
-    const recentRecipeRow = get<any>(
+    const recentRecipeRow = await get<any>(
       "SELECT * FROM recipes WHERE house_id = ? ORDER BY updated_at DESC LIMIT 1",
       [houseId],
     );
     let recentRecipe = null;
     if (recentRecipeRow) {
-      const ingredients = all<any>("SELECT * FROM recipe_ingredients WHERE recipe_id = ? ORDER BY sort", [recentRecipeRow.id]);
+      const ingredients = await all<any>("SELECT * FROM recipe_ingredients WHERE recipe_id = ? ORDER BY sort", [recentRecipeRow.id]);
       const serialized = serializeRecipe(recentRecipeRow, ingredients);
       const stock = new Map<string, number>();
-      for (const item of all<any>(
+      for (const item of await all<any>(
         `SELECT i.name, COALESCE((SELECT SUM(l.quantity) FROM stock_lots l WHERE l.item_id = i.id), 0) AS quantity
          FROM items i WHERE i.house_id = ? AND i.archived = 0`,
         [houseId],
@@ -84,18 +84,18 @@ dashboardRoutes.get(
     }
 
     const counts = {
-      recipes: Number(get<{ n: number }>("SELECT COUNT(*) AS n FROM recipes WHERE house_id = ?", [houseId])?.n ?? 0),
-      photos: Number(get<{ n: number }>("SELECT COUNT(*) AS n FROM photos WHERE house_id = ?", [houseId])?.n ?? 0),
+      recipes: Number((await get<{ n: number }>("SELECT COUNT(*) AS n FROM recipes WHERE house_id = ?", [houseId]))?.n ?? 0),
+      photos: Number((await get<{ n: number }>("SELECT COUNT(*) AS n FROM photos WHERE house_id = ?", [houseId]))?.n ?? 0),
       unlabeledPhotos: Number(
-        get<{ n: number }>(
+        (await get<{ n: number }>(
           "SELECT COUNT(*) AS n FROM photos p WHERE p.house_id = ? AND NOT EXISTS (SELECT 1 FROM photo_labels l WHERE l.photo_id = p.id)",
           [houseId],
-        )?.n ?? 0,
+        ))?.n ?? 0,
       ),
-      unreadNotifications: all<any>(
+      unreadNotifications: (await all<any>(
         "SELECT read_by FROM notifications WHERE house_id = ? AND resolved_at IS NULL AND (user_id IS NULL OR user_id = ?)",
         [houseId, req.user!.id],
-      ).filter((r) => {
+      )).filter((r) => {
         try {
           return !(JSON.parse(r.read_by) as string[]).includes(req.user!.id);
         } catch {
@@ -113,7 +113,7 @@ dashboardRoutes.get(
       expiring,
       recent,
       recentRecipe,
-      plan: (() => {
+      plan: await (async () => {
         const now = new Date();
         const weekday = (now.getUTCDay() + 6) % 7;
         const monday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - weekday));
@@ -122,27 +122,27 @@ dashboardRoutes.get(
         const today = now.toISOString().slice(0, 10);
         return {
           today: Number(
-            get<{ n: number }>("SELECT COUNT(*) AS n FROM meal_plan_entries WHERE house_id = ? AND day = ?", [
+            (await get<{ n: number }>("SELECT COUNT(*) AS n FROM meal_plan_entries WHERE house_id = ? AND day = ?", [
               houseId,
               today,
-            ])?.n ?? 0,
+            ]))?.n ?? 0,
           ),
           week: Number(
-            get<{ n: number }>(
+            (await get<{ n: number }>(
               "SELECT COUNT(*) AS n FROM meal_plan_entries WHERE house_id = ? AND day >= ? AND day <= ?",
               [houseId, weekStart, weekEnd],
-            )?.n ?? 0,
+            ))?.n ?? 0,
           ),
           weekStart,
         };
       })(),
-      locations: all<any>(
+      locations: (await all<any>(
         `SELECT l.*, (SELECT COUNT(DISTINCT item_id) FROM stock_lots WHERE location_id = l.id) AS item_count
-         FROM locations l WHERE l.house_id = ? ORDER BY l.name COLLATE NOCASE`,
+         FROM locations l WHERE l.house_id = ? ORDER BY lower(l.name)`,
         [houseId],
-      ).map(serializeLocation),
+      )).map(serializeLocation),
       counts,
-      barcodes: { total: all<any>("SELECT 1 FROM item_barcodes WHERE house_id = ?", [houseId]).length },
+      barcodes: { total: (await all<any>("SELECT 1 FROM item_barcodes WHERE house_id = ?", [houseId])).length },
     });
   }),
 );
