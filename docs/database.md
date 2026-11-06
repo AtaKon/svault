@@ -26,6 +26,16 @@ Optional settings:
 The schema is created on first start, with the same tables, indexes and foreign keys as the SQLite
 schema. `GET /api/health` reports the active backend as `"database": "sqlite" | "postgres"`.
 
+The npm scripts load `.env` when it exists (`--env-file-if-exists=.env`), so one file works for
+`npm run dev`, `npm start` and Docker Compose. `.env` is gitignored; keep database passwords there and
+out of the repository.
+
+### Rolling back to SQLite
+
+Stop SVault, remove `DATABASE_URL` (and `PGSSLMODE`) from `.env`, and start it again. The migration
+reads a snapshot, so the original `DATA_DIR/svault.db` and uploads are left untouched. Keep that file
+until you are happy with the PostgreSQL copy.
+
 ### Docker Compose
 
 The repository ships an example override with a PostgreSQL service:
@@ -81,3 +91,14 @@ a byte-for-byte snapshot. For disaster recovery you can also use `pg_dump` / `pg
   `COLLATE NOCASE`.
 - Reminders, the stock engine, receipt parsing and the AI features are backend-independent. Only the
   database adapter and backup format change.
+
+## Tests
+
+The API suite runs against both backends. `npm test` uses a temporary SQLite file. For PostgreSQL,
+point `TEST_DATABASE_URL` at a disposable database; the script resets its `public` schema first:
+
+```bash
+createdb svault_test
+TEST_DATABASE_URL=postgres://postgres@localhost:5432/svault_test npm run test:postgres
+```
+

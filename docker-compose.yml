@@ -13,6 +13,9 @@ services:
       NODE_ENV: production
       PORT: "4000"
       DATA_DIR: /data
+      # Optional external database. Empty keeps the bundled SQLite file.
+      DATABASE_URL: "${DATABASE_URL:-}"
+      PGSSLMODE: "${PGSSLMODE:-}"
       # Set to "true" when you put SVault behind HTTPS (recommended).
       COOKIE_SECURE: "${COOKIE_SECURE:-false}"
       # Set to "true" to load the demo vault on first start (empty data volume).

@@ -44,6 +44,21 @@ If you prefer the image's built-in UID instead, remove the `user:` line from `co
    - `SEED_DEMO=true` if you want the demo vault on first start
 4. Press **Deploy** and wait for the health check to go green.
 
+### Optional: use PostgreSQL instead of SQLite
+
+Add these to the stack `.env` (or Dockge's environment editor):
+
+```bash
+DATABASE_URL=postgresql://svaultadmin:password@192.168.0.76:5432/Svault_dev
+PGSSLMODE=disable
+```
+
+The compose file passes both variables into the container. The NAS must be able to reach the
+PostgreSQL host, and `pg_hba.conf` must allow its address. Keep the SQLite file in
+`SVAULT_DATA_PATH` until the PostgreSQL copy is verified; removing `DATABASE_URL` and redeploying
+switches back to SQLite without deleting anything. See [Bring your own database](../../docs/database.md)
+for the migration and verification procedure.
+
 Open `http://<truenas-ip>:8095` and create the first account — it becomes the owner.
 
 If you enabled `SEED_DEMO`, the demo login is `demo@svault.local / demo1234`. It only seeds when the
