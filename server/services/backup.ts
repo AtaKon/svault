@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { DatabaseSync } from "node:sqlite";
@@ -96,14 +96,11 @@ async function logicalDump(): Promise<Buffer> {
 }
 
 /** SHA-256 of a file, read as a stream so large uploads never sit in memory. */
-function sha256File(file: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const hash = createHash("sha256");
-    fs.createReadStream(file)
-      .on("error", reject)
-      .on("data", (chunk) => hash.update(chunk))
-      .on("end", () => resolve(hash.digest("hex")));
-  });
+async function sha256File(file: string): Promise<string> {
+  const hash = createHash("sha256");
+  // pipeline destroys the read stream on error, so a failed read never leaks it.
+  await pipeline(fs.createReadStream(file), hash);
+  return hash.digest("hex");
 }
 
 /**
@@ -157,8 +154,31 @@ export interface BackupListEntry {
 const BACKUP_PATTERN = /^svault-backup-.*\.zip$/;
 const PRE_RESTORE_PATTERN = /^pre-restore-.*\.zip$/;
 
+/** ISO time plus a short random suffix, so two backups in the same millisecond never share a name. */
 function backupStamp(): string {
-  return new Date().toISOString().replace(/[:.]/g, "-");
+  return `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomBytes(3).toString("hex")}`;
+}
+
+const STALE_SCRATCH_MS = 60 * 60 * 1000;
+
+/**
+ * Remove scratch files a crashed backup left behind: the `.snapshot-*.db`
+ * SQLite copy and half-written `*.partial` zips. Neither matches a rotation
+ * pattern, so without this they would stay forever. Only files older than an
+ * hour are touched, so a backup running in parallel keeps its own.
+ */
+function removeStaleScratch(dir: string) {
+  if (!fs.existsSync(dir)) return;
+  const cutoff = Date.now() - STALE_SCRATCH_MS;
+  for (const name of fs.readdirSync(dir)) {
+    if (!/^\.snapshot-.*\.db$/.test(name) && !name.endsWith(".partial")) continue;
+    const file = path.join(dir, name);
+    try {
+      if (fs.statSync(file).mtimeMs < cutoff) fs.rmSync(file, { force: true });
+    } catch {
+      /* already gone */
+    }
+  }
 }
 
 /**
@@ -175,6 +195,9 @@ function backupStamp(): string {
 async function writeArchive(target: string): Promise<BackupArchive> {
   ensureDirs();
   fs.mkdirSync(path.dirname(target), { recursive: true });
+  removeStaleScratch(BACKUP_DIR);
+  removeStaleScratch(PRE_RESTORE_DIR);
+  removeStaleScratch(path.dirname(target));
   const stamp = backupStamp();
   const postgres = databaseKind() === "postgres";
   const partial = `${target}.partial`;
@@ -384,7 +407,15 @@ export async function restoreArchiveNow(
   // archive validated, so a bad file never rotates an older copy away.
   let safetyCopy: BackupArchive | null = null;
   if (opts.safetyCopy) {
-    await initDb();
+    try {
+      await initDb();
+    } catch (error) {
+      throw new Error(
+        `Could not open the current database to take a pre-restore safety copy: ${
+          error instanceof Error ? error.message : String(error)
+        }. Fix the connection, or pass --no-safety-copy to restore without one.`,
+      );
+    }
     try {
       safetyCopy = await createPreRestoreCopy();
     } finally {

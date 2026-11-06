@@ -3523,6 +3523,27 @@ describe("backup usability", () => {
     return fs.existsSync(dir) ? fs.readdirSync(dir).filter((name) => pattern.test(name)) : [];
   };
 
+  it("gives backups taken together distinct names and clears stale scratch files", async () => {
+    const { createBackupArchive } = await import("../services/backup.js");
+    const fs = await import("node:fs");
+    fs.mkdirSync(backupDir, { recursive: true });
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    const staleSnapshot = path.join(backupDir, ".snapshot-crashed.db");
+    const stalePartial = path.join(backupDir, "svault-backup-crashed.zip.partial");
+    const freshPartial = path.join(backupDir, "svault-backup-running.zip.partial");
+    for (const file of [staleSnapshot, stalePartial, freshPartial]) fs.writeFileSync(file, "x");
+    fs.utimesSync(staleSnapshot, old, old);
+    fs.utimesSync(stalePartial, old, old);
+
+    const [first, second] = await Promise.all([createBackupArchive(), createBackupArchive()]);
+    assert.notEqual(first.name, second.name);
+    assert.ok(fs.existsSync(first.path) && fs.existsSync(second.path));
+    assert.ok(!fs.existsSync(staleSnapshot), "a crashed backup's snapshot is removed");
+    assert.ok(!fs.existsSync(stalePartial), "a crashed backup's partial zip is removed");
+    assert.ok(fs.existsSync(freshPartial), "a backup still running keeps its partial zip");
+    fs.rmSync(freshPartial, { force: true });
+  });
+
   it("keeps a pre-restore safety copy through more than five regular backups", async () => {
     const { createBackupArchive, createPreRestoreCopy, listBackups } = await import("../services/backup.js");
     const fs = await import("node:fs");
