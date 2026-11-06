@@ -8,6 +8,7 @@ import { recipeMatch, serializeRecipe, stockQuantity } from "../serialize.js";
 import { aiCleanRecipe, aiCompleteRecipe, fileToDataUrl, resolveAi } from "../ai.js";
 import { normaliseNutrition, recipeNutrition, type NutritionSourceItem } from "../services/nutrition.js";
 import { heuristicRecipe, normaliseRecipeDraft, type ParsedRecipe } from "../services/recipe-local.js";
+import { removeUnreferencedUploads } from "../services/upload-cleanup.js";
 import { uploader, uploadPath } from "../upload.js";
 import type { OffProduct, Role, Recipe } from "../../shared/types.js";
 
@@ -430,6 +431,7 @@ singleRecipeRoutes.delete(
   handler(async (req, res) => {
     const { recipe } = await recipeAccess(req, "member");
     await run("DELETE FROM recipes WHERE id = ?", [recipe.id]);
+    await removeUnreferencedUploads([recipe.image, recipe.source_image]);
     res.json({ ok: true });
   }),
 );

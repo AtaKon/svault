@@ -6,6 +6,7 @@ import { houseMembers, memberRole, requireAuth, roleAtLeast, verifyPassword } fr
 import { ApiError, handler, parseBody, requireHouse } from "../http.js";
 import { serializeHouse } from "../serialize.js";
 import { createHouse } from "../services/houses.js";
+import { houseUploadUrls, removeUnreferencedUploads } from "../services/upload-cleanup.js";
 import { notifyHouseAdded, notifyOwnershipTransferred } from "../services/notifications.js";
 import {
   channelsFromSettings,
@@ -146,7 +147,9 @@ houseRoutes.delete(
   "/:houseId",
   handler(async (req, res) => {
     const { houseId } = await requireHouse(req, "owner");
+    const uploads = await houseUploadUrls(houseId);
     await run("DELETE FROM houses WHERE id = ?", [houseId]);
+    await removeUnreferencedUploads(uploads);
     res.json({ ok: true });
   }),
 );

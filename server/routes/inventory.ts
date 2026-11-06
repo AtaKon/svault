@@ -26,6 +26,7 @@ import {
   unlinkItemFromOff,
 } from "../services/openfoodfacts.js";
 import { uploader } from "../upload.js";
+import { removeUnreferencedUploads } from "../services/upload-cleanup.js";
 import { RESERVED_ATTRIBUTE_KEYS, type Role } from "../../shared/types.js";
 
 export const inventoryRoutes = Router();
@@ -684,6 +685,7 @@ itemRoutes.delete(
     const { item } = await itemAccess(req, "member");
     await run("DELETE FROM items WHERE id = ?", [item.id]);
     await clearItemNotifications(item.id);
+    await removeUnreferencedUploads([item.image]);
     res.json({ ok: true });
   }),
 );
@@ -806,6 +808,7 @@ itemRoutes.post(
     if (!req.file) throw new ApiError(400, "No image uploaded");
     const url = `/uploads/items/${req.file.filename}`;
     await run("UPDATE items SET image = ?, updated_at = ? WHERE id = ?", [url, now(), item.id]);
+    await removeUnreferencedUploads([item.image]);
     res.json({ image: url });
   }),
 );

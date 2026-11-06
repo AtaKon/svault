@@ -33,6 +33,7 @@ import { seedVendorCatalog } from "./services/vendors.js";
 import { seedProductCatalog } from "./services/product-catalog.js";
 import { pruneOffProductCache } from "./services/openfoodfacts.js";
 import { pruneAiCallLogs } from "./services/ai-logs.js";
+import { sweepOrphanUploads } from "./services/upload-cleanup.js";
 import { initDb, closeDb, databaseKind } from "./db.js";
 
 await initDb();
@@ -203,7 +204,20 @@ if (process.env.NODE_ENV !== "test") {
     }, 30 * 60 * 1000);
     timer.unref();
 
-    const logTimer = setInterval(() => void pruneAiCallLogs(), 24 * 60 * 60 * 1000);
+    const sweepUploads = async () => {
+      try {
+        const removed = await sweepOrphanUploads();
+        if (removed) console.log(`Removed ${removed} orphaned upload${removed === 1 ? "" : "s"}`);
+      } catch (err) {
+        console.error("Upload cleanup failed:", err);
+      }
+    };
+    void sweepUploads();
+
+    const logTimer = setInterval(() => {
+      void pruneAiCallLogs();
+      void sweepUploads();
+    }, 24 * 60 * 60 * 1000);
     logTimer.unref();
     void server;
   });

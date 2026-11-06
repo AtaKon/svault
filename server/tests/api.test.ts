@@ -2465,6 +2465,62 @@ describe("security hardening", () => {
       delete process.env.SV_RATE_LIMIT_LOGIN_ACCOUNT;
     }
   });
+
+  it("removes uploaded files with their item, recipe and house", async () => {
+    const { existsSync, writeFileSync, utimesSync } = await import("node:fs");
+    const fileOf = (url: string) => path.join(dataDir, url.replace(/^\//, ""));
+    const png = new Uint8Array(encodePng(4, 4, Buffer.alloc(4 * 4 * 4, 140)));
+
+    const item = await request(`/api/houses/${houseId}/items`, { method: "POST", body: { name: "Doomed jar" } });
+    assert.equal(item.status, 201);
+    const itemImage = await uploadImage(`/api/items/${item.data.id}/image`, png, "image/png", "jar.png");
+    assert.equal(itemImage.status, 200);
+    assert.ok(existsSync(fileOf(itemImage.data.image)));
+    assert.equal((await request(`/api/items/${item.data.id}`, { method: "DELETE" })).status, 200);
+    assert.equal(existsSync(fileOf(itemImage.data.image)), false);
+
+    const recipeImage = await uploadImage(`/api/houses/${houseId}/recipes/upload`, png, "image/png", "dish.png");
+    const recipe = await request(`/api/houses/${houseId}/recipes`, {
+      method: "POST",
+      body: { title: "Doomed dish", image: recipeImage.data.path, ingredients: [], steps: [] },
+    });
+    assert.equal(recipe.status, 201);
+    assert.equal((await request(`/api/recipes/${recipe.data.id}`, { method: "DELETE" })).status, 200);
+    assert.equal(existsSync(fileOf(recipeImage.data.path)), false);
+
+    const house = await request("/api/houses", { method: "POST", body: { name: "Doomed house" } });
+    assert.equal(house.status, 201);
+    const houseImage = await uploadImage(`/api/houses/${house.data.id}/recipes/upload`, png, "image/png", "h.png");
+    await request(`/api/houses/${house.data.id}/recipes`, {
+      method: "POST",
+      body: { title: "House dish", image: houseImage.data.path, ingredients: [], steps: [] },
+    });
+    const receiptImage = await uploadImage(`/api/houses/${house.data.id}/receipts/upload`, png, "image/png", "r.png");
+    const receipt = await request(`/api/houses/${house.data.id}/receipts`, {
+      method: "POST",
+      body: { vendorName: "Shop", image: receiptImage.data.path, lines: [{ description: "Bread", quantity: 1 }] },
+    });
+    assert.equal(receipt.status, 201);
+    assert.ok(existsSync(fileOf(receiptImage.data.path)));
+    assert.equal((await request(`/api/houses/${house.data.id}`, { method: "DELETE" })).status, 200);
+    assert.equal(existsSync(fileOf(houseImage.data.path)), false);
+    assert.equal(existsSync(fileOf(receiptImage.data.path)), false);
+
+    // The sweep removes old unreferenced files and keeps fresh or referenced ones.
+    const { sweepOrphanUploads } = await import("../services/upload-cleanup.js");
+    const kept = await uploadImage(`/api/items/${itemId}/image`, png, "image/png", "kept.png");
+    const old = new Date(Date.now() - 3 * 864e5);
+    utimesSync(fileOf(kept.data.image), old, old);
+    const orphan = path.join(dataDir, "uploads", "receipts", "orphan.jpg");
+    const fresh = path.join(dataDir, "uploads", "receipts", "fresh.jpg");
+    writeFileSync(orphan, "x");
+    writeFileSync(fresh, "x");
+    utimesSync(orphan, old, old);
+    assert.ok((await sweepOrphanUploads()) >= 1);
+    assert.equal(existsSync(orphan), false);
+    assert.ok(existsSync(fresh));
+    assert.ok(existsSync(fileOf(kept.data.image)));
+  });
 });
 
 describe("multi-photo receipt OCR", () => {
