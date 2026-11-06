@@ -351,6 +351,7 @@ Add these repository secrets/variables in **GitHub → Settings → Secrets and 
 | `AI_REVIEW_BASE_URL` | variable | no | Defaults to `https://api.openai.com/v1` |
 | `AI_REVIEW_MODEL` | variable | no | Defaults to `gpt-4o-mini` |
 | `AI_REVIEW_MAX_TOKENS` | variable | no | Answer budget, defaults to `4000`. Reasoning models spend part of it thinking; an empty answer is retried once with a shorter diff and twice the budget |
+| `AI_REVIEW_REASONING` | variable | no | OpenRouter only: `off` (default) turns model thinking off so the budget goes to the review; `low` asks for short thinking; `default` leaves the model's own setting. If a model cannot turn thinking off, the bot falls back to `low` |
 
 If `AI_REVIEW_API_KEY` is missing the workflow exits successfully without commenting. The bot
 updates its own previous comment instead of posting a new one on every push. Treat its output as a

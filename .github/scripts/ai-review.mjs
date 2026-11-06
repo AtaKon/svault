@@ -10,6 +10,9 @@
 //   AI_REVIEW_MODEL     optional; defaults to gpt-4o-mini
 //   AI_REVIEW_MAX_TOKENS optional; answer budget, defaults to 4000. Reasoning
 //                       models spend part of it thinking before they answer.
+//   AI_REVIEW_REASONING  optional; OpenRouter only. "off" (default) turns model
+//                       thinking off so the whole budget goes to the review,
+//                       "low" asks for short thinking, "default" sends nothing.
 
 import { readFile } from "node:fs/promises";
 
@@ -26,6 +29,14 @@ const maxTokens = Math.max(500, Number(process.env.AI_REVIEW_MAX_TOKENS) || 4_00
 // OpenRouter accepts a `reasoning` object for every model and ignores it for
 // models that do not think; other OpenAI-compatible APIs may reject it.
 const isOpenRouter = /(^|\.)openrouter\.ai$/i.test(safeHost(apiBase));
+const reasoningMode = ["off", "low", "default"].includes(process.env.AI_REVIEW_REASONING || "")
+  ? process.env.AI_REVIEW_REASONING
+  : "off";
+const REASONING = {
+  off: { enabled: false },
+  low: { effort: "low", exclude: true },
+  default: null,
+};
 const repository = process.env.GITHUB_REPOSITORY;
 const eventName = process.env.GITHUB_EVENT_NAME;
 const eventPath = process.env.GITHUB_EVENT_PATH;
@@ -201,7 +212,7 @@ function answerText(message) {
   return "";
 }
 
-async function requestReview(prompt, budget) {
+async function requestReview(prompt, budget, reasoning) {
   const payload = {
     model,
     temperature: 0.2,
@@ -211,8 +222,7 @@ async function requestReview(prompt, budget) {
       { role: "user", content: prompt },
     ],
   };
-  // Keep thinking short and out of the reply so the budget goes to the review.
-  if (isOpenRouter) payload.reasoning = { effort: "low", exclude: true };
+  if (isOpenRouter && reasoning) payload.reasoning = reasoning;
 
   const response = await fetch(`${apiBase}/chat/completions`, {
     method: "POST",
@@ -226,7 +236,9 @@ async function requestReview(prompt, budget) {
   });
   if (!response.ok) {
     const detail = await response.text();
-    throw new Error(`AI provider returned ${response.status}: ${detail.slice(0, 500)}`);
+    const error = new Error(`AI provider returned ${response.status}: ${detail.slice(0, 500)}`);
+    error.status = response.status;
+    throw error;
   }
   const data = await response.json();
   const choice = data.choices?.[0];
@@ -252,16 +264,29 @@ function describeAttempt(label, attempt) {
 // An empty answer usually means a reasoning model spent the whole budget
 // thinking (finish_reason "length"), most often on a large diff. Retry once
 // with a shorter diff and a bigger budget before giving up.
-const first = await requestReview(buildPrompt(MAX_DIFF_CHARS), maxTokens);
+// Reasoning models such as DeepSeek can spend the entire budget thinking about
+// a large diff and return no answer, even when asked for low effort. Thinking
+// is turned off by default; a model that cannot turn it off is asked for low
+// effort instead.
+let reasoning = isOpenRouter ? REASONING[reasoningMode] : null;
+let first;
+try {
+  first = await requestReview(buildPrompt(MAX_DIFF_CHARS), maxTokens, reasoning);
+} catch (error) {
+  if (!(reasoning?.enabled === false && error.status === 400)) throw error;
+  console.log(`The model cannot turn thinking off (${error.message}); asking for low effort instead.`);
+  reasoning = REASONING.low;
+  first = await requestReview(buildPrompt(MAX_DIFF_CHARS), maxTokens, reasoning);
+}
 let review = first.text;
 if (!review) {
   console.log(`Empty review. ${describeAttempt("attempt 1", first)}`);
-  const second = await requestReview(buildPrompt(RETRY_DIFF_CHARS), maxTokens * 2);
+  const second = await requestReview(buildPrompt(RETRY_DIFF_CHARS), maxTokens * 2, reasoning);
   review = second.text;
   if (!review) {
     throw new Error(
       `AI provider returned an empty review twice. ${describeAttempt("attempt 1", first)}; ` +
-        `${describeAttempt("attempt 2", second)}. Raise AI_REVIEW_MAX_TOKENS or pick a non-reasoning model.`,
+        `${describeAttempt("attempt 2", second)}. Raise AI_REVIEW_MAX_TOKENS, set AI_REVIEW_REASONING=off or pick a non-reasoning model.`,
     );
   }
 }
