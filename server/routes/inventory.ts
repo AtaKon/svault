@@ -800,7 +800,7 @@ itemRoutes.get(
 
 itemRoutes.post(
   "/:itemId/image",
-  uploader("items").single("image"),
+  uploader("items", (req) => itemAccess(req, "member")).single("image"),
   handler(async (req, res) => {
     const { item } = await itemAccess(req, "member");
     if (!req.file) throw new ApiError(400, "No image uploaded");

@@ -40,6 +40,14 @@ export const IS_PROD = process.env.NODE_ENV === "production";
 export const CLIENT_DIR = path.join(ROOT, "dist", "client");
 export const SESSION_DAYS = 30;
 export const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_MB ?? 20) * 1024 * 1024;
+const megabytes = (value: string | undefined, fallback: number) => {
+  const parsed = Number(value);
+  return (Number.isFinite(parsed) && parsed > 0 ? parsed : fallback) * 1024 * 1024;
+};
+/** Backup archives accepted by the restore endpoint (instance admin only). */
+export const RESTORE_MAX_BYTES = megabytes(process.env.SV_RESTORE_MAX_MB, 512);
+/** YOLO/COCO zip archives accepted by the dataset import. */
+export const DATASET_MAX_BYTES = megabytes(process.env.SV_DATASET_MAX_MB, 256);
 export const APP_VERSION = process.env.SV_VERSION ?? "1.2.0";
 export const SCHEMA_VERSION = 3;
 

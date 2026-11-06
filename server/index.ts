@@ -1,7 +1,9 @@
 import express from "express";
 import fs from "node:fs";
+import path from "node:path";
 import { PORT, CLIENT_DIR, IS_PROD, UPLOAD_DIR, ensureDirs } from "./config.js";
 import { ApiError } from "./http.js";
+import { IMAGE_EXTENSIONS } from "./upload.js";
 import { attachUser } from "./auth.js";
 import { authRoutes } from "./routes/auth.js";
 import { passkeyRoutes } from "./routes/passkeys.js";
@@ -110,7 +112,27 @@ app.get("/api/health", (_req, res) => {
   res.json({ ok: true, version: 1, database: databaseKind(), time: new Date().toISOString() });
 });
 
-app.use("/uploads", express.static(UPLOAD_DIR, { maxAge: "30d", fallthrough: true, index: false }));
+/* Uploaded files are user content served from the app's own origin. Lock them
+   down so nothing under /uploads can run script, even if a non-image slipped
+   in through an older version: no sniffing, a sandboxing CSP, and anything
+   that is not a known image extension is forced to download. */
+app.use(
+  "/uploads",
+  express.static(UPLOAD_DIR, {
+    maxAge: "30d",
+    fallthrough: true,
+    index: false,
+    dotfiles: "deny",
+    setHeaders: (res, filePath) => {
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("Content-Security-Policy", "default-src 'none'; img-src 'self'; sandbox");
+      if (!IMAGE_EXTENSIONS.has(path.extname(filePath).toLowerCase())) {
+        res.setHeader("Content-Type", "application/octet-stream");
+        res.setHeader("Content-Disposition", "attachment");
+      }
+    },
+  }),
+);
 
 app.use("/api", (_req, res) => {
   res.status(404).json({ error: "Unknown API route" });
@@ -132,7 +154,7 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
   }
   if (err?.name === "MulterError") {
     res.status(400).json({
-      error: err.code === "LIMIT_FILE_SIZE" ? "That image is too large" : `Upload failed: ${err.message}`,
+      error: err.code === "LIMIT_FILE_SIZE" ? "That file is too large" : `Upload failed: ${err.message}`,
     });
     return;
   }

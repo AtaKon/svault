@@ -1,11 +1,12 @@
 import { Router } from "express";
-import multer from "multer";
+import fs from "node:fs";
 import { get } from "../db.js";
 import { requireAuth, verifyPassword } from "../auth.js";
 import { ApiError, handler, requireHouse, requireInstanceAdmin } from "../http.js";
 import { setMaintenance } from "../maintenance.js";
 import { createBackupArchive, listBackups, stageRestore, validateBackup } from "../services/backup.js";
-import { IS_PROD } from "../config.js";
+import { IS_PROD, RESTORE_MAX_BYTES } from "../config.js";
+import { archiveUploader } from "../upload.js";
 
 export const backupRoutes = Router();
 backupRoutes.use(requireAuth);
@@ -16,10 +17,12 @@ backupRoutes.use(requireAuth);
  * kept for client compatibility; the caller must still be a member of it.
  */
 
-const restoreUpload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 1024 * 1024 * 1024 },
-}).single("backup");
+/* The admin check runs before multer and the archive goes to a temp file, so
+   nobody else can push a large body onto the server. */
+const restoreUpload = archiveUploader("backup", RESTORE_MAX_BYTES, async (req) => {
+  requireInstanceAdmin(req);
+  await requireHouse(req);
+});
 
 backupRoutes.get(
   "/:houseId/backup",
@@ -61,7 +64,7 @@ backupRoutes.post(
 
     let validation;
     try {
-      validation = await validateBackup(req.file.buffer);
+      validation = await validateBackup(await fs.promises.readFile(req.file.path));
     } catch (error) {
       throw new ApiError(400, error instanceof Error ? error.message : "Invalid backup archive");
     }

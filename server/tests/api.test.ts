@@ -2249,6 +2249,76 @@ describe("security hardening", () => {
     const adminList = await request(`/api/houses/${houseId}/backups`);
     assert.equal(adminList.status, 200);
   });
+
+  async function uploadImage(path: string, bytes: Uint8Array, type: string, name: string, auth = cookie) {
+    const copy = new ArrayBuffer(bytes.length);
+    new Uint8Array(copy).set(bytes);
+    const form = new FormData();
+    form.append("image", new Blob([copy], { type }), name);
+    const res = await fetch(`${base}${path}`, { method: "POST", headers: { cookie: auth }, body: form });
+    const text = await res.text();
+    return { status: res.status, data: text ? JSON.parse(text) : null };
+  }
+
+  it("only stores real images under their mapped extension", async () => {
+    const html = Buffer.from("<html><script>alert(document.cookie)</script></html>");
+    const spoofed = await uploadImage(`/api/houses/${houseId}/recipes/upload`, html, "image/png", "evil.html");
+    assert.equal(spoofed.status, 400);
+    const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
+    const vector = await uploadImage(`/api/houses/${houseId}/recipes/upload`, svg, "image/svg+xml", "evil.svg");
+    assert.equal(vector.status, 400);
+    const unknown = await uploadImage(`/api/houses/${houseId}/recipes/upload`, html, "image/x-html", "evil.html");
+    assert.equal(unknown.status, 400);
+
+    const png = encodePng(4, 4, Buffer.alloc(4 * 4 * 4, 90));
+    const ok = await uploadImage(`/api/houses/${houseId}/recipes/upload`, new Uint8Array(png), "image/png", "photo.html");
+    assert.equal(ok.status, 201);
+    assert.match(ok.data.path, /^\/uploads\/recipes\/[\w-]+\.png$/);
+    const served = await fetch(`${base}${ok.data.path}`);
+    assert.equal(served.status, 200);
+    assert.equal(served.headers.get("x-content-type-options"), "nosniff");
+    assert.match(served.headers.get("content-security-policy") ?? "", /sandbox/);
+    assert.equal(served.headers.get("content-disposition"), null);
+  });
+
+  it("serves non-image files under /uploads as sandboxed downloads", async () => {
+    const { writeFileSync, mkdirSync } = await import("node:fs");
+    mkdirSync(path.join(dataDir, "uploads", "recipes"), { recursive: true });
+    writeFileSync(path.join(dataDir, "uploads", "recipes", "legacy.html"), "<script>alert(1)</script>");
+    const res = await fetch(`${base}/uploads/recipes/legacy.html`);
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get("content-disposition"), "attachment");
+    assert.equal(res.headers.get("content-type"), "application/octet-stream");
+    assert.match(res.headers.get("content-security-policy") ?? "", /default-src 'none'.*sandbox/);
+  });
+
+  it("checks house access before accepting any upload bytes", async () => {
+    const { readdirSync } = await import("node:fs");
+    const count = (dir: string) => readdirSync(path.join(dataDir, "uploads", dir)).length;
+    const png = new Uint8Array(encodePng(4, 4, Buffer.alloc(4 * 4 * 4, 30)));
+    const before = { recipes: count("recipes"), receipts: count("receipts"), items: count("items") };
+
+    const recipe = await uploadImage(`/api/houses/${houseId}/recipes/upload`, png, "image/png", "a.png", secondUserCookie);
+    assert.equal(recipe.status, 403);
+    const receipt = await uploadImage(`/api/houses/${houseId}/receipts/upload`, png, "image/png", "a.png", secondUserCookie);
+    assert.equal(receipt.status, 403);
+    const intake = await uploadImage(`/api/houses/${houseId}/intake/upload`, png, "image/png", "a.png", secondUserCookie);
+    assert.equal(intake.status, 403);
+    const item = await uploadImage(`/api/items/${itemId}/image`, png, "image/png", "a.png", secondUserCookie);
+    assert.equal(item.status, 403);
+    const outsider = await uploadImage(`/api/houses/${strangerHouseId}/recipes/upload`, png, "image/png", "a.png");
+    assert.equal(outsider.status, 404);
+    assert.deepEqual({ recipes: count("recipes"), receipts: count("receipts"), items: count("items") }, before);
+
+    const form = new FormData();
+    form.append("dataset", new Blob([Buffer.from("PK not really")], { type: "application/zip" }), "d.zip");
+    const dataset = await fetch(`${base}/api/houses/${strangerHouseId}/photos/dataset/import`, {
+      method: "POST",
+      headers: { cookie },
+      body: form,
+    });
+    assert.equal(dataset.status, 404);
+  });
 });
 
 describe("multi-photo receipt OCR", () => {
