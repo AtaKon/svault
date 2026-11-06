@@ -872,6 +872,11 @@ checksums for the database and every upload. Restore rejects unsafe zip paths, c
 archives from a newer schema, keeps a pre-restore copy, then stages the archive and restarts the server.
 During the swap API requests return `503`.
 
+The download is streamed from the finished zip on disk. `GET …/backups` returns
+`{ backups: [{ name, kind, size, createdAt }] }`, newest first, where `kind` is `backup` (regular, last
+five in `DATA_DIR/backups`) or `pre-restore` (safety copies in `DATA_DIR/backups/pre-restore`, rotated
+separately, newest three by default via `SV_PRE_RESTORE_KEEP`).
+
 CLI (stop the server first for restore):
 
 ```bash
