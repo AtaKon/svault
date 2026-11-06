@@ -26,6 +26,7 @@ import { aiCostLabel, money, qty, receiptProviderLabel, receiptTemplateLabel, sh
 import type {
   PurchaseAnalytics,
   Receipt,
+  ReceiptDeleteResult,
   ReceiptLine,
   ReceiptTemplate,
   Vendor,
@@ -52,6 +53,7 @@ export function ReceiptsPage() {
   const [detail, setDetail] = useState<Receipt | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Receipt | null>(null);
+  const [revertStock, setRevertStock] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const [shopOpen, setShopOpen] = useState(false);
@@ -128,12 +130,50 @@ export function ReceiptsPage() {
     }
   };
 
+  // Deep link from the scan page's duplicate warning: /receipts?receipt=<id>.
+  const linkedReceipt = params.get("receipt");
+  useEffect(() => {
+    if (!linkedReceipt) return;
+    void openDetail({ id: linkedReceipt } as Receipt);
+    const next = new URLSearchParams(params);
+    next.delete("receipt");
+    setParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [linkedReceipt]);
+
+  const askDeleteReceipt = (receipt: Receipt) => {
+    setRevertStock(false);
+    setDeleteTarget(receipt);
+  };
+
   const removeReceipt = async () => {
     if (!deleteTarget) return;
     setBusy(true);
     try {
-      await api(`/api/receipts/${deleteTarget.id}`, { method: "DELETE" });
-      toast.success("Receipt removed — stock stays in inventory");
+      const result = await api<ReceiptDeleteResult>(
+        `/api/receipts/${deleteTarget.id}${revertStock ? "?revertStock=true" : ""}`,
+        { method: "DELETE" },
+      );
+      if (!revertStock) {
+        toast.success("Receipt deleted — the stock it added stays in inventory");
+      } else {
+        const reverted = result.reverted.filter((entry) => entry.reverted > 0);
+        const used = result.reverted.filter((entry) => entry.consumed > 0);
+        const usedText = used.length
+          ? ` Already used, so not removed: ${used
+              .slice(0, 3)
+              .map((entry) => `${qty(entry.consumed)} ${entry.unit} ${entry.itemName}`)
+              .join(", ")}${used.length > 3 ? ` and ${used.length - 3} more` : ""}.`
+          : "";
+        toast.success(
+          reverted.length
+            ? `Receipt deleted and ${reverted.length} item${reverted.length === 1 ? "" : "s"} taken back out of stock (${reverted
+                .slice(0, 3)
+                .map((entry) => `${qty(entry.reverted)} ${entry.unit} ${entry.itemName}`)
+                .join(", ")}${reverted.length > 3 ? "…" : ""}).${usedText}`
+            : `Receipt deleted — none of its stock was left to remove.${usedText}`,
+        );
+      }
       setDeleteTarget(null);
       setDetail(null);
       await load();
@@ -450,7 +490,7 @@ export function ReceiptsPage() {
           detail ? (
             <div className="flex gap-2">
               {can("member") && (
-                <Button variant="secondary" block icon="trash" className="text-danger" onClick={() => setDeleteTarget(detail)}>
+                <Button variant="secondary" block icon="trash" className="text-danger" onClick={() => askDeleteReceipt(detail)}>
                   Delete record
                 </Button>
               )}
@@ -678,15 +718,44 @@ export function ReceiptsPage() {
         </div>
       </Sheet>
 
-      <ConfirmDialog
+      <Sheet
         open={Boolean(deleteTarget)}
         onClose={() => setDeleteTarget(null)}
-        onConfirm={() => void removeReceipt()}
         title="Delete this receipt?"
-        body="The receipt, its image and line details are removed. Stock and price history stay in the house."
-        confirmLabel="Delete receipt"
-        loading={busy}
-      />
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setDeleteTarget(null)} disabled={busy}>
+              Cancel
+            </Button>
+            <Button variant="danger" onClick={() => void removeReceipt()} loading={busy}>
+              Delete receipt
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-3 text-sm">
+          <p className="text-muted">
+            The receipt record, its line details and its scanned image are removed.{" "}
+            {revertStock
+              ? "The stock this receipt added is taken back out of inventory, except what was already used."
+              : "The stock it added stays in inventory; the batches simply lose their link to this receipt. Price history is kept."}
+          </p>
+          <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-line px-3 py-2.5">
+            <input
+              type="checkbox"
+              checked={revertStock}
+              onChange={(event) => setRevertStock(event.target.checked)}
+              className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--sv-brand)]"
+            />
+            <span>
+              <span className="block font-medium">Also remove the stock this receipt added</span>
+              <span className="block text-[11px] text-muted">
+                Use this when the receipt was imported by mistake or twice. Anything already used is left as it is.
+              </span>
+            </span>
+          </label>
+        </div>
+      </Sheet>
 
       <ConfirmDialog
         open={Boolean(deleteShop)}
