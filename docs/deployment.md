@@ -104,6 +104,7 @@ Docker Compose reads `.env` next to `docker-compose.yml`.
 | `OFF_CACHE_DAYS` | `30` | Server | How long a product stays fresh in the shared cache. |
 | `PORT` | `4000` | Server | Internal listen port. Keep it at 4000 inside the container. |
 | `DATA_DIR` | `./data` locally, `/data` in Docker | Server | Database and uploads directory. |
+| `SV_PRE_RESTORE_KEEP` | `3` | Server, `npm run restore` | Safety copies kept in `DATA_DIR/backups/pre-restore` (minimum 1). Add it to the compose `environment` block if you change it. |
 | `DATABASE_URL` | empty | Server | PostgreSQL connection string. Empty keeps the bundled SQLite file. |
 | `SV_DATABASE_KIND` | inferred | Server | Force `postgres` or `sqlite`. |
 | `PG_POOL_SIZE` | `10` | Server | PostgreSQL connection pool size. |
@@ -319,6 +320,13 @@ cover every house and account, so house owners cannot download them) and press *
 contains a consistent `svault.db`, `uploads/`, and `manifest.json` with the app/schema version and
 SHA-256 checksums. The last five copies stay in `DATA_DIR/backups`.
 
+The archive is streamed to disk while it is built: uploads are hashed and then copied into the zip one
+file at a time, and the download is served from the finished file. Memory use therefore stays flat
+however large the photo library is, but `DATA_DIR` needs free space for roughly one more copy of the
+database and uploads (compressed photos barely shrink). A PostgreSQL logical dump (`database.json`) is
+still built in memory; uploads are streamed either way. Backups only ever contain the database and
+`uploads/`, never the `backups/` folder itself.
+
 The same operations are available without the UI:
 
 ```bash
@@ -326,8 +334,19 @@ npm run backup -- --out svault-backup.zip
 npm run restore -- --in svault-backup.zip   # stop the server first
 ```
 
-Restore validates paths, checksums and schema, keeps a pre-restore copy, stages the archive and restarts
-the server. During the swap API requests return `503`.
+`npm run backup` writes only to `--out`; it does not add a copy to `DATA_DIR/backups` or rotate it.
+
+Restore validates paths, checksums and schema, saves a **pre-restore safety copy** of the current data,
+stages the archive and restarts the server. During the swap API requests return `503`.
+
+Safety copies are full backup zips named `pre-restore-<timestamp>.zip` in
+`DATA_DIR/backups/pre-restore` (`/data/backups/pre-restore` in Docker). They rotate separately from
+regular backups (newest three, `SV_PRE_RESTORE_KEEP`), so downloading or scheduling more backups never
+deletes the copy you need to roll back. Settings lists them under **Safety copies taken before a
+restore**. To roll back, restore that zip like any other backup. `npm run restore` takes the same safety
+copy (skip it with `--no-safety-copy`, e.g. when the current database cannot be opened); SQLite
+additionally keeps a raw `pre-restore-<ms>.db` of the replaced file in the same folder, rotated the same
+way.
 
 ### Stop and copy (simplest, consistent)
 
@@ -380,7 +399,8 @@ docker compose up -d
 ```
 
 Restoring is destructive. Keep the old volume or a second archive until the new instance is verified.
-The in-app restore keeps a timestamped pre-restore copy under `DATA_DIR/backups`.
+The in-app restore and `npm run restore` keep timestamped safety copies under
+`DATA_DIR/backups/pre-restore`.
 
 ### What to back up
 

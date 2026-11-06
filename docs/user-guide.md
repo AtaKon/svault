@@ -471,10 +471,17 @@ Docker, Loki, Grafana or another log collector.
 - For a full backup, copy the whole `DATA_DIR` (or the `svault-data` Docker volume). Stop the
   container first for the most consistent SQLite copy, or use `sqlite3 svault.db ".backup ..."`.
 - **Settings → Data → Backup & restore** downloads a checksummed zip with a live SQLite snapshot and
-  uploads. Restore validates the archive, keeps a pre-restore copy and returns 503 while it restarts.
-  Because a backup holds every house and account on the server, only the instance administrator (the
-  first account) sees this panel.
-  The same operations are available as `npm run backup` / `npm run restore`.
+  uploads. Because a backup holds every house and account on the server, only the instance
+  administrator (the first account) sees this panel. The server keeps the last five backups in
+  `DATA_DIR/backups`. Backups are written to disk as they are built, so large photo libraries do not
+  need extra memory, only free disk space.
+- Restore validates the archive, then saves a safety copy of your current data before anything is
+  replaced, and returns 503 while it restarts. Safety copies live in `/data/backups/pre-restore`
+  (`DATA_DIR/backups/pre-restore`), are listed separately as **Safety copies taken before a restore**
+  and are never removed by new backups; the newest three are kept (`SV_PRE_RESTORE_KEEP`). To undo a
+  restore, restore the matching `pre-restore-….zip`.
+- The same operations are available as `npm run backup` / `npm run restore`; the CLI restore also
+  takes a safety copy unless you pass `--no-safety-copy`.
 - To move to another server, copy `DATA_DIR` to the new host and start the same image with the same
   `DATA_DIR`.
 
