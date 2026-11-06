@@ -19,6 +19,7 @@ export function ProfilePage() {
   const [email, setEmail] = useState(user?.email ?? "");
   const [username, setUsername] = useState(user?.username ?? "");
   const [savingProfile, setSavingProfile] = useState(false);
+  const [profilePassword, setProfilePassword] = useState("");
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -158,15 +159,22 @@ export function ProfilePage() {
     }
   };
 
+  const hasPassword = user?.hasPassword !== false;
+  const identityChanged =
+    email.trim().toLowerCase() !== (user?.email ?? "").toLowerCase() ||
+    username.trim().toLowerCase() !== (user?.username ?? "").toLowerCase();
+  const needsProfilePassword = identityChanged && hasPassword;
+
   const saveProfile = async (event: FormEvent) => {
     event.preventDefault();
     setSavingProfile(true);
     try {
       const data = await api<{ user: User; houses: House[] }>("/api/auth/me", {
         method: "PATCH",
-        body: { name, email, username },
+        body: { name, email, username, ...(needsProfilePassword ? { currentPassword: profilePassword } : {}) },
       });
       setSession(data);
+      setProfilePassword("");
       toast.success("Profile updated");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not save your profile");
@@ -215,8 +223,14 @@ export function ProfilePage() {
           <Field label="Name" required>
             <Input value={name} onChange={(event) => setName(event.target.value)} maxLength={80} />
           </Field>
-          <Field label="Email" required>
-            <Input type="email" value={email} onChange={(event) => setEmail(event.target.value)} inputMode="email" />
+          <Field label="Email" hint={hasPassword ? undefined : "managed by your single sign-on provider"} required>
+            <Input
+              type="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              inputMode="email"
+              disabled={!hasPassword}
+            />
           </Field>
           <Field label="Username" hint="sign in with this instead of your email" required>
             <Input
@@ -228,10 +242,20 @@ export function ProfilePage() {
               autoComplete="username"
             />
           </Field>
+          {needsProfilePassword && (
+            <Field label="Current password" hint="needed to change your email or username" required>
+              <Input
+                type="password"
+                value={profilePassword}
+                onChange={(event) => setProfilePassword(event.target.value)}
+                autoComplete="current-password"
+              />
+            </Field>
+          )}
           <Button
             type="submit"
             loading={savingProfile}
-            disabled={!name.trim() || !email.trim() || username.trim().length < 3}
+            disabled={!name.trim() || !email.trim() || username.trim().length < 3 || (needsProfilePassword && !profilePassword)}
           >
             Save profile
           </Button>

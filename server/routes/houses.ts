@@ -6,7 +6,9 @@ import { houseMembers, memberRole, requireAuth, roleAtLeast, verifyPassword } fr
 import { ApiError, handler, parseBody, requireHouse } from "../http.js";
 import { serializeHouse } from "../serialize.js";
 import { createHouse } from "../services/houses.js";
-import { notifyHouseAdded, notifyOwnershipTransferred } from "../services/notifications.js";
+import { houseUploadUrls, removeUnreferencedUploads } from "../services/upload-cleanup.js";
+import { inviteExpired, inviteExpiresAt, newInviteExpiry } from "../services/invites.js";
+import { notifyOwnershipTransferred } from "../services/notifications.js";
 import {
   channelsFromSettings,
   deliveryLog,
@@ -146,7 +148,10 @@ houseRoutes.delete(
   "/:houseId",
   handler(async (req, res) => {
     const { houseId } = await requireHouse(req, "owner");
+    const uploads = await houseUploadUrls(houseId);
     await run("DELETE FROM houses WHERE id = ?", [houseId]);
+    await run("DELETE FROM catalog_mappings WHERE house_id = ?", [houseId]);
+    await removeUnreferencedUploads(uploads);
     res.json({ ok: true });
   }),
 );
@@ -246,27 +251,25 @@ houseRoutes.post(
     if (existing && await memberRole(existing.id, houseId)) {
       throw new ApiError(409, "That person is already a member");
     }
-    if (existing) {
-      await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
-        houseId,
-        existing.id,
-        body.role,
-        now(),
-      ]);
-      await notifyHouseAdded(existing.id, houseId, body.role, req.user!.id);
-      res.status(201).json({
-        member: { id: existing.id, email: existing.email, name: existing.name, role: body.role },
-      });
-      return;
-    }
-    const code = randomBytes(9).toString("base64url");
+    // Existing accounts are not added silently: everyone gets an email-bound
+    // invite and joins by accepting it, so nobody is put into a house without consent.
+    const code = randomBytes(12).toString("base64url");
     const id = newId("inv");
+    const expiresAt = newInviteExpiry();
     await run(
-      "INSERT INTO house_invites (id, house_id, email, role, code, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-      [id, houseId, body.email, body.role, code, req.user!.id, now()],
+      "INSERT INTO house_invites (id, house_id, email, role, code, created_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      [id, houseId, body.email, body.role, code, req.user!.id, now(), expiresAt],
     );
     res.status(201).json({
-      invite: { id, code, email: body.email, role: body.role, url: `/join/${code}` },
+      invite: {
+        id,
+        code,
+        email: body.email,
+        role: body.role,
+        url: `/join/${code}`,
+        expiresAt,
+        existingAccount: Boolean(existing),
+      },
     });
   }),
 );
@@ -359,6 +362,8 @@ houseRoutes.get(
         url: `/join/${i.code}`,
         inviter: i.inviter ?? null,
         createdAt: i.created_at,
+        expiresAt: inviteExpiresAt(i),
+        expired: !i.accepted_at && inviteExpired(i),
         acceptedAt: i.accepted_at ?? null,
       })),
     );

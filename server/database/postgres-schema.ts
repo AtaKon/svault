@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS users (
   username TEXT,
   name TEXT NOT NULL,
   password_hash TEXT NOT NULL,
+  password_set INTEGER NOT NULL DEFAULT 1,
   language TEXT,
   is_admin INTEGER NOT NULL DEFAULT 0,
   developer_mode INTEGER NOT NULL DEFAULT 0,
@@ -36,6 +37,7 @@ CREATE TABLE IF NOT EXISTS user_totp (
   secret TEXT NOT NULL,
   enabled INTEGER NOT NULL DEFAULT 0,
   backup_codes TEXT NOT NULL DEFAULT '[]',
+  last_used_step BIGINT,
   created_at TEXT NOT NULL,
   confirmed_at TEXT
 );
@@ -79,6 +81,7 @@ CREATE TABLE IF NOT EXISTS login_challenges (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   type TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
   expires_at TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
@@ -347,6 +350,7 @@ CREATE INDEX IF NOT EXISTS catalog_products_brand ON catalog_products(brand);
 
 CREATE TABLE IF NOT EXISTS catalog_mappings (
   id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL DEFAULT '',
   country TEXT NOT NULL DEFAULT '',
   vendor_key TEXT NOT NULL DEFAULT '',
   vendor_label TEXT,
@@ -361,8 +365,7 @@ CREATE TABLE IF NOT EXISTS catalog_mappings (
   confidence DOUBLE PRECISION NOT NULL DEFAULT 0.5,
   uses INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  UNIQUE (country, vendor_key, raw_key)
+  updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS catalog_mappings_lookup ON catalog_mappings(country, vendor_key, raw_key);
 CREATE INDEX IF NOT EXISTS catalog_mappings_off ON catalog_mappings(off_code);
@@ -586,6 +589,23 @@ CREATE TABLE IF NOT EXISTS schema_meta (
   value TEXT NOT NULL
 );
 `;
+
+/**
+ * In-place migrations for databases created by older versions.
+ * CREATE TABLE IF NOT EXISTS never adds columns, so every column added after
+ * the first PostgreSQL release is listed here. Each statement is idempotent.
+ */
+export const POSTGRES_MIGRATIONS: string[] = [
+  "ALTER TABLE users ADD COLUMN IF NOT EXISTS developer_mode INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE users ADD COLUMN IF NOT EXISTS password_set INTEGER NOT NULL DEFAULT 1",
+  "ALTER TABLE user_totp ADD COLUMN IF NOT EXISTS last_used_step BIGINT",
+  "ALTER TABLE login_challenges ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0",
+  // Learned catalogue mappings are scoped per house ('' = shared row).
+  "ALTER TABLE catalog_mappings ADD COLUMN IF NOT EXISTS house_id TEXT NOT NULL DEFAULT ''",
+  "ALTER TABLE catalog_mappings DROP CONSTRAINT IF EXISTS catalog_mappings_country_vendor_key_raw_key_key",
+  "CREATE UNIQUE INDEX IF NOT EXISTS catalog_mappings_scope ON catalog_mappings(house_id, country, vendor_key, raw_key)",
+  "CREATE INDEX IF NOT EXISTS catalog_mappings_house ON catalog_mappings(house_id)",
+];
 
 /**
  * Parent-first order used when inserting a logical restore. TRUNCATE ... CASCADE

@@ -12,6 +12,10 @@ import { productAliasKey } from "./product-aliases.js";
  * Seed rows ship in `assets/catalog/off-mappings.json`. Rows learned on this
  * instance are marked `local` and always win over seed/community data. An admin
  * can export the catalogue, import a file, or sync from `SV_CATALOG_URL`.
+ *
+ * Learned rows belong to the house whose receipt taught them (`house_id`), so
+ * one household's purchases never show up as suggestions in another. Seed and
+ * community rows, and rows learned without a house, are shared (`house_id` '').
  */
 
 const SEED_FILE = path.join(ROOT, "assets", "catalog", "off-mappings.json");
@@ -19,6 +23,7 @@ const MAX_MAPPINGS = 20000;
 
 interface MappingRow {
   id: string;
+  house_id: string;
   country: string;
   vendor_key: string;
   vendor_label: string | null;
@@ -94,7 +99,7 @@ export async function seedProductCatalog() {
          (id, country, vendor_key, vendor_label, raw_key, raw_text, off_code, name, brand, unit, category,
           source, confidence, uses, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'seed', ?, 0, ?, ?)
-       ON CONFLICT(country, vendor_key, raw_key) DO UPDATE SET
+       ON CONFLICT(house_id, country, vendor_key, raw_key) DO UPDATE SET
          vendor_label = excluded.vendor_label,
          raw_text = excluded.raw_text,
          off_code = excluded.off_code,
@@ -135,6 +140,8 @@ export async function findCatalogMapping(opts: {
   country?: string | null;
   vendorName?: string | null;
   rawDescription: string;
+  /** The house asking. Its own learned rows are considered before shared ones. */
+  houseId?: string | null;
 }): Promise<CatalogMapping | null> {
   const rawKey = productAliasKey(opts.rawDescription);
   if (!rawKey) return null;
@@ -151,17 +158,27 @@ export async function findCatalogMapping(opts: {
     const key = `${attempt.country}\u0000${attempt.vendor}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    const row = await get<MappingRow>(
-      "SELECT * FROM catalog_mappings WHERE country = ? AND vendor_key = ? AND raw_key = ?",
-      [attempt.country, attempt.vendor, rawKey],
-    );
+    const row = opts.houseId
+      ? await get<MappingRow>(
+          `SELECT * FROM catalog_mappings WHERE house_id IN (?, '') AND country = ? AND vendor_key = ? AND raw_key = ?
+           ORDER BY CASE WHEN house_id = '' THEN 1 ELSE 0 END LIMIT 1`,
+          [opts.houseId, attempt.country, attempt.vendor, rawKey],
+        )
+      : await get<MappingRow>(
+          "SELECT * FROM catalog_mappings WHERE house_id = '' AND country = ? AND vendor_key = ? AND raw_key = ?",
+          [attempt.country, attempt.vendor, rawKey],
+        );
     if (row) return serializeCatalogMapping(row);
   }
   return null;
 }
 
-/** Remember a receipt mapping locally. Local corrections beat seed rows. */
+/**
+ * Remember a receipt mapping locally. Local corrections beat seed rows. With
+ * a houseId the row is private to that house; without one it is shared.
+ */
 export async function learnCatalogMapping(opts: {
+  houseId?: string | null;
   country?: string | null;
   vendorName?: string | null;
   rawDescription: string;
@@ -184,10 +201,10 @@ export async function learnCatalogMapping(opts: {
   const timestamp = now();
   await run(
     `INSERT INTO catalog_mappings
-       (id, country, vendor_key, vendor_label, raw_key, raw_text, off_code, name, brand, unit, category,
+       (id, house_id, country, vendor_key, vendor_label, raw_key, raw_text, off_code, name, brand, unit, category,
         source, confidence, uses, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'local', ?, 1, ?, ?)
-     ON CONFLICT(country, vendor_key, raw_key) DO UPDATE SET
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'local', ?, 1, ?, ?)
+     ON CONFLICT(house_id, country, vendor_key, raw_key) DO UPDATE SET
        vendor_label = excluded.vendor_label,
        raw_text = excluded.raw_text,
        off_code = COALESCE(excluded.off_code, catalog_mappings.off_code),
@@ -201,6 +218,7 @@ export async function learnCatalogMapping(opts: {
        updated_at = excluded.updated_at`,
     [
       newId("cmap"),
+      String(opts.houseId ?? ""),
       country,
       vendorKey,
       vendorLabel,
@@ -233,7 +251,17 @@ export async function listCatalogMappings(query: string, limit = 100): Promise<C
 }
 
 export async function exportCatalogMappings(): Promise<CatalogExport> {
-  const rows = await all<MappingRow>("SELECT * FROM catalog_mappings ORDER BY country, vendor_key, raw_key");
+  const allRows = await all<MappingRow>(
+    "SELECT * FROM catalog_mappings ORDER BY country, vendor_key, raw_key, uses DESC, updated_at DESC",
+  );
+  // House-scoped rows can repeat a key; the export has no house column, so keep the most used one.
+  const seen = new Set<string>();
+  const rows = allRows.filter((row) => {
+    const key = `${row.country}\u0000${row.vendor_key}\u0000${row.raw_key}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
   return {
     version: 1,
     generatedAt: now(),
@@ -294,7 +322,7 @@ export async function importCatalogMappings(input: unknown): Promise<CatalogImpo
     }
     const vendorKey = mapping.vendor ? normalizeVendorName(mapping.vendor) : "";
     const existing = await get<{ id: string; source: string }>(
-      "SELECT id, source FROM catalog_mappings WHERE country = ? AND vendor_key = ? AND raw_key = ?",
+      "SELECT id, source FROM catalog_mappings WHERE house_id = '' AND country = ? AND vendor_key = ? AND raw_key = ?",
       [mapping.country, vendorKey, rawKey],
     );
     if (existing?.source === "local") {
@@ -306,7 +334,7 @@ export async function importCatalogMappings(input: unknown): Promise<CatalogImpo
          (id, country, vendor_key, vendor_label, raw_key, raw_text, off_code, name, brand, unit, category,
           source, confidence, uses, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
-       ON CONFLICT(country, vendor_key, raw_key) DO UPDATE SET
+       ON CONFLICT(house_id, country, vendor_key, raw_key) DO UPDATE SET
          vendor_label = excluded.vendor_label,
          raw_text = excluded.raw_text,
          off_code = excluded.off_code,

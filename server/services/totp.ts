@@ -55,14 +55,21 @@ export function totpCode(secret: string, timestamp = Date.now(), step = 30, digi
   return String(value % 10 ** digits).padStart(digits, "0");
 }
 
-export function verifyTotp(secret: string, code: string, window = 1): boolean {
+/** The 30-second time step a code belongs to, or null when it does not match. */
+export function matchTotpStep(secret: string, code: string, window = 1): number | null {
   const wanted = code.replace(/\s+/g, "");
-  if (!/^\d{6}$/.test(wanted)) return false;
+  if (!/^\d{6}$/.test(wanted)) return null;
+  const current = Math.floor(Date.now() / 30_000);
   for (let offset = -window; offset <= window; offset++) {
-    const candidate = totpCode(secret, Date.now() + offset * 30_000);
-    if (timingSafeEqual(Buffer.from(candidate), Buffer.from(wanted))) return true;
+    const step = current + offset;
+    const candidate = totpCode(secret, step * 30_000);
+    if (timingSafeEqual(Buffer.from(candidate), Buffer.from(wanted))) return step;
   }
-  return false;
+  return null;
+}
+
+export function verifyTotp(secret: string, code: string, window = 1): boolean {
+  return matchTotpStep(secret, code, window) !== null;
 }
 
 export function otpauthUrl(secret: string, account: string, issuer = "SVault"): string {
@@ -126,18 +133,34 @@ export async function disableTotp(userId: string) {
   await run("DELETE FROM user_totp WHERE user_id = ?", [userId]);
 }
 
-/** Accept a TOTP code or consume one of the hashed backup codes. */
+/**
+ * Accept a TOTP code or consume one of the hashed backup codes. A TOTP code
+ * is accepted at most once: its time step must be newer than the last one
+ * this user signed in with, so an observed code cannot be replayed.
+ */
 export async function verifyTotpOrBackup(userId: string, code: string): Promise<boolean> {
   const row = await getTotp(userId);
   if (!row || !row.enabled) return false;
-  if (verifyTotp(row.secret, code)) return true;
+  const step = matchTotpStep(row.secret, code);
+  if (step !== null) {
+    const result = await run(
+      "UPDATE user_totp SET last_used_step = ? WHERE user_id = ? AND (last_used_step IS NULL OR last_used_step < ?)",
+      [step, userId, step],
+    );
+    return result.changes > 0;
+  }
   const hashed = JSON.parse(row.backup_codes || "[]") as string[];
   const wanted = hashBackupCode(code);
   const index = hashed.findIndex((entry) => timingSafeEqual(Buffer.from(entry), Buffer.from(wanted)));
   if (index < 0) return false;
   hashed.splice(index, 1);
-  await run("UPDATE user_totp SET backup_codes = ? WHERE user_id = ?", [JSON.stringify(hashed), userId]);
-  return true;
+  // Only succeed if nobody consumed a code in between.
+  const result = await run("UPDATE user_totp SET backup_codes = ? WHERE user_id = ? AND backup_codes = ?", [
+    JSON.stringify(hashed),
+    userId,
+    row.backup_codes,
+  ]);
+  return result.changes > 0;
 }
 
 export async function requireTotp(userId: string): Promise<boolean> {
@@ -166,11 +189,23 @@ export async function consumeLoginChallenge(id: string, type = "totp"): Promise<
   return row.user_id as string;
 }
 
+/** Wrong codes allowed per sign-in challenge before the password step must be repeated. */
+export const MAX_CHALLENGE_ATTEMPTS = 5;
+
+/** Count a wrong code. Returns the attempts left; at zero the challenge is gone. */
+export async function recordChallengeFailure(id: string, type = "totp"): Promise<number> {
+  await run("UPDATE login_challenges SET attempts = attempts + 1 WHERE id = ? AND type = ?", [id, type]);
+  const row = await get<{ attempts: number }>("SELECT attempts FROM login_challenges WHERE id = ? AND type = ?", [id, type]);
+  const left = MAX_CHALLENGE_ATTEMPTS - Number(row?.attempts ?? MAX_CHALLENGE_ATTEMPTS);
+  if (left <= 0) await run("DELETE FROM login_challenges WHERE id = ?", [id]);
+  return Math.max(0, left);
+}
+
 /** Look at a challenge without invalidating it, so a mistyped code can be retried. */
 export async function peekLoginChallenge(id: string, type = "totp"): Promise<string | null> {
   const row = await get<any>("SELECT * FROM login_challenges WHERE id = ? AND type = ?", [id, type]);
   if (!row) return null;
-  if (new Date(row.expires_at).getTime() < Date.now()) {
+  if (new Date(row.expires_at).getTime() < Date.now() || Number(row.attempts ?? 0) >= MAX_CHALLENGE_ATTEMPTS) {
     await run("DELETE FROM login_challenges WHERE id = ?", [id]);
     return null;
   }

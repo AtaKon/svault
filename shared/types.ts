@@ -11,6 +11,8 @@ export interface User {
   isAdmin: boolean;
   /** Reveals the developer page, including the AI call log. */
   developerMode: boolean;
+  /** False for single sign-on accounts that never had a password of their own. */
+  hasPassword?: boolean;
   createdAt: string;
 }
 

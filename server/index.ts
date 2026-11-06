@@ -1,7 +1,11 @@
 import express from "express";
 import fs from "node:fs";
-import { PORT, CLIENT_DIR, IS_PROD, UPLOAD_DIR, ensureDirs } from "./config.js";
+import path from "node:path";
+import { createHash } from "node:crypto";
+import { PORT, CLIENT_DIR, IS_PROD, RP_ORIGIN, UPLOAD_DIR, ensureDirs } from "./config.js";
 import { ApiError } from "./http.js";
+import { IMAGE_EXTENSIONS } from "./upload.js";
+import { RateLimitError, limitRequests, limiters, userOrIp } from "./rate-limit.js";
 import { attachUser } from "./auth.js";
 import { authRoutes } from "./routes/auth.js";
 import { passkeyRoutes } from "./routes/passkeys.js";
@@ -30,6 +34,7 @@ import { seedVendorCatalog } from "./services/vendors.js";
 import { seedProductCatalog } from "./services/product-catalog.js";
 import { pruneOffProductCache } from "./services/openfoodfacts.js";
 import { pruneAiCallLogs } from "./services/ai-logs.js";
+import { sweepOrphanUploads } from "./services/upload-cleanup.js";
 import { initDb, closeDb, databaseKind } from "./db.js";
 
 await initDb();
@@ -43,19 +48,104 @@ export const app = express();
 app.disable("x-powered-by");
 app.set("trust proxy", 1);
 
+/**
+ * Content-Security-Policy for the app shell. The only inline script is the
+ * theme bootstrap in index.html, allowed by its hash. Tesseract OCR needs
+ * WebAssembly ('wasm-unsafe-eval') and a blob: worker; product photos come
+ * from OpenFoodFacts over https. Set SV_CSP=off to disable it.
+ */
+function inlineScriptHashes(): string[] {
+  try {
+    const html = fs.readFileSync(path.join(CLIENT_DIR, "index.html"), "utf8");
+    const hashes: string[] = [];
+    for (const match of html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi)) {
+      hashes.push(`'sha256-${createHash("sha256").update(match[1]).digest("base64")}'`);
+    }
+    return hashes;
+  } catch {
+    return [];
+  }
+}
+
+const SHELL_CSP = [
+  "default-src 'self'",
+  ["script-src 'self' 'wasm-unsafe-eval'", ...inlineScriptHashes()].join(" "),
+  "worker-src 'self' blob:",
+  "img-src 'self' data: blob: https:",
+  "media-src 'self' blob:",
+  "connect-src 'self' data: blob:",
+  "style-src 'self' 'unsafe-inline'",
+  "font-src 'self' data:",
+  "manifest-src 'self'",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'self'",
+].join("; ");
+const CSP_ENABLED = (process.env.SV_CSP ?? "on").trim().toLowerCase() !== "off";
+
 app.use((req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   res.setHeader("X-Frame-Options", "SAMEORIGIN");
   res.setHeader("Permissions-Policy", "camera=(self), microphone=(), geolocation=()");
+  if (CSP_ENABLED && !req.path.startsWith("/uploads")) res.setHeader("Content-Security-Policy", SHELL_CSP);
   if (IS_PROD && req.path.startsWith("/api")) {
     res.setHeader("Cache-Control", "no-store");
   }
   next();
 });
 
+/**
+ * CSRF defence in depth on top of SameSite=Lax cookies: a state-changing API
+ * request from a browser must come from this origin. Browsers mark requests
+ * with Sec-Fetch-Site and Origin; non-browser clients send neither and pass.
+ */
+const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+function trustedHosts(req: express.Request): Set<string> {
+  const hosts = new Set<string>();
+  if (req.headers.host) hosts.add(req.headers.host.toLowerCase());
+  const forwarded = String(req.headers["x-forwarded-host"] ?? "").split(",")[0].trim().toLowerCase();
+  if (forwarded) hosts.add(forwarded);
+  if (RP_ORIGIN) {
+    try {
+      hosts.add(new URL(RP_ORIGIN).host.toLowerCase());
+    } catch {
+      /* ignore a malformed ORIGIN */
+    }
+  }
+  return hosts;
+}
+app.use("/api", (req, res, next) => {
+  if (!UNSAFE_METHODS.has(req.method)) {
+    next();
+    return;
+  }
+  const site = String(req.headers["sec-fetch-site"] ?? "").toLowerCase();
+  if (site === "same-origin" || site === "none") {
+    next();
+    return;
+  }
+  const origin = req.headers.origin;
+  if (origin) {
+    let host = "";
+    try {
+      host = new URL(origin).host.toLowerCase();
+    } catch {
+      host = "";
+    }
+    if (host && trustedHosts(req).has(host)) {
+      next();
+      return;
+    }
+  } else if (!site) {
+    next();
+    return;
+  }
+  res.status(403).json({ error: "Cross-site request blocked" });
+});
+
 app.use(express.json({ limit: "2mb" }));
-app.use(express.urlencoded({ extended: false, limit: "1mb" }));
 app.use(attachUser);
 
 app.use((_req, res, next) => {
@@ -77,6 +167,24 @@ if (!IS_PROD) {
     next();
   });
 }
+
+/* Rate limits for credential, invite and AI endpoints. Mounted by path ahead
+   of the routers so every router gets the same treatment. */
+const authLimit = limitRequests(limiters.login, undefined, "Too many sign-in attempts. Wait a few minutes and try again.");
+app.post("/api/auth/login", authLimit);
+app.post("/api/auth/register", limitRequests(limiters.register, undefined, "Too many sign-ups from this address. Try again later."));
+app.post("/api/auth/2fa/verify", limitRequests(limiters.twoFactor, undefined, "Too many codes entered. Wait a few minutes and try again."));
+app.post("/api/auth/passkeys/login/options", limitRequests(limiters.passkey));
+app.post("/api/auth/passkeys/login/verify", limitRequests(limiters.passkey));
+app.get("/api/auth/invites/:code", limitRequests(limiters.invite));
+app.post("/api/auth/invites/:code/accept", limitRequests(limiters.invite));
+const aiLimit = limitRequests(limiters.ai, userOrIp, "Too many AI requests. Wait a few minutes and try again.");
+app.post("/api/houses/:houseId/receipts/scan", aiLimit);
+app.post("/api/houses/:houseId/recipes/scan", aiLimit);
+app.post("/api/houses/:houseId/intake/parse", aiLimit);
+app.post("/api/houses/:houseId/ideas", aiLimit);
+app.post("/api/houses/:houseId/ai/test", aiLimit);
+app.post("/api/recipes/:recipeId/ai", aiLimit);
 
 app.use("/api/auth", authRoutes);
 app.use("/api/auth", passkeyRoutes);
@@ -110,7 +218,27 @@ app.get("/api/health", (_req, res) => {
   res.json({ ok: true, version: 1, database: databaseKind(), time: new Date().toISOString() });
 });
 
-app.use("/uploads", express.static(UPLOAD_DIR, { maxAge: "30d", fallthrough: true, index: false }));
+/* Uploaded files are user content served from the app's own origin. Lock them
+   down so nothing under /uploads can run script, even if a non-image slipped
+   in through an older version: no sniffing, a sandboxing CSP, and anything
+   that is not a known image extension is forced to download. */
+app.use(
+  "/uploads",
+  express.static(UPLOAD_DIR, {
+    maxAge: "30d",
+    fallthrough: true,
+    index: false,
+    dotfiles: "deny",
+    setHeaders: (res, filePath) => {
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("Content-Security-Policy", "default-src 'none'; img-src 'self'; sandbox");
+      if (!IMAGE_EXTENSIONS.has(path.extname(filePath).toLowerCase())) {
+        res.setHeader("Content-Type", "application/octet-stream");
+        res.setHeader("Content-Disposition", "attachment");
+      }
+    },
+  }),
+);
 
 app.use("/api", (_req, res) => {
   res.status(404).json({ error: "Unknown API route" });
@@ -126,13 +254,14 @@ if (fs.existsSync(CLIENT_DIR)) {
 }
 
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  if (err instanceof RateLimitError) res.setHeader("Retry-After", String(err.retryAfter));
   if (err instanceof ApiError) {
     res.status(err.status).json({ error: err.message, details: err.details ?? undefined });
     return;
   }
   if (err?.name === "MulterError") {
     res.status(400).json({
-      error: err.code === "LIMIT_FILE_SIZE" ? "That image is too large" : `Upload failed: ${err.message}`,
+      error: err.code === "LIMIT_FILE_SIZE" ? "That file is too large" : `Upload failed: ${err.message}`,
     });
     return;
   }
@@ -161,7 +290,20 @@ if (process.env.NODE_ENV !== "test") {
     }, 30 * 60 * 1000);
     timer.unref();
 
-    const logTimer = setInterval(() => void pruneAiCallLogs(), 24 * 60 * 60 * 1000);
+    const sweepUploads = async () => {
+      try {
+        const removed = await sweepOrphanUploads();
+        if (removed) console.log(`Removed ${removed} orphaned upload${removed === 1 ? "" : "s"}`);
+      } catch (err) {
+        console.error("Upload cleanup failed:", err);
+      }
+    };
+    void sweepUploads();
+
+    const logTimer = setInterval(() => {
+      void pruneAiCallLogs();
+      void sweepUploads();
+    }, 24 * 60 * 60 * 1000);
     logTimer.unref();
     void server;
   });

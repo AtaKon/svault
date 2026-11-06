@@ -50,6 +50,12 @@ export async function requireHouse(req: Request, minRole: Role = "viewer") {
   return { houseId, role };
 }
 
+/** Instance-wide operations (backups, catalogue maintenance) need the instance admin. */
+export function requireInstanceAdmin(req: Request): void {
+  if (!req.user) throw new ApiError(401, "Not signed in");
+  if (!req.user.isAdmin) throw new ApiError(403, "Requires the instance administrator");
+}
+
 export function intParam(value: unknown, fallback: number, max = 200): number {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return fallback;

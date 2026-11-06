@@ -1,6 +1,7 @@
 import { AI_ENV, AI_LOG_PREVIEW_CHARS } from "./config.js";
 import { ApiError } from "./http.js";
 import { recordAiCall } from "./services/ai-logs.js";
+import { OutboundBlockedError, assertOutboundUrl, outboundRedirectMode } from "./lib/outbound.js";
 import type { HouseSettings } from "../shared/types.js";
 
 /** Extra context attached to the AI audit trail. */
@@ -22,6 +23,8 @@ export interface AiConfig {
   inputPrice: number | null;
   /** USD per 1M completion tokens. Used when the provider does not report a price. */
   outputPrice: number | null;
+  /** True when the house points at its own endpoint instead of the server's default. */
+  customEndpoint: boolean;
 }
 
 /** What an AI call cost, in USD, plus the token counts it was billed for. */
@@ -45,17 +48,41 @@ function optionalPrice(value: unknown): number | null {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
+/** Compare endpoints without caring about trailing slashes or host case. */
+export function normaliseBaseUrl(value: unknown): string {
+  const trimmed = String(value ?? "").trim().replace(/\/+$/, "");
+  if (!trimmed) return "";
+  try {
+    const url = new URL(trimmed);
+    return `${url.protocol}//${url.host}${url.pathname.replace(/\/+$/, "")}${url.search}`.toLowerCase();
+  } catch {
+    return trimmed.toLowerCase();
+  }
+}
+
+/**
+ * Resolve the provider for a house. The server's own key (OPENAI_API_KEY) is
+ * only ever sent to the server's own base URL: a house that points SVault at
+ * a different endpoint must bring its own key, or the endpoint must be a
+ * keyless local one (Ollama, LM Studio) that the house explicitly enabled.
+ */
 export function resolveAi(settings: HouseSettings | Record<string, any>): AiConfig {
   const ai = (settings as HouseSettings)?.ai ?? {};
-  const apiKey = (ai.apiKey && ai.apiKey !== "***" ? ai.apiKey : AI_ENV.apiKey) || "";
+  const houseBase = String(ai.baseUrl ?? "").trim().replace(/\/+$/, "");
+  const envBase = String(AI_ENV.baseUrl ?? "").trim().replace(/\/+$/, "");
+  const customEndpoint = Boolean(houseBase) && normaliseBaseUrl(houseBase) !== normaliseBaseUrl(envBase);
+  const houseKey = ai.apiKey && ai.apiKey !== "***" ? String(ai.apiKey) : "";
+  const apiKey = houseKey || (customEndpoint ? "" : AI_ENV.apiKey) || "";
+  const enabled = ai.enabled !== false && (Boolean(apiKey) || (customEndpoint && ai.enabled === true));
   return {
-    enabled: Boolean(apiKey) && ai.enabled !== false,
-    baseUrl: (ai.baseUrl || AI_ENV.baseUrl || "").replace(/\/+$/, ""),
+    enabled,
+    baseUrl: houseBase || envBase,
     apiKey,
     model: ai.model || AI_ENV.model,
     visionModel: ai.visionModel || AI_ENV.visionModel || ai.model || AI_ENV.model,
     inputPrice: optionalPrice(ai.inputPrice) ?? AI_ENV.inputPrice,
     outputPrice: optionalPrice(ai.outputPrice) ?? AI_ENV.outputPrice,
+    customEndpoint,
   };
 }
 
@@ -90,6 +117,14 @@ export async function chat(
   ctx: AiCallContext = { operation: "chat" },
 ): Promise<{ text: string; usage: AiUsage }> {
   if (!cfg.enabled) throw new ApiError(400, "No AI provider configured");
+  if (cfg.customEndpoint) {
+    try {
+      await assertOutboundUrl(cfg.baseUrl, "The AI base URL");
+    } catch (error) {
+      if (error instanceof OutboundBlockedError) throw new ApiError(400, error.message);
+      throw error;
+    }
+  }
 
   const startedAt = Date.now();
   const content: string | ContentPart[] = opts.images?.length
@@ -130,6 +165,7 @@ export async function chat(
         ...(cfg.apiKey ? { authorization: `Bearer ${cfg.apiKey}` } : {}),
       },
       body: payloadText,
+      redirect: cfg.customEndpoint ? outboundRedirectMode() : "follow",
       signal: AbortSignal.timeout(90_000),
     });
     lastStatus = res.status;
