@@ -1394,9 +1394,7 @@ describe("receipts and shops", () => {
         subtotal: draft.subtotal,
         tax: draft.tax,
         taxBreakdown: draft.taxBreakdown,
-        templateId: draft.templateId,
-        templateConfidence: draft.templateConfidence,
-        provider: scan.data.provider,
+        scanId: scan.data.scanId,
         savings: draft.savings,
         ocrText: SKLAVENITIS_SAMPLE,
         lines: draft.lines.map((line: any) => ({
@@ -1477,8 +1475,9 @@ describe("receipts and shops", () => {
     assert.equal(res.status, 201);
     assert.equal(res.data.vendorName, "Corner Market");
     assert.equal(res.data.lines.length, 2);
-    assert.equal(res.data.provider, "ai");
-    assert.equal(res.data.aiCost, 0.0012);
+    // Provenance comes from a server-side scan record; client-sent values are ignored.
+    assert.equal(res.data.provider, null);
+    assert.equal(res.data.aiCost, null);
     assert.equal(res.data.lines[0].itemName, "Milk");
     assert.equal(res.data.lines[1].itemName, "Sourdough bread");
     receiptId = res.data.id;

@@ -4,11 +4,11 @@ import { AI_ENV } from "../config.js";
 import { all, get, newId, now, parseJson, run, tx } from "../db.js";
 import { requireAuth, memberRole, roleAtLeast } from "../auth.js";
 import { ApiError, handler, intParam, parseBody, requireHouse } from "../http.js";
-import { aiParseReceipt, fileToDataUrl, resolveAi } from "../ai.js";
+import { aiParseReceipt, resolveAi } from "../ai.js";
 import { heuristicReceipt, normaliseReceiptDraft } from "../services/receipt-local.js";
-import { addStock, afterStockChange } from "../services/stock.js";
+import { addStock, afterStockChange, revertReceiptStock } from "../services/stock.js";
 import { receiptLinesFor, serializeReceipt, serializeVendor } from "../serialize.js";
-import { uploader, uploadPath } from "../upload.js";
+import { uploader } from "../upload.js";
 import { convert, round } from "../units.js";
 import {
   CATALOG_COUNTRIES,
@@ -20,10 +20,35 @@ import {
   normalizeVendorName,
 } from "../services/vendors.js";
 import { selectReceiptTemplate } from "../services/receipt-templates.js";
-import { findProductAlias, learnProductAlias } from "../services/product-aliases.js";
+import { learnProductAlias } from "../services/product-aliases.js";
 import { suggestProductMatches } from "../services/product-match.js";
 import { fetchOffProduct, getCachedOffProduct, linkItemToOff } from "../services/openfoodfacts.js";
 import { findCatalogMapping, learnCatalogMapping } from "../services/product-catalog.js";
+import { planReceiptLines, type LinePlan } from "../services/receipt-lines.js";
+import {
+  MAX_SCAN_IMAGES,
+  RECEIPT_IMAGE_PATTERN,
+  createScanRecord,
+  forgetScanRecord,
+  getScanRecord,
+  isReceiptImagePath,
+  loadVisionImages,
+  receiptImageExists,
+  rememberUpload,
+  removeReceiptImageIfUnused,
+  skippedImagesWarning,
+  uploadBelongsTo,
+} from "../services/receipt-scans.js";
+import { reconcileReceipt, reconciliationGap } from "../../shared/receipt-reconcile.js";
+import type {
+  ReceiptDeleteResult,
+  ReceiptDraft,
+  ReceiptDuplicate,
+  ReceiptScanResponse,
+  ReceiptStockRevert,
+  ReceiptValidation,
+  ReceiptValidationLine,
+} from "../../shared/types.js";
 
 export const receiptRoutes = Router();
 export const singleReceiptRoutes = Router();
@@ -182,7 +207,16 @@ async function receiptDetail(houseId: string, receiptId: string) {
   return serializeReceipt(row, await receiptLinesFor(receiptId));
 }
 
-async function resolveVendor(houseId: string, vendorId: string | null | undefined, vendorName: string | null | undefined) {
+/**
+ * Find the shop a receipt belongs to: the chosen id, an existing shop with the
+ * same (normalised or catalogue) name, or — when `create` is set — a new one.
+ */
+async function resolveVendor(
+  houseId: string,
+  vendorId: string | null | undefined,
+  vendorName: string | null | undefined,
+  { create = true }: { create?: boolean } = {},
+) {
   if (vendorId) {
     const vendor = await vendorRow(houseId, vendorId);
     if (!vendor) throw new ApiError(400, "Shop does not exist in this house");
@@ -200,6 +234,7 @@ async function resolveVendor(houseId: string, vendorId: string | null | undefine
       if ((await canonicalVendor(vendor.name, country))?.id === catalog.id) return vendor;
     }
   }
+  if (!create) return null;
   const id = newId("vnd");
   await run("INSERT INTO vendors (id, house_id, name, kind, note, created_at) VALUES (?, ?, ?, ?, NULL, ?)", [
     id,
@@ -209,15 +244,6 @@ async function resolveVendor(houseId: string, vendorId: string | null | undefine
     now(),
   ]);
   return await get<any>("SELECT * FROM vendors WHERE id = ?", [id]);
-}
-
-function looseName(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/\b\d+(?:[.,]\d+)?\s*(?:kg|g|gr|mg|l|lt|ml|cl|dl|pcs|pc|pack|packs|box|bag|bottle|can|jar|tub|roll)s?\b/g, " ")
-    .replace(/[^a-z0-9\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
 }
 
 /** Small concurrency pool for OpenFoodFacts lookups during a receipt import. */
@@ -235,42 +261,6 @@ async function mapWithLimit<T, R>(items: T[], limit: number, fn: (item: T) => Pr
   return results;
 }
 
-async function matchItem(houseId: string, line: { description: string; itemId?: string | null; barcode?: string | null }) {
-  if (line.itemId) {
-    const item = await get<any>("SELECT * FROM items WHERE id = ? AND house_id = ?", [line.itemId, houseId]);
-    if (!item) throw new ApiError(400, "One of the chosen items is not in this house");
-    return item;
-  }
-  if (line.barcode) {
-    const item = await get<any>(
-      `SELECT i.* FROM items i JOIN item_barcodes b ON b.item_id = i.id
-       WHERE i.house_id = ? AND b.code = ?`,
-      [houseId, line.barcode],
-    );
-    if (item) return item;
-  }
-  const exact = await get<any>("SELECT * FROM items WHERE house_id = ? AND archived = 0 AND LOWER(name) = LOWER(?)", [
-    houseId,
-    line.description,
-  ]);
-  if (exact) return exact;
-
-  const wanted = looseName(line.description);
-  if (wanted.length < 3) return null;
-  const candidates = await all<any>("SELECT * FROM items WHERE house_id = ? AND archived = 0", [houseId]);
-  let best: { item: any; score: number } | null = null;
-  for (const candidate of candidates) {
-    const name = looseName(String(candidate.name));
-    if (!name || name.length < 3) continue;
-    if (name === wanted) return candidate;
-    if (wanted.includes(name) || name.includes(wanted)) {
-      const score = Math.min(name.length, wanted.length) / Math.max(name.length, wanted.length);
-      if (score >= 0.6 && (!best || score > best.score)) best = { item: candidate, score };
-    }
-  }
-  return best?.item ?? null;
-}
-
 const boundedNumber = (min: number, max: number) =>
   z.number().finite().transform((value) => Math.min(max, Math.max(min, value)));
 const optionalText = (max: number) =>
@@ -279,6 +269,10 @@ const optionalText = (max: number) =>
     .trim()
     .transform((value) => value.slice(0, max) || null)
     .nullish();
+const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD");
+const receiptImage = z
+  .string()
+  .regex(RECEIPT_IMAGE_PATTERN, "Use an image uploaded with /receipts/upload");
 
 const lineInput = z.object({
   description: z.string().trim().min(1).transform((value) => value.slice(0, 160)),
@@ -294,7 +288,9 @@ const lineInput = z.object({
   taxRate: boundedNumber(0, 100).nullish(),
   discount: boundedNumber(0, 1e9).nullish(),
   itemId: z.string().max(60).nullish(),
+  /** Overrides the receipt-level place for this line. */
   locationId: z.string().max(60).nullish(),
+  expiresAt: isoDate.nullish(),
   barcode: optionalText(80),
   offCode: optionalText(80),
 });
@@ -302,10 +298,7 @@ const lineInput = z.object({
 const importBody = z.object({
   vendorId: z.string().max(60).nullish(),
   vendorName: optionalText(80),
-  purchasedAt: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD")
-    .nullish(),
+  purchasedAt: isoDate.nullish(),
   currency: optionalText(3),
   total: boundedNumber(0, 1e9).nullish(),
   subtotal: boundedNumber(0, 1e9).nullish(),
@@ -321,16 +314,23 @@ const importBody = z.object({
     )
     .max(20)
     .optional(),
-  image: optionalText(300),
+  image: z.string().max(300).nullish(),
   ocrText: optionalText(50000),
   notes: optionalText(500),
-  templateId: optionalText(60),
-  templateConfidence: boundedNumber(0, 1).nullish(),
-  provider: z.enum(["ai", "local", "template"]).nullish(),
-  aiCost: boundedNumber(0, 1e9).nullish(),
+  /** Id returned by /receipts/scan; provider, AI cost and template come from it. */
+  scanId: z.string().max(80).nullish(),
+  /** Import even when an identical receipt was already saved. */
+  allowDuplicate: z.boolean().optional(),
+  // Accepted for older clients but ignored: provenance is taken from `scanId`.
+  templateId: z.string().max(200).nullish(),
+  templateConfidence: z.number().nullish(),
+  provider: z.string().max(40).nullish(),
+  aiCost: z.number().nullish(),
   savings: boundedNumber(0, 1e9).nullish(),
   lines: z.array(lineInput).min(1).max(200),
 });
+
+type ImportBody = z.infer<typeof importBody>;
 
 receiptRoutes.get(
   "/:houseId/receipts",
@@ -367,16 +367,41 @@ receiptRoutes.post(
   "/:houseId/receipts/upload",
   uploader("receipts").single("image"),
   handler(async (req, res) => {
-    await requireHouse(req, "member");
+    const { houseId } = await requireHouse(req, "member");
     if (!req.file) throw new ApiError(400, "No image uploaded");
-    res.status(201).json({ path: `/uploads/receipts/${req.file.filename}` });
+    const path = `/uploads/receipts/${req.file.filename}`;
+    rememberUpload(path, houseId);
+    res.status(201).json({ path });
   }),
 );
 
-async function localImageToDataUrl(image: string): Promise<string | null> {
-  if (!image.startsWith("/uploads/receipts/")) return Promise.resolve(null);
-  const filename = image.split("/").pop()!;
-  return await fileToDataUrl(uploadPath("receipts", filename), "image/jpeg");
+/**
+ * Remove a scan image the browser no longer needs (a superseded stitch, a
+ * removed page, a discarded draft). Images that belong to a saved receipt stay.
+ */
+receiptRoutes.delete(
+  "/:houseId/receipts/upload",
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req, "member");
+    const body = parseBody(z.object({ path: receiptImage }), req.body);
+    if (!uploadBelongsTo(body.path, houseId)) throw new ApiError(404, "Upload not found");
+    if (await get("SELECT id FROM receipts WHERE image = ? LIMIT 1", [body.path])) {
+      throw new ApiError(409, "That image belongs to a saved receipt");
+    }
+    const deleted = await removeReceiptImageIfUnused(body.path);
+    res.json({ ok: true, deleted });
+  }),
+);
+
+/** Below this a template's own parse is double-checked by AI when one is configured. */
+const TEMPLATE_CONFIDENCE_THRESHOLD = 0.75;
+
+function draftReconciliation(draft: ReceiptDraft) {
+  return reconcileReceipt({ total: draft.total, savings: draft.savings ?? null, lines: draft.lines });
+}
+
+function moneyText(value: number, currency: string | null) {
+  return `${value.toFixed(2)}${currency ? ` ${currency}` : ""}`;
 }
 
 receiptRoutes.post(
@@ -386,67 +411,119 @@ receiptRoutes.post(
     const body = parseBody(
       z.object({
         text: z.string().max(50000).optional(),
-        image: z.string().max(300).optional(),
+        /** Stitched image kept with the receipt (older clients send only this). */
+        image: receiptImage.optional(),
+        /** Each page photo, in order, for the vision model. */
+        images: z.array(receiptImage).max(MAX_SCAN_IMAGES).optional(),
+        /** Skip the template and let AI read the receipt ("Re-read with AI"). */
+        preferAi: z.boolean().optional(),
       }),
       req.body,
     );
     const rawText = (body.text ?? "").trim();
-    if (!rawText && !body.image) throw new ApiError(400, "Provide receipt text or a scan image");
+    const visionPaths = body.images?.length ? body.images : body.image ? [body.image] : [];
+    if (!rawText && !visionPaths.length) throw new ApiError(400, "Provide receipt text or a scan image");
 
     const house = (await get<any>("SELECT * FROM houses WHERE id = ?", [houseId]))!;
     const settings = parseJson<Record<string, any>>(house.settings, {});
     const cfg = resolveAi(settings);
     const hasVisionModel = Boolean(settings?.ai?.visionModel || AI_ENV.visionModel);
+    const currency = house.currency ?? null;
+    const canUseAi = cfg.enabled && Boolean(rawText || (visionPaths.length && hasVisionModel));
 
     const template = await selectReceiptTemplate(rawText, houseId);
-    let draft = heuristicReceipt(rawText, house.currency ?? null);
+    let draft: ReceiptDraft = heuristicReceipt(rawText, currency);
     let provider: "ai" | "local" | "template" = "local";
     let aiCost: number | null = null;
-    let warning: string | null = null;
+    const warnings: string[] = [];
 
+    const readWithAi = async (reason: string) => {
+      const vision =
+        visionPaths.length && hasVisionModel ? await loadVisionImages(visionPaths) : { images: [], skipped: 0 };
+      const result = await aiParseReceipt(cfg, rawText, vision.images, {
+        operation: "receipt.scan",
+        houseId,
+        userId: req.user!.id,
+        metadata: {
+          hasImage: visionPaths.length > 0,
+          imageCount: vision.images.length,
+          skippedImages: vision.skipped,
+          hasVisionModel,
+          ocrChars: rawText.length,
+          lineCount: draft.lines.length,
+          reason,
+        },
+      });
+      aiCost = result.usage.cost;
+      const imageWarning = hasVisionModel ? skippedImagesWarning(vision.skipped, visionPaths.length) : null;
+      return { draft: normaliseReceiptDraft(result.data, currency), imageWarning };
+    };
+
+    let templateDraft: ReceiptDraft | null = null;
     if (template) {
-      const templated = template.parse(rawText, house.currency ?? null);
+      const templated = template.parse(rawText, currency);
       if (templated.lines.length) {
         templated.templateId = template.id;
         templated.templateConfidence = template.confidence;
+        templateDraft = templated;
         draft = templated;
         provider = "template";
-        warning = null;
       } else {
-        warning = `${template.name} layout detected, but no product lines were read — using the generic parser.`;
+        warnings.push(`${template.name} layout detected, but no product lines were read — using the generic parser.`);
       }
     }
 
-    if (provider !== "template") {
-      if (cfg.enabled && (rawText || (body.image && hasVisionModel))) {
+    if (templateDraft && template) {
+      // A template is fast and free, but only trusted on its own when it is
+      // confident and its lines add up to the printed total.
+      const templateCheck = draftReconciliation(templateDraft);
+      const lowConfidence = template.confidence < TEMPLATE_CONFIDENCE_THRESHOLD;
+      const mismatch = templateCheck.difference != null && !templateCheck.ok;
+      if (canUseAi && (body.preferAi || lowConfidence || mismatch)) {
+        const reason = body.preferAi
+          ? "AI re-read requested"
+          : lowConfidence
+            ? `the ${template.name} template only matched with ${Math.round(template.confidence * 100)}% confidence`
+            : `the ${template.name} template's lines are ${moneyText(Math.abs(templateCheck.difference!), templateDraft.currency)} off the printed total`;
         try {
-          const images =
-            body.image && hasVisionModel
-              ? [await localImageToDataUrl(body.image)].filter((value): value is string => !!value)
-              : [];
-          const aiDraft = await aiParseReceipt(cfg, rawText, images, {
-            operation: "receipt.scan",
-            houseId,
-            userId: req.user!.id,
-            metadata: {
-              hasImage: Boolean(body.image),
-              hasVisionModel,
-              ocrChars: rawText.length,
-              lineCount: draft.lines.length,
-            },
-          });
-          draft = normaliseReceiptDraft(aiDraft.data, house.currency ?? null);
-          aiCost = aiDraft.usage.cost;
-          provider = "ai";
+          const ai = await readWithAi(body.preferAi ? "requested" : lowConfidence ? "low-confidence-template" : "template-mismatch");
+          const aiCheck = draftReconciliation(ai.draft);
+          const aiWins =
+            ai.draft.lines.length > 0 &&
+            (body.preferAi || (!templateCheck.ok && reconciliationGap(aiCheck) < reconciliationGap(templateCheck)));
+          if (aiWins) {
+            draft = ai.draft;
+            provider = "ai";
+            if (!body.preferAi) warnings.push(`AI read this receipt because ${reason}; the AI lines match the total better.`);
+            if (ai.imageWarning) warnings.push(ai.imageWarning);
+          } else {
+            warnings.push(
+              body.preferAi
+                ? "AI did not find any product lines, so the template result was kept."
+                : `AI double-checked this receipt because ${reason}, but did not match the total better — kept the template result.`,
+            );
+          }
         } catch (err) {
-          warning = `AI cleanup failed, kept the locally parsed version. ${err instanceof Error ? err.message : ""}`.trim();
+          warnings.push(
+            `AI re-read failed (${reason}), kept the template result. ${err instanceof Error ? err.message : ""}`.trim(),
+          );
         }
-      } else if (cfg.enabled) {
-        warning =
-          "No text was recognised in the scan. Add a vision-capable model in Settings → AI to let AI read the photo, or correct the text before importing.";
-      } else {
-        warning = "No AI provider configured — parsed locally. Check the lines before adding them to your inventory.";
       }
+    } else if (canUseAi) {
+      try {
+        const ai = await readWithAi("no-template");
+        draft = ai.draft;
+        provider = "ai";
+        if (ai.imageWarning) warnings.push(ai.imageWarning);
+      } catch (err) {
+        warnings.push(`AI cleanup failed, kept the locally parsed version. ${err instanceof Error ? err.message : ""}`.trim());
+      }
+    } else if (cfg.enabled) {
+      warnings.push(
+        "No text was recognised in the scan. Add a vision-capable model in Settings → AI to let AI read the photo, or correct the text before importing.",
+      );
+    } else {
+      warnings.push("No AI provider configured — parsed locally. Check the lines before adding them to your inventory.");
     }
 
     // Resolve the merchant against the shop catalogue so receipt variants such
@@ -490,10 +567,123 @@ receiptRoutes.post(
     }));
 
     if (!draft.lines.length && !draft.vendorName) {
-      warning = [warning, "Could not find any product lines in this text."].filter(Boolean).join(" ");
+      warnings.push("Could not find any product lines in this text.");
     }
 
-    res.json({ provider, warning, aiCost, draft });
+    if (provider !== "template") {
+      draft.templateId = null;
+      draft.templateConfidence = null;
+    }
+    draft.aiCost = aiCost;
+    const scan = createScanRecord({
+      houseId,
+      userId: req.user!.id,
+      provider,
+      aiCost,
+      templateId: provider === "template" ? draft.templateId ?? null : null,
+      templateConfidence: provider === "template" ? draft.templateConfidence ?? null : null,
+      images: [...new Set([...(body.image ? [body.image] : []), ...visionPaths])],
+    });
+
+    const response: ReceiptScanResponse = {
+      provider,
+      warning: warnings.length ? warnings.join(" ") : null,
+      aiCost,
+      scanId: scan.id,
+      aiAvailable: cfg.enabled,
+      reconciliation: draftReconciliation(draft),
+      draft,
+    };
+    res.json(response);
+  }),
+);
+
+/* ------------------------------------------------------------ import helpers */
+
+/** The total a receipt will be stored with (the printed one, or the sum of its lines). */
+function effectiveTotal(body: ImportBody): number | null {
+  if (body.total != null) return round(body.total, 2);
+  let sum = 0;
+  let priced = false;
+  for (const line of body.lines) {
+    const value = line.lineTotal ?? (line.unitPrice != null ? line.unitPrice * line.quantity : null);
+    if (value == null) continue;
+    priced = true;
+    sum += value;
+  }
+  return priced ? round(sum, 2) : null;
+}
+
+/** An already-saved receipt from the same shop, day and total, if any. */
+async function findDuplicateReceipt(houseId: string, body: ImportBody, vendor: any | null): Promise<ReceiptDuplicate | null> {
+  const vendorName = vendor?.name ?? body.vendorName ?? null;
+  if (!vendor && !vendorName) return null;
+  const total = effectiveTotal(body);
+  if (total == null) return null;
+  const purchasedAt = body.purchasedAt ?? now().slice(0, 10);
+  const rows = await all<any>(
+    `SELECT r.id, r.vendor_id, r.purchased_at, r.total, COALESCE(v.name, r.vendor_name) AS vendor_name
+     FROM receipts r LEFT JOIN vendors v ON v.id = r.vendor_id
+     WHERE r.house_id = ? AND r.purchased_at = ? AND r.total IS NOT NULL
+     ORDER BY r.created_at DESC`,
+    [houseId, purchasedAt],
+  );
+  const wanted = vendorName ? normalizeVendorName(vendorName) : null;
+  for (const row of rows) {
+    const sameVendor =
+      (vendor && row.vendor_id === vendor.id) ||
+      (wanted != null && row.vendor_name != null && normalizeVendorName(row.vendor_name) === wanted);
+    if (!sameVendor) continue;
+    if (Math.abs(Number(row.total) - total) > 0.01 + 1e-9) continue;
+    return {
+      id: row.id,
+      purchasedAt: row.purchased_at ?? null,
+      total: row.total == null ? null : Number(row.total),
+      vendorName: row.vendor_name ?? null,
+    };
+  }
+  return null;
+}
+
+async function assertReceiptImage(image: string | null | undefined) {
+  if (!image) return;
+  if (!isReceiptImagePath(image) || !await receiptImageExists(image)) {
+    throw new ApiError(400, "The receipt image must be a scan uploaded with /receipts/upload");
+  }
+}
+
+function validationLines(plans: LinePlan[]): ReceiptValidationLine[] {
+  return plans.map((plan) => ({
+    index: plan.index,
+    itemId: plan.item?.id ?? null,
+    itemName: plan.error && !plan.item && !plan.createKey ? null : plan.itemName,
+    itemUnit: plan.error && !plan.item && !plan.createKey ? null : plan.itemUnit,
+    match: plan.error && plan.match === "chosen" && !plan.item ? null : plan.match,
+    willCreate: plan.willCreate,
+    error: plan.error,
+  }));
+}
+
+/**
+ * Dry run of an import: which item each line goes to, which lines create new
+ * items and which cannot be imported. Nothing is written.
+ */
+receiptRoutes.post(
+  "/:houseId/receipts/validate",
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req, "member");
+    const body = parseBody(importBody, req.body);
+    await assertReceiptImage(body.image);
+    const vendor = await resolveVendor(houseId, body.vendorId, body.vendorName, { create: false });
+    const plans = await planReceiptLines(houseId, vendor?.id ?? null, body.lines);
+    const lines = validationLines(plans);
+    const result: ReceiptValidation = {
+      ok: lines.every((line) => !line.error),
+      newItems: lines.filter((line) => line.willCreate).length,
+      lines,
+      duplicateOf: body.allowDuplicate ? null : await findDuplicateReceipt(houseId, body, vendor),
+    };
+    res.json(result);
   }),
 );
 
@@ -502,14 +692,34 @@ receiptRoutes.post(
   handler(async (req, res) => {
     const { houseId } = await requireHouse(req, "member");
     const body = parseBody(importBody, req.body);
+    await assertReceiptImage(body.image);
+    const scan = getScanRecord(body.scanId, houseId);
 
-    const vendor = await resolveVendor(houseId, body.vendorId, body.vendorName);
-    for (const line of body.lines) {
-      if (line.locationId && !await get("SELECT id FROM locations WHERE id = ? AND house_id = ?", [line.locationId, houseId])) {
-        throw new ApiError(400, "One of the chosen places is not in this house");
+    const existingVendor = await resolveVendor(houseId, body.vendorId, body.vendorName, { create: false });
+    if (!body.allowDuplicate) {
+      const duplicateOf = await findDuplicateReceipt(houseId, body, existingVendor);
+      if (duplicateOf) {
+        res.status(409).json({
+          error: "This receipt looks like one you already saved",
+          duplicateOf,
+        });
+        return;
       }
     }
 
+    // Resolve every line first so all problems are reported together and
+    // nothing is written when one line cannot be imported.
+    const plans = await planReceiptLines(houseId, existingVendor?.id ?? null, body.lines);
+    const lineErrors = plans.filter((plan) => plan.error).map((plan) => ({ index: plan.index, error: plan.error! }));
+    if (lineErrors.length) {
+      throw new ApiError(
+        400,
+        lineErrors.length === 1 ? lineErrors[0].error : `${lineErrors.length} lines cannot be imported`,
+        { lines: lineErrors },
+      );
+    }
+
+    const vendor = existingVendor ?? await resolveVendor(houseId, null, body.vendorName);
     const receiptId = newId("rct");
     const touchedItems = new Set<string>();
     const house = await get<any>("SELECT currency FROM houses WHERE id = ?", [houseId]);
@@ -530,6 +740,7 @@ receiptRoutes.post(
           : null);
     const lineSavings = round(body.lines.reduce((sum, line) => sum + Math.abs(line.discount ?? 0), 0), 2);
     const savings = body.savings != null ? round(Math.max(0, body.savings), 2) : lineSavings > 0 ? lineSavings : null;
+    const purchasedAt = body.purchasedAt ?? now().slice(0, 10);
 
     // Resolve OpenFoodFacts before the transaction: product fetches are network
     // calls and must never hold the SQLite write lock.
@@ -557,34 +768,34 @@ receiptRoutes.post(
           houseId,
           vendor?.id ?? null,
           vendor?.name ?? body.vendorName ?? null,
-          body.purchasedAt ?? now().slice(0, 10),
+          purchasedAt,
           currency,
           body.total ?? null,
           subtotal,
           tax,
           JSON.stringify(taxBreakdown),
-          body.templateId ?? null,
-          body.templateConfidence ?? null,
-          body.provider ?? null,
-          body.aiCost ?? null,
+          scan?.templateId ?? null,
+          scan?.templateConfidence ?? null,
+          scan?.provider ?? null,
+          scan?.aiCost ?? null,
           savings,
           body.image ?? null,
           body.ocrText ?? null,
-          body.image ? "scan" : "manual",
+          scan || body.image ? "scan" : "manual",
           body.notes ?? null,
           req.user!.id,
           now(),
         ],
       );
 
+      const createdItems = new Map<string, any>();
       for (const [index, { line, rawDescription, mapping, offCode, product }] of enriched.entries()) {
-        const alias =
-          !line.itemId && rawDescription ? await findProductAlias(houseId, vendor?.id ?? null, rawDescription) : null;
-        let item = alias?.item ?? await matchItem(houseId, line);
-        const unit = line.unit ? line.unit.toLowerCase() : null;
-
+        const plan = plans[index];
+        const unit = plan.unit;
+        let item = plan.item ?? (plan.createKey ? createdItems.get(plan.createKey) : null) ?? null;
         if (!item) {
           item = await createItemForLine(houseId, req.user!.id, line, unit);
+          if (plan.createKey) createdItems.set(plan.createKey, item);
         }
 
         // Link scanned/receipt products only when the item has no link yet. A
@@ -597,6 +808,7 @@ receiptRoutes.post(
               source: line.barcode ? "barcode" : "receipt",
             });
             item = linked.item;
+            if (plan.createKey) createdItems.set(plan.createKey, item);
           } catch {
             // A product can already belong to another item in this house. The
             // receipt still imports; the OFF lookup is only an enrichment.
@@ -604,7 +816,9 @@ receiptRoutes.post(
         }
 
         // Learn after enrichment so the alias captures the final unit/category.
-        await learnProductAlias({ houseId, vendorId: vendor?.id ?? null, rawDescription, item });
+        // Automatic fuzzy matches are not learned: a wrong guess must not
+        // become a permanent alias. Chosen items and new items are.
+        if (plan.learn) await learnProductAlias({ houseId, vendorId: vendor?.id ?? null, rawDescription, item });
 
         if (product) {
           await learnCatalogMapping({
@@ -639,6 +853,7 @@ receiptRoutes.post(
           throw new ApiError(
             400,
             `Cannot add “${line.description}” in ${fromUnit} to an item stocked in ${item.unit}. Pick another unit or item.`,
+            { lines: [{ index, error: `Cannot add “${line.description}” in ${fromUnit} to an item stocked in ${item.unit}.` }] },
           );
         }
 
@@ -654,7 +869,8 @@ receiptRoutes.post(
           unitPrice,
           currency,
           locationId: line.locationId ?? null,
-          purchasedAt: body.purchasedAt ?? now().slice(0, 10),
+          expiresAt: line.expiresAt ?? null,
+          purchasedAt,
           note: body.notes ?? null,
           reason: vendor ? `Receipt · ${vendor.name}` : "Receipt",
           vendorId: vendor?.id ?? null,
@@ -700,9 +916,16 @@ receiptRoutes.post(
     });
 
     for (const itemId of touchedItems) await afterStockChange(itemId);
+    if (scan) {
+      // The page photos only fed the vision model; the stored receipt keeps
+      // the stitched image. Drop the rest now instead of leaving orphans.
+      forgetScanRecord(scan.id);
+      for (const path of scan.images) if (path !== body.image) await removeReceiptImageIfUnused(path);
+    }
     res.status(201).json(await receiptDetail(houseId, receiptId));
   }),
 );
+
 
 receiptRoutes.get(
   "/:houseId/purchases/analytics",
@@ -902,8 +1125,19 @@ singleReceiptRoutes.get(
 singleReceiptRoutes.delete(
   "/:receiptId",
   handler(async (req, res) => {
-    const { receipt } = await receiptAccess(req, "member");
-    await run("DELETE FROM receipts WHERE id = ?", [receipt.id]);
-    res.json({ ok: true });
+    const { receipt, houseId } = await receiptAccess(req, "member");
+    const revertStock = ["1", "true", "yes"].includes(String(req.query.revertStock ?? "").toLowerCase());
+    let reverted: ReceiptStockRevert[] = [];
+    await tx(async () => {
+      if (revertStock) {
+        reverted = await revertReceiptStock({ receiptId: receipt.id, houseId, userId: req.user!.id });
+      }
+      await run("DELETE FROM receipts WHERE id = ?", [receipt.id]);
+    });
+    for (const entry of reverted) await afterStockChange(entry.itemId);
+    // The image goes too, unless another receipt record shares the same file.
+    const imageRemoved = await removeReceiptImageIfUnused(receipt.image);
+    const result: ReceiptDeleteResult = { ok: true, imageRemoved, reverted };
+    res.json(result);
   }),
 );

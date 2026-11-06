@@ -324,7 +324,11 @@ export async function aiParseReceipt(
       "return null instead of guessing. Respond with JSON only, no markdown.",
     user:
       `Extract this shopping receipt into JSON with this exact shape:\n${RECEIPT_SCHEMA}\n\n` +
-      (rawText ? `RAW OCR TEXT:\n${rawText.slice(0, 12000)}` : "The receipt is in the attached image. Read it carefully."),
+      (rawText ? `RAW OCR TEXT:\n${rawText.slice(0, 12000)}` : "The receipt is in the attached image. Read it carefully.") +
+      (images.length > 1
+        ? `\n\nThe receipt was photographed in ${images.length} overlapping parts, attached top to bottom. ` +
+          "Lines visible in two photos are the same purchase: list them once."
+        : ""),
     images,
     json: true,
     temperature: 0.1,
@@ -417,11 +421,38 @@ export async function aiSuggestIdeas(
   return { data: extractJson<Record<string, unknown>>(text), usage };
 }
 
-/** Convert a local upload into a data URL for vision models. */
-export async function fileToDataUrl(filePath: string, mime: string): Promise<string | null> {
+const IMAGE_MIME_BY_EXT: Record<string, string> = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+  ".avif": "image/avif",
+  ".heic": "image/heic",
+  ".heif": "image/heif",
+  ".bmp": "image/bmp",
+  ".tif": "image/tiff",
+  ".tiff": "image/tiff",
+};
+
+/** Largest image sent inline to a vision model. */
+export const MAX_VISION_IMAGE_BYTES = 8 * 1024 * 1024;
+
+/** Mime type for an upload, from its file extension. */
+export function imageMimeForPath(filePath: string, fallback = "image/jpeg"): string {
+  const match = /\.[A-Za-z0-9]+$/.exec(filePath);
+  return (match && IMAGE_MIME_BY_EXT[match[0].toLowerCase()]) || fallback;
+}
+
+/**
+ * Convert a local upload into a data URL for vision models. The mime type
+ * comes from the file extension; `mime` is only the fallback for unknown ones.
+ * Returns null when the file is missing or larger than MAX_VISION_IMAGE_BYTES.
+ */
+export async function fileToDataUrl(filePath: string, mime = "image/jpeg"): Promise<string | null> {
   const fs = await import("node:fs/promises");
   const stat = await fs.stat(filePath).catch(() => null);
-  if (!stat || stat.size > 8 * 1024 * 1024) return null;
+  if (!stat || !stat.isFile() || stat.size > MAX_VISION_IMAGE_BYTES) return null;
   const buf = await fs.readFile(filePath);
-  return `data:${mime};base64,${buf.toString("base64")}`;
+  return `data:${imageMimeForPath(filePath, mime)};base64,${buf.toString("base64")}`;
 }
