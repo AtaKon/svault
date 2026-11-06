@@ -290,7 +290,7 @@ export async function importDataset(opts: {
   const zip = await JSZip.loadAsync(opts.buffer);
   const inspection = await inspectDataset(opts.buffer);
   const collectionId = newId("col");
-  run("INSERT INTO photo_collections (id, house_id, name, description, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)", [
+  await run("INSERT INTO photo_collections (id, house_id, name, description, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)", [
     collectionId,
     opts.houseId,
     (opts.collectionName ?? "Imported dataset").slice(0, 80),
@@ -322,7 +322,7 @@ export async function importDataset(opts: {
       fs.writeFileSync(uploadPath("photos", filename), data);
       const dims = image.width && image.height ? { width: image.width, height: image.height } : dimensions(data);
       const photoId = newId("pho");
-      run(
+      await run(
         `INSERT INTO photos (id, house_id, collection_id, filename, original_name, mime, size, width, height, notes,
            item_id, split, captured_at, uploaded_by, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?)`,
@@ -347,7 +347,7 @@ export async function importDataset(opts: {
         if (!className) continue;
         const label = targetLabel(className).trim();
         if (!label || label === "__skip") continue;
-        run("INSERT INTO photo_labels (id, photo_id, house_id, label, x, y, w, h, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", [
+        await run("INSERT INTO photo_labels (id, photo_id, house_id, label, x, y, w, h, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", [
           newId("lbl"),
           photoId,
           opts.houseId,

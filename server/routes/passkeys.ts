@@ -40,13 +40,13 @@ function relyingParty(req: any) {
 passkeyRoutes.get(
   "/passkeys",
   requireAuth,
-  handler((req, res) => {
+  handler(async (req, res) => {
     const { origin, rpID } = relyingParty(req);
     res.json({
       supported: true,
       rpID,
       origin,
-      passkeys: listPasskeys(req.user!.id).map((passkey) => ({
+      passkeys: (await listPasskeys(req.user!.id)).map((passkey) => ({
         id: passkey.id,
         name: passkey.name,
         createdAt: passkey.createdAt,
@@ -62,8 +62,8 @@ passkeyRoutes.post(
   requireAuth,
   handler(async (req, res) => {
     const { rpID } = relyingParty(req);
-    const user = get<any>("SELECT * FROM users WHERE id = ?", [req.user!.id])!;
-    const existing = listPasskeys(user.id);
+    const user = (await get<any>("SELECT * FROM users WHERE id = ?", [req.user!.id]))!;
+    const existing = await listPasskeys(user.id);
     const options = await generateRegistrationOptions({
       rpName: "SVault",
       rpID,
@@ -77,7 +77,7 @@ passkeyRoutes.post(
       })),
       authenticatorSelection: { residentKey: "preferred", userVerification: "preferred" },
     });
-    const challengeId = storeChallenge({
+    const challengeId = await storeChallenge({
       userId: user.id,
       type: "registration",
       challenge: options.challenge,
@@ -99,7 +99,7 @@ passkeyRoutes.post(
       }),
       req.body,
     );
-    const stored = consumeChallenge(body.challengeId, "registration");
+    const stored = await consumeChallenge(body.challengeId, "registration");
     if (!stored || stored.userId !== req.user!.id) throw new ApiError(400, "Registration challenge expired");
     const { origin, rpID } = relyingParty(req);
     const verification = await verifyRegistrationResponse({
@@ -113,7 +113,7 @@ passkeyRoutes.post(
       throw new ApiError(400, "Passkey registration could not be verified");
     }
     const credential = verification.registrationInfo.credential;
-    const passkey = savePasskey({
+    const passkey = await savePasskey({
       userId: req.user!.id,
       credentialId: credential.id,
       publicKey: Buffer.from(credential.publicKey).toString("base64url"),
@@ -135,8 +135,8 @@ passkeyRoutes.post(
 passkeyRoutes.delete(
   "/passkeys/:passkeyId",
   requireAuth,
-  handler((req, res) => {
-    deletePasskey(req.user!.id, String(req.params.passkeyId));
+  handler(async (req, res) => {
+    await deletePasskey(req.user!.id, String(req.params.passkeyId));
     res.json({ ok: true });
   }),
 );
@@ -144,17 +144,17 @@ passkeyRoutes.delete(
 passkeyRoutes.delete(
   "/passkeys/user/:userId",
   requireAuth,
-  handler((req, res) => {
+  handler(async (req, res) => {
     const targetId = String(req.params.userId);
     if (targetId !== req.user!.id) {
-      const sharedOwner = get<any>(
+      const sharedOwner = await get<any>(
         `SELECT 1 AS ok FROM house_members a JOIN house_members b ON b.house_id = a.house_id
          WHERE a.user_id = ? AND b.user_id = ? AND a.role = 'owner' LIMIT 1`,
         [req.user!.id, targetId],
       );
       if (!req.user!.isAdmin && !sharedOwner) throw new ApiError(403, "Requires owner or instance admin access");
     }
-    deleteAllPasskeys(targetId);
+    await deleteAllPasskeys(targetId);
     res.json({ ok: true });
   }),
 );
@@ -166,10 +166,13 @@ passkeyRoutes.post(
     const { rpID } = relyingParty(req);
     const identifier = (body.identifier ?? "").trim();
     const user = identifier
-      ? get<any>("SELECT * FROM users WHERE email = ? OR username = ?", [identifier, identifier.toLowerCase()])
+      ? await get<any>("SELECT * FROM users WHERE lower(email) = lower(?) OR lower(username) = lower(?)", [
+          identifier,
+          identifier,
+        ])
       : null;
     if (identifier && !user) throw new ApiError(404, "No passkey is registered for that account");
-    const allowed = user ? listPasskeys(user.id) : [];
+    const allowed = user ? await listPasskeys(user.id) : [];
     const options = await generateAuthenticationOptions({
       rpID,
       allowCredentials: allowed.map((credential) => ({
@@ -178,7 +181,7 @@ passkeyRoutes.post(
       })),
       userVerification: "preferred",
     });
-    const challengeId = storeChallenge({
+    const challengeId = await storeChallenge({
       userId: user?.id ?? null,
       type: "authentication",
       challenge: options.challenge,
@@ -203,10 +206,10 @@ passkeyRoutes.post(
       }),
       req.body,
     );
-    const stored = consumeChallenge(body.challengeId, "authentication");
+    const stored = await consumeChallenge(body.challengeId, "authentication");
     if (!stored) throw new ApiError(400, "Passkey challenge expired");
     const credentialId = String((body.response as any)?.id ?? "");
-    const passkey = credentialId ? passkeyByCredentialId(credentialId) : null;
+    const passkey = credentialId ? await passkeyByCredentialId(credentialId) : null;
     if (!passkey) throw new ApiError(401, "Unknown passkey");
     if (stored.userId && stored.userId !== passkey.userId) throw new ApiError(401, "Passkey does not match this account");
     const { origin, rpID } = relyingParty(req);
@@ -227,9 +230,9 @@ passkeyRoutes.post(
     if (verification.authenticationInfo.newCounter <= passkey.counter && passkey.counter > 0) {
       throw new ApiError(401, "Passkey counter did not advance; possible replay");
     }
-    updatePasskeyCounter(passkey.id, verification.authenticationInfo.newCounter);
-    const token = createSession(passkey.userId, req.headers["user-agent"]);
+    await updatePasskeyCounter(passkey.id, verification.authenticationInfo.newCounter);
+    const token = await createSession(passkey.userId, req.headers["user-agent"]);
     res.setHeader("Set-Cookie", sessionCookie(token));
-    res.json(userPayload(passkey.userId));
+    res.json(await userPayload(passkey.userId));
   }),
 );

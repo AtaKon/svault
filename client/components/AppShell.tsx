@@ -144,6 +144,7 @@ export function AppShell() {
           {EXTRA.map((item) => (
             <SideLink key={item.to} {...item} label={t(item.label)} badge={item.to === "/notifications" && unread > 0 ? unread : undefined} />
           ))}
+          {user?.developerMode && <SideLink to="/developer" label="Developer" icon="list" />}
         </nav>
 
         <div className="mt-auto space-y-2">
@@ -225,7 +226,7 @@ export function AppShell() {
           {NAV.map((item) => {
             const moreActive =
               item.to === "/more" &&
-              ["/more", "/photos", "/ideas", "/shopping", "/plan", "/intake", "/receipts", "/notifications", "/settings", "/profile"].some(
+              ["/more", "/photos", "/ideas", "/shopping", "/plan", "/intake", "/receipts", "/notifications", "/settings", "/profile", "/developer"].some(
                 (path) => location.pathname === path || location.pathname.startsWith(`${path}/`),
               );
             return (

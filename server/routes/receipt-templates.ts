@@ -26,8 +26,8 @@ const templateBody = z.object({
   rules: z.record(z.string(), z.any()),
 });
 
-function templateRow(houseId: string, templateId: string) {
-  return get<any>("SELECT * FROM receipt_templates WHERE id = ? AND house_id = ?", [templateId, houseId]);
+async function templateRow(houseId: string, templateId: string) {
+  return await get<any>("SELECT * FROM receipt_templates WHERE id = ? AND house_id = ?", [templateId, houseId]);
 }
 
 function validateRules(rules: ReceiptTemplateRules) {
@@ -40,23 +40,23 @@ function validateRules(rules: ReceiptTemplateRules) {
 
 receiptTemplateRoutes.get(
   "/:houseId/receipt-templates",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req);
-    res.json([...builtInTemplates(), ...listCustomTemplates(houseId)]);
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req);
+    res.json([...builtInTemplates(), ...await listCustomTemplates(houseId)]);
   }),
 );
 
 receiptTemplateRoutes.post(
   "/:houseId/receipt-templates",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req, "admin");
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req, "admin");
     const body = parseBody(templateBody, req.body);
     validateRules(body.rules as ReceiptTemplateRules);
-    if (get("SELECT id FROM receipt_templates WHERE house_id = ? AND name = ? COLLATE NOCASE", [houseId, body.name])) {
+    if (await get("SELECT id FROM receipt_templates WHERE house_id = ? AND lower(name) = lower(?)", [houseId, body.name])) {
       throw new ApiError(409, "A template with that name already exists");
     }
     const id = newId("tpl");
-    run(
+    await run(
       `INSERT INTO receipt_templates (id, house_id, name, country, vendor_name, active, version, rules, created_by, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
       [
@@ -72,27 +72,27 @@ receiptTemplateRoutes.post(
         now(),
       ],
     );
-    res.status(201).json(serializeTemplateRow(templateRow(houseId, id)));
+    res.status(201).json(serializeTemplateRow(await templateRow(houseId, id)));
   }),
 );
 
 receiptTemplateRoutes.patch(
   "/:houseId/receipt-templates/:templateId",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req, "admin");
-    const current = templateRow(houseId, String(req.params.templateId));
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req, "admin");
+    const current = await templateRow(houseId, String(req.params.templateId));
     if (!current) throw new ApiError(404, "Template not found");
     const body = parseBody(templateBody.partial(), req.body);
     const rules = (body.rules ?? JSON.parse(current.rules)) as ReceiptTemplateRules;
     validateRules(rules);
     if (body.name) {
-      const duplicate = get<any>(
-        "SELECT id FROM receipt_templates WHERE house_id = ? AND name = ? COLLATE NOCASE AND id <> ?",
+      const duplicate = await get<any>(
+        "SELECT id FROM receipt_templates WHERE house_id = ? AND lower(name) = lower(?) AND id <> ?",
         [houseId, body.name, current.id],
       );
       if (duplicate) throw new ApiError(409, "A template with that name already exists");
     }
-    run(
+    await run(
       `UPDATE receipt_templates SET name = ?, country = ?, vendor_name = ?, active = ?, version = version + 1,
          rules = ?, updated_at = ? WHERE id = ?`,
       [
@@ -105,23 +105,23 @@ receiptTemplateRoutes.patch(
         current.id,
       ],
     );
-    res.json(serializeTemplateRow(templateRow(houseId, current.id)));
+    res.json(serializeTemplateRow(await templateRow(houseId, current.id)));
   }),
 );
 
 receiptTemplateRoutes.delete(
   "/:houseId/receipt-templates/:templateId",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req, "admin");
-    run("DELETE FROM receipt_templates WHERE id = ? AND house_id = ?", [req.params.templateId, houseId]);
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req, "admin");
+    await run("DELETE FROM receipt_templates WHERE id = ? AND house_id = ?", [req.params.templateId, houseId]);
     res.json({ ok: true });
   }),
 );
 
 receiptTemplateRoutes.post(
   "/:houseId/receipt-templates/test",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req, "admin");
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req, "admin");
     const body = parseBody(
       z.object({
         rules: z.record(z.string(), z.any()),

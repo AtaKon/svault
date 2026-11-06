@@ -70,6 +70,8 @@ The current codebase also includes:
 - AI or local food ideas from current stock,
 - photo folders, bounding boxes, train/val/test splits and YOLO/COCO export,
 - an installable PWA with a cached shell,
+- an optional PostgreSQL backend with the same schema, in-app logical backups and a
+  `npm run migrate:postgres` path from SQLite (SQLite stays the default),
 - Docker and TrueNAS/Dockge deployment guides.
 
 ## Not planned
@@ -81,7 +83,6 @@ These come up often but are deliberate non-goals for now:
 | Cloud sync / hosted SaaS | SVault is local-first and single-tenant. Sync would add accounts, encryption and a service to run. |
 | Native iOS/Android apps | The PWA installs from the browser and keeps one codebase. |
 | Model training inside SVault | The app manages datasets; training belongs in a notebook or a dedicated tool. |
-| External database (Postgres/MySQL) | SQLite is a feature for this deployment size. A change would need a real migration story. |
 | Telemetry and analytics | Nothing leaves the server unless you configure AI or look up a barcode. |
 | Stable public API guarantees | The API serves the bundled client. A versioned API would need a compatibility promise and tests. |
 | SAML / SCIM | OIDC covers self-hosted identity providers; enterprise provisioning is out of scope. |

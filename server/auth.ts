@@ -9,6 +9,7 @@ export interface AuthUser {
   email: string;
   name: string;
   isAdmin: boolean;
+  developerMode: boolean;
   createdAt: string;
 }
 
@@ -43,18 +44,18 @@ export function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
-export function createSession(userId: string, userAgent?: string): string {
+export async function createSession(userId: string, userAgent?: string): Promise<string> {
   const token = randomBytes(24).toString("base64url");
   const expires = new Date(Date.now() + SESSION_DAYS * 864e5).toISOString();
-  run(
+  await run(
     "INSERT INTO sessions (id, user_id, token_hash, expires_at, user_agent, created_at) VALUES (?, ?, ?, ?, ?, ?)",
     [newId("ses"), userId, hashToken(token), expires, userAgent ?? null, now()],
   );
   return token;
 }
 
-export function destroySession(token: string) {
-  run("DELETE FROM sessions WHERE token_hash = ?", [hashToken(token)]);
+export async function destroySession(token: string) {
+  await run("DELETE FROM sessions WHERE token_hash = ?", [hashToken(token)]);
 }
 
 export function parseCookies(header: string | undefined): Record<string, string> {
@@ -70,18 +71,18 @@ export function parseCookies(header: string | undefined): Record<string, string>
   return out;
 }
 
-export function readSessionUser(req: Request): AuthUser | null {
+export async function readSessionUser(req: Request): Promise<AuthUser | null> {
   const token = parseCookies(req.headers.cookie)["sv_session"];
   if (!token) return null;
-  const row = get<any>(
-    `SELECT u.id, u.email, u.name, u.is_admin, u.created_at, s.expires_at
+  const row = await get<any>(
+    `SELECT u.id, u.email, u.name, u.is_admin, u.developer_mode, u.created_at, s.expires_at
      FROM sessions s JOIN users u ON u.id = s.user_id
      WHERE s.token_hash = ?`,
     [hashToken(token)],
   );
   if (!row) return null;
   if (new Date(row.expires_at).getTime() < Date.now()) {
-    run("DELETE FROM sessions WHERE token_hash = ?", [hashToken(token)]);
+    await run("DELETE FROM sessions WHERE token_hash = ?", [hashToken(token)]);
     return null;
   }
   req.sessionToken = token;
@@ -90,6 +91,7 @@ export function readSessionUser(req: Request): AuthUser | null {
     email: row.email,
     name: row.name,
     isAdmin: !!row.is_admin,
+    developerMode: !!row.developer_mode,
     createdAt: row.created_at,
   };
 }
@@ -105,8 +107,8 @@ export function clearedCookie(): string {
   return "sv_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0";
 }
 
-export function attachUser(req: Request, _res: Response, next: NextFunction) {
-  req.user = readSessionUser(req) ?? undefined;
+export async function attachUser(req: Request, _res: Response, next: NextFunction) {
+  req.user = await readSessionUser(req) ?? undefined;
   next();
 }
 
@@ -118,8 +120,8 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
-export function memberRole(userId: string, houseId: string): Role | null {
-  const row = get<{ role: string }>("SELECT role FROM house_members WHERE house_id = ? AND user_id = ?", [
+export async function memberRole(userId: string, houseId: string): Promise<Role | null> {
+  const row = await get<{ role: string }>("SELECT role FROM house_members WHERE house_id = ? AND user_id = ?", [
     houseId,
     userId,
   ]);
@@ -131,8 +133,8 @@ export function roleAtLeast(role: Role | null, required: Role): boolean {
   return ROLE_RANK[role] >= ROLE_RANK[required];
 }
 
-export function houseMembers(houseId: string) {
-  return all(
+export async function houseMembers(houseId: string) {
+  return await all(
     `SELECT u.id, u.email, u.name, m.role, m.created_at FROM house_members m
      JOIN users u ON u.id = m.user_id WHERE m.house_id = ? ORDER BY m.created_at`,
     [houseId],
@@ -140,8 +142,8 @@ export function houseMembers(houseId: string) {
 }
 
 /** Houses the user can see, with their role. */
-export function userHouses(userId: string) {
-  return all<any>(
+export async function userHouses(userId: string) {
+  return await all<any>(
     `SELECT h.*, m.role FROM houses h JOIN house_members m ON m.house_id = h.id
      WHERE m.user_id = ? ORDER BY h.created_at`,
     [userId],

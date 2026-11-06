@@ -40,24 +40,24 @@ const vendorBody = z.object({
   catalogId: z.string().max(60).optional(),
 });
 
-function housePurchaseCountry(houseId: string): string {
-  const house = get<any>("SELECT settings FROM houses WHERE id = ?", [houseId]);
+async function housePurchaseCountry(houseId: string): Promise<string> {
+  const house = await get<any>("SELECT settings FROM houses WHERE id = ?", [houseId]);
   const settings = parseJson<Record<string, any>>(house?.settings, {});
   const country = String(settings?.purchases?.country ?? "GR").toUpperCase();
   return CATALOG_COUNTRIES[country] ? country : "GR";
 }
 
-function vendorRow(houseId: string, vendorId: string) {
-  return get<any>("SELECT * FROM vendors WHERE id = ? AND house_id = ?", [vendorId, houseId]);
+async function vendorRow(houseId: string, vendorId: string) {
+  return await get<any>("SELECT * FROM vendors WHERE id = ? AND house_id = ?", [vendorId, houseId]);
 }
 
 receiptRoutes.get(
   "/:houseId/vendors",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req);
-    const rows = all<any>(
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req);
+    const rows = await all<any>(
       `SELECT v.*, (SELECT COUNT(*) FROM stock_lots l WHERE l.vendor_id = v.id) AS purchase_count
-       FROM vendors v WHERE v.house_id = ? ORDER BY v.name COLLATE NOCASE`,
+       FROM vendors v WHERE v.house_id = ? ORDER BY lower(v.name)`,
       [houseId],
     );
     res.json(rows.map(serializeVendor));
@@ -66,22 +66,27 @@ receiptRoutes.get(
 
 receiptRoutes.post(
   "/:houseId/vendors",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req, "member");
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req, "member");
     const body = parseBody(vendorBody, req.body);
-    const catalog = body.catalogId ? catalogById(body.catalogId) : null;
+    const catalog = body.catalogId ? await catalogById(body.catalogId) : null;
     if (body.catalogId && !catalog) throw new ApiError(400, "That suggested shop does not exist");
     const name = catalog?.name ?? body.name;
     if (!name) throw new ApiError(400, "A shop name is required");
-    const existing = all<any>("SELECT * FROM vendors WHERE house_id = ?", [houseId]);
-    const duplicate = existing.find(
-      (vendor) =>
-        normalizeVendorName(vendor.name) === normalizeVendorName(name) ||
-        (catalog ? canonicalVendor(vendor.name)?.id === catalog.id : false),
-    );
+    const existing = await all<any>("SELECT * FROM vendors WHERE house_id = ?", [houseId]);
+    const canonicalIds = catalog
+      ? new Set(
+          (
+            await Promise.all(existing.map(async (vendor) => (await canonicalVendor(vendor.name))?.id))
+          ).filter(Boolean),
+        )
+      : null;
+    const duplicate =
+      existing.find((vendor) => normalizeVendorName(vendor.name) === normalizeVendorName(name)) ||
+      (catalog && canonicalIds?.has(catalog.id));
     if (duplicate) throw new ApiError(409, "That shop already exists");
     const id = newId("vnd");
-    run("INSERT INTO vendors (id, house_id, name, kind, note, created_at) VALUES (?, ?, ?, ?, ?, ?)", [
+    await run("INSERT INTO vendors (id, house_id, name, kind, note, created_at) VALUES (?, ?, ?, ?, ?, ?)", [
       id,
       houseId,
       name,
@@ -89,50 +94,55 @@ receiptRoutes.post(
       body.note ?? null,
       now(),
     ]);
-    res.status(201).json(serializeVendor(get<any>("SELECT * FROM vendors WHERE id = ?", [id])));
+    res.status(201).json(serializeVendor(await get<any>("SELECT * FROM vendors WHERE id = ?", [id])));
   }),
 );
 
 receiptRoutes.patch(
   "/:houseId/vendors/:vendorId",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req, "member");
-    const current = vendorRow(houseId, String(req.params.vendorId));
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req, "member");
+    const current = await vendorRow(houseId, String(req.params.vendorId));
     if (!current) throw new ApiError(404, "Shop not found");
     const body = parseBody(vendorBody.partial(), req.body);
     if (body.name) {
-      const other = all<any>("SELECT * FROM vendors WHERE house_id = ? AND id <> ?", [houseId, current.id]);
-      const catalog = canonicalVendor(body.name);
-      const duplicate = other.find(
-        (vendor) =>
-          normalizeVendorName(vendor.name) === normalizeVendorName(body.name!) ||
-          (catalog ? canonicalVendor(vendor.name)?.id === catalog.id : false),
-      );
+      const other = await all<any>("SELECT * FROM vendors WHERE house_id = ? AND id <> ?", [houseId, current.id]);
+      const catalog = await canonicalVendor(body.name);
+      let duplicate = other.find((vendor) => normalizeVendorName(vendor.name) === normalizeVendorName(body.name!));
+      if (!duplicate && catalog) {
+        for (const vendor of other) {
+          if ((await canonicalVendor(vendor.name))?.id === catalog.id) {
+            duplicate = vendor;
+            break;
+          }
+        }
+      }
       if (duplicate) throw new ApiError(409, "That shop already exists");
     }
-    run("UPDATE vendors SET name = ?, kind = ?, note = ? WHERE id = ?", [
+    await run("UPDATE vendors SET name = ?, kind = ?, note = ? WHERE id = ?", [
       body.name ?? current.name,
       body.kind ?? current.kind,
       body.note === undefined ? current.note : body.note,
       current.id,
     ]);
-    res.json(serializeVendor(get<any>("SELECT * FROM vendors WHERE id = ?", [current.id])));
+    res.json(serializeVendor(await get<any>("SELECT * FROM vendors WHERE id = ?", [current.id])));
   }),
 );
 
 receiptRoutes.get(
   "/:houseId/vendor-suggestions",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req);
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req);
     const requested = String(req.query.country ?? "").toUpperCase();
-    const country = CATALOG_COUNTRIES[requested] ? requested : housePurchaseCountry(houseId);
+    const country = CATALOG_COUNTRIES[requested] ? requested : await housePurchaseCountry(houseId);
     const q = normalizeVendorName(String(req.query.q ?? ""));
-    const existing = all<any>("SELECT name FROM vendors WHERE house_id = ?", [houseId]);
+    const existing = await all<any>("SELECT name FROM vendors WHERE house_id = ?", [houseId]);
     const existingNames = new Set(existing.map((vendor) => normalizeVendorName(vendor.name)));
-    const existingCanonical = new Set(
-      existing.map((vendor) => canonicalVendor(vendor.name, country)?.id).filter((id): id is string => Boolean(id)),
+    const canonicalIds = await Promise.all(
+      existing.map(async (vendor) => (await canonicalVendor(vendor.name, country))?.id),
     );
-    const entries = catalogEntries(country)
+    const existingCanonical = new Set(canonicalIds.filter((id): id is string => Boolean(id)));
+    const entries = (await catalogEntries(country))
       .filter((entry) => !q || normalizeVendorName(`${entry.name} ${entry.aliases.join(" ")}`).includes(q))
       .map((entry) => ({
         id: entry.id,
@@ -141,23 +151,23 @@ receiptRoutes.get(
         kind: entry.kind,
         added: existingNames.has(normalizeVendorName(entry.name)) || existingCanonical.has(entry.id),
       }));
-    res.json({ country, countries: catalogCountries(), entries });
+    res.json({ country, countries: await catalogCountries(), entries });
   }),
 );
 
 receiptRoutes.delete(
   "/:houseId/vendors/:vendorId",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req, "admin");
-    run("DELETE FROM vendors WHERE id = ? AND house_id = ?", [req.params.vendorId, houseId]);
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req, "admin");
+    await run("DELETE FROM vendors WHERE id = ? AND house_id = ?", [req.params.vendorId, houseId]);
     res.json({ ok: true });
   }),
 );
 
 /* ------------------------------------------------------------------- receipts */
 
-function receiptRow(houseId: string, receiptId: string) {
-  return get<any>(
+async function receiptRow(houseId: string, receiptId: string) {
+  return await get<any>(
     `SELECT r.*, COALESCE(v.name, r.vendor_name) AS vendor_name,
        (SELECT COUNT(*) FROM receipt_lines rl WHERE rl.receipt_id = r.id) AS line_count
      FROM receipts r LEFT JOIN vendors v ON v.id = r.vendor_id
@@ -166,38 +176,39 @@ function receiptRow(houseId: string, receiptId: string) {
   );
 }
 
-function receiptDetail(houseId: string, receiptId: string) {
-  const row = receiptRow(houseId, receiptId);
+async function receiptDetail(houseId: string, receiptId: string) {
+  const row = await receiptRow(houseId, receiptId);
   if (!row) throw new ApiError(404, "Receipt not found");
-  return serializeReceipt(row, receiptLinesFor(receiptId));
+  return serializeReceipt(row, await receiptLinesFor(receiptId));
 }
 
-function resolveVendor(houseId: string, vendorId: string | null | undefined, vendorName: string | null | undefined) {
+async function resolveVendor(houseId: string, vendorId: string | null | undefined, vendorName: string | null | undefined) {
   if (vendorId) {
-    const vendor = vendorRow(houseId, vendorId);
+    const vendor = await vendorRow(houseId, vendorId);
     if (!vendor) throw new ApiError(400, "Shop does not exist in this house");
     return vendor;
   }
   const name = (vendorName ?? "").trim();
   if (!name) return null;
-  const country = housePurchaseCountry(houseId);
-  const catalog = canonicalVendor(name, country);
-  const existing = all<any>("SELECT * FROM vendors WHERE house_id = ?", [houseId]);
-  const match = existing.find(
-    (vendor) =>
-      normalizeVendorName(vendor.name) === normalizeVendorName(name) ||
-      (catalog ? canonicalVendor(vendor.name, country)?.id === catalog.id : false),
-  );
-  if (match) return match;
+  const country = await housePurchaseCountry(houseId);
+  const catalog = await canonicalVendor(name, country);
+  const existing = await all<any>("SELECT * FROM vendors WHERE house_id = ?", [houseId]);
+  const nameMatch = existing.find((vendor) => normalizeVendorName(vendor.name) === normalizeVendorName(name));
+  if (nameMatch) return nameMatch;
+  if (catalog) {
+    for (const vendor of existing) {
+      if ((await canonicalVendor(vendor.name, country))?.id === catalog.id) return vendor;
+    }
+  }
   const id = newId("vnd");
-  run("INSERT INTO vendors (id, house_id, name, kind, note, created_at) VALUES (?, ?, ?, ?, NULL, ?)", [
+  await run("INSERT INTO vendors (id, house_id, name, kind, note, created_at) VALUES (?, ?, ?, ?, NULL, ?)", [
     id,
     houseId,
     (catalog?.name ?? name).slice(0, 80),
     catalog?.kind ?? "shop",
     now(),
   ]);
-  return get<any>("SELECT * FROM vendors WHERE id = ?", [id]);
+  return await get<any>("SELECT * FROM vendors WHERE id = ?", [id]);
 }
 
 function looseName(value: string): string {
@@ -224,21 +235,21 @@ async function mapWithLimit<T, R>(items: T[], limit: number, fn: (item: T) => Pr
   return results;
 }
 
-function matchItem(houseId: string, line: { description: string; itemId?: string | null; barcode?: string | null }) {
+async function matchItem(houseId: string, line: { description: string; itemId?: string | null; barcode?: string | null }) {
   if (line.itemId) {
-    const item = get<any>("SELECT * FROM items WHERE id = ? AND house_id = ?", [line.itemId, houseId]);
+    const item = await get<any>("SELECT * FROM items WHERE id = ? AND house_id = ?", [line.itemId, houseId]);
     if (!item) throw new ApiError(400, "One of the chosen items is not in this house");
     return item;
   }
   if (line.barcode) {
-    const item = get<any>(
+    const item = await get<any>(
       `SELECT i.* FROM items i JOIN item_barcodes b ON b.item_id = i.id
        WHERE i.house_id = ? AND b.code = ?`,
       [houseId, line.barcode],
     );
     if (item) return item;
   }
-  const exact = get<any>("SELECT * FROM items WHERE house_id = ? AND archived = 0 AND LOWER(name) = LOWER(?)", [
+  const exact = await get<any>("SELECT * FROM items WHERE house_id = ? AND archived = 0 AND LOWER(name) = LOWER(?)", [
     houseId,
     line.description,
   ]);
@@ -246,7 +257,7 @@ function matchItem(houseId: string, line: { description: string; itemId?: string
 
   const wanted = looseName(line.description);
   if (wanted.length < 3) return null;
-  const candidates = all<any>("SELECT * FROM items WHERE house_id = ? AND archived = 0", [houseId]);
+  const candidates = await all<any>("SELECT * FROM items WHERE house_id = ? AND archived = 0", [houseId]);
   let best: { item: any; score: number } | null = null;
   for (const candidate of candidates) {
     const name = looseName(String(candidate.name));
@@ -323,8 +334,8 @@ const importBody = z.object({
 
 receiptRoutes.get(
   "/:houseId/receipts",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req);
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req);
     const limit = intParam(req.query.limit, 50, 300);
     const vendorId = req.query.vendorId ? String(req.query.vendorId) : null;
     const q = String(req.query.q ?? "").trim();
@@ -336,11 +347,11 @@ receiptRoutes.get(
     }
     if (q) {
       where.push(
-        `(COALESCE(v.name, r.vendor_name) LIKE ? OR EXISTS (SELECT 1 FROM receipt_lines rl WHERE rl.receipt_id = r.id AND rl.description LIKE ?))`,
+        `(lower(COALESCE(v.name, r.vendor_name)) LIKE lower(?) OR EXISTS (SELECT 1 FROM receipt_lines rl WHERE rl.receipt_id = r.id AND lower(rl.description) LIKE lower(?)))`,
       );
       params.push(`%${q}%`, `%${q}%`);
     }
-    const rows = all<any>(
+    const rows = await all<any>(
       `SELECT r.*, COALESCE(v.name, r.vendor_name) AS vendor_name,
          (SELECT COUNT(*) FROM receipt_lines rl WHERE rl.receipt_id = r.id) AS line_count
        FROM receipts r LEFT JOIN vendors v ON v.id = r.vendor_id
@@ -355,23 +366,23 @@ receiptRoutes.get(
 receiptRoutes.post(
   "/:houseId/receipts/upload",
   uploader("receipts").single("image"),
-  handler((req, res) => {
-    requireHouse(req, "member");
+  handler(async (req, res) => {
+    await requireHouse(req, "member");
     if (!req.file) throw new ApiError(400, "No image uploaded");
     res.status(201).json({ path: `/uploads/receipts/${req.file.filename}` });
   }),
 );
 
-function localImageToDataUrl(image: string): Promise<string | null> {
+async function localImageToDataUrl(image: string): Promise<string | null> {
   if (!image.startsWith("/uploads/receipts/")) return Promise.resolve(null);
   const filename = image.split("/").pop()!;
-  return fileToDataUrl(uploadPath("receipts", filename), "image/jpeg");
+  return await fileToDataUrl(uploadPath("receipts", filename), "image/jpeg");
 }
 
 receiptRoutes.post(
   "/:houseId/receipts/scan",
   handler(async (req, res) => {
-    const { houseId } = requireHouse(req, "member");
+    const { houseId } = await requireHouse(req, "member");
     const body = parseBody(
       z.object({
         text: z.string().max(50000).optional(),
@@ -382,12 +393,12 @@ receiptRoutes.post(
     const rawText = (body.text ?? "").trim();
     if (!rawText && !body.image) throw new ApiError(400, "Provide receipt text or a scan image");
 
-    const house = get<any>("SELECT * FROM houses WHERE id = ?", [houseId])!;
+    const house = (await get<any>("SELECT * FROM houses WHERE id = ?", [houseId]))!;
     const settings = parseJson<Record<string, any>>(house.settings, {});
     const cfg = resolveAi(settings);
     const hasVisionModel = Boolean(settings?.ai?.visionModel || AI_ENV.visionModel);
 
-    const template = selectReceiptTemplate(rawText, houseId);
+    const template = await selectReceiptTemplate(rawText, houseId);
     let draft = heuristicReceipt(rawText, house.currency ?? null);
     let provider: "ai" | "local" | "template" = "local";
     let aiCost: number | null = null;
@@ -413,7 +424,17 @@ receiptRoutes.post(
             body.image && hasVisionModel
               ? [await localImageToDataUrl(body.image)].filter((value): value is string => !!value)
               : [];
-          const aiDraft = await aiParseReceipt(cfg, rawText, images);
+          const aiDraft = await aiParseReceipt(cfg, rawText, images, {
+            operation: "receipt.scan",
+            houseId,
+            userId: req.user!.id,
+            metadata: {
+              hasImage: Boolean(body.image),
+              hasVisionModel,
+              ocrChars: rawText.length,
+              lineCount: draft.lines.length,
+            },
+          });
           draft = normaliseReceiptDraft(aiDraft.data, house.currency ?? null);
           aiCost = aiDraft.usage.cost;
           provider = "ai";
@@ -430,28 +451,28 @@ receiptRoutes.post(
 
     // Resolve the merchant against the shop catalogue so receipt variants such
     // as "LIDL HELLAS" or "ΣΚΛΑΒΕΝΙΤΗΣ" become the same familiar shop.
-    const country = housePurchaseCountry(houseId);
-    const catalogVendor = canonicalVendor(draft.vendorName, country) ?? detectCatalogVendor(rawText, country);
+    const country = await housePurchaseCountry(houseId);
+    const catalogVendor = await canonicalVendor(draft.vendorName, country) ?? await detectCatalogVendor(rawText, country);
     if (catalogVendor) draft.vendorName = catalogVendor.name;
 
     const knownVendor = draft.vendorName
-      ? get<any>("SELECT * FROM vendors WHERE house_id = ? AND name = ? COLLATE NOCASE", [houseId, draft.vendorName])
+      ? await get<any>("SELECT * FROM vendors WHERE house_id = ? AND lower(name) = lower(?)", [houseId, draft.vendorName])
       : null;
-    draft.lines = draft.lines.map((line) => {
-      const suggestions = suggestProductMatches(
+    draft.lines = await Promise.all(draft.lines.map(async (line) => {
+      const suggestions = await suggestProductMatches(
         houseId,
         knownVendor?.id ?? null,
         line.rawDescription ?? line.description,
         3,
       );
       const top = suggestions[0];
-      const mapping = findCatalogMapping({
+      const mapping = await findCatalogMapping({
         country,
         vendorName: draft.vendorName,
         rawDescription: line.rawDescription ?? line.description,
       });
       const offCode = line.barcode || mapping?.offCode || null;
-      const product = offCode ? getCachedOffProduct(offCode) : null;
+      const product = offCode ? await getCachedOffProduct(offCode) : null;
       return {
         ...line,
         suggestedItemId: top?.itemId ?? null,
@@ -466,7 +487,7 @@ receiptRoutes.post(
         offQuantity: product?.quantity || mapping?.unit || null,
         offScore: product ? (line.barcode ? 1 : (mapping?.confidence ?? 0.7)) : (mapping?.confidence ?? null),
       };
-    });
+    }));
 
     if (!draft.lines.length && !draft.vendorName) {
       warning = [warning, "Could not find any product lines in this text."].filter(Boolean).join(" ");
@@ -479,19 +500,19 @@ receiptRoutes.post(
 receiptRoutes.post(
   "/:houseId/receipts",
   handler(async (req, res) => {
-    const { houseId } = requireHouse(req, "member");
+    const { houseId } = await requireHouse(req, "member");
     const body = parseBody(importBody, req.body);
 
-    const vendor = resolveVendor(houseId, body.vendorId, body.vendorName);
+    const vendor = await resolveVendor(houseId, body.vendorId, body.vendorName);
     for (const line of body.lines) {
-      if (line.locationId && !get("SELECT id FROM locations WHERE id = ? AND house_id = ?", [line.locationId, houseId])) {
+      if (line.locationId && !await get("SELECT id FROM locations WHERE id = ? AND house_id = ?", [line.locationId, houseId])) {
         throw new ApiError(400, "One of the chosen places is not in this house");
       }
     }
 
     const receiptId = newId("rct");
     const touchedItems = new Set<string>();
-    const house = get<any>("SELECT currency FROM houses WHERE id = ?", [houseId]);
+    const house = await get<any>("SELECT currency FROM houses WHERE id = ?", [houseId]);
     const currency = (body.currency ?? house?.currency ?? "EUR").toUpperCase().slice(0, 3);
     const taxBreakdown = (body.taxBreakdown ?? []).map((entry) => ({
       rate: entry.rate ?? null,
@@ -512,10 +533,10 @@ receiptRoutes.post(
 
     // Resolve OpenFoodFacts before the transaction: product fetches are network
     // calls and must never hold the SQLite write lock.
-    const country = housePurchaseCountry(houseId);
+    const country = await housePurchaseCountry(houseId);
     const enriched = await mapWithLimit(body.lines, 4, async (line) => {
       const rawDescription = line.rawDescription ?? line.description;
-      const mapping = findCatalogMapping({
+      const mapping = await findCatalogMapping({
         country,
         vendorName: vendor?.name ?? body.vendorName,
         rawDescription,
@@ -525,8 +546,8 @@ receiptRoutes.post(
       return { line, rawDescription, mapping, offCode: product?.code ?? wanted, product };
     });
 
-    tx(() => {
-      run(
+    await tx(async () => {
+      await run(
         `INSERT INTO receipts
           (id, house_id, vendor_id, vendor_name, purchased_at, currency, total, subtotal, tax, tax_breakdown,
            template_id, template_confidence, provider, ai_cost, savings, image, ocr_text, source, notes, created_by, created_at)
@@ -556,21 +577,21 @@ receiptRoutes.post(
         ],
       );
 
-      enriched.forEach(({ line, rawDescription, mapping, offCode, product }, index) => {
+      for (const [index, { line, rawDescription, mapping, offCode, product }] of enriched.entries()) {
         const alias =
-          !line.itemId && rawDescription ? findProductAlias(houseId, vendor?.id ?? null, rawDescription) : null;
-        let item = alias?.item ?? matchItem(houseId, line);
+          !line.itemId && rawDescription ? await findProductAlias(houseId, vendor?.id ?? null, rawDescription) : null;
+        let item = alias?.item ?? await matchItem(houseId, line);
         const unit = line.unit ? line.unit.toLowerCase() : null;
 
         if (!item) {
-          item = createItemForLine(houseId, req.user!.id, line, unit);
+          item = await createItemForLine(houseId, req.user!.id, line, unit);
         }
 
         // Link scanned/receipt products only when the item has no link yet. A
         // different existing link is a deliberate user choice and is kept.
         if (product && !item.off_code) {
           try {
-            const linked = linkItemToOff({
+            const linked = await linkItemToOff({
               item,
               product,
               source: line.barcode ? "barcode" : "receipt",
@@ -583,10 +604,10 @@ receiptRoutes.post(
         }
 
         // Learn after enrichment so the alias captures the final unit/category.
-        learnProductAlias({ houseId, vendorId: vendor?.id ?? null, rawDescription, item });
+        await learnProductAlias({ houseId, vendorId: vendor?.id ?? null, rawDescription, item });
 
         if (product) {
-          learnCatalogMapping({
+          await learnCatalogMapping({
             country,
             vendorName: vendor?.name ?? body.vendorName,
             rawDescription,
@@ -600,7 +621,7 @@ receiptRoutes.post(
         } else if (item.off_code) {
           // A corrected/pinned line for an item that is already linked to OFF
           // still teaches the shared catalogue the shop’s printed name.
-          learnCatalogMapping({
+          await learnCatalogMapping({
             country,
             vendorName: vendor?.name ?? body.vendorName,
             rawDescription,
@@ -624,7 +645,7 @@ receiptRoutes.post(
         const unitPrice =
           line.unitPrice != null ? line.unitPrice : line.lineTotal != null ? round(line.lineTotal / quantity, 4) : null;
 
-        addStock({
+        await addStock({
           itemId: item.id,
           houseId,
           userId: req.user!.id,
@@ -641,7 +662,7 @@ receiptRoutes.post(
         });
         touchedItems.add(item.id);
 
-        run(
+        await run(
           `INSERT INTO receipt_lines
             (id, receipt_id, house_id, description, raw_description, quantity, unit, unit_price, line_total,
              tax_rate, discount, item_id, location_id, barcode, off_code, sort)
@@ -665,28 +686,28 @@ receiptRoutes.post(
             index,
           ],
         );
-      });
+      }
 
       if (body.total == null) {
-        const sum = get<{ total: number | null }>(
+        const sum = await get<{ total: number | null }>(
           "SELECT SUM(COALESCE(line_total, 0)) AS total FROM receipt_lines WHERE receipt_id = ?",
           [receiptId],
         );
         const finalTotal = sum?.total == null ? null : round(Number(sum.total), 2);
         const finalSubtotal = subtotal ?? (finalTotal != null && tax != null ? round(finalTotal - tax, 2) : null);
-        run("UPDATE receipts SET total = ?, subtotal = ? WHERE id = ?", [finalTotal, finalSubtotal, receiptId]);
+        await run("UPDATE receipts SET total = ?, subtotal = ? WHERE id = ?", [finalTotal, finalSubtotal, receiptId]);
       }
     });
 
-    for (const itemId of touchedItems) afterStockChange(itemId);
-    res.status(201).json(receiptDetail(houseId, receiptId));
+    for (const itemId of touchedItems) await afterStockChange(itemId);
+    res.status(201).json(await receiptDetail(houseId, receiptId));
   }),
 );
 
 receiptRoutes.get(
   "/:houseId/purchases/analytics",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req);
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req);
     const from = req.query.from ? String(req.query.from).slice(0, 10) : null;
     const to = req.query.to ? String(req.query.to).slice(0, 10) : null;
     const where = ["r.house_id = ?"];
@@ -700,7 +721,7 @@ receiptRoutes.get(
       params.push(to);
     }
 
-    const rows = all<any>(
+    const rows = await all<any>(
       `SELECT r.id, r.vendor_id, COALESCE(v.name, r.vendor_name) AS vendor_name, r.purchased_at, r.created_at,
          r.total, r.subtotal, r.tax, r.savings, r.tax_breakdown
        FROM receipts r LEFT JOIN vendors v ON v.id = r.vendor_id
@@ -769,7 +790,7 @@ receiptRoutes.get(
       }
     }
 
-    const categoryRows = all<any>(
+    const categoryRows = await all<any>(
       `SELECT c.id AS category_id, COALESCE(c.name, 'Uncategorised') AS category_name,
          SUM(COALESCE(rl.line_total, 0)) AS total
        FROM receipt_lines rl
@@ -777,7 +798,7 @@ receiptRoutes.get(
        LEFT JOIN items i ON i.id = rl.item_id
        LEFT JOIN categories c ON c.id = i.category_id
        WHERE ${where.join(" AND ")}
-       GROUP BY c.id, c.name
+       GROUP BY c.id, c.name, COALESCE(c.name, 'Uncategorised')
        ORDER BY total DESC`,
       params,
     );
@@ -826,7 +847,7 @@ receiptRoutes.get(
   }),
 );
 
-function createItemForLine(
+async function createItemForLine(
   houseId: string,
   userId: string,
   line: z.infer<typeof lineInput>,
@@ -835,19 +856,19 @@ function createItemForLine(
   const name = line.description.replace(/\s+/g, " ").trim().slice(0, 120);
   if (!name) throw new ApiError(400, "Every receipt line needs a product name");
   const itemId = newId("itm");
-  run(
+  await run(
     `INSERT INTO items (id, house_id, name, description, brand, category_id, unit, reorder_point, target_stock,
        attributes, tags, image, archived, created_by, created_at, updated_at)
      VALUES (?, ?, ?, NULL, NULL, NULL, ?, 0, NULL, '{}', '[]', NULL, 0, ?, ?, ?)`,
     [itemId, houseId, name, (unit ?? "pcs").toLowerCase().slice(0, 10), userId, now(), now()],
   );
   if (line.barcode) {
-    const existing = get<any>(
+    const existing = await get<any>(
       `SELECT i.name FROM item_barcodes b JOIN items i ON i.id = b.item_id WHERE b.house_id = ? AND b.code = ?`,
       [houseId, line.barcode],
     );
     if (!existing) {
-      run("INSERT INTO item_barcodes (id, item_id, house_id, code, format, created_at) VALUES (?, ?, ?, ?, 'receipt', ?)", [
+      await run("INSERT INTO item_barcodes (id, item_id, house_id, code, format, created_at) VALUES (?, ?, ?, ?, 'receipt', ?)", [
         newId("bar"),
         itemId,
         houseId,
@@ -856,15 +877,15 @@ function createItemForLine(
       ]);
     }
   }
-  return get<any>("SELECT * FROM items WHERE id = ?", [itemId]);
+  return await get<any>("SELECT * FROM items WHERE id = ?", [itemId]);
 }
 
 /* --------------------------------------------------------------- single receipt */
 
-function receiptAccess(req: any, minRole: "viewer" | "member" = "viewer") {
-  const receipt = get<any>("SELECT * FROM receipts WHERE id = ?", [req.params.receiptId]);
+async function receiptAccess(req: any, minRole: "viewer" | "member" = "viewer") {
+  const receipt = await get<any>("SELECT * FROM receipts WHERE id = ?", [req.params.receiptId]);
   if (!receipt) throw new ApiError(404, "Receipt not found");
-  const role = memberRole(req.user!.id, receipt.house_id);
+  const role = await memberRole(req.user!.id, receipt.house_id);
   if (!role) throw new ApiError(404, "Receipt not found");
   if (!roleAtLeast(role, minRole)) throw new ApiError(403, `Requires ${minRole} access`);
   return { receipt, houseId: receipt.house_id as string };
@@ -872,17 +893,17 @@ function receiptAccess(req: any, minRole: "viewer" | "member" = "viewer") {
 
 singleReceiptRoutes.get(
   "/:receiptId",
-  handler((req, res) => {
-    const { houseId, receipt } = receiptAccess(req);
-    res.json(receiptDetail(houseId, receipt.id));
+  handler(async (req, res) => {
+    const { houseId, receipt } = await receiptAccess(req);
+    res.json(await receiptDetail(houseId, receipt.id));
   }),
 );
 
 singleReceiptRoutes.delete(
   "/:receiptId",
-  handler((req, res) => {
-    const { receipt } = receiptAccess(req, "member");
-    run("DELETE FROM receipts WHERE id = ?", [receipt.id]);
+  handler(async (req, res) => {
+    const { receipt } = await receiptAccess(req, "member");
+    await run("DELETE FROM receipts WHERE id = ?", [receipt.id]);
     res.json({ ok: true });
   }),
 );

@@ -34,18 +34,18 @@ const DEFAULT_ATTRIBUTES = [
   { key: "warranty_until", label: "Warranty until", type: "date", sort: 3 },
 ];
 
-export function createHouse(opts: {
+export async function createHouse(opts: {
   userId: string;
   name: string;
   kind?: string;
   address?: string | null;
   currency?: string;
   settings?: HouseSettings;
-}): string {
-  return tx(() => {
+}): Promise<string> {
+  return await tx(async () => {
     const id = newId("hse");
     const stamp = now();
-    run(
+    await run(
       "INSERT INTO houses (id, name, kind, address, currency, settings, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
       [
         id,
@@ -58,19 +58,19 @@ export function createHouse(opts: {
         stamp,
       ],
     );
-    run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, 'owner', ?)", [
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, 'owner', ?)", [
       id,
       opts.userId,
       stamp,
     ]);
     for (const loc of DEFAULT_LOCATIONS) {
-      run(
+      await run(
         "INSERT INTO locations (id, house_id, name, kind, icon, parent_id, created_at) VALUES (?, ?, ?, ?, ?, NULL, ?)",
         [newId("loc"), id, loc.name, loc.kind, loc.icon, stamp],
       );
     }
     for (const cat of DEFAULT_CATEGORIES) {
-      run("INSERT INTO categories (id, house_id, name, icon, parent_id, created_at) VALUES (?, ?, ?, ?, NULL, ?)", [
+      await run("INSERT INTO categories (id, house_id, name, icon, parent_id, created_at) VALUES (?, ?, ?, ?, NULL, ?)", [
         newId("cat"),
         id,
         cat.name,
@@ -79,7 +79,7 @@ export function createHouse(opts: {
       ]);
     }
     for (const attr of DEFAULT_ATTRIBUTES) {
-      run(
+      await run(
         `INSERT INTO attribute_defs (id, house_id, key, label, type, unit, options, required, category_id, sort, created_at)
          VALUES (?, ?, ?, ?, ?, NULL, '[]', 0, NULL, ?, ?)`,
         [newId("att"), id, attr.key, attr.label, attr.type, attr.sort, stamp],

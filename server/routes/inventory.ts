@@ -54,10 +54,10 @@ const nutritionBody = z
 
 /* ------------------------------------------------------------------ helpers */
 
-function itemAccess(req: any, minRole: Role = "viewer") {
-  const item = get<any>("SELECT * FROM items WHERE id = ?", [req.params.itemId]);
+async function itemAccess(req: any, minRole: Role = "viewer") {
+  const item = await get<any>("SELECT * FROM items WHERE id = ?", [req.params.itemId]);
   if (!item) throw new ApiError(404, "Item not found");
-  const role = memberRole(req.user!.id, item.house_id);
+  const role = await memberRole(req.user!.id, item.house_id);
   if (!role) throw new ApiError(404, "Item not found");
   if (!roleAtLeast(role, minRole)) throw new ApiError(403, `Requires ${minRole} access`);
   return { item, houseId: item.house_id as string, role };
@@ -95,12 +95,12 @@ function parseTags(value: unknown): string[] {
   return [];
 }
 
-function itemDetail(itemId: string, userId: string) {
-  const row = get<any>(`${ITEM_SELECT} WHERE i.id = ?`, [itemId]);
+async function itemDetail(itemId: string, userId: string) {
+  const row = await get<any>(`${ITEM_SELECT} WHERE i.id = ?`, [itemId]);
   if (!row) throw new ApiError(404, "Item not found");
   void userId;
-  const item = serializeItem(row, barcodesForItem(itemId));
-  const lots = all<any>(
+  const item = serializeItem(row, await barcodesForItem(itemId));
+  const lots = (await all<any>(
     `SELECT l.*, loc.name AS location_name, v.name AS vendor_name FROM stock_lots l
      LEFT JOIN locations loc ON loc.id = l.location_id
      LEFT JOIN vendors v ON v.id = l.vendor_id
@@ -108,23 +108,23 @@ function itemDetail(itemId: string, userId: string) {
      ORDER BY CASE WHEN l.quantity > 0 THEN 0 ELSE 1 END, CASE WHEN l.expires_at IS NULL THEN 1 ELSE 0 END,
        l.expires_at ASC, l.created_at ASC`,
     [itemId],
-  ).map(serializeLot);
-  const movements = all<any>(
+  )).map(serializeLot);
+  const movements = (await all<any>(
     `SELECT m.*, loc.name AS location_name, u.name AS user_name, v.name AS vendor_name FROM stock_movements m
      LEFT JOIN locations loc ON loc.id = m.location_id
      LEFT JOIN users u ON u.id = m.user_id
      LEFT JOIN vendors v ON v.id = m.vendor_id
      WHERE m.item_id = ? ORDER BY m.created_at DESC LIMIT 80`,
     [itemId],
-  ).map(serializeMovement);
-  const priceHistory = all<any>(
+  )).map(serializeMovement);
+  const priceHistory = (await all<any>(
     `SELECT m.normalized_price AS price, m.created_at AS at, m.unit, m.quantity, m.unit_price,
        m.vendor_id, v.name AS vendor_name, m.receipt_id, m.note
      FROM stock_movements m LEFT JOIN vendors v ON v.id = m.vendor_id
      WHERE m.item_id = ? AND m.normalized_price IS NOT NULL AND m.normalized_price > 0 AND m.type = 'in'
      ORDER BY m.created_at ASC LIMIT 300`,
     [itemId],
-  ).map((r) => ({
+  )).map((r) => ({
     at: r.at,
     price: Number(r.price),
     unit: r.unit,
@@ -135,24 +135,24 @@ function itemDetail(itemId: string, userId: string) {
     receiptId: r.receipt_id ?? null,
     note: r.note ?? null,
   }));
-  const recipes = all<any>(
+  const recipes = await all<any>(
     `SELECT DISTINCT r.id, r.title FROM recipes r
      JOIN recipe_ingredients ri ON ri.recipe_id = r.id
      WHERE r.house_id = ? AND (ri.item_id = ? OR LOWER(ri.name) = LOWER(?))`,
     [row.house_id, itemId, row.name],
   );
-  return { ...item, lots, movements, priceHistory, recipes, priceStats: priceStats(itemId, item.unit) };
+  return { ...item, lots, movements, priceHistory, recipes, priceStats: await priceStats(itemId, item.unit) };
 }
 
 /* ---------------------------------------------------------------- locations */
 
 inventoryRoutes.get(
   "/:houseId/locations",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req);
-    const rows = all<any>(
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req);
+    const rows = await all<any>(
       `SELECT l.*, (SELECT COUNT(DISTINCT item_id) FROM stock_lots WHERE location_id = l.id) AS item_count
-       FROM locations l WHERE l.house_id = ? ORDER BY l.name COLLATE NOCASE`,
+       FROM locations l WHERE l.house_id = ? ORDER BY lower(l.name)`,
       [houseId],
     );
     res.json(rows.map(serializeLocation));
@@ -161,8 +161,8 @@ inventoryRoutes.get(
 
 inventoryRoutes.post(
   "/:houseId/locations",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req, "member");
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req, "member");
     const body = parseBody(
       z.object({
         name: z.string().trim().min(1).max(60),
@@ -173,7 +173,7 @@ inventoryRoutes.post(
       req.body,
     );
     const id = newId("loc");
-    run("INSERT INTO locations (id, house_id, name, kind, icon, parent_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", [
+    await run("INSERT INTO locations (id, house_id, name, kind, icon, parent_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", [
       id,
       houseId,
       body.name,
@@ -182,14 +182,14 @@ inventoryRoutes.post(
       body.parentId ?? null,
       now(),
     ]);
-    res.status(201).json(serializeLocation(get<any>("SELECT * FROM locations WHERE id = ?", [id])));
+    res.status(201).json(serializeLocation(await get<any>("SELECT * FROM locations WHERE id = ?", [id])));
   }),
 );
 
 inventoryRoutes.patch(
   "/:houseId/locations/:locationId",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req, "member");
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req, "member");
     const body = parseBody(
       z.object({
         name: z.string().trim().min(1).max(60).optional(),
@@ -199,24 +199,24 @@ inventoryRoutes.patch(
       }),
       req.body,
     );
-    const current = get<any>("SELECT * FROM locations WHERE id = ? AND house_id = ?", [req.params.locationId, houseId]);
+    const current = await get<any>("SELECT * FROM locations WHERE id = ? AND house_id = ?", [req.params.locationId, houseId]);
     if (!current) throw new ApiError(404, "Location not found");
-    run("UPDATE locations SET name = ?, kind = ?, icon = ?, parent_id = ? WHERE id = ?", [
+    await run("UPDATE locations SET name = ?, kind = ?, icon = ?, parent_id = ? WHERE id = ?", [
       body.name ?? current.name,
       body.kind ?? current.kind,
       body.icon === undefined ? current.icon : body.icon,
       body.parentId === undefined ? current.parent_id : body.parentId,
       current.id,
     ]);
-    res.json(serializeLocation(get<any>("SELECT * FROM locations WHERE id = ?", [current.id])));
+    res.json(serializeLocation(await get<any>("SELECT * FROM locations WHERE id = ?", [current.id])));
   }),
 );
 
 inventoryRoutes.delete(
   "/:houseId/locations/:locationId",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req, "admin");
-    run("DELETE FROM locations WHERE id = ? AND house_id = ?", [req.params.locationId, houseId]);
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req, "admin");
+    await run("DELETE FROM locations WHERE id = ? AND house_id = ?", [req.params.locationId, houseId]);
     res.json({ ok: true });
   }),
 );
@@ -225,11 +225,11 @@ inventoryRoutes.delete(
 
 inventoryRoutes.get(
   "/:houseId/categories",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req);
-    const rows = all<any>(
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req);
+    const rows = await all<any>(
       `SELECT c.*, (SELECT COUNT(*) FROM items i WHERE i.category_id = c.id AND i.archived = 0) AS item_count
-       FROM categories c WHERE c.house_id = ? ORDER BY c.name COLLATE NOCASE`,
+       FROM categories c WHERE c.house_id = ? ORDER BY lower(c.name)`,
       [houseId],
     );
     res.json(rows.map(serializeCategory));
@@ -238,8 +238,8 @@ inventoryRoutes.get(
 
 inventoryRoutes.post(
   "/:houseId/categories",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req, "member");
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req, "member");
     const body = parseBody(
       z.object({
         name: z.string().trim().min(1).max(60),
@@ -249,7 +249,7 @@ inventoryRoutes.post(
       req.body,
     );
     const id = newId("cat");
-    run("INSERT INTO categories (id, house_id, name, icon, parent_id, created_at) VALUES (?, ?, ?, ?, ?, ?)", [
+    await run("INSERT INTO categories (id, house_id, name, icon, parent_id, created_at) VALUES (?, ?, ?, ?, ?, ?)", [
       id,
       houseId,
       body.name,
@@ -257,14 +257,14 @@ inventoryRoutes.post(
       body.parentId ?? null,
       now(),
     ]);
-    res.status(201).json(serializeCategory(get<any>("SELECT * FROM categories WHERE id = ?", [id])));
+    res.status(201).json(serializeCategory(await get<any>("SELECT * FROM categories WHERE id = ?", [id])));
   }),
 );
 
 inventoryRoutes.patch(
   "/:houseId/categories/:categoryId",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req, "member");
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req, "member");
     const body = parseBody(
       z.object({
         name: z.string().trim().min(1).max(60).optional(),
@@ -273,23 +273,23 @@ inventoryRoutes.patch(
       }),
       req.body,
     );
-    const current = get<any>("SELECT * FROM categories WHERE id = ? AND house_id = ?", [req.params.categoryId, houseId]);
+    const current = await get<any>("SELECT * FROM categories WHERE id = ? AND house_id = ?", [req.params.categoryId, houseId]);
     if (!current) throw new ApiError(404, "Category not found");
-    run("UPDATE categories SET name = ?, icon = ?, parent_id = ? WHERE id = ?", [
+    await run("UPDATE categories SET name = ?, icon = ?, parent_id = ? WHERE id = ?", [
       body.name ?? current.name,
       body.icon === undefined ? current.icon : body.icon,
       body.parentId === undefined ? current.parent_id : body.parentId,
       current.id,
     ]);
-    res.json(serializeCategory(get<any>("SELECT * FROM categories WHERE id = ?", [current.id])));
+    res.json(serializeCategory(await get<any>("SELECT * FROM categories WHERE id = ?", [current.id])));
   }),
 );
 
 inventoryRoutes.delete(
   "/:houseId/categories/:categoryId",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req, "admin");
-    run("DELETE FROM categories WHERE id = ? AND house_id = ?", [req.params.categoryId, houseId]);
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req, "admin");
+    await run("DELETE FROM categories WHERE id = ? AND house_id = ?", [req.params.categoryId, houseId]);
     res.json({ ok: true });
   }),
 );
@@ -298,10 +298,10 @@ inventoryRoutes.delete(
 
 inventoryRoutes.get(
   "/:houseId/attributes",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req);
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req);
     res.json(
-      all<any>("SELECT * FROM attribute_defs WHERE house_id = ? ORDER BY sort, label", [houseId])
+      (await all<any>("SELECT * FROM attribute_defs WHERE house_id = ? ORDER BY sort, label", [houseId]))
         .filter((row) => !RESERVED_ATTRIBUTE_KEY_SET.has(String(row.key)))
         .map(serializeAttribute),
     );
@@ -326,17 +326,17 @@ const attributeBody = z.object({
 
 inventoryRoutes.post(
   "/:houseId/attributes",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req, "admin");
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req, "admin");
     const body = parseBody(attributeBody, req.body);
     if (RESERVED_ATTRIBUTE_KEY_SET.has(body.key)) {
       throw new ApiError(400, `"${body.key}" is a built-in item field and cannot be a custom attribute`);
     }
-    if (get("SELECT id FROM attribute_defs WHERE house_id = ? AND key = ?", [houseId, body.key])) {
+    if (await get("SELECT id FROM attribute_defs WHERE house_id = ? AND key = ?", [houseId, body.key])) {
       throw new ApiError(409, "An attribute with that key already exists");
     }
     const id = newId("att");
-    run(
+    await run(
       `INSERT INTO attribute_defs (id, house_id, key, label, type, unit, options, required, category_id, sort, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
@@ -353,15 +353,15 @@ inventoryRoutes.post(
         now(),
       ],
     );
-    res.status(201).json(serializeAttribute(get<any>("SELECT * FROM attribute_defs WHERE id = ?", [id])));
+    res.status(201).json(serializeAttribute(await get<any>("SELECT * FROM attribute_defs WHERE id = ?", [id])));
   }),
 );
 
 inventoryRoutes.patch(
   "/:houseId/attributes/:attributeId",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req, "admin");
-    const current = get<any>("SELECT * FROM attribute_defs WHERE id = ? AND house_id = ?", [
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req, "admin");
+    const current = await get<any>("SELECT * FROM attribute_defs WHERE id = ? AND house_id = ?", [
       req.params.attributeId,
       houseId,
     ]);
@@ -370,7 +370,7 @@ inventoryRoutes.patch(
     if (body.key && RESERVED_ATTRIBUTE_KEY_SET.has(body.key)) {
       throw new ApiError(400, `"${body.key}" is a built-in item field and cannot be a custom attribute`);
     }
-    run(
+    await run(
       `UPDATE attribute_defs SET key = ?, label = ?, type = ?, unit = ?, options = ?, required = ?, category_id = ?, sort = ?
        WHERE id = ?`,
       [
@@ -385,15 +385,15 @@ inventoryRoutes.patch(
         current.id,
       ],
     );
-    res.json(serializeAttribute(get<any>("SELECT * FROM attribute_defs WHERE id = ?", [current.id])));
+    res.json(serializeAttribute(await get<any>("SELECT * FROM attribute_defs WHERE id = ?", [current.id])));
   }),
 );
 
 inventoryRoutes.delete(
   "/:houseId/attributes/:attributeId",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req, "admin");
-    run("DELETE FROM attribute_defs WHERE id = ? AND house_id = ?", [req.params.attributeId, houseId]);
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req, "admin");
+    await run("DELETE FROM attribute_defs WHERE id = ? AND house_id = ?", [req.params.attributeId, houseId]);
     res.json({ ok: true });
   }),
 );
@@ -402,8 +402,8 @@ inventoryRoutes.delete(
 
 inventoryRoutes.get(
   "/:houseId/items",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req);
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req);
     const q = String(req.query.q ?? "").trim();
     const categoryId = req.query.categoryId ? String(req.query.categoryId) : null;
     const locationId = req.query.locationId ? String(req.query.locationId) : null;
@@ -427,7 +427,7 @@ inventoryRoutes.get(
       params.push(locationId);
     }
     if (tag) {
-      where.push("i.tags LIKE ?");
+      where.push("lower(i.tags) LIKE lower(?)");
       params.push(`%${tag}%`);
     }
     if (lowOnly) {
@@ -436,14 +436,16 @@ inventoryRoutes.get(
       );
     }
     if (expiring) {
+      const horizon = new Date(Date.now() + 14 * 864e5).toISOString().slice(0, 10);
       where.push(
-        `EXISTS (SELECT 1 FROM stock_lots l WHERE l.item_id = i.id AND l.quantity > 0 AND l.expires_at IS NOT NULL AND l.expires_at <= date('now', '+14 day'))`,
+        `EXISTS (SELECT 1 FROM stock_lots l WHERE l.item_id = i.id AND l.quantity > 0 AND l.expires_at IS NOT NULL AND l.expires_at <= ?)`,
       );
+      params.push(horizon);
     }
     if (q) {
       const like = `%${q}%`;
       where.push(
-        `(i.name LIKE ? OR i.brand LIKE ? OR i.description LIKE ? OR EXISTS (SELECT 1 FROM item_barcodes b WHERE b.item_id = i.id AND b.code LIKE ?))`,
+        `(lower(i.name) LIKE lower(?) OR lower(i.brand) LIKE lower(?) OR lower(i.description) LIKE lower(?) OR EXISTS (SELECT 1 FROM item_barcodes b WHERE b.item_id = i.id AND lower(b.code) LIKE lower(?)))`,
       );
       params.push(like, like, like, like);
     }
@@ -451,20 +453,20 @@ inventoryRoutes.get(
       sort === "recent"
         ? "i.updated_at DESC"
         : sort === "quantity"
-          ? "quantity ASC, i.name COLLATE NOCASE"
+          ? "quantity ASC, lower(i.name)"
           : sort === "value"
-            ? "value DESC, i.name COLLATE NOCASE"
-            : "i.name COLLATE NOCASE";
+            ? "value DESC, lower(i.name)"
+            : "lower(i.name)";
 
-    const rows = all<any>(`${ITEM_SELECT} WHERE ${where.join(" AND ")} ORDER BY ${order} LIMIT ? OFFSET ?`, [
+    const rows = await all<any>(`${ITEM_SELECT} WHERE ${where.join(" AND ")} ORDER BY ${order} LIMIT ? OFFSET ?`, [
       ...params,
       limit,
       offset,
     ]);
     const total = Number(
-      get<{ n: number }>(`SELECT COUNT(*) AS n FROM items i WHERE ${where.join(" AND ")}`, params)?.n ?? 0,
+      (await get<{ n: number }>(`SELECT COUNT(*) AS n FROM items i WHERE ${where.join(" AND ")}`, params))?.n ?? 0,
     );
-    const barcodeMap = barcodesForHouse(houseId);
+    const barcodeMap = await barcodesForHouse(houseId);
     res.json({ items: rows.map((r) => serializeItem(r, barcodeMap.get(r.id) ?? [])), total });
   }),
 );
@@ -472,7 +474,7 @@ inventoryRoutes.get(
 inventoryRoutes.post(
   "/:houseId/items",
   handler(async (req, res) => {
-    const { houseId } = requireHouse(req, "member");
+    const { houseId } = await requireHouse(req, "member");
     const body = parseBody(
       z.object({
         name: z.string().trim().min(1).max(120),
@@ -504,18 +506,18 @@ inventoryRoutes.post(
       req.body,
     );
 
-    if (body.categoryId && !get("SELECT id FROM categories WHERE id = ? AND house_id = ?", [body.categoryId, houseId])) {
+    if (body.categoryId && !await get("SELECT id FROM categories WHERE id = ? AND house_id = ?", [body.categoryId, houseId])) {
       throw new ApiError(400, "Category does not exist in this house");
     }
-    if (body.initialStock?.vendorId && !get("SELECT id FROM vendors WHERE id = ? AND house_id = ?", [body.initialStock.vendorId, houseId])) {
+    if (body.initialStock?.vendorId && !await get("SELECT id FROM vendors WHERE id = ? AND house_id = ?", [body.initialStock.vendorId, houseId])) {
       throw new ApiError(400, "Shop does not exist in this house");
     }
 
     const normalized = normalizeItemAttributes(body.attributes, body.brand);
     const nutrition = normaliseNutrition(body.nutrition);
     const id = newId("itm");
-    tx(() => {
-      run(
+    await tx(async () => {
+      await run(
         `INSERT INTO items (id, house_id, name, description, brand, category_id, unit, reorder_point, target_stock,
            attributes, tags, image, nutrition, archived, created_by, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
@@ -541,12 +543,12 @@ inventoryRoutes.post(
       for (const code of body.barcodes ?? []) {
         const trimmed = code.trim();
         if (!trimmed) continue;
-        const conflict = get<any>(
+        const conflict = await get<any>(
           `SELECT i.name FROM item_barcodes b JOIN items i ON i.id = b.item_id WHERE b.house_id = ? AND b.code = ?`,
           [houseId, trimmed],
         );
         if (conflict) throw new ApiError(409, `Barcode ${trimmed} is already linked to ${conflict.name}`);
-        run("INSERT INTO item_barcodes (id, item_id, house_id, code, format, created_at) VALUES (?, ?, ?, ?, ?, ?)", [
+        await run("INSERT INTO item_barcodes (id, item_id, house_id, code, format, created_at) VALUES (?, ?, ?, ?, ?, ?)", [
           newId("bar"),
           id,
           houseId,
@@ -558,7 +560,7 @@ inventoryRoutes.post(
     });
 
     if (body.initialStock) {
-      addStock({
+      await addStock({
         itemId: id,
         houseId,
         userId: req.user!.id,
@@ -572,15 +574,15 @@ inventoryRoutes.post(
         vendorId: body.initialStock.vendorId ?? null,
         reason: "Initial stock",
       });
-      afterStockChange(id);
+      await afterStockChange(id);
     }
 
     if (body.offCode) {
       const product = await fetchOffProduct(body.offCode);
       if (product) {
-        const item = get<any>("SELECT * FROM items WHERE id = ?", [id]);
+        const item = await get<any>("SELECT * FROM items WHERE id = ?", [id]);
         try {
-          linkItemToOff({ item, product, source: "manual" });
+          await linkItemToOff({ item, product, source: "manual" });
         } catch {
           // The product may already be linked to another item; the new item is
           // still valid, so creation must not fail after the insert.
@@ -588,7 +590,7 @@ inventoryRoutes.post(
       }
     }
 
-    res.status(201).json(itemDetail(id, req.user!.id));
+    res.status(201).json(await itemDetail(id, req.user!.id));
   }),
 );
 
@@ -599,16 +601,16 @@ itemRoutes.use(requireAuth);
 
 itemRoutes.get(
   "/:itemId",
-  handler((req, res) => {
-    const { item } = itemAccess(req);
-    res.json(itemDetail(item.id, req.user!.id));
+  handler(async (req, res) => {
+    const { item } = await itemAccess(req);
+    res.json(await itemDetail(item.id, req.user!.id));
   }),
 );
 
 itemRoutes.patch(
   "/:itemId",
   handler(async (req, res) => {
-    const { item } = itemAccess(req, "member");
+    const { item } = await itemAccess(req, "member");
     const body = parseBody(
       z.object({
         name: z.string().trim().min(1).max(120).optional(),
@@ -640,7 +642,7 @@ itemRoutes.patch(
               const normalizedNutrition = normaliseNutrition(body.nutrition);
               return normalizedNutrition ? JSON.stringify(normalizedNutrition) : null;
             })();
-    run(
+    await run(
       `UPDATE items SET name = ?, description = ?, brand = ?, category_id = ?, unit = ?, reorder_point = ?,
          target_stock = ?, attributes = ?, tags = ?, image = ?, nutrition = ?, archived = ?, updated_at = ? WHERE id = ?`,
       [
@@ -660,36 +662,36 @@ itemRoutes.patch(
         item.id,
       ],
     );
-    afterStockChange(item.id);
+    await afterStockChange(item.id);
     if (body.offCode !== undefined) {
       if (body.offCode === null || body.offCode === "") {
-        unlinkItemFromOff(item.id);
+        await unlinkItemFromOff(item.id);
       } else {
         const product = await fetchOffProduct(body.offCode);
         if (product) {
-          const current = get<any>("SELECT * FROM items WHERE id = ?", [item.id]);
-          linkItemToOff({ item: current, product, source: "manual" });
+          const current = await get<any>("SELECT * FROM items WHERE id = ?", [item.id]);
+          await linkItemToOff({ item: current, product, source: "manual" });
         }
       }
     }
-    res.json(itemDetail(item.id, req.user!.id));
+    res.json(await itemDetail(item.id, req.user!.id));
   }),
 );
 
 itemRoutes.delete(
   "/:itemId",
-  handler((req, res) => {
-    const { item } = itemAccess(req, "member");
-    run("DELETE FROM items WHERE id = ?", [item.id]);
-    clearItemNotifications(item.id);
+  handler(async (req, res) => {
+    const { item } = await itemAccess(req, "member");
+    await run("DELETE FROM items WHERE id = ?", [item.id]);
+    await clearItemNotifications(item.id);
     res.json({ ok: true });
   }),
 );
 
 itemRoutes.post(
   "/:itemId/stock",
-  handler((req, res) => {
-    const { item } = itemAccess(req, "member");
+  handler(async (req, res) => {
+    const { item } = await itemAccess(req, "member");
     const body = parseBody(
       z.object({
         action: z.enum(["add", "remove", "set", "waste", "move"]),
@@ -713,7 +715,7 @@ itemRoutes.post(
       req.body,
     );
     if (body.idempotencyKey) {
-      const previous = get<any>("SELECT response FROM stock_mutations WHERE house_id = ? AND idempotency_key = ?", [
+      const previous = await get<any>("SELECT response FROM stock_mutations WHERE house_id = ? AND idempotency_key = ?", [
         item.house_id,
         body.idempotencyKey,
       ]);
@@ -726,11 +728,11 @@ itemRoutes.post(
       throw new ApiError(409, "This count is older than a newer server change", {
         conflict: true,
         currentUpdatedAt: item.updated_at,
-        currentQuantity: itemQuantity(item.id),
+        currentQuantity: await itemQuantity(item.id),
         baseUpdatedAt: body.baseUpdatedAt,
       });
     }
-    if (body.vendorId && !get("SELECT id FROM vendors WHERE id = ? AND house_id = ?", [body.vendorId, item.house_id])) {
+    if (body.vendorId && !await get("SELECT id FROM vendors WHERE id = ? AND house_id = ?", [body.vendorId, item.house_id])) {
       throw new ApiError(400, "Shop does not exist in this house");
     }
     const base = {
@@ -749,13 +751,13 @@ itemRoutes.post(
       reason: body.reason ?? null,
       vendorId: body.vendorId ?? null,
     };
-    const detail = tx(() => {
-      if (body.action === "add") addStock(base);
-      else if (body.action === "remove") removeStock(base);
-      else if (body.action === "waste") removeStock({ ...base, waste: true });
-      else if (body.action === "set") setStock({ ...base, target: body.target ?? 0 });
+    const detail = await tx(async () => {
+      if (body.action === "add") await addStock(base);
+      else if (body.action === "remove") await removeStock(base);
+      else if (body.action === "waste") await removeStock({ ...base, waste: true });
+      else if (body.action === "set") await setStock({ ...base, target: body.target ?? 0 });
       else
-        moveStock({
+        await moveStock({
           itemId: item.id,
           houseId: item.house_id,
           userId: req.user!.id,
@@ -765,26 +767,26 @@ itemRoutes.post(
           toLocationId: body.toLocationId ?? "",
           note: body.note ?? undefined,
         });
-      const result = itemDetail(item.id, req.user!.id);
+      const result = await itemDetail(item.id, req.user!.id);
       if (body.idempotencyKey) {
-        run(
-          "INSERT OR IGNORE INTO stock_mutations (id, house_id, idempotency_key, user_id, response, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        await run(
+          "INSERT INTO stock_mutations (id, house_id, idempotency_key, user_id, response, created_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
           [newId("mut"), item.house_id, body.idempotencyKey, req.user!.id, JSON.stringify(result), now()],
         );
       }
       return result;
     });
-    afterStockChange(item.id);
+    await afterStockChange(item.id);
     res.json(detail);
   }),
 );
 
 itemRoutes.get(
   "/:itemId/movements",
-  handler((req, res) => {
-    const { item } = itemAccess(req);
+  handler(async (req, res) => {
+    const { item } = await itemAccess(req);
     const limit = intParam(req.query.limit, 50, 300);
-    const rows = all<any>(
+    const rows = await all<any>(
       `SELECT m.*, loc.name AS location_name, u.name AS user_name, v.name AS vendor_name FROM stock_movements m
        LEFT JOIN locations loc ON loc.id = m.location_id
        LEFT JOIN users u ON u.id = m.user_id
@@ -799,26 +801,26 @@ itemRoutes.get(
 itemRoutes.post(
   "/:itemId/image",
   uploader("items").single("image"),
-  handler((req, res) => {
-    const { item } = itemAccess(req, "member");
+  handler(async (req, res) => {
+    const { item } = await itemAccess(req, "member");
     if (!req.file) throw new ApiError(400, "No image uploaded");
     const url = `/uploads/items/${req.file.filename}`;
-    run("UPDATE items SET image = ?, updated_at = ? WHERE id = ?", [url, now(), item.id]);
+    await run("UPDATE items SET image = ?, updated_at = ? WHERE id = ?", [url, now(), item.id]);
     res.json({ image: url });
   }),
 );
 
 itemRoutes.post(
   "/:itemId/barcodes",
-  handler((req, res) => {
-    const { item } = itemAccess(req, "member");
+  handler(async (req, res) => {
+    const { item } = await itemAccess(req, "member");
     const body = parseBody(z.object({ code: z.string().trim().min(1).max(80), format: z.string().max(30).optional() }), req.body);
-    const conflict = get<any>(
+    const conflict = await get<any>(
       `SELECT i.name FROM item_barcodes b JOIN items i ON i.id = b.item_id WHERE b.house_id = ? AND b.code = ?`,
       [item.house_id, body.code],
     );
     if (conflict) throw new ApiError(409, `Barcode is already linked to ${conflict.name}`);
-    run("INSERT INTO item_barcodes (id, item_id, house_id, code, format, created_at) VALUES (?, ?, ?, ?, ?, ?)", [
+    await run("INSERT INTO item_barcodes (id, item_id, house_id, code, format, created_at) VALUES (?, ?, ?, ?, ?, ?)", [
       newId("bar"),
       item.id,
       item.house_id,
@@ -826,15 +828,15 @@ itemRoutes.post(
       body.format ?? "manual",
       now(),
     ]);
-    res.status(201).json(itemDetail(item.id, req.user!.id));
+    res.status(201).json(await itemDetail(item.id, req.user!.id));
   }),
 );
 
 itemRoutes.delete(
   "/:itemId/barcodes/:barcodeId",
-  handler((req, res) => {
-    const { item } = itemAccess(req, "member");
-    run("DELETE FROM item_barcodes WHERE id = ? AND item_id = ?", [req.params.barcodeId, item.id]);
+  handler(async (req, res) => {
+    const { item } = await itemAccess(req, "member");
+    await run("DELETE FROM item_barcodes WHERE id = ? AND item_id = ?", [req.params.barcodeId, item.id]);
     res.json({ ok: true });
   }),
 );
@@ -844,15 +846,15 @@ itemRoutes.delete(
 itemRoutes.get(
   "/:itemId/off",
   handler(async (req, res) => {
-    const { item } = itemAccess(req);
+    const { item } = await itemAccess(req);
     if (!item.off_code) {
       res.json({ off: null, product: null });
       return;
     }
     const product = await fetchOffProduct(item.off_code);
-    const row = get<any>(`${ITEM_SELECT} WHERE i.id = ?`, [item.id]);
+    const row = await get<any>(`${ITEM_SELECT} WHERE i.id = ?`, [item.id]);
     res.json({
-      off: row ? serializeItem(row, barcodesForItem(item.id)).off : null,
+      off: row ? serializeItem(row, await barcodesForItem(item.id)).off : null,
       product,
     });
   }),
@@ -861,7 +863,7 @@ itemRoutes.get(
 itemRoutes.post(
   "/:itemId/off/link",
   handler(async (req, res) => {
-    const { item } = itemAccess(req, "member");
+    const { item } = await itemAccess(req, "member");
     const body = parseBody(
       z.object({
         code: z.string().trim().min(1).max(80),
@@ -873,17 +875,17 @@ itemRoutes.post(
     if (!product) throw new ApiError(404, "Could not load this product from OpenFoodFacts");
 
     if (body.fill === false) {
-      const other = get<any>(
+      const other = await get<any>(
         "SELECT id, name FROM items WHERE house_id = ? AND off_code = ? AND id <> ?",
         [item.house_id, product.code, item.id],
       );
       if (other) throw new ApiError(409, `OpenFoodFacts product ${product.code} is already linked to ${other.name}`);
-      run(
+      await run(
         "UPDATE items SET off_code = ?, off_source = 'manual', off_linked_at = ?, off_synced_at = NULL, off_filled = '[]', updated_at = ? WHERE id = ?",
         [product.code, now(), now(), item.id],
       );
       res.json({
-        item: itemDetail(item.id, req.user!.id),
+        item: await itemDetail(item.id, req.user!.id),
         product,
         filled: [],
         skipped: [],
@@ -891,9 +893,9 @@ itemRoutes.post(
       return;
     }
 
-    const result = linkItemToOff({ item, product, source: "manual" });
+    const result = await linkItemToOff({ item, product, source: "manual" });
     res.json({
-      item: itemDetail(item.id, req.user!.id),
+      item: await itemDetail(item.id, req.user!.id),
       product,
       filled: result.filled,
       skipped: result.skipped,
@@ -904,22 +906,22 @@ itemRoutes.post(
 itemRoutes.post(
   "/:itemId/off/fill",
   handler(async (req, res) => {
-    const { item } = itemAccess(req, "member");
+    const { item } = await itemAccess(req, "member");
     if (!item.off_code) throw new ApiError(400, "This item is not linked to OpenFoodFacts");
     const force = String(req.query.force ?? "") === "1";
     const product = await fetchOffProduct(item.off_code, { force });
     if (!product) throw new ApiError(404, "Product not found on OpenFoodFacts");
-    const result = fillItemFromOff({ item, product, source: "manual" });
+    const result = await fillItemFromOff({ item, product, source: "manual" });
     const previous = parseJson<string[]>(item.off_filled, []);
     const filled = [...new Set([...previous, ...result.filled])];
-    run("UPDATE items SET off_filled = ?, off_synced_at = ?, updated_at = ? WHERE id = ?", [
+    await run("UPDATE items SET off_filled = ?, off_synced_at = ?, updated_at = ? WHERE id = ?", [
       JSON.stringify(filled),
       now(),
       now(),
       item.id,
     ]);
     res.json({
-      item: itemDetail(item.id, req.user!.id),
+      item: await itemDetail(item.id, req.user!.id),
       product,
       filled: result.filled,
       skipped: result.skipped,
@@ -929,18 +931,18 @@ itemRoutes.post(
 
 itemRoutes.delete(
   "/:itemId/off",
-  handler((req, res) => {
-    const { item } = itemAccess(req, "member");
-    unlinkItemFromOff(item.id);
-    res.json({ ok: true, item: itemDetail(item.id, req.user!.id) });
+  handler(async (req, res) => {
+    const { item } = await itemAccess(req, "member");
+    await unlinkItemFromOff(item.id);
+    res.json({ ok: true, item: await itemDetail(item.id, req.user!.id) });
   }),
 );
 
 itemRoutes.get(
   "/:itemId/aliases",
-  handler((req, res) => {
-    const { item } = itemAccess(req);
-    const rows = all<any>(
+  handler(async (req, res) => {
+    const { item } = await itemAccess(req);
+    const rows = await all<any>(
       `SELECT pa.*, v.name AS vendor_name FROM product_aliases pa
        LEFT JOIN vendors v ON v.id = pa.vendor_key
        WHERE pa.house_id = ? AND pa.item_id = ?
@@ -962,8 +964,8 @@ itemRoutes.get(
 
 itemRoutes.post(
   "/:itemId/aliases",
-  handler((req, res) => {
-    const { item } = itemAccess(req, "member");
+  handler(async (req, res) => {
+    const { item } = await itemAccess(req, "member");
     const body = parseBody(
       z.object({
         rawName: z.string().trim().min(2).max(200),
@@ -971,10 +973,10 @@ itemRoutes.post(
       }),
       req.body,
     );
-    if (body.vendorId && !get("SELECT id FROM vendors WHERE id = ? AND house_id = ?", [body.vendorId, item.house_id])) {
+    if (body.vendorId && !await get("SELECT id FROM vendors WHERE id = ? AND house_id = ?", [body.vendorId, item.house_id])) {
       throw new ApiError(400, "Shop does not exist in this house");
     }
-    learnProductAlias({
+    await learnProductAlias({
       houseId: item.house_id,
       vendorId: body.vendorId ?? null,
       rawDescription: body.rawName,
@@ -986,9 +988,9 @@ itemRoutes.post(
 
 itemRoutes.delete(
   "/:itemId/aliases/:aliasId",
-  handler((req, res) => {
-    const { item } = itemAccess(req, "member");
-    run("DELETE FROM product_aliases WHERE id = ? AND item_id = ? AND house_id = ?", [
+  handler(async (req, res) => {
+    const { item } = await itemAccess(req, "member");
+    await run("DELETE FROM product_aliases WHERE id = ? AND item_id = ? AND house_id = ?", [
       req.params.aliasId,
       item.id,
       item.house_id,
@@ -1002,15 +1004,15 @@ itemRoutes.delete(
 inventoryRoutes.get(
   "/:houseId/scan",
   handler(async (req, res) => {
-    const { houseId } = requireHouse(req);
+    const { houseId } = await requireHouse(req);
     const code = String(req.query.code ?? "").trim();
     if (!code) throw new ApiError(400, "Missing barcode");
-    const row = get<any>(
+    const row = await get<any>(
       `${ITEM_SELECT} WHERE i.house_id = ? AND EXISTS (SELECT 1 FROM item_barcodes b WHERE b.item_id = i.id AND b.code = ?)`,
       [houseId, code],
     );
     if (row) {
-      res.json({ code, match: "local", item: serializeItem(row, barcodesForItem(row.id)) });
+      res.json({ code, match: "local", item: serializeItem(row, await barcodesForItem(row.id)) });
       return;
     }
     const product = await fetchOffProduct(code);

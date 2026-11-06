@@ -194,18 +194,18 @@ function matchesAlias(text: string, alias: string): boolean {
   return hay === needle || ` ${hay} `.includes(` ${needle} `);
 }
 
-export function seedVendorCatalog() {
+export async function seedVendorCatalog() {
   for (const entry of GREEK_SHOPS) {
-    run(
-      `INSERT OR IGNORE INTO vendor_catalog (id, country, name, kind, aliases, sort, created_at)
-       VALUES (?, 'GR', ?, ?, ?, ?, ?)`,
+    await run(
+      `INSERT INTO vendor_catalog (id, country, name, kind, aliases, sort, created_at)
+       VALUES (?, 'GR', ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
       [newId("vct"), entry.name, entry.kind, JSON.stringify(entry.aliases), entry.sort, now()],
     );
   }
 }
 
-export function catalogEntries(country = "GR"): CatalogEntry[] {
-  return all<any>("SELECT * FROM vendor_catalog WHERE country = ? ORDER BY sort, name", [country.toUpperCase()]).map(
+export async function catalogEntries(country = "GR"): Promise<CatalogEntry[]> {
+  return (await all<any>("SELECT * FROM vendor_catalog WHERE country = ? ORDER BY sort, name", [country.toUpperCase()])).map(
     (row) => ({
       id: row.id,
       country: row.country,
@@ -217,8 +217,8 @@ export function catalogEntries(country = "GR"): CatalogEntry[] {
   );
 }
 
-export function catalogById(catalogId: string): CatalogEntry | null {
-  const row = get<any>("SELECT * FROM vendor_catalog WHERE id = ?", [catalogId]);
+export async function catalogById(catalogId: string): Promise<CatalogEntry | null> {
+  const row = await get<any>("SELECT * FROM vendor_catalog WHERE id = ?", [catalogId]);
   if (!row) return null;
   return {
     id: row.id,
@@ -230,16 +230,16 @@ export function catalogById(catalogId: string): CatalogEntry | null {
   };
 }
 
-export function catalogCountries(): { code: string; name: string }[] {
-  const rows = all<{ country: string }>("SELECT DISTINCT country FROM vendor_catalog ORDER BY country");
+export async function catalogCountries(): Promise<{ code: string; name: string }[]> {
+  const rows = await all<{ country: string }>("SELECT DISTINCT country FROM vendor_catalog ORDER BY country");
   return rows.map((row) => ({ code: row.country, name: CATALOG_COUNTRIES[row.country] ?? row.country }));
 }
 
 /** Match a merchant name against the catalogue and return the canonical entry. */
-export function canonicalVendor(value: string | null | undefined, country = "GR"): CatalogEntry | null {
+export async function canonicalVendor(value: string | null | undefined, country = "GR"): Promise<CatalogEntry | null> {
   if (!value) return null;
   let best: { entry: CatalogEntry; length: number } | null = null;
-  for (const entry of catalogEntries(country)) {
+  for (const entry of await catalogEntries(country)) {
     for (const alias of [entry.name, ...entry.aliases]) {
       if (!matchesAlias(value, alias)) continue;
       const length = normalizeVendorName(alias).length;
@@ -250,7 +250,7 @@ export function canonicalVendor(value: string | null | undefined, country = "GR"
 }
 
 /** Look for a known shop in the header of a receipt. */
-export function detectCatalogVendor(text: string, country = "GR"): CatalogEntry | null {
+export async function detectCatalogVendor(text: string, country = "GR"): Promise<CatalogEntry | null> {
   const lines = String(text ?? "")
     .replace(/\r\n?/g, "\n")
     .split("\n")
@@ -258,7 +258,7 @@ export function detectCatalogVendor(text: string, country = "GR"): CatalogEntry 
     .filter(Boolean)
     .slice(0, 12);
   for (const line of lines) {
-    const entry = canonicalVendor(line, country);
+    const entry = await canonicalVendor(line, country);
     if (entry) return entry;
   }
   return null;

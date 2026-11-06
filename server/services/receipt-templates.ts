@@ -24,8 +24,8 @@ export function serializeTemplateRow(row: any): ReceiptTemplate {
   };
 }
 
-export function listCustomTemplates(houseId: string): ReceiptTemplate[] {
-  return all<any>("SELECT * FROM receipt_templates WHERE house_id = ? ORDER BY name COLLATE NOCASE", [houseId]).map(
+export async function listCustomTemplates(houseId: string): Promise<ReceiptTemplate[]> {
+  return (await all<any>("SELECT * FROM receipt_templates WHERE house_id = ? ORDER BY lower(name)", [houseId])).map(
     serializeTemplateRow,
   );
 }
@@ -57,7 +57,7 @@ export function builtInTemplates(): ReceiptTemplate[] {
   ];
 }
 
-export function selectReceiptTemplate(rawText: string, houseId: string): SelectedReceiptTemplate | null {
+export async function selectReceiptTemplate(rawText: string, houseId: string): Promise<SelectedReceiptTemplate | null> {
   const candidates: SelectedReceiptTemplate[] = [];
   const builtIns = builtInTemplates();
 
@@ -93,7 +93,7 @@ export function selectReceiptTemplate(rawText: string, houseId: string): Selecte
     }
   }
 
-  for (const template of listCustomTemplates(houseId)) {
+  for (const template of await listCustomTemplates(houseId)) {
     if (!template.active) continue;
     const errors = validateTemplateRules(template.rules);
     if (errors.length) continue;

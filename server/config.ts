@@ -11,13 +11,49 @@ export const DATA_DIR = path.resolve(process.env.DATA_DIR ?? path.join(ROOT, "da
 export const UPLOAD_DIR = path.join(DATA_DIR, "uploads");
 export const BACKUP_DIR = path.join(DATA_DIR, "backups");
 export const DB_FILE = path.join(DATA_DIR, "svault.db");
+
+/**
+ * Bring-your-own-database configuration.
+ *
+ * Set DATABASE_URL to a PostgreSQL connection string (or SV_DATABASE_KIND to
+ * "postgres") to use an external database. Without either, SVault keeps using
+ * the bundled SQLite file, so existing installs need no changes.
+ */
+export const DATABASE_URL = process.env.DATABASE_URL ?? process.env.SV_DATABASE_URL ?? "";
+export const DATABASE_KIND: "sqlite" | "postgres" =
+  (process.env.SV_DATABASE_KIND ?? "").trim().toLowerCase() === "postgres" ||
+  /^postgres(ql)?:\/\//i.test(DATABASE_URL)
+    ? "postgres"
+    : "sqlite";
+export const PG_POOL_SIZE = Math.max(1, Number(process.env.PG_POOL_SIZE ?? 10));
+export const PG_SSL: boolean | { rejectUnauthorized: boolean } | undefined = (() => {
+  const mode = (process.env.PGSSLMODE ?? process.env.DATABASE_SSL ?? "").trim().toLowerCase();
+  if (!mode || mode === "disable" || mode === "false" || mode === "allow") return undefined;
+  if (mode === "no-verify" || mode === "require" || mode === "true" || mode === "prefer") {
+    return { rejectUnauthorized: false };
+  }
+  return { rejectUnauthorized: true };
+})();
+
 export const PORT = Number(process.env.PORT ?? 4000);
 export const IS_PROD = process.env.NODE_ENV === "production";
 export const CLIENT_DIR = path.join(ROOT, "dist", "client");
 export const SESSION_DAYS = 30;
 export const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_MB ?? 20) * 1024 * 1024;
 export const APP_VERSION = process.env.SV_VERSION ?? "1.2.0";
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
+
+/**
+ * AI audit trail. Every provider request is stored in `ai_call_logs` so it can
+ * be inspected from the app's developer page. Set the retention to 0 to keep
+ * entries forever; the preview cap only limits stored prompt/answer text.
+ */
+const aiLogDays = Number(process.env.SV_AI_LOG_RETENTION_DAYS ?? 90);
+const aiLogPreview = Number(process.env.SV_AI_LOG_PREVIEW_CHARS ?? 4000);
+export const AI_LOG_RETENTION_DAYS = Number.isFinite(aiLogDays) ? Math.max(0, aiLogDays) : 90;
+export const AI_LOG_PREVIEW_CHARS = Number.isFinite(aiLogPreview)
+  ? Math.min(20000, Math.max(200, aiLogPreview))
+  : 4000;
 
 /** WebAuthn relying party. Both must match the browser origin. */
 export const RP_ID = process.env.RP_ID ?? "";

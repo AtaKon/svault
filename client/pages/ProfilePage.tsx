@@ -4,7 +4,7 @@ import { startRegistration } from "@simplewebauthn/browser";
 import { api } from "@/api";
 import { useAuth } from "@/state";
 import { useI18n, type Language } from "@/i18n";
-import { Avatar, Badge, Button, Card, Field, Input, PageHeader } from "@/components/ui";
+import { Avatar, Badge, Button, Card, Field, Input, PageHeader, Switch } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { useToast } from "@/components/toast";
 import { shortDate } from "@/format";
@@ -32,6 +32,8 @@ export function ProfilePage() {
   const [passkeys, setPasskeys] = useState<{ id: string; name: string; createdAt: string; lastUsedAt: string | null }[]>([]);
   const [passkeyName, setPasskeyName] = useState("");
   const [passkeyBusy, setPasskeyBusy] = useState(false);
+  const [developerMode, setDeveloperMode] = useState(Boolean(user?.developerMode));
+  const [savingDeveloper, setSavingDeveloper] = useState(false);
 
   const loadSecurity = async () => {
     try {
@@ -135,6 +137,24 @@ export function ProfilePage() {
       toast.success("Passkey removed");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not remove the passkey");
+    }
+  };
+
+  const saveDeveloperMode = async (next: boolean) => {
+    setDeveloperMode(next);
+    setSavingDeveloper(true);
+    try {
+      const data = await api<{ user: User; houses: House[] }>("/api/auth/me", {
+        method: "PATCH",
+        body: { developerMode: next },
+      });
+      setSession(data);
+      toast.success(next ? "Developer mode enabled" : "Developer mode disabled");
+    } catch (err) {
+      setDeveloperMode(!next);
+      toast.error(err instanceof Error ? err.message : "Could not save developer mode");
+    } finally {
+      setSavingDeveloper(false);
     }
   };
 
@@ -254,6 +274,31 @@ export function ProfilePage() {
             </Button>
           ))}
         </div>
+      </Card>
+
+      <Card className="p-4">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <h2 className="font-display text-lg">Developer mode</h2>
+          <Badge tone={developerMode ? "brand" : "neutral"}>{developerMode ? "on" : "off"}</Badge>
+        </div>
+        <Switch
+          checked={developerMode}
+          disabled={savingDeveloper}
+          onChange={(next) => void saveDeveloperMode(next)}
+          label="Show developer tools"
+          description="Adds a Developer section with a detailed log of every AI call SVault makes, including tokens, cost, duration and errors."
+        />
+        {developerMode && (
+          <Button
+            variant="secondary"
+            size="sm"
+            icon="list"
+            className="mt-3"
+            onClick={() => navigate("/developer")}
+          >
+            Open AI call log
+          </Button>
+        )}
       </Card>
 
       <Card className="p-4">

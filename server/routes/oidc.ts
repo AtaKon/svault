@@ -49,18 +49,18 @@ function redirectError(res: any, message: string) {
   res.redirect(`/login?oidc_error=${encodeURIComponent(message)}`);
 }
 
-function uniqueUsername(email: string, excludeUserId?: string) {
+async function uniqueUsername(email: string, excludeUserId?: string) {
   const base = usernameFromEmail(email);
   let candidate = base;
   let suffix = 1;
-  while (get("SELECT id FROM users WHERE username = ? AND id <> ?", [candidate, excludeUserId ?? ""])) {
+  while (await get("SELECT id FROM users WHERE lower(username) = lower(?) AND id <> ?", [candidate, excludeUserId ?? ""])) {
     suffix += 1;
     candidate = usernameWithSuffix(base, suffix);
   }
   return candidate;
 }
 
-function findOrCreateIdentity(claims: Record<string, any>) {
+async function findOrCreateIdentity(claims: Record<string, any>) {
   const email = String(claims.email ?? "").trim().toLowerCase();
   if (!email) throw new ApiError(400, "The identity provider did not return an email address");
   if (claims.email_verified !== true && claims.email_verified !== "true") {
@@ -74,40 +74,40 @@ function findOrCreateIdentity(claims: Record<string, any>) {
   const subject = String(claims.sub ?? "");
   if (!subject) throw new ApiError(400, "The identity provider did not return a subject");
 
-  const identity = get<any>("SELECT * FROM user_identities WHERE provider = 'oidc' AND subject = ?", [subject]);
+  const identity = await get<any>("SELECT * FROM user_identities WHERE provider = 'oidc' AND subject = ?", [subject]);
   if (identity) {
-    const linked = get<any>("SELECT * FROM users WHERE id = ?", [identity.user_id]);
+    const linked = await get<any>("SELECT * FROM users WHERE id = ?", [identity.user_id]);
     if (!linked) throw new ApiError(409, "This identity is linked to a missing account");
     return linked;
   }
 
-  let user = get<any>("SELECT * FROM users WHERE email = ?", [email]);
+  let user = await get<any>("SELECT * FROM users WHERE lower(email) = lower(?)", [email]);
   if (!user) {
     if (!OIDC.autoProvision) throw new ApiError(403, "No SVault account matches this identity");
     const userId = newId("usr");
-    const first = !get("SELECT id FROM users LIMIT 1");
-    run("INSERT INTO users (id, email, username, name, password_hash, is_admin, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", [
+    const first = !await get("SELECT id FROM users LIMIT 1");
+    await run("INSERT INTO users (id, email, username, name, password_hash, is_admin, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", [
       userId,
       email,
-      uniqueUsername(email),
+      await uniqueUsername(email),
       String(claims.name ?? claims.preferred_username ?? email.split("@")[0]).slice(0, 80),
       hashPassword(randomBytes(24).toString("base64url")),
       first ? 1 : 0,
       now(),
     ]);
-    if (OIDC.defaultHouseId && get("SELECT id FROM houses WHERE id = ?", [OIDC.defaultHouseId])) {
-      run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, 'member', ?)", [
+    if (OIDC.defaultHouseId && await get("SELECT id FROM houses WHERE id = ?", [OIDC.defaultHouseId])) {
+      await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, 'member', ?)", [
         OIDC.defaultHouseId,
         userId,
         now(),
       ]);
     } else {
-      createHouse({ userId, name: `${String(claims.name ?? email.split("@")[0]).split(" ")[0]}'s Home` });
+      await createHouse({ userId, name: `${String(claims.name ?? email.split("@")[0]).split(" ")[0]}'s Home` });
     }
-    user = get<any>("SELECT * FROM users WHERE id = ?", [userId]);
+    user = await get<any>("SELECT * FROM users WHERE id = ?", [userId]);
   }
 
-  run("INSERT OR IGNORE INTO user_identities (id, user_id, provider, subject, email, created_at) VALUES (?, ?, 'oidc', ?, ?, ?)", [
+  await run("INSERT INTO user_identities (id, user_id, provider, subject, email, created_at) VALUES (?, ?, 'oidc', ?, ?, ?) ON CONFLICT DO NOTHING", [
     newId("idn"),
     user.id,
     subject,
@@ -133,7 +133,7 @@ oidcRoutes.get(
     const challenge = await calculatePKCECodeChallenge(verifier);
     const state = randomState();
     const nonce = randomNonce();
-    storeChallenge({
+    await storeChallenge({
       id: state,
       type: "oidc",
       challenge: state,
@@ -161,7 +161,7 @@ oidcRoutes.get(
       redirectError(res, "The provider did not return a state value");
       return;
     }
-    const stored = consumeChallenge(state, "oidc");
+    const stored = await consumeChallenge(state, "oidc");
     if (!stored) {
       redirectError(res, "The sign-in state expired. Try again.");
       return;
@@ -176,8 +176,8 @@ oidcRoutes.get(
       });
       const claims = tokens.claims() as Record<string, any> | undefined;
       if (!claims) throw new ApiError(400, "The provider did not return an ID token");
-      const user = findOrCreateIdentity(claims);
-      const token = createSession(user.id, req.headers["user-agent"]);
+      const user = await findOrCreateIdentity(claims);
+      const token = await createSession(user.id, req.headers["user-agent"]);
       res.setHeader("Set-Cookie", sessionCookie(token));
       res.redirect("/?sso=1");
     } catch (error) {

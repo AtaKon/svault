@@ -21,8 +21,8 @@ export interface StockOpts {
   receiptId?: string | null;
 }
 
-function itemRow(itemId: string, houseId: string) {
-  const item = get<any>("SELECT * FROM items WHERE id = ? AND house_id = ?", [itemId, houseId]);
+async function itemRow(itemId: string, houseId: string) {
+  const item = await get<any>("SELECT * FROM items WHERE id = ? AND house_id = ?", [itemId, houseId]);
   if (!item) throw new ApiError(404, "Item not found");
   return item;
 }
@@ -36,15 +36,15 @@ function baseQuantity(item: any, quantity: number, unit?: string): number {
   return round(amount);
 }
 
-export function itemQuantity(itemId: string): number {
-  const row = get<{ q: number }>(
+export async function itemQuantity(itemId: string): Promise<number> {
+  const row = await get<{ q: number }>(
     "SELECT COALESCE(SUM(quantity), 0) AS q FROM stock_lots WHERE item_id = ?",
     [itemId],
   );
   return round(Number(row?.q ?? 0));
 }
 
-function recordMovement(opts: {
+async function recordMovement(opts: {
   item: any;
   type: "in" | "out" | "adjust" | "waste" | "move";
   delta: number;
@@ -59,10 +59,10 @@ function recordMovement(opts: {
   receiptId?: string | null;
   reason?: string | null;
   note?: string | null;
-}): string {
+}): Promise<string> {
   const id = newId("mov");
-  const balance = itemQuantity(opts.item.id);
-  run(
+  const balance = await itemQuantity(opts.item.id);
+  await run(
     `INSERT INTO stock_movements
       (id, item_id, lot_id, house_id, type, delta, unit, quantity, unit_price, normalized_price,
        location_id, user_id, vendor_id, receipt_id, reason, note, balance_after, created_at)
@@ -88,16 +88,16 @@ function recordMovement(opts: {
       now(),
     ],
   );
-  run("UPDATE items SET updated_at = ? WHERE id = ?", [now(), opts.item.id]);
+  await run("UPDATE items SET updated_at = ? WHERE id = ?", [now(), opts.item.id]);
   return id;
 }
 
-export function addStock(opts: StockOpts): string {
+export async function addStock(opts: StockOpts): Promise<string> {
   if (!Number.isFinite(opts.quantity) || opts.quantity <= 0) {
     throw new ApiError(400, "Quantity must be greater than zero");
   }
-  return tx(() => {
-    const item = itemRow(opts.itemId, opts.houseId);
+  return await tx(async () => {
+    const item = await itemRow(opts.itemId, opts.houseId);
     const qty = baseQuantity(item, opts.quantity, opts.unit);
     const price =
       opts.unitPrice != null && Number.isFinite(opts.unitPrice) && opts.unitPrice >= 0
@@ -105,7 +105,7 @@ export function addStock(opts: StockOpts): string {
         : null;
     const normalized = price == null ? null : pricePerUnit(price, opts.unit ?? item.unit, item.unit);
     const lotId = newId("lot");
-    run(
+    await run(
       `INSERT INTO stock_lots
         (id, item_id, house_id, location_id, quantity, unit, unit_price, currency, purchased_at, expires_at, note,
          vendor_id, receipt_id, created_by, created_at)
@@ -128,7 +128,7 @@ export function addStock(opts: StockOpts): string {
         now(),
       ],
     );
-    const movementId = recordMovement({
+    const movementId = await recordMovement({
       item,
       type: "in",
       delta: qty,
@@ -149,22 +149,22 @@ export function addStock(opts: StockOpts): string {
 }
 
 /** Consume stock FIFO (oldest expiry first, then oldest purchase). */
-export function removeStock(opts: StockOpts & { waste?: boolean }): string {
+export async function removeStock(opts: StockOpts & { waste?: boolean }): Promise<string> {
   const requested = baseQuantity(
-    { unit: itemRow(opts.itemId, opts.houseId).unit },
+    { unit: (await itemRow(opts.itemId, opts.houseId)).unit },
     opts.quantity,
     opts.unit,
   );
   if (requested <= 0) throw new ApiError(400, "Quantity must be greater than zero");
 
-  return tx(() => {
-    const item = itemRow(opts.itemId, opts.houseId);
-    const available = itemQuantity(item.id);
+  return await tx(async () => {
+    const item = await itemRow(opts.itemId, opts.houseId);
+    const available = await itemQuantity(item.id);
     if (available < requested) {
       throw new ApiError(400, `Only ${available} ${item.unit} of ${item.name} in stock`);
     }
     let remaining = requested;
-    const lots = all<any>(
+    const lots = await all<any>(
       `SELECT * FROM stock_lots WHERE item_id = ? AND quantity > 0
          ${opts.locationId ? "AND location_id = ?" : ""}
          ${opts.lotId ? "AND id = ?" : ""}
@@ -183,10 +183,10 @@ export function removeStock(opts: StockOpts & { waste?: boolean }): string {
     for (const lot of lots) {
       if (remaining <= 0) break;
       const take = Math.min(Number(lot.quantity), remaining);
-      run("UPDATE stock_lots SET quantity = ? WHERE id = ?", [round(Number(lot.quantity) - take), lot.id]);
+      await run("UPDATE stock_lots SET quantity = ? WHERE id = ?", [round(Number(lot.quantity) - take), lot.id]);
       remaining = round(remaining - take);
     }
-    return recordMovement({
+    return await recordMovement({
       item,
       type: opts.waste ? "waste" : "out",
       delta: -requested,
@@ -201,16 +201,16 @@ export function removeStock(opts: StockOpts & { waste?: boolean }): string {
 }
 
 /** Set an absolute quantity (stock count correction). */
-export function setStock(opts: StockOpts & { target: number }): string {
-  const item = itemRow(opts.itemId, opts.houseId);
+export async function setStock(opts: StockOpts & { target: number }): Promise<string> {
+  const item = await itemRow(opts.itemId, opts.houseId);
   const target = round(Number(opts.target));
   if (!Number.isFinite(target) || target < 0) throw new ApiError(400, "Target quantity must be zero or more");
-  const current = itemQuantity(item.id);
+  const current = await itemQuantity(item.id);
   const delta = round(target - current);
   if (delta === 0) {
     throw new ApiError(400, "Stock already matches that count");
   }
-  return tx(() => {
+  return await tx(async () => {
     if (delta > 0) {
       const price =
         opts.unitPrice != null && Number.isFinite(opts.unitPrice) && opts.unitPrice > 0
@@ -218,7 +218,7 @@ export function setStock(opts: StockOpts & { target: number }): string {
           : null;
       const normalized = price == null ? null : pricePerUnit(price, opts.unit ?? item.unit, item.unit);
       const lotId = newId("lot");
-      run(
+      await run(
         `INSERT INTO stock_lots
           (id, item_id, house_id, location_id, quantity, unit, unit_price, currency, purchased_at, expires_at, note,
            vendor_id, receipt_id, created_by, created_at)
@@ -241,7 +241,7 @@ export function setStock(opts: StockOpts & { target: number }): string {
           now(),
         ],
       );
-      return recordMovement({
+      return await recordMovement({
         item,
         type: "adjust",
         delta,
@@ -258,17 +258,17 @@ export function setStock(opts: StockOpts & { target: number }): string {
       });
     }
     let remaining = Math.abs(delta);
-    const lots = all<any>(
+    const lots = await all<any>(
       "SELECT * FROM stock_lots WHERE item_id = ? AND quantity > 0 ORDER BY expires_at IS NULL, expires_at ASC, created_at ASC",
       [item.id],
     );
     for (const lot of lots) {
       if (remaining <= 0) break;
       const take = Math.min(Number(lot.quantity), remaining);
-      run("UPDATE stock_lots SET quantity = ? WHERE id = ?", [round(Number(lot.quantity) - take), lot.id]);
+      await run("UPDATE stock_lots SET quantity = ? WHERE id = ?", [round(Number(lot.quantity) - take), lot.id]);
       remaining = round(remaining - take);
     }
-    return recordMovement({
+    return await recordMovement({
       item,
       type: "adjust",
       delta: -Math.abs(delta),
@@ -282,15 +282,15 @@ export function setStock(opts: StockOpts & { target: number }): string {
 }
 
 /** Move stock between locations inside the same house. */
-export function moveStock(opts: { itemId: string; houseId: string; userId: string; quantity: number; unit?: string; fromLocationId: string; toLocationId: string; note?: string }): string {
+export async function moveStock(opts: { itemId: string; houseId: string; userId: string; quantity: number; unit?: string; fromLocationId: string; toLocationId: string; note?: string }): Promise<string> {
   if (!opts.fromLocationId || !opts.toLocationId || opts.fromLocationId === opts.toLocationId) {
     throw new ApiError(400, "Pick two different locations");
   }
-  return tx(() => {
-    const item = itemRow(opts.itemId, opts.houseId);
+  return await tx(async () => {
+    const item = await itemRow(opts.itemId, opts.houseId);
     const requested = baseQuantity(item, opts.quantity, opts.unit);
     if (requested <= 0) throw new ApiError(400, "Quantity must be greater than zero");
-    const lots = all<any>(
+    const lots = await all<any>(
       "SELECT * FROM stock_lots WHERE item_id = ? AND location_id = ? AND quantity > 0 ORDER BY created_at ASC",
       [item.id, opts.fromLocationId],
     );
@@ -300,8 +300,8 @@ export function moveStock(opts: { itemId: string; houseId: string; userId: strin
     for (const lot of lots) {
       if (remaining <= 0) break;
       const take = Math.min(Number(lot.quantity), remaining);
-      run("UPDATE stock_lots SET quantity = ? WHERE id = ?", [round(Number(lot.quantity) - take), lot.id]);
-      run(
+      await run("UPDATE stock_lots SET quantity = ? WHERE id = ?", [round(Number(lot.quantity) - take), lot.id]);
+      await run(
         `INSERT INTO stock_lots
           (id, item_id, house_id, location_id, quantity, unit, unit_price, currency, purchased_at, expires_at, note,
            vendor_id, receipt_id, created_by, created_at)
@@ -326,7 +326,7 @@ export function moveStock(opts: { itemId: string; houseId: string; userId: strin
       );
       remaining = round(remaining - take);
     }
-    return recordMovement({
+    return await recordMovement({
       item,
       type: "move",
       delta: 0,
@@ -340,6 +340,6 @@ export function moveStock(opts: { itemId: string; houseId: string; userId: strin
   });
 }
 
-export function afterStockChange(itemId: string) {
-  syncItemLowStock(itemId);
+export async function afterStockChange(itemId: string) {
+  await syncItemLowStock(itemId);
 }

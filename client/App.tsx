@@ -22,6 +22,7 @@ import { PhotosPage } from "@/pages/PhotosPage";
 import { NotificationsPage } from "@/pages/NotificationsPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { ProfilePage } from "@/pages/ProfilePage";
+import { DeveloperPage } from "@/pages/DeveloperPage";
 import { MorePage } from "@/pages/MorePage";
 import { ExtraPages } from "@/pages/ExtraPages";
 import { ShoppingPage } from "@/pages/ShoppingPage";
@@ -64,6 +65,7 @@ export function App() {
         <Route path="/notifications" element={<NotificationsPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/profile" element={<ProfilePage />} />
+        <Route path="/developer" element={<DeveloperPage />} />
         <Route path="/more" element={<MorePage />} />
         <Route path="*" element={<ExtraPages />} />
       </Route>

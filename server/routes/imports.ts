@@ -53,27 +53,27 @@ function parseAttributes(value: string): Record<string, unknown> {
   return cleaned;
 }
 
-function findMatch(houseId: string, row: CsvImportRow) {
+async function findMatch(houseId: string, row: CsvImportRow) {
   for (const code of row.barcodes) {
-    const item = get<any>(
+    const item = await get<any>(
       `SELECT i.* FROM items i JOIN item_barcodes b ON b.item_id = i.id WHERE b.house_id = ? AND b.code = ? LIMIT 1`,
       [houseId, code],
     );
     if (item) return item;
   }
-  const exact = all<any>("SELECT * FROM items WHERE house_id = ? AND LOWER(name) = LOWER(?)", [houseId, row.name]);
+  const exact = await all<any>("SELECT * FROM items WHERE house_id = ? AND LOWER(name) = LOWER(?)", [houseId, row.name]);
   if (exact.length === 1) return exact[0];
   if (exact.length > 1) return { ambiguous: true, count: exact.length };
   return null;
 }
 
-function buildPreview(houseId: string, csv: string, mapping: CsvColumnMap | undefined, mode: CsvImportMode) {
+async function buildPreview(houseId: string, csv: string, mapping: CsvColumnMap | undefined, mode: CsvImportMode) {
   const parsed = parseCsv(csv);
   if (!parsed.headers.length) throw new ApiError(400, "The CSV file is empty");
   const map = (mapping && Object.keys(mapping).length ? mapping : guessColumnMap(parsed.headers)) as CsvColumnMap;
 
   const seenBarcodes = new Map<string, number>();
-  const rows: CsvImportRow[] = parsed.rows.map((row, index) => {
+  const rows: CsvImportRow[] = await Promise.all(parsed.rows.map(async (row, index) => {
     const line = index + 2;
     const name = field(row, map, "name");
     const unit = field(row, map, "unit").toLowerCase() || null;
@@ -126,7 +126,7 @@ function buildPreview(houseId: string, csv: string, mapping: CsvColumnMap | unde
       return preview;
     }
 
-    const match = findMatch(houseId, preview);
+    const match = await findMatch(houseId, preview);
     if (match && (match as any).ambiguous) {
       preview.action = "skip";
       preview.warnings.push(`Several items are named "${name}"; skipped as ambiguous`);
@@ -148,7 +148,7 @@ function buildPreview(houseId: string, csv: string, mapping: CsvColumnMap | unde
 
     // A barcode may not point at a different item than the one being updated.
     for (const code of barcodes) {
-      const owner = get<any>(
+      const owner = await get<any>(
         `SELECT i.id, i.name FROM item_barcodes b JOIN items i ON i.id = b.item_id WHERE b.house_id = ? AND b.code = ?`,
         [houseId, code],
       );
@@ -159,7 +159,7 @@ function buildPreview(houseId: string, csv: string, mapping: CsvColumnMap | unde
 
     if (errors.length) preview.action = "skip";
     return preview;
-  });
+  }));
 
   const summary = {
     create: rows.filter((row) => row.action === "create" && !row.errors.length).length,
@@ -170,12 +170,12 @@ function buildPreview(houseId: string, csv: string, mapping: CsvColumnMap | unde
   return { delimiter: parsed.delimiter, headers: parsed.headers, map, mode, rows, summary };
 }
 
-function ensureLocation(houseId: string, name: string | null) {
+async function ensureLocation(houseId: string, name: string | null) {
   if (!name) return null;
-  const existing = get<any>("SELECT id FROM locations WHERE house_id = ? AND LOWER(name) = LOWER(?)", [houseId, name]);
+  const existing = await get<any>("SELECT id FROM locations WHERE house_id = ? AND LOWER(name) = LOWER(?)", [houseId, name]);
   if (existing) return existing.id as string;
   const id = newId("loc");
-  run("INSERT INTO locations (id, house_id, name, kind, icon, parent_id, created_at) VALUES (?, ?, ?, 'shelf', NULL, NULL, ?)", [
+  await run("INSERT INTO locations (id, house_id, name, kind, icon, parent_id, created_at) VALUES (?, ?, ?, 'shelf', NULL, NULL, ?)", [
     id,
     houseId,
     name.slice(0, 60),
@@ -184,12 +184,12 @@ function ensureLocation(houseId: string, name: string | null) {
   return id;
 }
 
-function ensureCategory(houseId: string, name: string | null) {
+async function ensureCategory(houseId: string, name: string | null) {
   if (!name) return null;
-  const existing = get<any>("SELECT id FROM categories WHERE house_id = ? AND LOWER(name) = LOWER(?)", [houseId, name]);
+  const existing = await get<any>("SELECT id FROM categories WHERE house_id = ? AND LOWER(name) = LOWER(?)", [houseId, name]);
   if (existing) return existing.id as string;
   const id = newId("cat");
-  run("INSERT INTO categories (id, house_id, name, icon, parent_id, created_at) VALUES (?, ?, ?, NULL, NULL, ?)", [
+  await run("INSERT INTO categories (id, house_id, name, icon, parent_id, created_at) VALUES (?, ?, ?, NULL, NULL, ?)", [
     id,
     houseId,
     name.slice(0, 60),
@@ -198,15 +198,15 @@ function ensureCategory(houseId: string, name: string | null) {
   return id;
 }
 
-function insertBarcodes(houseId: string, itemId: string, codes: string[]) {
+async function insertBarcodes(houseId: string, itemId: string, codes: string[]) {
   for (const code of codes) {
-    const conflict = get<any>(
+    const conflict = await get<any>(
       `SELECT i.id, i.name FROM item_barcodes b JOIN items i ON i.id = b.item_id WHERE b.house_id = ? AND b.code = ?`,
       [houseId, code],
     );
     if (conflict?.id === itemId) continue;
     if (conflict) throw new ApiError(400, `Barcode ${code} is already linked to ${conflict.name}`);
-    run("INSERT INTO item_barcodes (id, item_id, house_id, code, format, created_at) VALUES (?, ?, ?, ?, 'csv', ?)", [
+    await run("INSERT INTO item_barcodes (id, item_id, house_id, code, format, created_at) VALUES (?, ?, ?, ?, 'csv', ?)", [
       newId("bar"),
       itemId,
       houseId,
@@ -218,19 +218,19 @@ function insertBarcodes(houseId: string, itemId: string, codes: string[]) {
 
 importRoutes.post(
   "/:houseId/import/csv/preview",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req, "member");
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req, "member");
     const body = parseBody(importBody, req.body);
-    res.json(buildPreview(houseId, body.csv, body.mapping as CsvColumnMap | undefined, body.mode ?? "create"));
+    res.json(await buildPreview(houseId, body.csv, body.mapping as CsvColumnMap | undefined, body.mode ?? "create"));
   }),
 );
 
 importRoutes.post(
   "/:houseId/import/csv/commit",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req, "member");
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req, "member");
     const body = parseBody(importBody, req.body);
-    const preview = buildPreview(houseId, body.csv, body.mapping as CsvColumnMap | undefined, body.mode ?? "create");
+    const preview = await buildPreview(houseId, body.csv, body.mapping as CsvColumnMap | undefined, body.mode ?? "create");
     if (preview.summary.errors > 0) {
       throw new ApiError(400, "Fix the highlighted rows before importing", {
         rows: preview.rows.filter((row) => row.errors.length),
@@ -243,23 +243,23 @@ importRoutes.post(
     const updatedIds: string[] = [];
     let skipped = 0;
 
-    tx(() => {
+    await tx(async () => {
       for (const row of preview.rows) {
         if (row.action === "skip" || row.errors.length) {
           skipped++;
           continue;
         }
-        const categoryId = ensureCategory(houseId, row.category);
-        const locationId = ensureLocation(houseId, row.place);
+        const categoryId = await ensureCategory(houseId, row.category);
+        const locationId = await ensureLocation(houseId, row.place);
         const unit = (row.unit ?? "pcs").toLowerCase();
 
         if (row.action === "update" && row.matchId) {
-          const item = get<any>("SELECT * FROM items WHERE id = ? AND house_id = ?", [row.matchId, houseId]);
+          const item = await get<any>("SELECT * FROM items WHERE id = ? AND house_id = ?", [row.matchId, houseId]);
           if (!item) {
             skipped++;
             continue;
           }
-          run(
+          await run(
             `UPDATE items SET name = ?, brand = COALESCE(?, brand), category_id = COALESCE(?, category_id),
                reorder_point = COALESCE(?, reorder_point), target_stock = COALESCE(?, target_stock),
                attributes = ?, updated_at = ? WHERE id = ?`,
@@ -274,9 +274,9 @@ importRoutes.post(
               item.id,
             ],
           );
-          insertBarcodes(houseId, item.id, row.barcodes);
+          await insertBarcodes(houseId, item.id, row.barcodes);
           if (row.quantity != null && row.quantity > 0) {
-            addStock({
+            await addStock({
               itemId: item.id,
               houseId,
               userId: req.user!.id,
@@ -294,7 +294,7 @@ importRoutes.post(
         }
 
         const itemId = newId("itm");
-        run(
+        await run(
           `INSERT INTO items (id, house_id, name, description, brand, category_id, unit, reorder_point, target_stock,
              attributes, tags, image, archived, created_by, created_at, updated_at)
            VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, '[]', NULL, 0, ?, ?, ?)`,
@@ -313,9 +313,9 @@ importRoutes.post(
             now(),
           ],
         );
-        insertBarcodes(houseId, itemId, row.barcodes);
+        await insertBarcodes(houseId, itemId, row.barcodes);
         if (row.quantity != null && row.quantity > 0) {
-          addStock({
+          await addStock({
             itemId,
             houseId,
             userId: req.user!.id,
@@ -332,15 +332,16 @@ importRoutes.post(
       }
     });
 
-    for (const itemId of touched) afterStockChange(itemId);
+    for (const itemId of touched) await afterStockChange(itemId);
     const ids = [...createdIds, ...updatedIds];
-    const items = ids
-      .map((id) => get<any>(`${ITEM_SELECT} WHERE i.id = ?`, [id]))
-      .filter(Boolean)
-      .map((item) => ({
-        ...serializeItem(item, barcodesForItem(item.id)),
-        priceStats: priceStats(item.id, item.unit),
-      }));
+    const items = await Promise.all(
+      (await Promise.all(ids.map((id) => get<any>(`${ITEM_SELECT} WHERE i.id = ?`, [id]))))
+        .filter(Boolean)
+        .map(async (item) => ({
+          ...serializeItem(item, await barcodesForItem(item.id)),
+          priceStats: await priceStats(item.id, item.unit),
+        })),
+    );
     res.json({
       ...preview,
       created: createdIds.length,

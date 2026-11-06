@@ -58,7 +58,7 @@ Mounted at `/api/auth`.
 | `POST` | `/login` | public | Email **or** username + password; sets the session cookie. |
 | `POST` | `/logout` | any | Deletes the current session and clears the cookie. |
 | `GET` | `/me` | user | Current user plus all houses with roles. |
-| `PATCH` | `/me` | user | Change `name`, `email` and/or `username`. |
+| `PATCH` | `/me` | user | Change `name`, `email`, `username`, `language` and/or `developerMode`. |
 | `POST` | `/me/password` | user | Requires `currentPassword`; rotates every session and issues a new cookie. |
 | `GET` | `/invites/:code` | public | Preview an invite (house name, role, inviter). Does not accept it. |
 | `POST` | `/invites/:code/accept` | user | Join the house if the invite is valid and the email matches. |
@@ -87,7 +87,7 @@ Login accepts `{ "identifier": "alex", "password": "..." }`, or `email`/`usernam
 
 ```json
 {
-  "user": { "id": "usr_...", "email": "alex@example.com", "username": "alex", "name": "Alex", "isAdmin": false, "createdAt": "..." },
+  "user": { "id": "usr_...", "email": "alex@example.com", "username": "alex", "name": "Alex", "isAdmin": false, "developerMode": false, "createdAt": "..." },
   "houses": [ { "id": "hse_...", "name": "Alex's Home", "role": "owner", "...": "..." } ]
 }
 ```
@@ -104,6 +104,9 @@ Mounted at `/api/houses`.
 | `PATCH` | `/:houseId` | admin+ | Name, kind, address, currency and `settings` (merged, not replaced). |
 | `DELETE` | `/:houseId` | owner | Delete the house and all database rows. Uploaded files stay on disk. |
 | `POST` | `/:houseId/ai/test` | admin+ | Send a ping to the configured provider. |
+| `GET` | `/:houseId/ai/logs` | developer | AI call audit trail. Filters: `scope=mine\|all`, `operation`, `status=ok\|error`, `limit`, `offset`. |
+| `GET` | `/:houseId/ai/logs/:logId` | developer | Full call detail, including request/response previews and metadata. |
+| `DELETE` | `/:houseId/ai/logs` | admin+ & developer | Clear the AI call log for this house. |
 | `GET` | `/:houseId/members` | viewer+ | List members. |
 | `POST` | `/:houseId/members` | admin+ | Add an existing user by email, or create an invite for a new one. |
 | `PATCH` | `/:houseId/members/:userId` | owner | Change a role (`admin`, `member` or `viewer`). Ownership transfer is not implemented yet ([#16](https://github.com/AtaKon/svault/issues/16)). |
@@ -132,6 +135,29 @@ Mounted at `/api/houses`.
 ```
 
 Send `"apiKey": "***"` to keep the stored key, `""` to delete it. The API never returns the real key.
+
+### AI call log
+
+Every request SVault sends to an OpenAI-compatible provider is stored in `ai_call_logs`: receipt scans,
+bulk intake, recipe scans, recipe completion, food ideas and connection tests. Each row records the
+operation, user, house, provider host, model, HTTP status, retry count, duration, token counts, cost,
+image count, request/response sizes, truncated prompt/response previews, error text and arbitrary
+operation metadata. Logging never fails the scan that triggered it.
+
+The endpoints require `developerMode` on the account (toggle it on the profile page). Non-admins see
+their own calls; house admins can pass `scope=all` to see every member's calls. The response shape is:
+
+```json
+{
+  "scope": "mine",
+  "logs": [ { "id": "ail_...", "operation": "receipt.scan", "status": "ok", "model": "gpt-4o-mini", "totalTokens": 1500, "cost": 0.00125, "durationMs": 812, "...": "..." } ],
+  "total": 42,
+  "summary": { "calls": 42, "errors": 1, "cost": 0.042, "promptTokens": 39000, "completionTokens": 12000, "totalTokens": 51000 }
+}
+```
+
+The same calls are written to stdout as one structured `[ai] {...}` JSON line, so Docker logs, Loki,
+Grafana, Vector or any log collector can consume them. API keys are never written to the log.
 
 ## Taxonomy: places, categories, attributes
 

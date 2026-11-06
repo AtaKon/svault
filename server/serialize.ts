@@ -57,8 +57,8 @@ export function serializeHouse(row: any, role: string) {
   };
 }
 
-export function barcodesForHouse(houseId: string) {
-  const rows = all<any>("SELECT * FROM item_barcodes WHERE house_id = ?", [houseId]);
+export async function barcodesForHouse(houseId: string) {
+  const rows = await all<any>("SELECT * FROM item_barcodes WHERE house_id = ?", [houseId]);
   const map = new Map<string, { id: string; code: string; format: string | null }[]>();
   for (const r of rows) {
     const list = map.get(r.item_id) ?? [];
@@ -68,8 +68,8 @@ export function barcodesForHouse(houseId: string) {
   return map;
 }
 
-export function barcodesForItem(itemId: string) {
-  return all<any>("SELECT id, code, format FROM item_barcodes WHERE item_id = ? ORDER BY created_at", [itemId]);
+export async function barcodesForItem(itemId: string) {
+  return await all<any>("SELECT id, code, format FROM item_barcodes WHERE item_id = ? ORDER BY created_at", [itemId]);
 }
 
 export function serializeItem(row: any, barcodes: { id: string; code: string; format: string | null }[] = []): Item {
@@ -116,8 +116,8 @@ export function serializeItem(row: any, barcodes: { id: string; code: string; fo
   };
 }
 
-export function priceStats(itemId: string, unit: string): PriceStats {
-  const rows = all<{ price: number; at: string }>(
+export async function priceStats(itemId: string, unit: string): Promise<PriceStats> {
+  const rows = await all<{ price: number; at: string }>(
     `SELECT normalized_price AS price, created_at AS at FROM stock_movements
      WHERE item_id = ? AND normalized_price IS NOT NULL AND normalized_price > 0
        AND type IN ('in', 'adjust')
@@ -196,13 +196,13 @@ export function serializeVendor(row: any): Vendor {
   };
 }
 
-export function receiptLinesFor(receiptId: string) {
-  return all<any>(
+export async function receiptLinesFor(receiptId: string) {
+  return (await all<any>(
     `SELECT rl.*, i.name AS item_name, i.unit AS item_unit
      FROM receipt_lines rl LEFT JOIN items i ON i.id = rl.item_id
-     WHERE rl.receipt_id = ? ORDER BY rl.sort, rl.rowid`,
+     WHERE rl.receipt_id = ? ORDER BY rl.sort, rl.id`,
     [receiptId],
-  ).map((row) => ({
+  )).map((row) => ({
     id: row.id,
     description: row.description,
     rawDescription: row.raw_description ?? null,
@@ -380,11 +380,11 @@ export function serializePhoto(row: any, labels: any[] = []): Photo {
   };
 }
 
-export function serializeNotification(row: any, userId: string): Notification {
+export async function serializeNotification(row: any, userId: string): Promise<Notification> {
   const readBy = parseJson<string[]>(row.read_by, []);
   const data = parseJson<Record<string, unknown>>(row.data, {});
   if (data.itemName === undefined && data.itemId) {
-    const item = all<any>("SELECT name FROM items WHERE id = ?", [data.itemId])[0];
+    const item = (await all<any>("SELECT name FROM items WHERE id = ?", [data.itemId]))[0];
     if (item) data.itemName = item.name;
   }
   return {

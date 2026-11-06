@@ -123,20 +123,20 @@ interface CandidateText {
   vendorSpecific: boolean;
 }
 
-export function suggestProductMatches(
+export async function suggestProductMatches(
   houseId: string,
   vendorId: string | null | undefined,
   rawDescription: string,
   limit = 3,
-): ProductSuggestion[] {
+): Promise<ProductSuggestion[]> {
   const raw = String(rawDescription ?? "").trim();
   if (raw.length < 2) return [];
   const rawKey = productAliasKey(raw);
 
-  const items = all<any>("SELECT id, name, brand, unit, category_id FROM items WHERE house_id = ? AND archived = 0", [
+  const items = await all<any>("SELECT id, name, brand, unit, category_id FROM items WHERE house_id = ? AND archived = 0", [
     houseId,
   ]);
-  const aliases = all<any>(
+  const aliases = await all<any>(
     "SELECT item_id, vendor_key, raw_key, raw_text FROM product_aliases WHERE house_id = ? AND (vendor_key = ? OR vendor_key = '')",
     [houseId, vendorId ?? ""],
   );

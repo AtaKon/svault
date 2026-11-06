@@ -66,7 +66,7 @@ function countryKey(value: string | null | undefined): string {
 }
 
 /** Seed the bundled catalogue without touching rows learned on this instance. */
-export function seedProductCatalog() {
+export async function seedProductCatalog() {
   if (!fs.existsSync(SEED_FILE)) return;
   let data: any;
   try {
@@ -89,7 +89,7 @@ export function seedProductCatalog() {
     const name = String(entry?.name ?? "").trim().slice(0, 200) || null;
     if (!offCode && !name) continue;
     const timestamp = now();
-    const result = run(
+    const result = await run(
       `INSERT INTO catalog_mappings
          (id, country, vendor_key, vendor_label, raw_key, raw_text, off_code, name, brand, unit, category,
           source, confidence, uses, created_at, updated_at)
@@ -131,11 +131,11 @@ export function seedProductCatalog() {
  * Resolve a raw receipt line through the shared catalogue. Shop-specific rows
  * win over generic ones; the requested country wins over the global bucket.
  */
-export function findCatalogMapping(opts: {
+export async function findCatalogMapping(opts: {
   country?: string | null;
   vendorName?: string | null;
   rawDescription: string;
-}): CatalogMapping | null {
+}): Promise<CatalogMapping | null> {
   const rawKey = productAliasKey(opts.rawDescription);
   if (!rawKey) return null;
   const country = countryKey(opts.country);
@@ -151,7 +151,7 @@ export function findCatalogMapping(opts: {
     const key = `${attempt.country}\u0000${attempt.vendor}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    const row = get<MappingRow>(
+    const row = await get<MappingRow>(
       "SELECT * FROM catalog_mappings WHERE country = ? AND vendor_key = ? AND raw_key = ?",
       [attempt.country, attempt.vendor, rawKey],
     );
@@ -161,7 +161,7 @@ export function findCatalogMapping(opts: {
 }
 
 /** Remember a receipt mapping locally. Local corrections beat seed rows. */
-export function learnCatalogMapping(opts: {
+export async function learnCatalogMapping(opts: {
   country?: string | null;
   vendorName?: string | null;
   rawDescription: string;
@@ -182,7 +182,7 @@ export function learnCatalogMapping(opts: {
   const vendorKey = vendorLabel ? normalizeVendorName(vendorLabel) : "";
   const country = countryKey(opts.country);
   const timestamp = now();
-  run(
+  await run(
     `INSERT INTO catalog_mappings
        (id, country, vendor_key, vendor_label, raw_key, raw_text, off_code, name, brand, unit, category,
         source, confidence, uses, created_at, updated_at)
@@ -196,7 +196,7 @@ export function learnCatalogMapping(opts: {
        unit = COALESCE(excluded.unit, catalog_mappings.unit),
        category = COALESCE(excluded.category, catalog_mappings.category),
        source = 'local',
-       confidence = MAX(catalog_mappings.confidence, excluded.confidence),
+       confidence = CASE WHEN excluded.confidence > catalog_mappings.confidence THEN excluded.confidence ELSE catalog_mappings.confidence END,
        uses = catalog_mappings.uses + 1,
        updated_at = excluded.updated_at`,
     [
@@ -218,22 +218,22 @@ export function learnCatalogMapping(opts: {
   );
 }
 
-export function listCatalogMappings(query: string, limit = 100): CatalogMapping[] {
+export async function listCatalogMappings(query: string, limit = 100): Promise<CatalogMapping[]> {
   const q = String(query ?? "").trim();
   const capped = Math.min(Math.max(limit, 1), 500);
   const rows = q
-    ? all<MappingRow>(
+    ? await all<MappingRow>(
         `SELECT * FROM catalog_mappings
-         WHERE raw_text LIKE ? OR name LIKE ? OR off_code LIKE ? OR vendor_label LIKE ?
+         WHERE lower(raw_text) LIKE lower(?) OR lower(name) LIKE lower(?) OR lower(off_code) LIKE lower(?) OR lower(vendor_label) LIKE lower(?)
          ORDER BY uses DESC, updated_at DESC LIMIT ?`,
         [`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, capped],
       )
-    : all<MappingRow>("SELECT * FROM catalog_mappings ORDER BY uses DESC, updated_at DESC LIMIT ?", [capped]);
+    : await all<MappingRow>("SELECT * FROM catalog_mappings ORDER BY uses DESC, updated_at DESC LIMIT ?", [capped]);
   return rows.map(serializeCatalogMapping);
 }
 
-export function exportCatalogMappings(): CatalogExport {
-  const rows = all<MappingRow>("SELECT * FROM catalog_mappings ORDER BY country, vendor_key, raw_key");
+export async function exportCatalogMappings(): Promise<CatalogExport> {
+  const rows = await all<MappingRow>("SELECT * FROM catalog_mappings ORDER BY country, vendor_key, raw_key");
   return {
     version: 1,
     generatedAt: now(),
@@ -270,7 +270,7 @@ function normalizeImportEntry(entry: any): Omit<CatalogMapping, "id" | "uses" | 
 }
 
 /** Merge an exported catalogue. Local rows are never overwritten by an import. */
-export function importCatalogMappings(input: unknown): CatalogImportResult {
+export async function importCatalogMappings(input: unknown): Promise<CatalogImportResult> {
   const entries = Array.isArray(input)
     ? input
     : Array.isArray((input as any)?.mappings)
@@ -293,7 +293,7 @@ export function importCatalogMappings(input: unknown): CatalogImportResult {
       continue;
     }
     const vendorKey = mapping.vendor ? normalizeVendorName(mapping.vendor) : "";
-    const existing = get<{ id: string; source: string }>(
+    const existing = await get<{ id: string; source: string }>(
       "SELECT id, source FROM catalog_mappings WHERE country = ? AND vendor_key = ? AND raw_key = ?",
       [mapping.country, vendorKey, rawKey],
     );
@@ -301,7 +301,7 @@ export function importCatalogMappings(input: unknown): CatalogImportResult {
       skipped++;
       continue;
     }
-    run(
+    await run(
       `INSERT INTO catalog_mappings
          (id, country, vendor_key, vendor_label, raw_key, raw_text, off_code, name, brand, unit, category,
           source, confidence, uses, created_at, updated_at)
@@ -354,16 +354,16 @@ export async function syncProductCatalog(url?: string): Promise<CatalogImportRes
   });
   if (!response.ok) throw new Error(`Catalogue download failed (${response.status})`);
   const data = await response.json();
-  return importCatalogMappings(data);
+  return await importCatalogMappings(data);
 }
 
-export function catalogStats() {
+export async function catalogStats() {
   return {
-    mappings: Number(get<{ n: number }>("SELECT COUNT(*) AS n FROM catalog_mappings")?.n ?? 0),
-    seed: Number(get<{ n: number }>("SELECT COUNT(*) AS n FROM catalog_mappings WHERE source = 'seed'")?.n ?? 0),
-    local: Number(get<{ n: number }>("SELECT COUNT(*) AS n FROM catalog_mappings WHERE source = 'local'")?.n ?? 0),
-    community: Number(get<{ n: number }>("SELECT COUNT(*) AS n FROM catalog_mappings WHERE source = 'community'")?.n ?? 0),
-    products: Number(get<{ n: number }>("SELECT COUNT(*) AS n FROM catalog_products")?.n ?? 0),
+    mappings: Number((await get<{ n: number }>("SELECT COUNT(*) AS n FROM catalog_mappings"))?.n ?? 0),
+    seed: Number((await get<{ n: number }>("SELECT COUNT(*) AS n FROM catalog_mappings WHERE source = 'seed'"))?.n ?? 0),
+    local: Number((await get<{ n: number }>("SELECT COUNT(*) AS n FROM catalog_mappings WHERE source = 'local'"))?.n ?? 0),
+    community: Number((await get<{ n: number }>("SELECT COUNT(*) AS n FROM catalog_mappings WHERE source = 'community'"))?.n ?? 0),
+    products: Number((await get<{ n: number }>("SELECT COUNT(*) AS n FROM catalog_products"))?.n ?? 0),
     syncUrl: CATALOG_URL || null,
   };
 }

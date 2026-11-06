@@ -18,7 +18,7 @@ const restoreUpload = multer({
 backupRoutes.get(
   "/:houseId/backup",
   handler(async (req, res) => {
-    requireHouse(req, "owner");
+    await requireHouse(req, "owner");
     const { buffer, name } = await createBackupArchive();
     res.setHeader("Content-Type", "application/zip");
     res.setHeader("Content-Disposition", `attachment; filename="${name}"`);
@@ -29,8 +29,8 @@ backupRoutes.get(
 
 backupRoutes.get(
   "/:houseId/backups",
-  handler((req, res) => {
-    requireHouse(req, "owner");
+  handler(async (req, res) => {
+    await requireHouse(req, "owner");
     res.json({ backups: listBackups() });
   }),
 );
@@ -39,13 +39,13 @@ backupRoutes.post(
   "/:houseId/restore",
   restoreUpload,
   handler(async (req, res) => {
-    const { houseId } = requireHouse(req, "owner");
+    const { houseId } = await requireHouse(req, "owner");
     if (!req.file) throw new ApiError(400, "Attach a SVault backup zip");
     const body = (req.body ?? {}) as Record<string, string>;
-    const house = get<any>("SELECT * FROM houses WHERE id = ?", [houseId])!;
+    const house = (await get<any>("SELECT * FROM houses WHERE id = ?", [houseId]))!;
     const named = String(body.houseName ?? "").trim().toLowerCase() === String(house.name).trim().toLowerCase();
     const passwordHash = body.password
-      ? get<{ password_hash: string }>("SELECT password_hash FROM users WHERE id = ?", [req.user!.id])?.password_hash
+      ? (await get<{ password_hash: string }>("SELECT password_hash FROM users WHERE id = ?", [req.user!.id]))?.password_hash
       : null;
     const confirmed = Boolean(named || (body.password && passwordHash && verifyPassword(body.password, passwordHash)));
     if (!confirmed) throw new ApiError(400, "Type the house name or your password to confirm the restore");

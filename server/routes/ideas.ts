@@ -14,15 +14,15 @@ export const singleIdeaRoutes = Router();
 ideaRoutes.use(requireAuth);
 singleIdeaRoutes.use(requireAuth);
 
-function inventory(houseId: string) {
-  return all<any>(
+async function inventory(houseId: string) {
+  return (await all<any>(
     `SELECT i.id, i.name, i.unit, i.category_id, c.name AS category_name,
        COALESCE((SELECT SUM(l.quantity) FROM stock_lots l WHERE l.item_id = i.id), 0) AS quantity
      FROM items i LEFT JOIN categories c ON c.id = i.category_id
      WHERE i.house_id = ? AND i.archived = 0
-     ORDER BY quantity DESC, i.name COLLATE NOCASE`,
+     ORDER BY quantity DESC, lower(i.name)`,
     [houseId],
-  )
+  ))
     .filter((r) => Number(r.quantity) > 0)
     .map((r) => ({
       id: r.id as string,
@@ -33,30 +33,30 @@ function inventory(houseId: string) {
     }));
 }
 
-function ideaRecipes(houseId: string) {
-  const rows = all<any>("SELECT id, title, steps FROM recipes WHERE house_id = ? ORDER BY favorite DESC, updated_at DESC LIMIT 60", [
+async function ideaRecipes(houseId: string) {
+  const rows = await all<any>("SELECT id, title, steps FROM recipes WHERE house_id = ? ORDER BY favorite DESC, updated_at DESC LIMIT 60", [
     houseId,
   ]);
-  return rows.map((r) => ({
+  return Promise.all(rows.map(async (r) => ({
     id: r.id as string,
     title: r.title as string,
     steps: parseJson<{ text: string }[]>(r.steps, []),
-    ingredients: all<any>("SELECT name, quantity, unit, optional FROM recipe_ingredients WHERE recipe_id = ? ORDER BY sort", [
+    ingredients: (await all<any>("SELECT name, quantity, unit, optional FROM recipe_ingredients WHERE recipe_id = ? ORDER BY sort", [
       r.id,
-    ]).map((i) => ({
+    ])).map((i) => ({
       name: i.name as string,
       quantity: i.quantity == null ? null : Number(i.quantity),
       unit: (i.unit as string) ?? null,
       optional: Boolean(i.optional),
     })),
-  }));
+  })));
 }
 
 ideaRoutes.get(
   "/:houseId/ideas",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req);
-    const rows = all<any>("SELECT * FROM food_ideas WHERE house_id = ? ORDER BY created_at DESC LIMIT 12", [houseId]);
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req);
+    const rows = await all<any>("SELECT * FROM food_ideas WHERE house_id = ? ORDER BY created_at DESC LIMIT 12", [houseId]);
     res.json(
       rows.map((r) => ({
         id: r.id,
@@ -71,7 +71,7 @@ ideaRoutes.get(
 ideaRoutes.post(
   "/:houseId/ideas",
   handler(async (req, res) => {
-    const { houseId } = requireHouse(req, "member");
+    const { houseId } = await requireHouse(req, "member");
     const body = parseBody(
       z.object({
         prompt: z.string().trim().max(500).optional(),
@@ -84,9 +84,9 @@ ideaRoutes.post(
       .filter(Boolean)
       .join(", ");
 
-    const items = inventory(houseId);
-    const recipes = ideaRecipes(houseId);
-    const house = get<any>("SELECT * FROM houses WHERE id = ?", [houseId])!;
+    const items = await inventory(houseId);
+    const recipes = await ideaRecipes(houseId);
+    const house = (await get<any>("SELECT * FROM houses WHERE id = ?", [houseId]))!;
     const cfg = resolveAi(parseJson(house.settings, {}));
 
     let result: IdeaResponse;
@@ -98,6 +98,16 @@ ideaRoutes.post(
           items,
           recipes.map((r) => ({ id: r.id, title: r.title, ingredients: r.ingredients.map((i) => i.name) })),
           prompt,
+          {
+            operation: "ideas.suggest",
+            houseId,
+            userId: req.user!.id,
+            metadata: {
+              promptChars: prompt.length,
+              inventoryCount: items.length,
+              recipeCount: recipes.length,
+            },
+          },
         );
         result = normaliseIdeas(raw.data);
         if (!result.ideas.length) result = localIdeas(items, recipes, prompt);
@@ -111,7 +121,7 @@ ideaRoutes.post(
     }
 
     const id = newId("ida");
-    run("INSERT INTO food_ideas (id, house_id, user_id, prompt, result, created_at) VALUES (?, ?, ?, ?, ?, ?)", [
+    await run("INSERT INTO food_ideas (id, house_id, user_id, prompt, result, created_at) VALUES (?, ?, ?, ?, ?, ?)", [
       id,
       houseId,
       req.user!.id,
@@ -125,10 +135,10 @@ ideaRoutes.post(
 
 singleIdeaRoutes.post(
   "/:ideaId/save",
-  handler((req, res) => {
-    const idea = get<any>("SELECT * FROM food_ideas WHERE id = ?", [req.params.ideaId]);
+  handler(async (req, res) => {
+    const idea = await get<any>("SELECT * FROM food_ideas WHERE id = ?", [req.params.ideaId]);
     if (!idea) throw new ApiError(404, "Idea not found");
-    const role = memberRole(req.user!.id, idea.house_id);
+    const role = await memberRole(req.user!.id, idea.house_id);
     if (!role || role === "viewer") throw new ApiError(403, "Requires member access");
     const body = parseBody(z.object({ index: z.number().int().min(0).default(0) }), req.body ?? {});
     const result = parseJson<IdeaResponse>(idea.result, { provider: "local", summary: "", ideas: [] });
@@ -151,7 +161,7 @@ singleIdeaRoutes.post(
         optional: pick.missing.some((m) => m.name === i.name),
       })),
     });
-    const id = saveRecipe(idea.house_id, req.user!.id, payload);
+    const id = await saveRecipe(idea.house_id, req.user!.id, payload);
     res.status(201).json({ recipeId: id });
   }),
 );

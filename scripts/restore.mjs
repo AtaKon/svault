@@ -18,10 +18,8 @@ if (!fs.existsSync(file)) {
 }
 const buffer = fs.readFileSync(file);
 
-// Open the service modules only after reading the archive, then close the
-// SQLite handle before swapping the files so Windows can replace them.
-const { db } = await import("../server/db.ts");
+// The backup service stages the archive; SQLite is swapped before the next
+// server start and PostgreSQL is applied during startup.
 const { restoreArchiveNow } = await import("../server/services/backup.ts");
-db.close();
 const manifest = await restoreArchiveNow(buffer);
 console.log(`Restored backup from ${manifest.createdAt} (schema ${manifest.schemaVersion}). Start SVault again.`);

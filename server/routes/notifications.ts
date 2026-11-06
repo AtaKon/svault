@@ -11,15 +11,15 @@ notificationRoutes.use(requireAuth);
 
 notificationRoutes.get(
   "/:houseId/notifications",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req);
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req);
     const unreadOnly = req.query.unread === "1";
     const limit = Math.min(Number(req.query.limit ?? 100) || 100, 200);
-    let rows = all<any>(
+    let rows = await Promise.all((await all<any>(
       `SELECT * FROM notifications WHERE house_id = ? AND resolved_at IS NULL
          AND (user_id IS NULL OR user_id = ?) ORDER BY created_at DESC LIMIT ?`,
       [houseId, req.user!.id, limit],
-    ).map((r) => serializeNotification(r, req.user!.id));
+    )).map(async (r) => await serializeNotification(r, req.user!.id)));
     if (unreadOnly) rows = rows.filter((r) => !r.read);
     res.json({ notifications: rows, unread: rows.filter((r) => !r.read).length });
   }),
@@ -27,10 +27,10 @@ notificationRoutes.get(
 
 notificationRoutes.post(
   "/:houseId/notifications/read",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req);
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req);
     const body = parseBody(z.object({ ids: z.array(z.string()).max(200).optional() }), req.body ?? {});
-    const rows = all<any>(
+    const rows = await all<any>(
       "SELECT id, read_by FROM notifications WHERE house_id = ? AND (user_id IS NULL OR user_id = ?)",
       [houseId, req.user!.id],
     );
@@ -39,7 +39,7 @@ notificationRoutes.post(
       const readBy = parseJson<string[]>(row.read_by, []);
       if (!readBy.includes(req.user!.id)) {
         readBy.push(req.user!.id);
-        run("UPDATE notifications SET read_by = ? WHERE id = ?", [JSON.stringify(readBy), row.id]);
+        await run("UPDATE notifications SET read_by = ? WHERE id = ?", [JSON.stringify(readBy), row.id]);
       }
     }
     res.json({ ok: true });
@@ -48,21 +48,21 @@ notificationRoutes.post(
 
 notificationRoutes.post(
   "/:houseId/notifications/scan",
-  handler((req, res) => {
-    const { houseId } = requireHouse(req);
-    const house = get<any>("SELECT settings FROM houses WHERE id = ?", [houseId]);
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req);
+    const house = await get<any>("SELECT settings FROM houses WHERE id = ?", [houseId]);
     const settings = parseJson<Record<string, any>>(house?.settings, {});
     const expiryDays = Number(settings?.notifications?.expiryDays ?? 7);
-    cleanupOrphanNotifications(houseId);
-    for (const item of all<any>("SELECT id FROM items WHERE house_id = ? AND archived = 0", [houseId])) {
-      syncItemLowStock(item.id);
+    await cleanupOrphanNotifications(houseId);
+    for (const item of await all<any>("SELECT id FROM items WHERE house_id = ? AND archived = 0", [houseId])) {
+      await syncItemLowStock(item.id);
     }
-    syncHouseExpiry(houseId, expiryDays);
-    const rows = all<any>(
+    await syncHouseExpiry(houseId, expiryDays);
+    const rows = await Promise.all((await all<any>(
       `SELECT * FROM notifications WHERE house_id = ? AND resolved_at IS NULL
          AND (user_id IS NULL OR user_id = ?) ORDER BY created_at DESC LIMIT 100`,
       [houseId, req.user!.id],
-    ).map((r) => serializeNotification(r, req.user!.id));
+    )).map(async (r) => await serializeNotification(r, req.user!.id)));
     res.json({ notifications: rows, scannedAt: now() });
   }),
 );
@@ -71,8 +71,8 @@ notificationRoutes.post(
 export const globalNotificationRoutes = Router();
 globalNotificationRoutes.use(requireAuth);
 
-function visibleNotifications(userId: string) {
-  return all<any>(
+async function visibleNotifications(userId: string) {
+  return await all<any>(
     `SELECT n.*, h.name AS house_name
      FROM notifications n
      JOIN houses h ON h.id = n.house_id
@@ -85,10 +85,10 @@ function visibleNotifications(userId: string) {
 
 globalNotificationRoutes.get(
   "/",
-  handler((req, res) => {
+  handler(async (req, res) => {
     const unreadOnly = req.query.unread === "1";
     const limit = Math.min(Number(req.query.limit ?? 100) || 100, 200);
-    let rows = visibleNotifications(req.user!.id).map((r) => serializeNotification(r, req.user!.id));
+    let rows = await Promise.all((await visibleNotifications(req.user!.id)).map(async (r) => await serializeNotification(r, req.user!.id)));
     const unread = rows.filter((r) => !r.read).length;
     if (unreadOnly) rows = rows.filter((r) => !r.read);
     res.json({ notifications: rows.slice(0, limit), unread });
@@ -97,15 +97,15 @@ globalNotificationRoutes.get(
 
 globalNotificationRoutes.post(
   "/read",
-  handler((req, res) => {
+  handler(async (req, res) => {
     const body = parseBody(z.object({ ids: z.array(z.string()).max(200).optional() }), req.body ?? {});
-    const rows = visibleNotifications(req.user!.id);
+    const rows = await visibleNotifications(req.user!.id);
     for (const row of rows) {
       if (body.ids && !body.ids.includes(row.id)) continue;
       const readBy = parseJson<string[]>(row.read_by, []);
       if (!readBy.includes(req.user!.id)) {
         readBy.push(req.user!.id);
-        run("UPDATE notifications SET read_by = ? WHERE id = ?", [JSON.stringify(readBy), row.id]);
+        await run("UPDATE notifications SET read_by = ? WHERE id = ?", [JSON.stringify(readBy), row.id]);
       }
     }
     res.json({ ok: true });

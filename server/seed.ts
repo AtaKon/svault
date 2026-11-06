@@ -6,7 +6,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { UPLOAD_DIR } from "./config.js";
-import { all, get, newId, now, run } from "./db.js";
+import { all, get, initDb, newId, now, run } from "./db.js";
 import { hashPassword } from "./auth.js";
 import { createHouse } from "./services/houses.js";
 import { addStock, removeStock } from "./services/stock.js";
@@ -18,7 +18,9 @@ import { round } from "./units.js";
 const DEMO_EMAIL = "demo@svault.local";
 const PASSWORD = "demo1234";
 
-if (get("SELECT id FROM users WHERE email = ?", [DEMO_EMAIL])) {
+await initDb();
+
+if (await get("SELECT id FROM users WHERE lower(email) = lower(?)", [DEMO_EMAIL])) {
   console.log("Demo data already present — nothing to do.");
   process.exit(0);
 }
@@ -27,9 +29,9 @@ const day = 864e5;
 const daysAgo = (n: number) => new Date(Date.now() - n * day).toISOString();
 const dateOnly = (n: number) => daysAgo(n).slice(0, 10);
 
-function createUser(email: string, name: string, password: string) {
+async function createUser(email: string, name: string, password: string) {
   const id = newId("usr");
-  run("INSERT INTO users (id, email, name, password_hash, is_admin, created_at) VALUES (?, ?, ?, ?, ?, ?)", [
+  await run("INSERT INTO users (id, email, name, password_hash, is_admin, created_at) VALUES (?, ?, ?, ?, ?, ?)", [
     id,
     email,
     name,
@@ -40,22 +42,22 @@ function createUser(email: string, name: string, password: string) {
   return id;
 }
 
-const demoId = createUser(DEMO_EMAIL, "Alex Moreau", PASSWORD);
-const sofiaId = createUser("sofia@svault.local", "Sofia Moreau", PASSWORD);
+const demoId = await createUser(DEMO_EMAIL, "Alex Moreau", PASSWORD);
+const sofiaId = await createUser("sofia@svault.local", "Sofia Moreau", PASSWORD);
 
-const lake = createHouse({ userId: demoId, name: "Lake House", kind: "cabin", currency: "EUR", address: "Lakeside road 12" });
-const flat = createHouse({ userId: demoId, name: "City Flat", kind: "apartment", currency: "EUR" });
-run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, 'member', ?)", [lake, sofiaId, now()]);
+const lake = await createHouse({ userId: demoId, name: "Lake House", kind: "cabin", currency: "EUR", address: "Lakeside road 12" });
+const flat = await createHouse({ userId: demoId, name: "City Flat", kind: "apartment", currency: "EUR" });
+await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, 'member', ?)", [lake, sofiaId, now()]);
 
-function houseName(houseId: string, type: "locations" | "categories") {
-  const rows = all<any>(`SELECT id, name FROM ${type} WHERE house_id = ?`, [houseId]);
+async function houseName(houseId: string, type: "locations" | "categories") {
+  const rows = await all<any>(`SELECT id, name FROM ${type} WHERE house_id = ?`, [houseId]);
   const map = new Map<string, string>();
   for (const row of rows) map.set(row.name, row.id);
   return map;
 }
 
-const lakeLocations = houseName(lake, "locations");
-const lakeCategories = houseName(lake, "categories");
+const lakeLocations = await houseName(lake, "locations");
+const lakeCategories = await houseName(lake, "categories");
 
 interface ItemSpec {
   name: string;
@@ -72,10 +74,10 @@ interface ItemSpec {
   keep: number;
 }
 
-function createItem(houseId: string, locations: Map<string, string>, categories: Map<string, string>, spec: ItemSpec, userId = demoId) {
+async function createItem(houseId: string, locations: Map<string, string>, categories: Map<string, string>, spec: ItemSpec, userId = demoId) {
   const id = newId("itm");
   const stamp = now();
-  run(
+  await run(
     `INSERT INTO items (id, house_id, name, description, brand, category_id, unit, reorder_point, target_stock,
        attributes, tags, image, archived, created_by, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?, ?)`,
@@ -97,7 +99,7 @@ function createItem(houseId: string, locations: Map<string, string>, categories:
     ],
   );
   if (spec.barcode) {
-    run("INSERT INTO item_barcodes (id, item_id, house_id, code, format, created_at) VALUES (?, ?, ?, ?, 'EAN_13', ?)", [
+    await run("INSERT INTO item_barcodes (id, item_id, house_id, code, format, created_at) VALUES (?, ?, ?, ?, 'EAN_13', ?)", [
       newId("bar"),
       id,
       houseId,
@@ -107,7 +109,7 @@ function createItem(houseId: string, locations: Map<string, string>, categories:
   }
   let total = 0;
   for (const purchase of spec.purchases) {
-    addStock({
+    await addStock({
       itemId: id,
       houseId,
       userId,
@@ -119,8 +121,8 @@ function createItem(houseId: string, locations: Map<string, string>, categories:
       note: "Demo purchase",
       reason: "Demo purchase",
     });
-    const movement = get<any>("SELECT id FROM stock_movements WHERE item_id = ? ORDER BY rowid DESC LIMIT 1", [id]);
-    if (movement) run("UPDATE stock_movements SET created_at = ? WHERE id = ?", [daysAgo(purchase.days), movement.id]);
+    const movement = await get<any>("SELECT id FROM stock_movements WHERE item_id = ? ORDER BY created_at DESC, id DESC LIMIT 1", [id]);
+    if (movement) await run("UPDATE stock_movements SET created_at = ? WHERE id = ?", [daysAgo(purchase.days), movement.id]);
     total += purchase.qty;
   }
   if (total > spec.keep) {
@@ -137,16 +139,16 @@ function createItem(houseId: string, locations: Map<string, string>, categories:
       quantities = fractions.map((share) => round(remaining * share));
       quantities.push(round(remaining - quantities.reduce((sum, value) => sum + value, 0)));
     }
-    quantities.filter((quantity) => quantity > 0).forEach((quantity, index) => {
-      removeStock({ itemId: id, houseId, userId, quantity, reason: index === 0 ? "Used at home" : index === 1 ? "Cooked dinner" : "Breakfast" });
-      const movement = get<any>("SELECT id FROM stock_movements WHERE item_id = ? ORDER BY rowid DESC LIMIT 1", [id]);
-      if (movement) run("UPDATE stock_movements SET created_at = ? WHERE id = ?", [daysAgo(3 + index * 9), movement.id]);
-    });
+    for (const [index, quantity] of quantities.filter((value) => value > 0).entries()) {
+      await removeStock({ itemId: id, houseId, userId, quantity, reason: index === 0 ? "Used at home" : index === 1 ? "Cooked dinner" : "Breakfast" });
+      const movement = await get<any>("SELECT id FROM stock_movements WHERE item_id = ? ORDER BY created_at DESC, id DESC LIMIT 1", [id]);
+      if (movement) await run("UPDATE stock_movements SET created_at = ? WHERE id = ?", [daysAgo(3 + index * 9), movement.id]);
+    }
   }
   return id;
 }
 
-createItem(lake, lakeLocations, lakeCategories, {
+await createItem(lake, lakeLocations, lakeCategories, {
   name: "Whole milk",
   category: "Dairy",
   unit: "l",
@@ -165,7 +167,7 @@ createItem(lake, lakeLocations, lakeCategories, {
   keep: 1.5,
 });
 
-createItem(lake, lakeLocations, lakeCategories, {
+await createItem(lake, lakeLocations, lakeCategories, {
   name: "Free-range eggs",
   category: "Dairy",
   unit: "pcs",
@@ -176,7 +178,7 @@ createItem(lake, lakeLocations, lakeCategories, {
   keep: 9,
 });
 
-createItem(lake, lakeLocations, lakeCategories, {
+await createItem(lake, lakeLocations, lakeCategories, {
   name: "Sourdough bread",
   category: "Food",
   unit: "pcs",
@@ -186,7 +188,7 @@ createItem(lake, lakeLocations, lakeCategories, {
   keep: 1,
 });
 
-createItem(lake, lakeLocations, lakeCategories, {
+await createItem(lake, lakeLocations, lakeCategories, {
   name: "Salted butter",
   category: "Dairy",
   unit: "g",
@@ -196,7 +198,7 @@ createItem(lake, lakeLocations, lakeCategories, {
   keep: 320,
 });
 
-createItem(lake, lakeLocations, lakeCategories, {
+await createItem(lake, lakeLocations, lakeCategories, {
   name: "Greek yogurt",
   category: "Dairy",
   unit: "g",
@@ -205,7 +207,7 @@ createItem(lake, lakeLocations, lakeCategories, {
   keep: 650,
 });
 
-createItem(lake, lakeLocations, lakeCategories, {
+await createItem(lake, lakeLocations, lakeCategories, {
   name: "Olive oil",
   category: "Food",
   unit: "l",
@@ -220,7 +222,7 @@ createItem(lake, lakeLocations, lakeCategories, {
   keep: 0.8,
 });
 
-createItem(lake, lakeLocations, lakeCategories, {
+await createItem(lake, lakeLocations, lakeCategories, {
   name: "Spaghetti",
   category: "Food",
   unit: "g",
@@ -234,7 +236,7 @@ createItem(lake, lakeLocations, lakeCategories, {
   keep: 2600,
 });
 
-createItem(lake, lakeLocations, lakeCategories, {
+await createItem(lake, lakeLocations, lakeCategories, {
   name: "Tomatoes",
   category: "Produce",
   unit: "kg",
@@ -243,11 +245,11 @@ createItem(lake, lakeLocations, lakeCategories, {
   keep: 1.1,
 });
 
-createItem(lake, lakeLocations, lakeCategories, { name: "Garlic", category: "Produce", unit: "pcs", purchases: [{ qty: 6, price: 0.45, days: 20, location: "Pantry" }], keep: 4 });
-createItem(lake, lakeLocations, lakeCategories, { name: "Onions", category: "Produce", unit: "kg", purchases: [{ qty: 2, price: 1.6, days: 18, location: "Pantry" }], keep: 1.4 });
-createItem(lake, lakeLocations, lakeCategories, { name: "Lemons", category: "Produce", unit: "pcs", purchases: [{ qty: 6, price: 0.55, days: 6, location: "Fridge", expiryDays: 9 }], keep: 4 });
+await createItem(lake, lakeLocations, lakeCategories, { name: "Garlic", category: "Produce", unit: "pcs", purchases: [{ qty: 6, price: 0.45, days: 20, location: "Pantry" }], keep: 4 });
+await createItem(lake, lakeLocations, lakeCategories, { name: "Onions", category: "Produce", unit: "kg", purchases: [{ qty: 2, price: 1.6, days: 18, location: "Pantry" }], keep: 1.4 });
+await createItem(lake, lakeLocations, lakeCategories, { name: "Lemons", category: "Produce", unit: "pcs", purchases: [{ qty: 6, price: 0.55, days: 6, location: "Fridge", expiryDays: 9 }], keep: 4 });
 
-createItem(lake, lakeLocations, lakeCategories, {
+await createItem(lake, lakeLocations, lakeCategories, {
   name: "Coffee beans",
   category: "Drinks",
   unit: "g",
@@ -262,7 +264,7 @@ createItem(lake, lakeLocations, lakeCategories, {
   keep: 700,
 });
 
-createItem(lake, lakeLocations, lakeCategories, {
+await createItem(lake, lakeLocations, lakeCategories, {
   name: "Frozen peas",
   category: "Frozen",
   unit: "g",
@@ -270,14 +272,14 @@ createItem(lake, lakeLocations, lakeCategories, {
   purchases: [{ qty: 1000, price: 0.0024, days: 40, location: "Freezer", expiryDays: 200 }],
   keep: 800,
 });
-createItem(lake, lakeLocations, lakeCategories, {
+await createItem(lake, lakeLocations, lakeCategories, {
   name: "Dark chocolate",
   category: "Snacks",
   unit: "g",
   purchases: [{ qty: 300, price: 0.017, days: 30, location: "Cupboard", expiryDays: 120 }],
   keep: 200,
 });
-createItem(lake, lakeLocations, lakeCategories, {
+await createItem(lake, lakeLocations, lakeCategories, {
   name: "Laundry detergent",
   category: "Cleaning",
   unit: "l",
@@ -287,7 +289,7 @@ createItem(lake, lakeLocations, lakeCategories, {
   purchases: [{ qty: 2, price: 4.5, days: 55, location: "Bathroom" }],
   keep: 1.2,
 });
-createItem(lake, lakeLocations, lakeCategories, {
+await createItem(lake, lakeLocations, lakeCategories, {
   name: "Dish soap",
   category: "Cleaning",
   unit: "pcs",
@@ -296,7 +298,7 @@ createItem(lake, lakeLocations, lakeCategories, {
   keep: 1,
 });
 
-createItem(lake, lakeLocations, lakeCategories, {
+await createItem(lake, lakeLocations, lakeCategories, {
   name: "Hiking boots",
   category: "Clothing",
   unit: "pair",
@@ -306,7 +308,7 @@ createItem(lake, lakeLocations, lakeCategories, {
   purchases: [{ qty: 1, price: 129, days: 210, location: "Closet" }],
   keep: 1,
 });
-createItem(lake, lakeLocations, lakeCategories, {
+await createItem(lake, lakeLocations, lakeCategories, {
   name: "Wool socks",
   category: "Clothing",
   unit: "pair",
@@ -315,7 +317,7 @@ createItem(lake, lakeLocations, lakeCategories, {
   purchases: [{ qty: 3, price: 8.5, days: 120, location: "Closet" }],
   keep: 1,
 });
-createItem(lake, lakeLocations, lakeCategories, {
+await createItem(lake, lakeLocations, lakeCategories, {
   name: "Headlamp",
   category: "Tools",
   unit: "pcs",
@@ -324,7 +326,7 @@ createItem(lake, lakeLocations, lakeCategories, {
   purchases: [{ qty: 1, price: 39.9, days: 300, location: "Garage" }],
   keep: 1,
 });
-createItem(lake, lakeLocations, lakeCategories, {
+await createItem(lake, lakeLocations, lakeCategories, {
   name: "Cast iron pan",
   category: "Tools",
   unit: "pcs",
@@ -332,7 +334,7 @@ createItem(lake, lakeLocations, lakeCategories, {
   purchases: [{ qty: 1, price: 54, days: 400, location: "Cupboard" }],
   keep: 1,
 });
-createItem(lake, lakeLocations, lakeCategories, {
+await createItem(lake, lakeLocations, lakeCategories, {
   name: "AA batteries",
   category: "Tools",
   unit: "pcs",
@@ -341,14 +343,14 @@ createItem(lake, lakeLocations, lakeCategories, {
   purchases: [{ qty: 8, price: 0.6, days: 90, location: "Garage" }],
   keep: 4,
 });
-createItem(lake, lakeLocations, lakeCategories, {
+await createItem(lake, lakeLocations, lakeCategories, {
   name: "First aid kit",
   category: "Medicine",
   unit: "pcs",
   purchases: [{ qty: 1, price: 24.5, days: 320, location: "Bathroom" }],
   keep: 1,
 });
-createItem(lake, lakeLocations, lakeCategories, {
+await createItem(lake, lakeLocations, lakeCategories, {
   name: "Sunscreen SPF 50",
   category: "Medicine",
   unit: "pcs",
@@ -356,7 +358,7 @@ createItem(lake, lakeLocations, lakeCategories, {
   purchases: [{ qty: 1, price: 12.9, days: 100, location: "Bathroom", expiryDays: 240 }],
   keep: 1,
 });
-createItem(lake, lakeLocations, lakeCategories, {
+await createItem(lake, lakeLocations, lakeCategories, {
   name: "Red wine",
   category: "Drinks",
   unit: "bottle",
@@ -366,9 +368,9 @@ createItem(lake, lakeLocations, lakeCategories, {
 });
 
 // A few things in the second house.
-const flatLocations = houseName(flat, "locations");
-const flatCategories = houseName(flat, "categories");
-createItem(flat, flatLocations, flatCategories, {
+const flatLocations = await houseName(flat, "locations");
+const flatCategories = await houseName(flat, "categories");
+await createItem(flat, flatLocations, flatCategories, {
   name: "Oat milk",
   category: "Dairy",
   unit: "l",
@@ -376,7 +378,7 @@ createItem(flat, flatLocations, flatCategories, {
   purchases: [{ qty: 2, price: 1.99, days: 4, location: "Fridge", expiryDays: 6 }],
   keep: 1,
 });
-createItem(flat, flatLocations, flatCategories, {
+await createItem(flat, flatLocations, flatCategories, {
   name: "Rice",
   category: "Food",
   unit: "kg",
@@ -384,7 +386,7 @@ createItem(flat, flatLocations, flatCategories, {
   purchases: [{ qty: 2, price: 2.2, days: 50, location: "Pantry" }],
   keep: 1.4,
 });
-createItem(flat, flatLocations, flatCategories, {
+await createItem(flat, flatLocations, flatCategories, {
   name: "Umbrella",
   category: "Other",
   unit: "pcs",
@@ -394,7 +396,7 @@ createItem(flat, flatLocations, flatCategories, {
 
 /* ------------------------------------------------------------------ recipes */
 
-function createRecipe(houseId: string, spec: {
+async function createRecipe(houseId: string, spec: {
   title: string;
   description: string;
   servings: number | null;
@@ -411,7 +413,7 @@ function createRecipe(houseId: string, spec: {
 }) {
   const id = newId("rcp");
   const stamp = now();
-  run(
+  await run(
     `INSERT INTO recipes (id, house_id, title, description, servings, prep_minutes, cook_minutes, steps, tags, image,
        source_image, ocr_text, source, ai_notes, favorite, created_by, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -435,8 +437,8 @@ function createRecipe(houseId: string, spec: {
       stamp,
     ],
   );
-  spec.ingredients.forEach((ingredient, index) => {
-    run(
+  for (const [index, ingredient] of spec.ingredients.entries()) {
+    await run(
       "INSERT INTO recipe_ingredients (id, recipe_id, name, quantity, unit, item_id, optional, note, sort) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)",
       [
         newId("rin"),
@@ -449,7 +451,7 @@ function createRecipe(houseId: string, spec: {
         index,
       ],
     );
-  });
+  }
   return id;
 }
 
@@ -463,7 +465,7 @@ fs.mkdirSync(recipeDir, { recursive: true });
 const recipeCardFile = "demo-grandma-card.png";
 if (fs.existsSync(recipeCardPath)) fs.copyFileSync(recipeCardPath, path.join(recipeDir, recipeCardFile));
 
-createRecipe(lake, {
+await createRecipe(lake, {
   title: "Grandma's lemon cake",
   description: "The cake that appeared every Sunday afternoon, wrapped in a tea towel.",
   servings: 8,
@@ -497,7 +499,7 @@ createRecipe(lake, {
   ],
 });
 
-createRecipe(lake, {
+await createRecipe(lake, {
   title: "Sunday pancakes",
   description: "Thick, fluffy pancakes with whatever fruit is around.",
   servings: 4,
@@ -521,7 +523,7 @@ createRecipe(lake, {
   ],
 });
 
-createRecipe(lake, {
+await createRecipe(lake, {
   title: "Weeknight tomato pasta",
   description: "Twenty minutes, one pan of sauce, almost no washing up.",
   servings: 2,
@@ -544,7 +546,7 @@ createRecipe(lake, {
   ],
 });
 
-createRecipe(lake, {
+await createRecipe(lake, {
   title: "Roast chicken with lemons",
   description: "A Sunday roast for when the whole family turns up.",
   servings: 4,
@@ -567,7 +569,7 @@ createRecipe(lake, {
   ],
 });
 
-createRecipe(lake, {
+await createRecipe(lake, {
   title: "Whatever-is-left soup",
   description: "A forgiving soup for the end of the week.",
   servings: 4,
@@ -696,7 +698,7 @@ function headlampShot(): { png: Buffer; labels: Label[] } {
   };
 }
 
-function insertPhoto(
+async function insertPhoto(
   houseId: string,
   collectionId: string,
   shot: { png: Buffer; labels: Label[] },
@@ -706,7 +708,7 @@ function insertPhoto(
 ) {
   fs.writeFileSync(path.join(photoDir, filename), shot.png);
   const id = newId("pho");
-  run(
+  await run(
     `INSERT INTO photos (id, house_id, collection_id, filename, original_name, mime, size, width, height, notes,
        item_id, split, captured_at, uploaded_by, created_at)
      VALUES (?, ?, ?, ?, ?, 'image/png', ?, 800, 600, NULL, NULL, ?, ?, ?, ?)`,
@@ -714,7 +716,7 @@ function insertPhoto(
   );
   const labels = labelsOverride === "none" ? [] : (labelsOverride ?? shot.labels);
   for (const label of labels) {
-    run("INSERT INTO photo_labels (id, photo_id, house_id, label, x, y, w, h, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", [
+    await run("INSERT INTO photo_labels (id, photo_id, house_id, label, x, y, w, h, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", [
       newId("lbl"),
       id,
       houseId,
@@ -730,7 +732,7 @@ function insertPhoto(
 }
 
 const fridgeCollection = newId("col");
-run("INSERT INTO photo_collections (id, house_id, name, description, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)", [
+await run("INSERT INTO photo_collections (id, house_id, name, description, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)", [
   fridgeCollection,
   lake,
   "Fridge shelf",
@@ -738,13 +740,13 @@ run("INSERT INTO photo_collections (id, house_id, name, description, created_by,
   demoId,
   now(),
 ]);
-insertPhoto(lake, fridgeCollection, fridgeShot(0), "demo-fridge-1.png", "train");
-insertPhoto(lake, fridgeCollection, fridgeShot(1), "demo-fridge-2.png", "train");
-insertPhoto(lake, fridgeCollection, fridgeShot(2), "demo-fridge-3.png", "val");
-insertPhoto(lake, fridgeCollection, fridgeShot(3), "demo-fridge-4.png", "unassigned", "none");
+await insertPhoto(lake, fridgeCollection, fridgeShot(0), "demo-fridge-1.png", "train");
+await insertPhoto(lake, fridgeCollection, fridgeShot(1), "demo-fridge-2.png", "train");
+await insertPhoto(lake, fridgeCollection, fridgeShot(2), "demo-fridge-3.png", "val");
+await insertPhoto(lake, fridgeCollection, fridgeShot(3), "demo-fridge-4.png", "unassigned", "none");
 
 const pantryCollection = newId("col");
-run("INSERT INTO photo_collections (id, house_id, name, description, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)", [
+await run("INSERT INTO photo_collections (id, house_id, name, description, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)", [
   pantryCollection,
   lake,
   "Pantry jars",
@@ -752,11 +754,11 @@ run("INSERT INTO photo_collections (id, house_id, name, description, created_by,
   demoId,
   now(),
 ]);
-insertPhoto(lake, pantryCollection, pantryShot(0), "demo-pantry-1.png", "train");
-insertPhoto(lake, pantryCollection, pantryShot(1), "demo-pantry-2.png", "test");
+await insertPhoto(lake, pantryCollection, pantryShot(0), "demo-pantry-1.png", "train");
+await insertPhoto(lake, pantryCollection, pantryShot(1), "demo-pantry-2.png", "test");
 
 const gearCollection = newId("col");
-run("INSERT INTO photo_collections (id, house_id, name, description, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)", [
+await run("INSERT INTO photo_collections (id, house_id, name, description, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)", [
   gearCollection,
   lake,
   "Boots & gear",
@@ -764,26 +766,26 @@ run("INSERT INTO photo_collections (id, house_id, name, description, created_by,
   demoId,
   now(),
 ]);
-insertPhoto(lake, gearCollection, bootsShot(), "demo-boots-1.png", "train");
-insertPhoto(lake, gearCollection, headlampShot(), "demo-headlamp-1.png", "val");
+await insertPhoto(lake, gearCollection, bootsShot(), "demo-boots-1.png", "train");
+await insertPhoto(lake, gearCollection, headlampShot(), "demo-headlamp-1.png", "val");
 
 /* ----------------------------------------------------------------- ideas + alerts */
 
-const inventory = all<any>(
+const inventory = (await all<any>(
   `SELECT i.name, i.unit, c.name AS category_name,
      COALESCE((SELECT SUM(l.quantity) FROM stock_lots l WHERE l.item_id = i.id), 0) AS quantity
    FROM items i LEFT JOIN categories c ON c.id = i.category_id
    WHERE i.house_id = ? AND i.archived = 0`,
   [lake],
-)
+))
   .filter((row) => Number(row.quantity) > 0)
   .map((row) => ({ name: row.name, unit: row.unit, quantity: Number(row.quantity), categoryName: row.category_name }));
 
-const savedRecipes = all<any>("SELECT id, title, steps FROM recipes WHERE house_id = ?", [lake]).map((recipe) => ({
+const savedRecipes = await Promise.all((await all<any>("SELECT id, title, steps FROM recipes WHERE house_id = ?", [lake])).map(async (recipe) => ({
   id: recipe.id,
   title: recipe.title,
   steps: JSON.parse(recipe.steps || "[]"),
-  ingredients: all<any>("SELECT name, quantity, unit, optional FROM recipe_ingredients WHERE recipe_id = ?", [recipe.id]).map(
+  ingredients: (await all<any>("SELECT name, quantity, unit, optional FROM recipe_ingredients WHERE recipe_id = ?", [recipe.id])).map(
     (ingredient) => ({
       name: ingredient.name,
       quantity: ingredient.quantity,
@@ -791,10 +793,10 @@ const savedRecipes = all<any>("SELECT id, title, steps FROM recipes WHERE house_
       optional: Boolean(ingredient.optional),
     }),
   ),
-}));
+})));
 
 const ideaResult = localIdeas(inventory, savedRecipes, "Something quick using what we have");
-run("INSERT INTO food_ideas (id, house_id, user_id, prompt, result, created_at) VALUES (?, ?, ?, ?, ?, ?)", [
+await run("INSERT INTO food_ideas (id, house_id, user_id, prompt, result, created_at) VALUES (?, ?, ?, ?, ?, ?)", [
   newId("ida"),
   lake,
   demoId,
@@ -803,16 +805,16 @@ run("INSERT INTO food_ideas (id, house_id, user_id, prompt, result, created_at) 
   daysAgo(1),
 ]);
 
-for (const item of all<any>("SELECT id FROM items WHERE house_id = ?", [lake])) syncItemLowStock(item.id);
-syncHouseExpiry(lake, 7);
+for (const item of await all<any>("SELECT id FROM items WHERE house_id = ?", [lake])) await syncItemLowStock(item.id);
+await syncHouseExpiry(lake, 7);
 
 /* --------------------------------------------------------------------- done */
 
 const counts = {
-  items: Number(get<{ n: number }>("SELECT COUNT(*) AS n FROM items WHERE house_id = ?", [lake])?.n ?? 0),
-  recipes: Number(get<{ n: number }>("SELECT COUNT(*) AS n FROM recipes WHERE house_id = ?", [lake])?.n ?? 0),
-  photos: Number(get<{ n: number }>("SELECT COUNT(*) AS n FROM photos WHERE house_id = ?", [lake])?.n ?? 0),
-  reminders: Number(get<{ n: number }>("SELECT COUNT(*) AS n FROM notifications WHERE house_id = ?", [lake])?.n ?? 0),
+  items: Number((await get<{ n: number }>("SELECT COUNT(*) AS n FROM items WHERE house_id = ?", [lake]))?.n ?? 0),
+  recipes: Number((await get<{ n: number }>("SELECT COUNT(*) AS n FROM recipes WHERE house_id = ?", [lake]))?.n ?? 0),
+  photos: Number((await get<{ n: number }>("SELECT COUNT(*) AS n FROM photos WHERE house_id = ?", [lake]))?.n ?? 0),
+  reminders: Number((await get<{ n: number }>("SELECT COUNT(*) AS n FROM notifications WHERE house_id = ?", [lake]))?.n ?? 0),
 };
 
 console.log("Demo vault ready.");
