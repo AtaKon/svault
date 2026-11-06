@@ -17,6 +17,7 @@ import { ApiError, handler } from "../http.js";
 import { OIDC } from "../config.js";
 import { consumeChallenge, storeChallenge } from "../services/passkeys.js";
 import { createHouse } from "../services/houses.js";
+import { registrationStatus } from "../services/registration.js";
 import { usernameFromEmail, usernameWithSuffix } from "../username.js";
 
 export const oidcRoutes = Router();
@@ -84,8 +85,13 @@ async function findOrCreateIdentity(claims: Record<string, any>) {
   let user = await get<any>("SELECT * FROM users WHERE lower(email) = lower(?)", [email]);
   if (!user) {
     if (!OIDC.autoProvision) throw new ApiError(403, "No SVault account matches this identity");
+    // Auto-provisioning creates an account, so it follows SV_REGISTRATION.
+    const registration = await registrationStatus();
+    if (registration.mode !== "open") {
+      throw new ApiError(403, "No SVault account matches this identity. Ask the administrator for an invite.");
+    }
     const userId = newId("usr");
-    const first = !await get("SELECT id FROM users LIMIT 1");
+    const first = registration.firstUser;
     await run("INSERT INTO users (id, email, username, name, password_hash, is_admin, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", [
       userId,
       email,

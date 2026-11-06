@@ -19,6 +19,7 @@ import { notifyHouseAdded } from "../services/notifications.js";
 import { usernameFromEmail, usernameWithSuffix } from "../username.js";
 import { createLoginChallenge, requireTotp } from "../services/totp.js";
 import { RateLimitError, limiters } from "../rate-limit.js";
+import { registrationStatus } from "../services/registration.js";
 import type { Role } from "../../shared/types.js";
 
 export const authRoutes = Router();
@@ -77,6 +78,15 @@ export async function userPayload(userId: string) {
   return { user: publicUser(user), houses };
 }
 
+/** Public: lets the sign-up page explain whether an invite is needed. */
+authRoutes.get(
+  "/registration",
+  handler(async (_req, res) => {
+    const status = await registrationStatus();
+    res.json({ mode: status.mode, inviteRequired: status.mode === "invite", firstUser: status.firstUser });
+  }),
+);
+
 authRoutes.post(
   "/register",
   handler(async (req, res) => {
@@ -101,7 +111,14 @@ authRoutes.post(
     const username = body.username ?? await uniqueUsername(body.email);
 
     const userId = newId("usr");
-    const isFirst = !await get("SELECT id FROM users LIMIT 1");
+    const registration = await registrationStatus();
+    const isFirst = registration.firstUser;
+    if (registration.mode === "closed") {
+      throw new ApiError(403, "Registration is closed on this server. Ask the administrator for an account.");
+    }
+    if (registration.mode === "invite" && !body.inviteCode) {
+      throw new ApiError(403, "Registration on this server needs an invite link from a house admin.");
+    }
     const invite = body.inviteCode
       ? await get<any>("SELECT * FROM house_invites WHERE code = ? AND accepted_at IS NULL", [body.inviteCode])
       : undefined;

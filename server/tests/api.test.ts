@@ -9,6 +9,8 @@ const dataDir = mkdtempSync(path.join(tmpdir(), "svault-test-"));
 process.env.DATA_DIR = dataDir;
 process.env.NODE_ENV = "test";
 process.env.OPENAI_API_KEY = "";
+// Most tests register several independent accounts; the registration-mode tests switch this.
+process.env.SV_REGISTRATION = "open";
 process.env.SVAI_API_KEY = "";
 
 const http = await import("node:http");
@@ -2520,6 +2522,57 @@ describe("security hardening", () => {
     assert.equal(existsSync(orphan), false);
     assert.ok(existsSync(fresh));
     assert.ok(existsSync(fileOf(kept.data.image)));
+  });
+
+  it("closes registration to invite-only or entirely", async () => {
+    const signUp = (email: string, inviteCode?: string) =>
+      request("/api/auth/register", {
+        method: "POST",
+        auth: "",
+        body: { name: "Late Comer", email, password: "test password", ...(inviteCode ? { inviteCode } : {}) },
+      });
+    try {
+      process.env.SV_REGISTRATION = "invite";
+      const status = await request("/api/auth/registration", { auth: "" });
+      assert.equal(status.status, 200);
+      assert.equal(status.data.mode, "invite");
+      assert.equal(status.data.inviteRequired, true);
+      assert.equal((await signUp("no.invite@example.com")).status, 403);
+
+      const invite = await request(`/api/houses/${houseId}/members`, {
+        method: "POST",
+        body: { email: "invited.person@example.com", role: "viewer" },
+      });
+      assert.equal(invite.status, 201);
+      const joined = await signUp("invited.person@example.com", invite.data.invite.code);
+      assert.equal(joined.status, 201);
+      assert.ok(joined.data.houses.some((house: any) => house.id === houseId));
+
+      process.env.SV_REGISTRATION = "closed";
+      assert.equal((await request("/api/auth/registration", { auth: "" })).data.mode, "closed");
+      assert.equal((await signUp("closed.out@example.com")).status, 403);
+
+      // OIDC auto-provisioning follows the same rule.
+      const start = await fetch(`${base}/api/auth/oidc/start`, { redirect: "manual" });
+      const authorize = new URL(start.headers.get("location")!);
+      const callback = await fetch(
+        `${base}/api/auth/oidc/callback?code=${encodeURIComponent(authorize.searchParams.get("nonce")!)}&state=${encodeURIComponent(
+          authorize.searchParams.get("state")!,
+        )}`,
+        { redirect: "manual" },
+      );
+      assert.equal(callback.status, 302);
+      assert.match(callback.headers.get("location") ?? "", /oidc_error=.*invite/);
+
+      // Unset falls back to invite-only once accounts exist.
+      delete process.env.SV_REGISTRATION;
+      assert.equal((await request("/api/auth/registration", { auth: "" })).data.mode, "invite");
+    } finally {
+      process.env.SV_REGISTRATION = "open";
+    }
+    // Signed-in users can still create houses.
+    const house = await request("/api/houses", { method: "POST", auth: secondUserCookie, body: { name: "Shed" } });
+    assert.equal(house.status, 201);
   });
 });
 
