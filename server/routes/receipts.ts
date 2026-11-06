@@ -544,6 +544,7 @@ receiptRoutes.post(
       );
       const top = suggestions[0];
       const mapping = await findCatalogMapping({
+        houseId,
         country,
         vendorName: draft.vendorName,
         rawDescription: line.rawDescription ?? line.description,
@@ -750,6 +751,7 @@ receiptRoutes.post(
     const enriched = await mapWithLimit(body.lines, 4, async (line) => {
       const rawDescription = line.rawDescription ?? line.description;
       const mapping = await findCatalogMapping({
+        houseId,
         country,
         vendorName: vendor?.name ?? body.vendorName,
         rawDescription,
@@ -824,6 +826,7 @@ receiptRoutes.post(
 
         if (product) {
           await learnCatalogMapping({
+            houseId,
             country,
             vendorName: vendor?.name ?? body.vendorName,
             rawDescription,
@@ -838,6 +841,7 @@ receiptRoutes.post(
           // A corrected/pinned line for an item that is already linked to OFF
           // still teaches the shared catalogue the shop’s printed name.
           await learnCatalogMapping({
+            houseId,
             country,
             vendorName: vendor?.name ?? body.vendorName,
             rawDescription,

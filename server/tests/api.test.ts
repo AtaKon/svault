@@ -1237,6 +1237,31 @@ describe("OpenFoodFacts links and shared catalogue", () => {
 
     const mappings = await request(`/api/catalog/mappings?q=${encodeURIComponent("ΔΩΔΩΝΗ")}`);
     assert.ok(mappings.data.some((mapping: any) => mapping.offCode === dodoniCode));
+
+    // A mapping learned from this house's receipt stays with this house. The
+    // text above also has a bundled seed row (shared by design), so use a
+    // shop shorthand that only this receipt teaches.
+    const privateRaw = "DODONI HOUSE ONLY 1KG";
+    const learned = await request(`/api/houses/${houseId}/receipts`, {
+      method: "POST",
+      body: {
+        vendorName: "Lidl",
+        currency: "EUR",
+        purchasedAt: "2026-01-02",
+        lines: [{ description: privateRaw, rawDescription: privateRaw, quantity: 1, unit: "pcs", lineTotal: 9.9, offCode: dodoniCode }],
+      },
+    });
+    assert.equal(learned.status, 201);
+    const { findCatalogMapping } = await import("../services/product-catalog.js");
+    const own = await findCatalogMapping({ houseId, country: "GR", vendorName: "Lidl", rawDescription: privateRaw });
+    assert.equal(own?.offCode, dodoniCode);
+    const other = await findCatalogMapping({
+      houseId: "hse_someoneelse",
+      country: "GR",
+      vendorName: "Lidl",
+      rawDescription: privateRaw,
+    });
+    assert.equal(other, null);
   });
 
   it("exports and imports the catalogue", async () => {
