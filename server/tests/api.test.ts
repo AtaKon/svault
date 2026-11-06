@@ -2319,6 +2319,69 @@ describe("security hardening", () => {
     });
     assert.equal(dataset.status, 404);
   });
+
+  it("never sends the server's AI key to a house-configured endpoint", async () => {
+    const { AI_ENV } = await import("../config.js");
+    const { resolveAi } = await import("../ai.js");
+    const saved = { apiKey: AI_ENV.apiKey, baseUrl: AI_ENV.baseUrl };
+    AI_ENV.apiKey = "server-secret";
+    AI_ENV.baseUrl = "https://api.openai.com/v1";
+    try {
+      assert.equal(resolveAi({ ai: {} }).apiKey, "server-secret");
+      assert.equal(resolveAi({ ai: { baseUrl: "HTTPS://API.OPENAI.COM/v1/" } }).apiKey, "server-secret");
+      const custom = resolveAi({ ai: { baseUrl: "https://attacker.example/v1" } });
+      assert.equal(custom.apiKey, "");
+      assert.equal(custom.enabled, false);
+      const local = resolveAi({ ai: { enabled: true, baseUrl: "http://192.168.1.20:11434/v1" } });
+      assert.equal(local.enabled, true);
+      assert.equal(local.apiKey, "");
+      assert.equal(resolveAi({ ai: { baseUrl: "https://other.example/v1", apiKey: "own" } }).apiKey, "own");
+
+      const saveSettings = await request(`/api/houses/${strangerHouseId}`, {
+        method: "PATCH",
+        auth: secondUserCookie,
+        body: { settings: { ai: { enabled: true, baseUrl: aiBase, model: "mock-model" } } },
+      });
+      assert.equal(saveSettings.status, 200);
+      aiRequests.length = 0;
+      const probe = await request(`/api/houses/${strangerHouseId}/ai/test`, { method: "POST", auth: secondUserCookie });
+      assert.equal(probe.status, 200);
+      assert.ok(aiRequests.length > 0);
+      assert.ok(aiRequests.every((entry) => entry.headers.authorization === undefined));
+    } finally {
+      AI_ENV.apiKey = saved.apiKey;
+      AI_ENV.baseUrl = saved.baseUrl;
+    }
+  });
+
+  it("can refuse house-configured URLs on private networks", async () => {
+    const { isPrivateAddress } = await import("../lib/outbound.js");
+    for (const address of ["127.0.0.1", "10.1.2.3", "172.20.0.1", "192.168.0.10", "169.254.169.254", "::1", "fd00::1", "fe80::1", "::ffff:7f00:1"]) {
+      assert.equal(isPrivateAddress(address), true, address);
+    }
+    for (const address of ["8.8.8.8", "1.1.1.1", "2606:4700::1111"]) {
+      assert.equal(isPrivateAddress(address), false, address);
+    }
+
+    process.env.SV_OUTBOUND_ALLOW_PRIVATE = "false";
+    try {
+      aiRequests.length = 0;
+      const probe = await request(`/api/houses/${strangerHouseId}/ai/test`, { method: "POST", auth: secondUserCookie });
+      assert.equal(probe.status, 400);
+      assert.match(probe.data.error, /private or local network/);
+      assert.equal(aiRequests.length, 0);
+
+      const channel = await request(`/api/houses/${strangerHouseId}/notifications/test`, {
+        method: "POST",
+        auth: secondUserCookie,
+        body: { channel: { id: "new", type: "webhook", name: "Local", enabled: true, url: "http://localhost:9/hook" } },
+      });
+      assert.equal(channel.status, 502);
+      assert.match(channel.data.error, /private or local network/);
+    } finally {
+      delete process.env.SV_OUTBOUND_ALLOW_PRIVATE;
+    }
+  });
 });
 
 describe("multi-photo receipt OCR", () => {

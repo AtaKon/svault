@@ -1289,8 +1289,9 @@ function AiTab({ house, onSave }: { house: House; onSave: (patch: Record<string,
         </div>
         Recipe OCR happens in the browser. When AI is enabled, the recognised text (and the scan image if a vision model
         is set) is sent to the provider you choose, together with the current recipe or pantry summary. Nothing else
-        leaves your server. If you leave the key empty, the server falls back to the <code>OPENAI_API_KEY</code> environment
-        variable.
+        leaves your server. If you leave the key empty and keep the server&apos;s default base URL, the server falls back to
+        the <code>OPENAI_API_KEY</code> environment variable. A custom base URL never receives the server key: add its own
+        key, or leave the key empty for a keyless local endpoint such as Ollama or LM Studio.
       </Card>
     </div>
   );
