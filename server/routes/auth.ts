@@ -18,6 +18,7 @@ import { createHouse } from "../services/houses.js";
 import { notifyHouseAdded } from "../services/notifications.js";
 import { usernameFromEmail, usernameWithSuffix } from "../username.js";
 import { createLoginChallenge, requireTotp } from "../services/totp.js";
+import { RateLimitError, limiters } from "../rate-limit.js";
 import type { Role } from "../../shared/types.js";
 
 export const authRoutes = Router();
@@ -159,6 +160,11 @@ authRoutes.post(
       req.body,
     );
     const identifier = (body.identifier || body.email || body.username || "").trim();
+    const accountKey = identifier.toLowerCase();
+    const wait = limiters.loginAccount.blocked(accountKey);
+    if (wait > 0) {
+      throw new RateLimitError(wait, "Too many failed sign-ins for this account. Wait a few minutes and try again.");
+    }
     const user = identifier
       ? await get<any>("SELECT * FROM users WHERE lower(email) = lower(?) OR lower(username) = lower(?)", [
           identifier,
@@ -166,8 +172,10 @@ authRoutes.post(
         ])
       : undefined;
     if (!user || !verifyPassword(body.password, user.password_hash)) {
+      limiters.loginAccount.hit(accountKey);
       throw new ApiError(401, "Wrong email/username or password");
     }
+    limiters.loginAccount.reset(accountKey);
     if (await requireTotp(user.id)) {
       const challenge = await createLoginChallenge(user.id, "totp");
       res.json({

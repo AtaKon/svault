@@ -4,6 +4,7 @@ import path from "node:path";
 import { PORT, CLIENT_DIR, IS_PROD, UPLOAD_DIR, ensureDirs } from "./config.js";
 import { ApiError } from "./http.js";
 import { IMAGE_EXTENSIONS } from "./upload.js";
+import { RateLimitError, limitRequests, limiters, userOrIp } from "./rate-limit.js";
 import { attachUser } from "./auth.js";
 import { authRoutes } from "./routes/auth.js";
 import { passkeyRoutes } from "./routes/passkeys.js";
@@ -80,6 +81,24 @@ if (!IS_PROD) {
   });
 }
 
+/* Rate limits for credential, invite and AI endpoints. Mounted by path ahead
+   of the routers so every router gets the same treatment. */
+const authLimit = limitRequests(limiters.login, undefined, "Too many sign-in attempts. Wait a few minutes and try again.");
+app.post("/api/auth/login", authLimit);
+app.post("/api/auth/register", limitRequests(limiters.register, undefined, "Too many sign-ups from this address. Try again later."));
+app.post("/api/auth/2fa/verify", limitRequests(limiters.twoFactor, undefined, "Too many codes entered. Wait a few minutes and try again."));
+app.post("/api/auth/passkeys/login/options", limitRequests(limiters.passkey));
+app.post("/api/auth/passkeys/login/verify", limitRequests(limiters.passkey));
+app.get("/api/auth/invites/:code", limitRequests(limiters.invite));
+app.post("/api/auth/invites/:code/accept", limitRequests(limiters.invite));
+const aiLimit = limitRequests(limiters.ai, userOrIp, "Too many AI requests. Wait a few minutes and try again.");
+app.post("/api/houses/:houseId/receipts/scan", aiLimit);
+app.post("/api/houses/:houseId/recipes/scan", aiLimit);
+app.post("/api/houses/:houseId/intake/parse", aiLimit);
+app.post("/api/houses/:houseId/ideas", aiLimit);
+app.post("/api/houses/:houseId/ai/test", aiLimit);
+app.post("/api/recipes/:recipeId/ai", aiLimit);
+
 app.use("/api/auth", authRoutes);
 app.use("/api/auth", passkeyRoutes);
 app.use("/api/auth", twoFactorRoutes);
@@ -148,6 +167,7 @@ if (fs.existsSync(CLIENT_DIR)) {
 }
 
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  if (err instanceof RateLimitError) res.setHeader("Retry-After", String(err.retryAfter));
   if (err instanceof ApiError) {
     res.status(err.status).json({ error: err.message, details: err.details ?? undefined });
     return;

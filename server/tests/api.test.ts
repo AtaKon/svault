@@ -2438,6 +2438,33 @@ describe("security hardening", () => {
     });
     assert.equal(replay.status, 401);
   });
+
+  it("rate-limits invite lookups and failed sign-ins with Retry-After", async () => {
+    process.env.SV_RATE_LIMIT = "on";
+    process.env.SV_RATE_LIMIT_INVITE = "3/60";
+    process.env.SV_RATE_LIMIT_LOGIN_ACCOUNT = "2/60";
+    try {
+      const statuses: number[] = [];
+      for (let attempt = 0; attempt < 4; attempt++) {
+        statuses.push((await request("/api/auth/invites/not-a-real-code", { auth: "" })).status);
+      }
+      assert.deepEqual(statuses, [404, 404, 404, 429]);
+      const limited = await fetch(`${base}/api/auth/invites/not-a-real-code`);
+      assert.equal(limited.status, 429);
+      assert.ok(Number(limited.headers.get("retry-after")) > 0);
+
+      const attempt = (password: string) =>
+        request("/api/auth/login", { method: "POST", auth: "", body: { identifier: "Totp.User@example.com", password } });
+      assert.equal((await attempt("wrong one")).status, 401);
+      assert.equal((await attempt("wrong two")).status, 401);
+      // Even the right password waits once the account is locked.
+      assert.equal((await attempt("test password")).status, 429);
+    } finally {
+      delete process.env.SV_RATE_LIMIT;
+      delete process.env.SV_RATE_LIMIT_INVITE;
+      delete process.env.SV_RATE_LIMIT_LOGIN_ACCOUNT;
+    }
+  });
 });
 
 describe("multi-photo receipt OCR", () => {
