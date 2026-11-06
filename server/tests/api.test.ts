@@ -1051,6 +1051,29 @@ describe("inventory and stock", () => {
     assert.ok(res.data.notifications.some((entry: any) => entry.type === "low_stock" && entry.data.itemId === itemId));
   });
 
+  it("removes reminders when their item is deleted", async () => {
+    const created = await request(`/api/houses/${houseId}/items`, {
+      method: "POST",
+      body: {
+        name: "Reminder to delete",
+        unit: "pcs",
+        reorderPoint: 2,
+        initialStock: { quantity: 1 },
+      },
+    });
+    assert.equal(created.status, 201);
+    const deletedItemId = created.data.id;
+
+    const before = await request(`/api/houses/${houseId}/notifications`);
+    assert.ok(before.data.notifications.some((entry: any) => entry.data.itemId === deletedItemId));
+
+    const deleted = await request(`/api/items/${deletedItemId}`, { method: "DELETE" });
+    assert.equal(deleted.status, 200);
+
+    const after = await request(`/api/houses/${houseId}/notifications`);
+    assert.ok(!after.data.notifications.some((entry: any) => entry.data.itemId === deletedItemId));
+  });
+
   it("filters items by search and category", async () => {
     const bySearch = await request(`/api/houses/${houseId}/items?q=milk`);
     assert.equal(bySearch.data.items.length, 1);

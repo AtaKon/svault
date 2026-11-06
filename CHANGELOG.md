@@ -85,6 +85,8 @@ All notable changes to SVault are documented here. The format follows
 
 ### Fixed
 
+- Deleting an item now removes its low-stock and expiry reminders, and the reminder scan
+  cleans up orphaned reminders left behind by earlier deletions or restores.
 - Dashboard side panels stay inside their column when a recipe or item name has a long unbroken word.
   Recipe titles wrap, other names truncate, and the two columns can no longer widen the page.
 - Wide desktop windows no longer scroll sideways or push page content past the right edge. The page

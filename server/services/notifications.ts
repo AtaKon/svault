@@ -1,4 +1,4 @@
-import { all, get, now, newId, run } from "../db.js";
+import { all, get, now, newId, parseJson, run } from "../db.js";
 import { maybeSendWeeklySummaries, queueDeliveries, type DeliveryEvent } from "./channels.js";
 
 const DAY = 864e5;
@@ -108,6 +108,42 @@ function resolve(houseId: string, dedupeKey: string) {
   );
 }
 
+/** Delete the reminders that belong to an item, so deleting an item does not
+ * leave a low-stock or expiry notification pointing at something that is gone. */
+export function clearItemNotifications(itemId: string): number {
+  const rows = all<{ id: string; data: string; dedupe_key: string }>(
+    "SELECT id, data, dedupe_key FROM notifications WHERE resolved_at IS NULL",
+  );
+  let removed = 0;
+  for (const row of rows) {
+    const data = parseJson<Record<string, unknown>>(row.data, {});
+    if (data.itemId === itemId || row.dedupe_key === `low:${itemId}`) {
+      run("DELETE FROM notifications WHERE id = ?", [row.id]);
+      removed += 1;
+    }
+  }
+  return removed;
+}
+
+/** Remove reminders whose item no longer exists. This catches reminders left
+ * behind by older versions and restores, and keeps the bell free of dead links. */
+export function cleanupOrphanNotifications(houseId: string): number {
+  const rows = all<{ id: string; data: string }>(
+    "SELECT id, data FROM notifications WHERE house_id = ? AND resolved_at IS NULL",
+    [houseId],
+  );
+  let removed = 0;
+  for (const row of rows) {
+    const data = parseJson<Record<string, unknown>>(row.data, {});
+    const itemId = typeof data.itemId === "string" ? data.itemId : null;
+    if (!itemId) continue;
+    if (get("SELECT id FROM items WHERE id = ?", [itemId])) continue;
+    run("DELETE FROM notifications WHERE id = ?", [row.id]);
+    removed += 1;
+  }
+  return removed;
+}
+
 export interface LowStockRow {
   id: string;
   name: string;
@@ -202,6 +238,7 @@ export function syncHouseExpiry(houseId: string, expiryDays = 7) {
 export function scanAllHouses() {
   const houses = all<{ id: string; settings: string }>("SELECT id, settings FROM houses");
   for (const house of houses) {
+    cleanupOrphanNotifications(house.id);
     let expiryDays = 7;
     try {
       const settings = JSON.parse(house.settings);
