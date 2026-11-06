@@ -699,9 +699,11 @@ receiptRoutes.post(
     if (!body.allowDuplicate) {
       const duplicateOf = await findDuplicateReceipt(houseId, body, existingVendor);
       if (duplicateOf) {
+        // `details` mirrors the other API errors so generic clients see it too.
         res.status(409).json({
           error: "This receipt looks like one you already saved",
           duplicateOf,
+          details: { duplicateOf },
         });
         return;
       }
