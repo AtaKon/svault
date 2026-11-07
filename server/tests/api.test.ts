@@ -4456,6 +4456,50 @@ describe("insights, household split and admin console", () => {
     assert.equal(unassigned.data.paidBy, null);
   });
 
+  it("settles a three-person house with the smallest set of transfers", async () => {
+    const house = await request("/api/houses", { method: "POST", body: { name: "Split House", currency: "EUR" } });
+    assert.equal(house.status, 201);
+    const thirdId = "usr_third_saver";
+    await run(
+      `INSERT INTO users (id, email, username, name, password_hash, is_admin, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [thirdId, "third@example.com", "third", "Third Saver", "s1$00$00", 0, new Date().toISOString()],
+    );
+    for (const userId of [secondUserId, thirdId]) {
+      await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
+        house.data.id,
+        userId,
+        "member",
+        new Date().toISOString(),
+      ]);
+    }
+    const paid = await request(`/api/houses/${house.data.id}/receipts`, {
+      method: "POST",
+      body: {
+        vendorName: "Split Mart",
+        purchasedAt: at(5),
+        currency: "EUR",
+        total: 30,
+        paidBy: thirdId,
+        lines: [{ description: "Shared groceries", quantity: 1, lineTotal: 30 }],
+      },
+    });
+    assert.equal(paid.status, 201, JSON.stringify(paid.data));
+
+    const household = await request(`/api/houses/${house.data.id}/insights/household`);
+    assert.equal(household.status, 200);
+    const total = household.data.balances.reduce((sum: number, entry: any) => sum + entry.balance, 0);
+    assert.ok(Math.abs(total) < 0.01, JSON.stringify(household.data.balances));
+    const third = household.data.balances.find((entry: any) => entry.userId === thirdId);
+    assert.equal(third.balance, 20);
+    assert.equal(household.data.settlements.length, 2);
+    assert.ok(household.data.settlements.every((entry: any) => entry.toUserId === thirdId));
+    assert.equal(
+      household.data.settlements.reduce((sum: number, entry: any) => sum + entry.amount, 0),
+      20,
+    );
+  });
+
   it("reads an e-receipt without writing anything", async () => {
     const parsed = await request(`/api/houses/${insightHouse}/receipts/e-receipt/parse`, {
       method: "POST",
@@ -4539,6 +4583,11 @@ describe("insights, household split and admin console", () => {
     assert.equal(overview.status, 200);
     assert.ok(overview.data.users >= 2);
     assert.equal(overview.data.database, "sqlite");
+    assert.equal((await request("/api/admin/files/sweep", { auth: secondUserCookie, method: "POST", body: {} })).status, 403);
+    const sweep = await request("/api/admin/files/sweep", { method: "POST", body: {} });
+    assert.equal(sweep.status, 200);
+    assert.equal(typeof sweep.data.removed, "number");
+
     const budget = await request("/api/admin/ai/budget", { method: "PATCH", body: { monthlyBudget: 5 } });
     assert.equal(budget.status, 200);
     assert.equal(budget.data.budget, 5);
@@ -4554,12 +4603,14 @@ describe("insights, household split and admin console", () => {
     for (const mode of ["closed", "invite", "open"] as const) {
       const changed = await request("/api/admin/registration", { method: "PATCH", body: { mode } });
       assert.equal(changed.status, 200);
+      assert.equal(changed.data.source, "admin");
       assert.equal((await request("/api/auth/registration", { auth: "" })).data.mode, mode);
     }
     const invalid = await request("/api/admin/registration", { method: "PATCH", body: { mode: "sometimes" } });
     assert.equal(invalid.status, 400);
     const reset = await request("/api/admin/registration", { method: "PATCH", body: { mode: "environment" } });
     assert.equal(reset.status, 200);
+    assert.notEqual(reset.data.source, "admin");
     assert.equal((await request("/api/auth/registration", { auth: "" })).data.mode, "open");
   });
 
@@ -4604,6 +4655,7 @@ describe("insights, household split and admin console", () => {
 
     const read = await request("/api/houses", { auth: "", headers: bearer });
     assert.equal(read.status, 200);
+    assert.equal((await request("/api/houses", { auth: "", headers: bearer, method: "HEAD" })).status, 200);
     assert.ok(read.data.some((house: any) => house.id === insightHouse));
     // A house created by the other user: the owner's token is not a member.
     const foreign = await request("/api/houses", {

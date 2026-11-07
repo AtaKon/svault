@@ -514,7 +514,7 @@ function ApiTokensCard() {
             Read-only access to your houses for Home Assistant, Grafana or a script. Tokens cannot change data.
           </p>
         </div>
-        <Badge tone="outline">{tokens?.length ?? 0}</Badge>
+        <Badge tone="outline">{loadError ? "?" : tokens?.length ?? 0}</Badge>
       </div>
 
       {fresh && (

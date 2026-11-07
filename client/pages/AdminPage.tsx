@@ -23,8 +23,10 @@ export function AdminPage() {
   const [sessions, setSessions] = useState<AdminSession[] | null>(null);
   const [files, setFiles] = useState<{ count: number; bytes: number; files: OrphanFile[] } | null>(null);
   const [ai, setAi] = useState<AiSpend | null>(null);
-  const [registration, setRegistration] = useState("invite");
+  const [registration, setRegistration] = useState<"open" | "invite" | "closed">("invite");
+  const [registrationSource, setRegistrationSource] = useState("default");
   const [aiBudget, setAiBudget] = useState("0");
+  const [failedSections, setFailedSections] = useState<string[]>([]);
   const aiBudgetTouched = useRef(false);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -58,7 +60,16 @@ export function AdminPage() {
     // Keep whatever the admin is typing; only seed the field from the server
     // until they have touched it.
     if (!aiBudgetTouched.current) setAiBudget(String(aiData?.budget || ""));
-    if (registrationData) setRegistration(registrationData.mode);
+    if (registrationData) {
+      setRegistration(registrationData.mode);
+      setRegistrationSource(registrationData.source);
+    }
+    const sectionNames = ["overview", "people", "sessions", "storage", "AI spend", "registration"];
+    setFailedSections(
+      results
+        .map((result, index) => (result.status === "rejected" && index !== 0 ? sectionNames[index] : null))
+        .filter((name): name is string => name != null),
+    );
     if (!overviewData) {
       const failure = results[0];
       const message = failure.status === "rejected" && failure.reason instanceof Error
@@ -73,7 +84,7 @@ export function AdminPage() {
     void load();
   }, [load]);
 
-  const saveRegistration = async (mode: string) => {
+  const saveRegistration = async (mode: "open" | "invite" | "closed") => {
     if (mode === "open" && registration !== "open" && !window.confirm("Allow anyone who can reach this server to create an account?")) {
       return;
     }
@@ -84,10 +95,29 @@ export function AdminPage() {
         body: { mode },
       });
       setRegistration(result.mode);
+      setRegistrationSource(result.source);
       setOverview((current) => (current ? { ...current, registration: result } : current));
       toast.success(`Sign-up is now ${result.mode}`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not change registration");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const clearRegistrationOverride = async () => {
+    setBusy(true);
+    try {
+      const result = await api<{ mode: "open" | "invite" | "closed"; source: string }>("/api/admin/registration", {
+        method: "PATCH",
+        body: { mode: "environment" },
+      });
+      setRegistration(result.mode);
+      setRegistrationSource(result.source);
+      setOverview((current) => (current ? { ...current, registration: result } : current));
+      toast.success(`Using the environment setting: ${result.mode}`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not clear the override");
     } finally {
       setBusy(false);
     }
@@ -169,6 +199,12 @@ export function AdminPage() {
     <div className="space-y-4">
       <PageHeader eyebrow="Instance" title="Admin" subtitle="Users, sign-up, sessions, storage and AI spend" />
 
+      {failedSections.length > 0 && (
+        <div className="rounded-xl border border-warn/40 bg-warn-soft px-3 py-2 text-[11px] text-warn">
+          Some sections could not load: {failedSections.join(", ")}. Refresh to try again.
+        </div>
+      )}
+
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         <Stat label="People" value={overview.users} icon="users" />
         <Stat label="Houses" value={overview.houses} icon="home" />
@@ -192,12 +228,23 @@ export function AdminPage() {
                 : `Currently set by ${overview.registration.source === "admin" ? "this console" : overview.registration.source}.`}
             </p>
           </div>
-          <Select value={registration} onChange={(event) => void saveRegistration(event.target.value)} className="max-w-[180px]" disabled={busy}>
-            <option value="open">Open to anyone</option>
-            <option value="invite">Invite only</option>
-            <option value="closed">Closed</option>
-            <option value="environment">Use environment</option>
-          </Select>
+          <div className="flex flex-col items-end gap-1.5">
+            <Select
+              value={registration}
+              onChange={(event) => void saveRegistration(event.target.value as "open" | "invite" | "closed")}
+              className="max-w-[180px]"
+              disabled={busy}
+            >
+              <option value="open">Open to anyone</option>
+              <option value="invite">Invite only</option>
+              <option value="closed">Closed</option>
+            </Select>
+            {registrationSource === "admin" && (
+              <Button size="sm" variant="ghost" loading={busy} onClick={() => void clearRegistrationOverride()}>
+                Use environment default
+              </Button>
+            )}
+          </div>
         </div>
       </Card>
 
