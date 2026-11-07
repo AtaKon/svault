@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, qs } from "@/api";
 import { useHouse } from "@/state";
+import { useI18n } from "@/i18n";
 import { Button, Card, EmptyState, Input, PageHeader, Select, Skeleton, Tabs, cn, useDebounced } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { ItemCard } from "@/components/ItemCard";
@@ -11,6 +12,7 @@ import type { Category, Item, ItemDetail, Location } from "@shared/types";
 
 export function InventoryPage() {
   const { house } = useHouse();
+  const { t } = useI18n();
   const navigate = useNavigate();
   const toast = useToast();
   const [params, setParams] = useSearchParams();
@@ -62,9 +64,9 @@ export function InventoryPage() {
       setTotal(data.total);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not load items");
+      setError(err instanceof Error ? err.message : t("Could not load items"));
     }
-  }, [house.id, query, categoryId, locationId, low, expiring, sort]);
+  }, [house.id, query, categoryId, locationId, low, expiring, sort, t]);
 
   useEffect(() => {
     void load();
@@ -89,47 +91,49 @@ export function InventoryPage() {
         body: {},
       });
       const count = result.added + result.merged;
-      toast.success(count ? `Added ${count} line${count === 1 ? "" : "s"} to the shopping list` : "Nothing new to add");
+      toast.success(count
+        ? t(count === 1 ? "Added {count} line to the shopping list" : "Added {count} lines to the shopping list", { count })
+        : t("Nothing new to add"));
       if (count) navigate("/shopping");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not add low-stock items");
+      toast.error(err instanceof Error ? err.message : t("Could not add low-stock items"));
     }
   };
 
   const activeFilters = useMemo(
     () =>
       [
-        low && { label: "Running low", clear: () => setParam("low", null) },
-        expiring && { label: "Expiring soon", clear: () => setParam("expiring", null) },
-        categoryId && { label: categories.find((c) => c.id === categoryId)?.name ?? "Category", clear: () => setParam("category", null) },
-        locationId && { label: locations.find((l) => l.id === locationId)?.name ?? "Place", clear: () => setParam("location", null) },
+        low && { label: t("Running low"), clear: () => setParam("low", null) },
+        expiring && { label: t("Expiring soon"), clear: () => setParam("expiring", null) },
+        categoryId && { label: categories.find((c) => c.id === categoryId)?.name ?? t("Category"), clear: () => setParam("category", null) },
+        locationId && { label: locations.find((l) => l.id === locationId)?.name ?? t("Place"), clear: () => setParam("location", null) },
       ].filter(Boolean) as { label: string; clear: () => void }[],
-    [low, expiring, categoryId, locationId, categories, locations],
+    [low, expiring, categoryId, locationId, categories, locations, t],
   );
 
   return (
     <div>
       <PageHeader
-        eyebrow={`${qty(total)} item${total === 1 ? "" : "s"}`}
-        title="Inventory"
-        subtitle="Everything stored in this house, with live quantities."
+        eyebrow={t(total === 1 ? "{count} item" : "{count} items", { count: qty(total) })}
+        title={t("Inventory")}
+        subtitle={t("Everything stored in this house, with live quantities.")}
         actions={
           <>
             <Button variant="secondary" icon="list" onClick={() => void addLowStock()}>
-              Add low stock
+              {t("Add low stock")}
             </Button>
             <div className="hidden sm:block">
               <Button variant="secondary" icon="receipt" onClick={() => navigate("/receipts/scan")}>
-                Receipt
+                {t("Receipt")}
               </Button>
             </div>
             <div className="hidden sm:block">
               <Button variant="secondary" icon="scan" onClick={() => navigate("/scan")}>
-                Scan
+                {t("Scan")}
               </Button>
             </div>
             <Button icon="plus" onClick={() => navigate("/items/new")}>
-              Add
+              {t("Add")}
             </Button>
           </>
         }
@@ -142,7 +146,7 @@ export function InventoryPage() {
             <Input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search items or barcode"
+              placeholder={t("Search items or barcode")}
               className="pl-9 pr-9"
               inputMode="search"
             />
@@ -150,7 +154,7 @@ export function InventoryPage() {
               <button
                 onClick={() => setSearch("")}
                 className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-muted hover:bg-raised hover:text-ink"
-                aria-label="Clear search"
+                aria-label={t("Clear search")}
               >
                 <Icon name="close" size={15} />
               </button>
@@ -159,21 +163,21 @@ export function InventoryPage() {
           <button
             onClick={() => navigate("/scan")}
             className="hidden h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-line bg-surface text-muted transition-colors hover:text-ink sm:flex"
-            aria-label="Scan a barcode"
+            aria-label={t("Scan a barcode")}
           >
             <Icon name="scan" size={19} />
           </button>
           <Select value={sort} onChange={(e) => setParam("sort", e.target.value === "name" ? null : e.target.value)} className="w-[96px] shrink-0 sm:w-[130px]">
             <option value="name">A–Z</option>
-            <option value="recent">Recent</option>
-            <option value="quantity">Low stock</option>
-            <option value="value">Value</option>
+            <option value="recent">{t("Recent")}</option>
+            <option value="quantity">{t("Low stock")}</option>
+            <option value="value">{t("Value")}</option>
           </Select>
         </div>
 
         <div className="flex items-center gap-2 overflow-hidden">
-          <Tabs
-            items={[{ value: "", label: "All" }, ...categories.map((cat) => ({ value: cat.id, label: cat.name }))]}
+            <Tabs
+            items={[{ value: "", label: t("All") }, ...categories.map((cat) => ({ value: cat.id, label: cat.name }))]}
             value={categoryId}
             onChange={(value) => setParam("category", value || null)}
             className="min-w-0 flex-1"
@@ -182,10 +186,10 @@ export function InventoryPage() {
 
         <div className="no-scrollbar -mx-1 flex gap-1 overflow-x-auto px-1">
           <FilterChip active={low} onClick={() => setParam("low", low ? null : "1")} icon="alert">
-            Running low
+            {t("Running low")}
           </FilterChip>
           <FilterChip active={expiring} onClick={() => setParam("expiring", expiring ? null : "1")} icon="clock">
-            Expiring soon
+            {t("Expiring soon")}
           </FilterChip>
           {locations.map((location) => (
             <FilterChip
@@ -226,19 +230,19 @@ export function InventoryPage() {
       ) : items.length === 0 ? (
         <EmptyState
           icon="box"
-          title={query || activeFilters.length ? "Nothing matches" : "No items yet"}
+          title={t(query || activeFilters.length ? "Nothing matches" : "No items yet")}
           body={
             query || activeFilters.length
-              ? "Try a different search or clear the filters."
-              : "Add what is in the fridge, the closet or the cabin. You can scan a barcode to start."
+              ? t("Try a different search or clear the filters.")
+              : t("Add what is in the fridge, the closet or the cabin. You can scan a barcode to start.")
           }
           action={
             <div className="flex gap-2">
               <Button icon="plus" onClick={() => navigate("/items/new")}>
-                Add item
+                {t("Add item")}
               </Button>
               <Button variant="secondary" icon="scan" onClick={() => navigate("/scan")}>
-                Scan
+                {t("Scan")}
               </Button>
             </div>
           }
@@ -252,10 +256,10 @@ export function InventoryPage() {
           </div>
           <div className="mt-4 flex items-center justify-between text-[11px] text-muted">
             <span>
-              Showing {items.length} of {total}
+              {t("Showing {shown} of {total}", { shown: items.length, total })}
             </span>
             <button className="font-medium text-brand hover:underline" onClick={() => void load()}>
-              Refresh
+              {t("Refresh")}
             </button>
           </div>
         </>
@@ -266,11 +270,11 @@ export function InventoryPage() {
           <Icon name="barcode" size={17} />
         </span>
         <div className="min-w-0 flex-1">
-          <div className="text-[13px] font-medium">Scan instead of typing</div>
-          <div className="text-[11px] text-muted">Unknown barcodes can fill in the product name automatically.</div>
+          <div className="text-[13px] font-medium">{t("Scan instead of typing")}</div>
+          <div className="text-[11px] text-muted">{t("Unknown barcodes can fill in the product name automatically.")}</div>
         </div>
         <Button size="sm" variant="secondary" onClick={() => navigate("/scan")}>
-          Open
+          {t("Open")}
         </Button>
       </Card>
     </div>

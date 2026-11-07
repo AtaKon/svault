@@ -2,6 +2,7 @@ import { useCallback, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/api";
 import { useHouse } from "@/state";
+import { useI18n } from "@/i18n";
 import { Badge, Button, Card, Input, PageHeader, Sheet, Spinner, cn } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { BarcodeScanner } from "@/components/BarcodeScanner";
@@ -37,6 +38,7 @@ function packageSize(quantity: string | null | undefined): { amount: string; uni
 
 export function ScanPage() {
   const { house } = useHouse();
+  const { t } = useI18n();
   const navigate = useNavigate();
   const toast = useToast();
   const [result, setResult] = useState<ScanResponse | null>(null);
@@ -56,7 +58,7 @@ export function ScanPage() {
         setRecent((current) => [data, ...current.filter((entry) => entry.code !== trimmed)].slice(0, 6));
         if (data.match === "local") navigator.vibrate?.([30, 40, 30]);
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Lookup failed");
+      toast.error(err instanceof Error ? t(err.message) : t("Lookup failed"));
       } finally {
         setBusy(false);
       }
@@ -73,10 +75,10 @@ export function ScanPage() {
         body: { action, quantity: 1, unit: result.item.unit },
       });
       setResult({ ...result, item: updated as unknown as Item });
-      toast.success(action === "add" ? `Added one ${updated.name}` : `Removed one ${updated.name}`);
+      toast.success(t(action === "add" ? "Added one {item}" : "Removed one {item}", { item: updated.name }));
       window.dispatchEvent(new Event("sv:refresh-badges"));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not update stock");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not update stock"));
     } finally {
       setStockBusy(null);
     }
@@ -107,13 +109,13 @@ export function ScanPage() {
   return (
     <div className="space-y-4">
       <PageHeader
-        eyebrow="Barcode"
-        title="Scan & stock"
-        subtitle="Point at a barcode to add, use or create an item."
+        eyebrow={t("Barcode")}
+        title={t("Scan & stock")}
+        subtitle={t("Point at a barcode to add, use or create an item.")}
         actions={
           <div className="hidden sm:block">
             <Badge tone="outline">
-              <Icon name="wifi" size={11} /> local first
+              <Icon name="wifi" size={11} /> {t("local first")}
             </Badge>
           </div>
         }
@@ -124,22 +126,22 @@ export function ScanPage() {
           <BarcodeScanner onDetected={(code) => void lookup(code)} />
           <Card className="p-4">
             <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted">
-              <Icon name="key" size={13} /> Or type it
+              <Icon name="key" size={13} /> {t("Or type it")}
             </div>
             <form onSubmit={submitManual} className="flex gap-2">
               <Input
                 value={manual}
                 onChange={(e) => setManual(e.target.value)}
-                placeholder="EAN, UPC or any code"
+                placeholder={t("EAN, UPC or any code")}
                 inputMode="numeric"
                 autoComplete="off"
               />
               <Button type="submit" variant="secondary" loading={busy} disabled={!manual.trim()}>
-                Find
+                {t("Find")}
               </Button>
             </form>
             <p className="mt-2 text-[11px] text-muted">
-              Unknown products are looked up online when possible, then you can create the item in two taps.
+              {t("Unknown products are looked up online when possible, then you can create the item in two taps.")}
             </p>
           </Card>
           <Card className="flex items-center gap-3 p-4">
@@ -147,16 +149,16 @@ export function ScanPage() {
               <Icon name="receipt" size={17} />
             </span>
             <div className="min-w-0 flex-1">
-              <div className="text-[13px] font-medium">Shopping receipt?</div>
-              <div className="text-[11px] text-muted">Photograph it once and add the whole basket, with the shop recorded.</div>
+              <div className="text-[13px] font-medium">{t("Shopping receipt?")}</div>
+              <div className="text-[11px] text-muted">{t("Photograph it once and add the whole basket, with the shop recorded.")}</div>
             </div>
             <Button size="sm" variant="secondary" icon="arrowUpRight" onClick={() => navigate("/receipts/scan")}>
-              Scan
+              {t("Scan")}
             </Button>
           </Card>
           {recent.length > 0 && (
             <Card className="p-4">
-              <h2 className="mb-2 font-display text-lg">This session</h2>
+              <h2 className="mb-2 font-display text-lg">{t("This session")}</h2>
               <div className="space-y-1">
                 {recent.map((entry) => (
                   <button
@@ -177,7 +179,7 @@ export function ScanPage() {
 
       {busy && !result && (
         <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted">
-          <Spinner size={16} /> Looking up barcode…
+          <Spinner size={16} /> {t("Looking up barcode…")}
         </div>
       )}
 
@@ -189,9 +191,9 @@ export function ScanPage() {
             ? result.item?.name
             : result?.product?.name
               ? result.product.name
-              : "Unknown barcode"
+              : t("Unknown barcode")
         }
-        description={result ? `Code ${result.code}` : undefined}
+        description={result ? t("Code {code}", { code: result.code }) : undefined}
         footer={
           <div className="flex gap-2">
             <Button
@@ -201,15 +203,15 @@ export function ScanPage() {
                 setResult(null);
               }}
             >
-              Scan next
+              {t("Scan next")}
             </Button>
             {result?.match === "local" && result.item ? (
               <Button block icon="arrowUpRight" onClick={() => navigate(`/items/${result.item!.id}`)}>
-                Open item
+                {t("Open item")}
               </Button>
             ) : (
               <Button block icon="plus" onClick={createItem}>
-                Create item
+                {t("Create item")}
               </Button>
             )}
           </div>
@@ -235,9 +237,9 @@ export function ScanPage() {
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1.5">
                   <span className="truncate font-medium">{result.item.name}</span>
-                  {result.item.isLow && <Badge tone="warn">low</Badge>}
+                  {result.item.isLow && <Badge tone="warn">{t("low")}</Badge>}
                 </div>
-                <div className="text-xs text-muted">{result.item.categoryName ?? "Uncategorised"}{result.item.brand ? ` · ${result.item.brand}` : ""}</div>
+                <div className="text-xs text-muted">{result.item.categoryName ?? t("Uncategorised")}{result.item.brand ? ` · ${result.item.brand}` : ""}</div>
                 <div className="mt-1 font-display text-2xl leading-none">
                   {formatQty(result.item.quantity)} <span className="text-xs text-muted">{result.item.unit}</span>
                 </div>
@@ -251,14 +253,14 @@ export function ScanPage() {
                 disabled={stockBusy !== null || result.item.quantity <= 0}
                 onClick={() => void adjust("remove")}
               >
-                Use one
+                {t("Use one")}
               </Button>
               <Button icon="plus" loading={stockBusy === "add"} disabled={stockBusy !== null} onClick={() => void adjust("add")}>
-                Add one
+                {t("Add one")}
               </Button>
             </div>
             <div className="rounded-xl bg-raised px-3 py-2 text-[11px] text-muted">
-              Need a different amount or a price? Open the item and choose “Adjust stock”.
+              {t("Need a different amount or a price? Open the item and choose “Adjust stock”.")}
             </div>
           </div>
         ) : result ? (
@@ -266,7 +268,7 @@ export function ScanPage() {
             {result.product?.image && (
               <ZoomableImage
                 src={result.product.image}
-                alt={result.product.name ?? "Product photo"}
+                alt={result.product.name ?? t("Product photo")}
                 wrapperClassName="mx-auto h-32 w-fit"
                 className="h-full rounded-2xl object-contain"
               />
@@ -283,12 +285,12 @@ export function ScanPage() {
                 </div>
               ) : (
                 <div className="text-xs text-muted">
-                  This code is not in your vault and the online lookup found nothing. Create it manually — the barcode will be attached for next time.
+                  {t("This code is not in your vault and the online lookup found nothing. Create it manually — the barcode will be attached for next time.")}
                 </div>
               )}
             </div>
             <div className={cn("text-[11px] leading-relaxed text-muted")}>
-              The create screen will be pre-filled. Set the unit, starting quantity and location, and it is ready to scan.
+              {t("The create screen will be pre-filled. Set the unit, starting quantity and location, and it is ready to scan.")}
             </div>
           </div>
         ) : null}

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react
 import { useNavigate } from "react-router-dom";
 import { api } from "@/api";
 import { useHouse } from "@/state";
+import { useI18n } from "@/i18n";
 import { Badge, Button, Card, EmptyState, Field, PageHeader, Select, Sheet, Skeleton } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { useToast } from "@/components/toast";
@@ -40,6 +41,7 @@ interface SavedIdeas {
 
 export function PlanPage() {
   const { house, can } = useHouse();
+  const { t, locale } = useI18n();
   const toast = useToast();
   const navigate = useNavigate();
   const [weekStart, setWeekStart] = useState(() => dayKey(mondayOf()));
@@ -63,11 +65,11 @@ export function PlanPage() {
       setRecipes(recipeList);
       setIdeas(ideaList);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not load the meal plan");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not load the meal plan"));
     } finally {
       setLoading(false);
     }
-  }, [house.id, weekStart, toast]);
+  }, [house.id, weekStart, toast, t]);
 
   useEffect(() => {
     void load();
@@ -101,7 +103,7 @@ export function PlanPage() {
       await api(`/api/houses/${house.id}/plan/${entry.id}`, { method: "DELETE" });
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not remove the meal");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not remove the meal"));
     }
   };
 
@@ -110,7 +112,7 @@ export function PlanPage() {
       await api(`/api/houses/${house.id}/plan/${entry.id}/duplicate`, { method: "POST", body: {} });
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not duplicate the meal");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not duplicate the meal"));
     }
   };
 
@@ -123,13 +125,13 @@ export function PlanPage() {
       );
       const count = result.added + result.merged;
       if (count) {
-        toast.success(`Added ${count} line${count === 1 ? "" : "s"} to the shopping list`);
+        toast.success(t(count === 1 ? "Added {count} line to the shopping list" : "Added {count} lines to the shopping list", { count }));
         navigate("/shopping");
       } else {
-        toast.push("Everything planned is already in stock or on the list");
+        toast.push(t("Everything planned is already in stock or on the list"));
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not build the shopping list");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not build the shopping list"));
     } finally {
       setBusy(false);
     }
@@ -141,37 +143,37 @@ export function PlanPage() {
     <div className="space-y-4">
       <PageHeader
         eyebrow={house.name}
-        title="Meal plan"
-        subtitle="Plan the week, scale servings and turn the missing ingredients into one shopping list."
+        title={t("Meal plan")}
+        subtitle={t("Plan the week, scale servings and turn the missing ingredients into one shopping list.")}
         actions={
           <>
             <Button variant="secondary" icon="list" onClick={() => void addToShoppingList()} loading={busy} disabled={!can("member")}>
-              Shopping list
+              {t("Shopping list")}
             </Button>
             <Button icon="plus" onClick={() => setAdding({ day: today, slot: "dinner" })} disabled={!can("member")}>
-              Plan a meal
+              {t("Plan a meal")}
             </Button>
           </>
         }
       />
 
       <Card className="flex flex-wrap items-center gap-2 p-3">
-        <Button size="sm" variant="secondary" icon="arrowLeft" onClick={() => shiftWeek(-7)} aria-label="Previous week">
-          Previous
+        <Button size="sm" variant="secondary" icon="arrowLeft" onClick={() => shiftWeek(-7)} aria-label={t("Previous week")}>
+          {t("Previous")}
         </Button>
         <Button size="sm" variant="ghost" onClick={() => setWeekStart(dayKey(mondayOf()))}>
-          This week
+          {t("This week")}
         </Button>
-        <Button size="sm" variant="secondary" iconRight="chevronRight" onClick={() => shiftWeek(7)} aria-label="Next week">
-          Next
+        <Button size="sm" variant="secondary" iconRight="chevronRight" onClick={() => shiftWeek(7)} aria-label={t("Next week")}>
+          {t("Next")}
         </Button>
         <div className="ml-auto text-sm">
           <span className="font-medium">
-            {new Date(`${weekStart}T00:00:00`).toLocaleDateString(undefined, { day: "numeric", month: "long" })}
+            {new Date(`${weekStart}T00:00:00`).toLocaleDateString(locale, { day: "numeric", month: "long" })}
           </span>
           <span className="text-muted">
             {" "}
-            – {new Date(new Date(`${weekStart}T00:00:00`).getTime() + 6 * DAY_MS).toLocaleDateString(undefined, {
+            – {new Date(new Date(`${weekStart}T00:00:00`).getTime() + 6 * DAY_MS).toLocaleDateString(locale, {
               day: "numeric",
               month: "long",
             })}
@@ -189,8 +191,8 @@ export function PlanPage() {
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-7">
           {days.map((day) => {
             const isToday = day.key === today;
-            const weekday = day.date.toLocaleDateString(undefined, { weekday: "short" });
-            const label = day.date.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+            const weekday = day.date.toLocaleDateString(locale, { weekday: "short" });
+            const label = day.date.toLocaleDateString(locale, { day: "numeric", month: "short" });
             return (
               <Card key={day.key} className={isToday ? "border-brand/50 p-2.5" : "p-2.5"}>
                 <div className="mb-2 flex items-baseline justify-between gap-2">
@@ -198,7 +200,7 @@ export function PlanPage() {
                     <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted">{weekday}</div>
                     <div className="font-display text-lg leading-tight">{label}</div>
                   </div>
-                  {isToday && <Badge tone="brand">today</Badge>}
+                  {isToday && <Badge tone="brand">{t("today")}</Badge>}
                 </div>
                 <div className="space-y-2">
                   {MEAL_SLOTS.map((slot) => {
@@ -206,11 +208,11 @@ export function PlanPage() {
                     return (
                       <div key={slot}>
                         <div className="mb-1 flex items-center justify-between gap-1">
-                          <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted">{SLOT_LABELS[slot]}</span>
+                          <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted">{t(SLOT_LABELS[slot])}</span>
                           <button
                             onClick={() => setAdding({ day: day.key, slot })}
                             className="flex h-5 w-5 items-center justify-center rounded-md text-muted transition-colors hover:bg-raised hover:text-ink"
-                            aria-label={`Add ${SLOT_LABELS[slot].toLowerCase()} on ${label}`}
+                            aria-label={t("Add {meal} on {date}", { meal: t(SLOT_LABELS[slot]).toLowerCase(), date: label })}
                             disabled={!can("member")}
                           >
                             <Icon name="plus" size={12} />
@@ -224,12 +226,12 @@ export function PlanPage() {
                               <div key={entry.id} className="rounded-lg border border-line bg-bg px-2 py-1.5">
                                 <div className="text-[12px] font-medium leading-snug">{entry.title}</div>
                                 <div className="mt-0.5 flex items-center gap-1 text-[10px] text-muted">
-                                  {entry.servings != null && <span>{qty(entry.servings)} servings</span>}
+                                  {entry.servings != null && <span>{t("{count} servings", { count: qty(entry.servings) })}</span>}
                                   <div className="ml-auto flex items-center">
                                     <button
                                       onClick={() => setMoveTarget(entry)}
                                       className="rounded p-0.5 text-muted hover:text-brand"
-                                      aria-label={`Move ${entry.title}`}
+                                      aria-label={t("Move {item}", { item: entry.title })}
                                       disabled={!can("member")}
                                     >
                                       <Icon name="calendar" size={11} />
@@ -237,7 +239,7 @@ export function PlanPage() {
                                     <button
                                       onClick={() => void duplicate(entry)}
                                       className="rounded p-0.5 text-muted hover:text-brand"
-                                      aria-label={`Duplicate ${entry.title}`}
+                                      aria-label={t("Duplicate {item}", { item: entry.title })}
                                       disabled={!can("member")}
                                     >
                                       <Icon name="grid" size={11} />
@@ -245,7 +247,7 @@ export function PlanPage() {
                                     <button
                                       onClick={() => void remove(entry)}
                                       className="rounded p-0.5 text-muted hover:text-danger"
-                                      aria-label={`Remove ${entry.title}`}
+                                      aria-label={t("Remove {item}", { item: entry.title })}
                                       disabled={!can("member")}
                                     >
                                       <Icon name="close" size={11} />
@@ -269,9 +271,9 @@ export function PlanPage() {
       {!loading && (week?.entries.length ?? 0) === 0 && (
         <EmptyState
           icon="calendar"
-          title="This week is empty"
-          body="Pick a saved recipe or food idea for any slot. Servings scale the ingredients without changing the recipe."
-          action={<Button onClick={() => setAdding({ day: today, slot: "dinner" })}>Plan the first meal</Button>}
+          title={t("This week is empty")}
+          body={t("Pick a saved recipe or food idea for any slot. Servings scale the ingredients without changing the recipe.")}
+          action={<Button onClick={() => setAdding({ day: today, slot: "dinner" })}>{t("Plan the first meal")}</Button>}
         />
       )}
 
@@ -315,6 +317,7 @@ function AddPlanSheet({
   onClose: () => void;
   onSaved: () => void | Promise<void>;
 }) {
+  const { t } = useI18n();
   const toast = useToast();
   const [kind, setKind] = useState<"recipe" | "idea" | "custom">("recipe");
   const [recipeId, setRecipeId] = useState("");
@@ -380,7 +383,7 @@ function AddPlanSheet({
       });
       await onSaved();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not plan the meal");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not plan the meal"));
     } finally {
       setBusy(false);
     }
@@ -390,17 +393,17 @@ function AddPlanSheet({
     <Sheet
       open={Boolean(target)}
       onClose={onClose}
-      title="Plan a meal"
-      description="The plan is shared with everyone in this house."
+      title={t("Plan a meal")}
+      description={t("The plan is shared with everyone in this house.")}
       footer={
         <Button block onClick={submit} loading={busy} disabled={kind === "custom" ? !title.trim() : kind === "recipe" ? !recipeId : !ideaKey}>
-          Add to plan
+          {t("Add to plan")}
         </Button>
       }
     >
       <form onSubmit={submit} className="space-y-3">
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Day">
+          <Field label={t("Day")}>
             <input
               type="date"
               value={day}
@@ -408,11 +411,11 @@ function AddPlanSheet({
               className="h-11 w-full rounded-xl border border-line bg-surface px-3 text-[15px] outline-none focus:border-brand focus:ring-2 focus:ring-brand/15"
             />
           </Field>
-          <Field label="Meal">
+          <Field label={t("Meal")}>
             <Select value={slot} onChange={(event) => setSlot(event.target.value as MealSlot)}>
               {MEAL_SLOTS.map((entry) => (
                 <option key={entry} value={entry}>
-                  {SLOT_LABELS[entry]}
+                  {t(SLOT_LABELS[entry])}
                 </option>
               ))}
             </Select>
@@ -421,9 +424,9 @@ function AddPlanSheet({
 
         <div className="flex flex-wrap gap-1.5">
           {[
-            { value: "recipe", label: "Recipe" },
-            { value: "idea", label: "Food idea" },
-            { value: "custom", label: "Custom" },
+            { value: "recipe", label: t("Recipe") },
+            { value: "idea", label: t("Food idea") },
+            { value: "custom", label: t("Custom") },
           ].map((option) => (
             <button
               key={option.value}
@@ -441,7 +444,7 @@ function AddPlanSheet({
         </div>
 
         {kind === "recipe" && (
-          <Field label="Recipe">
+          <Field label={t("Recipe")}>
             <Select value={recipeId} onChange={(event) => setRecipeId(event.target.value)}>
               {recipes.map((recipe) => (
                 <option key={recipe.id} value={recipe.id}>
@@ -452,7 +455,7 @@ function AddPlanSheet({
           </Field>
         )}
         {kind === "idea" && (
-          <Field label="Food idea">
+          <Field label={t("Food idea")}>
             <Select value={ideaKey} onChange={(event) => setIdeaKey(event.target.value)}>
               {flatIdeas.map((idea) => (
                 <option key={idea.key} value={idea.key}>
@@ -463,17 +466,17 @@ function AddPlanSheet({
           </Field>
         )}
         {kind === "custom" && (
-          <Field label="Title" required>
+          <Field label={t("Title")} required>
             <input
               value={title}
               onChange={(event) => setTitle(event.target.value)}
-              placeholder="Leftovers, takeaway…"
+              placeholder={t("Leftovers, takeaway…")}
               maxLength={160}
               className="h-11 w-full rounded-xl border border-line bg-surface px-3 text-[15px] outline-none focus:border-brand focus:ring-2 focus:ring-brand/15"
             />
           </Field>
         )}
-        <Field label="Servings" hint="scales the ingredients">
+        <Field label={t("Servings")} hint={t("scales the ingredients")}>
           <input
             value={servings}
             onChange={(event) => setServings(event.target.value)}
@@ -497,6 +500,7 @@ function MovePlanSheet({
   onClose: () => void;
   onSaved: () => void | Promise<void>;
 }) {
+  const { t } = useI18n();
   const toast = useToast();
   const [day, setDay] = useState("");
   const [slot, setSlot] = useState<MealSlot>("dinner");
@@ -516,7 +520,7 @@ function MovePlanSheet({
       await api(`/api/houses/${houseId}/plan/${entry.id}`, { method: "PATCH", body: { day, slot } });
       await onSaved();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not move the meal");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not move the meal"));
     } finally {
       setBusy(false);
     }
@@ -526,11 +530,11 @@ function MovePlanSheet({
     <Sheet
       open={Boolean(entry)}
       onClose={onClose}
-      title={`Move ${entry?.title ?? "meal"}`}
-      description="Choose another day or meal slot. No drag and drop needed."
+      title={t("Move {item}", { item: entry?.title ?? t("meal") })}
+      description={t("Choose another day or meal slot. No drag and drop needed.")}
       footer={
         <Button block onClick={submit} loading={busy} disabled={!day}>
-          Move meal
+          {t("Move meal")}
         </Button>
       }
     >
@@ -540,12 +544,12 @@ function MovePlanSheet({
           value={day}
           onChange={(event) => setDay(event.target.value)}
           className="h-11 w-full rounded-xl border border-line bg-surface px-3 text-[15px] outline-none focus:border-brand focus:ring-2 focus:ring-brand/15"
-          aria-label="Destination day"
+          aria-label={t("Destination day")}
         />
-        <Select value={slot} onChange={(event) => setSlot(event.target.value as MealSlot)} aria-label="Destination meal">
+        <Select value={slot} onChange={(event) => setSlot(event.target.value as MealSlot)} aria-label={t("Destination meal")}>
           {MEAL_SLOTS.map((entry) => (
             <option key={entry} value={entry}>
-              {SLOT_LABELS[entry]}
+              {t(SLOT_LABELS[entry])}
             </option>
           ))}
         </Select>

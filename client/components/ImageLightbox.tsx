@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { Icon } from "@/components/icons";
+import { useI18n } from "@/i18n";
 
 /**
  * Full-size image viewer. The image keeps its aspect ratio and is shown as
@@ -16,6 +17,7 @@ export function ImageLightbox({
   alt: string;
   onClose: () => void;
 }) {
+  const { t } = useI18n();
   const closeRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
@@ -63,7 +65,7 @@ export function ImageLightbox({
       ref={dialogRef}
       role="dialog"
       aria-modal="true"
-      aria-label={alt ? `Full-size image: ${alt}` : "Full-size image"}
+      aria-label={alt ? `${t("Full-size image")}: ${alt}` : t("Full-size image")}
       className="fade-in fixed inset-0 z-[60] flex items-center justify-center bg-black/90 p-3 sm:p-6"
       onClick={(event) => {
         event.stopPropagation();
@@ -73,8 +75,8 @@ export function ImageLightbox({
       <button
         ref={closeRef}
         type="button"
-        aria-label="Close full-size image"
-        title="Close"
+        aria-label={t("Close full-size image")}
+        title={t("Close")}
         className="absolute right-3 top-3 z-10 flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20 focus-visible:outline-white sm:right-5 sm:top-5"
         onClick={(event) => {
           event.stopPropagation();

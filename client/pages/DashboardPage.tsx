@@ -18,7 +18,7 @@ interface DashboardData extends Omit<Dashboard, "recent"> {
 export function DashboardPage() {
   const { house } = useHouse();
   const { user } = useAuth();
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const navigate = useNavigate();
   const toast = useToast();
   const [data, setData] = useState<DashboardData | null>(null);
@@ -30,9 +30,9 @@ export function DashboardPage() {
       setData(result);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not load the dashboard");
+      setError(err instanceof Error ? err.message : t("Could not load the dashboard"));
     }
-  }, [house.id]);
+  }, [house.id, t]);
 
   useEffect(() => {
     setData(null);
@@ -56,7 +56,7 @@ export function DashboardPage() {
 
   const hour = new Date().getHours();
   const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
-  const name = user?.name.split(" ")[0] ?? "there";
+  const name = user?.name.split(" ")[0];
 
   const addLowStock = async () => {
     try {
@@ -65,47 +65,49 @@ export function DashboardPage() {
         body: {},
       });
       const count = result.added + result.merged;
-      toast.success(count ? `Added ${count} line${count === 1 ? "" : "s"} to the shopping list` : "Nothing new to add");
+      toast.success(count
+        ? t(count === 1 ? "Added {count} line to the shopping list" : "Added {count} lines to the shopping list", { count })
+        : t("Nothing new to add"));
       if (count) navigate("/shopping");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not add low-stock items");
+      toast.error(err instanceof Error ? err.message : t("Could not add low-stock items"));
     }
   };
 
   return (
     <div className="space-y-5">
       <PageHeader
-        eyebrow={new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })}
+        eyebrow={new Date().toLocaleDateString(locale, { weekday: "long", day: "numeric", month: "long" })}
         title={
           <span>
-            {greeting}, {name}
+            {t(greeting)}{name ? `, ${name}` : ""}
           </span>
         }
-        subtitle={`Here is what is going on in ${house.name}.`}
+        subtitle={t("Here is what is going on in {house}.", { house: house.name })}
         actions={
           <div className="hidden gap-2 sm:flex">
             <Button variant="secondary" icon="scan" onClick={() => navigate("/scan")}>
-              Scan
+              {t("Scan")}
             </Button>
             <Button icon="plus" onClick={() => navigate("/items/new")}>
-              Add item
+              {t("Add item")}
             </Button>
           </div>
         }      />
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Stat label="Items" value={qty(data?.itemCount)} hint="tracked in this house" icon="box" />
-        <Stat label="Batches" value={qty(data?.batchCount)} hint="active stock batches" icon="grid" />
+        <Stat label={t("Items")} value={qty(data?.itemCount)} hint={t("tracked in this house")} icon="box" />
+        <Stat label={t("Batches")} value={qty(data?.batchCount)} hint={t("active stock batches")} icon="grid" />
         <Stat
-          label="Stock value"
+          label={t("Stock value")}
           value={compactMoney(data?.totalValue, house.currency)}
-          hint="from purchase prices"
+          hint={t("from purchase prices")}
           icon="price"
         />
         <Stat
-          label="Running low"
+          label={t("Running low")}
           value={qty(data?.lowStock.length ?? 0)}
-          hint="need a restock"
+          hint={t("need a restock")}
           icon="alert"
           tone={data?.lowStock.length ? "warn" : "brand"}
         />
@@ -116,20 +118,20 @@ export function DashboardPage() {
           <div className="relative bg-brand px-5 py-6 text-brand-ink">
             <div className="absolute inset-0 bg-grid opacity-20" />
             <div className="relative">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.16em] opacity-70">Let's get started</div>
-              <div className="mt-1 font-display text-2xl">Your shelves are waiting</div>
+              <div className="text-[11px] font-semibold uppercase tracking-[0.16em] opacity-70">{t("Let's get started")}</div>
+              <div className="mt-1 font-display text-2xl">{t("Your shelves are waiting")}</div>
               <p className="mt-1.5 max-w-md text-sm opacity-80">
-                Add the first thing you own, scan a barcode, or set up a room in this house. Everything else builds from here.
+                {t("Add the first thing you own, scan a barcode, or set up a room in this house. Everything else builds from here.")}
               </p>
               <div className="mt-4 flex flex-wrap gap-2">
                 <Button variant="secondary" icon="plus" onClick={() => navigate("/items/new")}>
-                  Add an item
+                  {t("Add an item")}
                 </Button>
                 <Button variant="secondary" icon="scan" onClick={() => navigate("/scan")}>
-                  Scan a barcode
+                  {t("Scan a barcode")}
                 </Button>
                 <Button variant="secondary" icon="settings" onClick={() => navigate("/settings?tab=places")}>
-                  Set up rooms
+                  {t("Set up rooms")}
                 </Button>
               </div>
             </div>
@@ -145,11 +147,11 @@ export function DashboardPage() {
               <div className="flex items-center gap-3">
                 {data && data.lowStock.length > 0 && (
                   <button onClick={() => void addLowStock()} className="text-xs font-medium text-brand hover:underline">
-                    Add to list
+                    {t("Add to list")}
                   </button>
                 )}
                 <Link to="/items?low=1" className="text-xs font-medium text-brand hover:underline">
-                  See all
+                  {t("See all")}
                 </Link>
               </div>
             </div>
@@ -164,8 +166,8 @@ export function DashboardPage() {
                   <Icon name="check" size={19} />
                 </span>
                 <div>
-                  <div className="text-sm font-medium">Everything is stocked</div>
-                  <div className="text-[11px] text-muted">Set a reorder point on items you never want to run out of.</div>
+                  <div className="text-sm font-medium">{t("Everything is stocked")}</div>
+                  <div className="text-[11px] text-muted">{t("Set a reorder point on items you never want to run out of.")}</div>
                 </div>
               </Card>
             ) : (
@@ -181,7 +183,7 @@ export function DashboardPage() {
             <div className="mb-2.5 flex items-center justify-between">
               <h2 className="font-display text-xl">{t("Rooms & places")}</h2>
               <Link to="/settings?tab=places" className="text-xs font-medium text-brand hover:underline">
-                Manage
+                {t("Manage")}
               </Link>
             </div>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
@@ -194,13 +196,13 @@ export function DashboardPage() {
                   <span className="text-lg">{location.icon ?? "📦"}</span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[13px] font-medium">{location.name}</span>
-                    <span className="block text-[11px] text-muted">{location.itemCount ?? 0} items</span>
+                    <span className="block text-[11px] text-muted">{t("{count} items", { count: location.itemCount ?? 0 })}</span>
                   </span>
                 </Link>
               ))}
               {data && data.locations.length === 0 && (
                 <Link to="/settings?tab=places" className="col-span-full rounded-xl border border-dashed border-line px-3 py-4 text-center text-xs text-muted">
-                  No places yet — add a fridge, shelf or cabin.
+                  {t("No places yet — add a fridge, shelf or cabin.")}
                 </Link>
               )}
             </div>
@@ -212,13 +214,13 @@ export function DashboardPage() {
             <div className="mb-2.5 flex items-center justify-between">
               <h2 className="font-display text-xl">{t("Use it up")}</h2>
               <Link to="/items?expiring=1" className="text-xs font-medium text-brand hover:underline">
-                Expiring
+                {t("Expiring")}
               </Link>
             </div>
             {!data ? (
               <Skeleton className="h-24" />
             ) : data.expiring.length === 0 ? (
-              <Card className="p-4 text-sm text-muted">Nothing expires in the next two weeks.</Card>
+              <Card className="p-4 text-sm text-muted">{t("Nothing expires in the next two weeks.")}</Card>
             ) : (
               <Card className="divide-y divide-line">
                 {data.expiring.slice(0, 4).map((lot) => {
@@ -239,7 +241,7 @@ export function DashboardPage() {
                         </span>
                       </span>
                       <Badge tone={days != null && days < 0 ? "danger" : "warn"}>
-                        {days == null ? "" : days < 0 ? `${Math.abs(days)}d ago` : days === 0 ? "today" : `${days}d`}
+                        {days == null ? "" : days < 0 ? t("{count}d ago", { count: Math.abs(days) }) : days === 0 ? t("today") : t("{count}d", { count: days })}
                       </Badge>
                     </button>
                   );
@@ -252,7 +254,7 @@ export function DashboardPage() {
             <div className="mb-2.5 flex items-center justify-between">
               <h2 className="font-display text-xl">{t("This week")}</h2>
               <Link to="/plan" className="text-xs font-medium text-brand hover:underline">
-                Open plan
+                {t("Open plan")}
               </Link>
             </div>
             <Card className="flex items-center gap-3 p-3.5">
@@ -261,17 +263,17 @@ export function DashboardPage() {
               </span>
               <div className="min-w-0 flex-1">
                 <div className="text-sm font-medium">
-                  {qty(data?.plan?.week ?? 0)} meal{(data?.plan?.week ?? 0) === 1 ? "" : "s"} planned
+                  {t((data?.plan?.week ?? 0) === 1 ? "{count} meal planned" : "{count} meals planned", { count: qty(data?.plan?.week ?? 0) })}
                 </div>
                 <div className="text-[11px] text-muted">
-                  {qty(data?.plan?.today ?? 0)} today · turn the missing ingredients into a list
+                  {t("{count} today · turn the missing ingredients into a list", { count: qty(data?.plan?.today ?? 0) })}
                 </div>
               </div>
               <Link
                 to="/shopping"
                 className="rounded-lg border border-line px-2 py-1 text-[11px] font-medium text-muted transition-colors hover:text-brand"
               >
-                Shop
+                {t("Shop")}
               </Link>
             </Card>
           </section>
@@ -280,7 +282,7 @@ export function DashboardPage() {
             <div className="mb-2.5 flex items-center justify-between">
               <h2 className="font-display text-xl">{t("Cook something")}</h2>
               <Link to="/ideas" className="text-xs font-medium text-brand hover:underline">
-                Get ideas
+                {t("Get ideas")}
               </Link>
             </div>
             {data?.recentRecipe ? (
@@ -288,27 +290,27 @@ export function DashboardPage() {
                 <button onClick={() => navigate(`/recipes/${data.recentRecipe!.id}`)} className="w-full text-left">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted">From your recipes</div>
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted">{t("From your recipes")}</div>
                       <div className="mt-1 break-words font-display text-lg leading-tight">{data.recentRecipe.title}</div>
                     </div>
                     {data.recentRecipe.match && (
                       <Badge tone={data.recentRecipe.match.coverage >= 0.75 ? "brand" : "warn"} className="shrink-0">
-                        {Math.round(data.recentRecipe.match.coverage * 100)}% in stock
+                        {Math.round(data.recentRecipe.match.coverage * 100)}% {t("in stock")}
                       </Badge>
                     )}
                   </div>
                   {data.recentRecipe.match && data.recentRecipe.match.missing.length > 0 && (
                     <p className="mt-2 text-xs text-muted">
-                      Missing: {data.recentRecipe.match.missing.slice(0, 3).map((m) => m.name).join(", ")}
+                      {t("Missing: {items}", { items: data.recentRecipe.match.missing.slice(0, 3).map((m) => m.name).join(", ") })}
                     </p>
                   )}
                 </button>
                 <div className="mt-3 flex flex-wrap gap-2">
                   <Button size="sm" variant="soft" icon="sparkles" onClick={() => navigate("/ideas")}>
-                    What can I cook?
+                    {t("What can I cook?")}
                   </Button>
                   <Button size="sm" variant="ghost" icon="book" onClick={() => navigate("/recipes/scan")}>
-                    Scan a recipe
+                    {t("Scan a recipe")}
                   </Button>
                 </div>
               </Card>
@@ -319,16 +321,16 @@ export function DashboardPage() {
                     <Icon name="utensils" size={19} />
                   </span>
                   <div className="min-w-0 flex-1">
-                    <div className="text-sm font-medium">No recipes yet</div>
-                    <div className="text-[11px] text-muted">Scan a handwritten recipe and let AI tidy it up.</div>
+                    <div className="text-sm font-medium">{t("No recipes yet")}</div>
+                    <div className="text-[11px] text-muted">{t("Scan a handwritten recipe and let AI tidy it up.")}</div>
                   </div>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2">
                   <Button size="sm" icon="camera" onClick={() => navigate("/recipes/scan")}>
-                    Scan recipe
+                    {t("Scan recipe")}
                   </Button>
                   <Button size="sm" variant="secondary" onClick={() => navigate("/recipes/new")}>
-                    Write one
+                    {t("Write one")}
                   </Button>
                 </div>
               </Card>
@@ -338,14 +340,14 @@ export function DashboardPage() {
           <section>
             <div className="mb-2.5 flex items-center justify-between">
               <h2 className="font-display text-xl">{t("Recent activity")}</h2>
-              <button onClick={() => void load()} className="text-muted transition-colors hover:text-ink" aria-label="Refresh activity">
+              <button onClick={() => void load()} className="text-muted transition-colors hover:text-ink" aria-label={t("Refresh activity")}>
                 <Icon name="refresh" size={15} />
               </button>
             </div>
             {!data ? (
               <Skeleton className="h-32" />
             ) : data.recent.length === 0 ? (
-              <Card className="p-4 text-sm text-muted">Stock changes will show up here.</Card>
+              <Card className="p-4 text-sm text-muted">{t("Stock changes will show up here.")}</Card>
             ) : (
               <Card className="divide-y divide-line">
                 {data.recent.slice(0, 5).map((movement) => (
@@ -361,8 +363,8 @@ export function DashboardPage() {
                 <Icon name="image" size={17} />
               </span>
               <span>
-                <span className="block text-[13px] font-medium">{qty(data?.counts.photos ?? 0)} photos</span>
-                <span className="block text-[11px] text-muted">{qty(data?.counts.unlabeledPhotos ?? 0)} to label</span>
+                <span className="block text-[13px] font-medium">{t("{count} photos", { count: qty(data?.counts.photos ?? 0) })}</span>
+                <span className="block text-[11px] text-muted">{t("{count} to label", { count: qty(data?.counts.unlabeledPhotos ?? 0) })}</span>
               </span>
             </Link>
             <Link to="/recipes" className="flex items-center gap-2.5 rounded-xl border border-line bg-surface px-3 py-3 transition-colors hover:bg-raised">
@@ -370,8 +372,8 @@ export function DashboardPage() {
                 <Icon name="book" size={17} />
               </span>
               <span>
-                <span className="block text-[13px] font-medium">{qty(data?.counts.recipes ?? 0)} recipes</span>
-                <span className="block text-[11px] text-muted">family collection</span>
+                <span className="block text-[13px] font-medium">{t("{count} recipes", { count: qty(data?.counts.recipes ?? 0) })}</span>
+                <span className="block text-[11px] text-muted">{t("family collection")}</span>
               </span>
             </Link>
           </div>
@@ -382,7 +384,7 @@ export function DashboardPage() {
 
       <div className="sm:hidden">
         <Button block icon="plus" onClick={() => navigate("/items/new")}>
-          Add item
+          {t("Add item")}
         </Button>
       </div>
     </div>
@@ -398,6 +400,7 @@ const MOVEMENT_META: Record<Movement["type"], { icon: IconName; label: string; t
 };
 
 function ActivityRow({ movement }: { movement: Movement & { itemName?: string } }) {
+  const { t } = useI18n();
   const meta = MOVEMENT_META[movement.type];
   return (
     <div className="flex items-center gap-3 px-4 py-2.5">
@@ -406,9 +409,9 @@ function ActivityRow({ movement }: { movement: Movement & { itemName?: string } 
       </span>
       <div className="min-w-0 flex-1">
         <div className="truncate text-[13px]">
-          <span className="font-medium">{movement.userName?.split(" ")[0] ?? "Someone"}</span> {meta.label}{" "}
+          <span className="font-medium">{movement.userName?.split(" ")[0] ?? t("Someone")}</span> {t(meta.label)}{" "}
           <span className="font-medium">{qty(Math.abs(movement.delta))} {movement.unit}</span>{" "}
-          {movement.itemName ? <span className="text-muted">of {movement.itemName}</span> : null}
+          {movement.itemName ? <span className="text-muted">{t("of {item}", { item: movement.itemName })}</span> : null}
         </div>
         <div className="text-[11px] text-muted">{relativeTime(movement.createdAt)}</div>
       </div>

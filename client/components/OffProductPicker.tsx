@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "@/api";
 import { Badge, Button, Input, Sheet, Spinner, cn } from "@/components/ui";
 import { Icon } from "@/components/icons";
+import { useI18n } from "@/i18n";
 import type { OffProduct, OffSearchResult } from "@shared/types";
 
 function looksLikeBarcode(value: string): boolean {
@@ -21,6 +22,7 @@ export function OffProductPicker({
   initialQuery?: string;
   title?: string;
 }) {
+  const { t } = useI18n();
   const [query, setQuery] = useState(initialQuery);
   const [products, setProducts] = useState<OffProduct[]>([]);
   const [busy, setBusy] = useState(false);
@@ -43,7 +45,7 @@ export function OffProductPicker({
   const search = async (raw?: string) => {
     const q = (raw ?? query).trim();
     if (q.length < 3) {
-      setWarning("Type at least three characters or a barcode.");
+      setWarning(t("Type at least three characters or a barcode."));
       return;
     }
     setBusy(true);
@@ -64,7 +66,7 @@ export function OffProductPicker({
       setProducts(data.products);
       setWarning(data.warning);
     } catch (err) {
-      setWarning(err instanceof Error ? err.message : "Could not search OpenFoodFacts");
+      setWarning(err instanceof Error ? t(err.message) : t("Could not search OpenFoodFacts"));
       setProducts([]);
     } finally {
       setBusy(false);
@@ -75,8 +77,8 @@ export function OffProductPicker({
     <Sheet
       open={open}
       onClose={onClose}
-      title={title}
-      description="Search by name or paste a barcode. Only empty item fields are filled."
+      title={t(title)}
+      description={t("Search by name or paste a barcode. Only empty item fields are filled.")}
     >
       <form
         className="flex gap-2"
@@ -88,12 +90,12 @@ export function OffProductPicker({
         <Input
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="Product name, brand or barcode"
+          placeholder={t("Product name, brand or barcode")}
           autoComplete="off"
           className="h-10"
         />
         <Button type="submit" variant="secondary" loading={busy} disabled={!query.trim()}>
-          Search
+          {t("Search")}
         </Button>
       </form>
 
@@ -101,12 +103,12 @@ export function OffProductPicker({
 
       {busy && (
         <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted">
-          <Spinner size={16} /> Looking up OpenFoodFacts…
+          <Spinner size={16} /> {t("Looking up OpenFoodFacts…")}
         </div>
       )}
 
       {!busy && searched && products.length === 0 && !warning && (
-        <p className="py-8 text-center text-sm text-muted">No products found. Try a shorter name or the barcode.</p>
+        <p className="py-8 text-center text-sm text-muted">{t("No products found. Try a shorter name or the barcode.")}</p>
       )}
 
       {!busy && products.length > 0 && (
@@ -128,9 +130,9 @@ export function OffProductPicker({
                 )}
               </span>
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-[13px] font-medium">{product.name || "Unnamed product"}</span>
+                <span className="block truncate text-[13px] font-medium">{product.name || t("Unnamed product")}</span>
                 <span className="block truncate text-[11px] text-muted">
-                  {[product.brand, product.quantity].filter(Boolean).join(" · ") || "No brand or size"}
+                  {[product.brand, product.quantity].filter(Boolean).join(" · ") || t("No brand or size")}
                 </span>
                 {product.nutrition?.energyKcal != null && (
                   <span className="block truncate text-[10px] text-muted">
@@ -149,8 +151,7 @@ export function OffProductPicker({
       )}
 
       <p className="mt-4 text-[11px] leading-relaxed text-muted">
-        Results come from OpenFoodFacts and the shared SVault cache. Linking never overwrites values you already set; it
-        only fills blanks such as brand, description, image or category.
+        {t("Results come from OpenFoodFacts and the shared SVault cache. Linking never overwrites values you already set; it only fills blanks such as brand, description, image or category.")}
       </p>
     </Sheet>
   );

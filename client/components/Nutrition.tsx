@@ -1,5 +1,6 @@
 import { Badge, Button, Card, Field, Input, Select } from "@/components/ui";
 import type { NutritionBasis, NutritionFacts, NutritionValues } from "@shared/types";
+import { useI18n } from "@/i18n";
 
 const FIELDS: { key: keyof NutritionValues; label: string; unit: string }[] = [
   { key: "energyKcal", label: "Energy", unit: "kcal" },
@@ -124,6 +125,7 @@ function milligrams(value: number | null | undefined): string {
 }
 
 export function NutritionRows({ values }: { values: NutritionValues }) {
+  const { t } = useI18n();
   const rows = [
     {
       label: "Energy",
@@ -133,12 +135,12 @@ export function NutritionRows({ values }: { values: NutritionValues }) {
     {
       label: "Fat",
       value: grams(values.fat),
-      detail: values.saturatedFat != null ? `saturates ${grams(values.saturatedFat)}` : null,
+      detail: values.saturatedFat != null ? t("saturates {amount}", { amount: grams(values.saturatedFat) }) : null,
     },
     {
       label: "Carbohydrate",
       value: grams(values.carbohydrates),
-      detail: values.sugars != null ? `sugars ${grams(values.sugars)}` : null,
+      detail: values.sugars != null ? t("sugars {amount}", { amount: grams(values.sugars) }) : null,
     },
     {
       label: "Fibre",
@@ -153,14 +155,14 @@ export function NutritionRows({ values }: { values: NutritionValues }) {
     {
       label: "Salt",
       value: grams(values.salt),
-      detail: values.sodium != null ? `sodium ${milligrams(values.sodium)}` : null,
+      detail: values.sodium != null ? t("sodium {amount}", { amount: milligrams(values.sodium) }) : null,
     },
   ];
   return (
     <dl className="divide-y divide-line text-[12px]">
       {rows.map((row) => (
         <div key={row.label} className="flex items-baseline justify-between gap-3 py-1.5">
-          <dt className="text-muted">{row.label}</dt>
+          <dt className="text-muted">{t(row.label)}</dt>
           <dd className="text-right">
             <span className="font-medium">{row.value}</span>
             {row.detail && <span className="ml-1.5 text-[11px] text-muted">{row.detail}</span>}
@@ -178,32 +180,33 @@ export function NutritionFormCard({
   draft: NutritionDraft;
   onChange: (next: NutritionDraft) => void;
 }) {
+  const { t } = useI18n();
   const update = (patch: Partial<NutritionDraft>) => onChange({ ...draft, ...patch, source: "manual" });
   return (
     <Card className="space-y-3 p-4">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h2 className="font-display text-lg">Nutrition</h2>
+          <h2 className="font-display text-lg">{t("Nutrition")}</h2>
           <p className="mt-0.5 text-[11px] text-muted">
-            Values per 100 g or 100 ml. Linked OpenFoodFacts products fill these automatically.
+            {t("Values per 100 g or 100 ml. Linked OpenFoodFacts products fill these automatically.")}
           </p>
         </div>
-        {draft.source === "openfoodfacts" ? <Badge tone="brand">OpenFoodFacts</Badge> : <Badge tone="outline">Manual</Badge>}
+        {draft.source === "openfoodfacts" ? <Badge tone="brand">OpenFoodFacts</Badge> : <Badge tone="outline">{t("Manual")}</Badge>}
       </div>
       <div className="grid grid-cols-2 gap-3">
-        <Field label="Values per">
+        <Field label={t("Values per")}>
           <Select value={draft.basis} onChange={(event) => update({ basis: event.target.value as NutritionBasis })}>
             <option value="100g">100 g</option>
             <option value="100ml">100 ml</option>
           </Select>
         </Field>
-        <Field label="Serving size" hint="optional, e.g. 30 g">
+        <Field label={t("Serving size")} hint={t("optional, e.g. 30 g")}>
           <Input value={draft.servingSize} onChange={(event) => update({ servingSize: event.target.value })} maxLength={60} />
         </Field>
       </div>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         {FIELDS.map((field) => (
-          <Field key={field.key} label={field.label} hint={field.unit}>
+          <Field key={field.key} label={t(field.label)} hint={field.unit}>
             <Input
               type="number"
               min="0"
@@ -216,7 +219,7 @@ export function NutritionFormCard({
           </Field>
         ))}
       </div>
-      <Field label={`Serving weight (${draft.basis === "100ml" ? "ml" : "g"})`} hint="used for count-based ingredients">
+      <Field label={t("Serving weight ({unit})", { unit: draft.basis === "100ml" ? "ml" : "g" })} hint={t("used for count-based ingredients")}>
         <Input
           type="number"
           min="0"
@@ -224,17 +227,16 @@ export function NutritionFormCard({
           inputMode="decimal"
           value={draft.servingQuantity}
           onChange={(event) => update({ servingQuantity: event.target.value })}
-          placeholder={draft.basis === "100ml" ? "e.g. 330" : "e.g. 30"}
+          placeholder={draft.basis === "100ml" ? t("e.g. 330") : t("e.g. 30")}
           className="h-10 text-[13px]"
         />
       </Field>
       <div className="flex items-center justify-between gap-2 border-t border-line pt-3">
         <p className="text-[11px] leading-relaxed text-muted">
-          Leave everything blank if this product has no nutrition label. Recipe estimates use per-portion values and
-          the serving weight when an ingredient is counted in pieces.
+          {t("Leave everything blank if this product has no nutrition label. Recipe estimates use per-portion values and the serving weight when an ingredient is counted in pieces.")}
         </p>
         <Button type="button" size="sm" variant="ghost" onClick={() => onChange(emptyNutritionDraft())}>
-          Clear
+          {t("Clear")}
         </Button>
       </div>
     </Card>

@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { ImageLightbox } from "@/components/ImageLightbox";
 import { cn } from "@/components/ui";
+import { useI18n } from "@/i18n";
 
 /**
  * A photo that opens in the full-size viewer when clicked, the same way
@@ -29,8 +30,9 @@ export function ZoomableImage({
   overlay?: ReactNode;
   loading?: "lazy" | "eager";
 }) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
-  const buttonLabel = label ?? (alt ? `View full-size image: ${alt}` : "View full-size image");
+  const buttonLabel = label ?? (alt ? `${t("View full-size image")}: ${alt}` : t("View full-size image"));
 
   return (
     <>
@@ -39,7 +41,7 @@ export function ZoomableImage({
         <button
           type="button"
           aria-label={buttonLabel}
-          title="View full-size image"
+          title={t("View full-size image")}
           className="absolute inset-0 cursor-zoom-in rounded-[inherit] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-inset"
           onClick={(event) => {
             event.preventDefault();

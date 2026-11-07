@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/api";
 import { useAuth, useHouse } from "@/state";
+import { useI18n } from "@/i18n";
 import { Badge, Button, Card, EmptyState, PageHeader, Skeleton, cn } from "@/components/ui";
 import { Icon, type IconName } from "@/components/icons";
 import { useToast } from "@/components/toast";
@@ -18,6 +19,7 @@ const TYPE_META: Record<Notification["type"], { icon: IconName; tone: string }> 
 
 export function NotificationsPage() {
   const { house } = useHouse();
+  const { t } = useI18n();
   const { refresh, selectHouse } = useAuth();
   const navigate = useNavigate();
   const toast = useToast();
@@ -107,18 +109,18 @@ export function NotificationsPage() {
     <div>
       <PageHeader
         back={() => navigate("/more")}
-        eyebrow={unread ? `${unread} unread` : "All caught up"}
-        title="Reminders"
-        subtitle="Low stock, expiry and house updates across all your houses."
+        eyebrow={unread ? t("{count} unread", { count: unread }) : t("All caught up")}
+        title={t("Reminders")}
+        subtitle={t("Low stock, expiry and house updates across all your houses.")}
         actions={
           <>
             <div className="hidden sm:block">
               <Button variant="secondary" icon="refresh" loading={busy} onClick={() => void scan()}>
-                Check now
+                {t("Check now")}
               </Button>
             </div>
             <Button variant="ghost" onClick={() => void markAll()} disabled={!unread || busy}>
-              Mark read
+              {t("Mark read")}
             </Button>
           </>
         }
@@ -129,21 +131,21 @@ export function NotificationsPage() {
           <Icon name="bell" size={17} />
         </span>
         <div className="min-w-0 flex-1">
-          <div className="text-[13px] font-medium">Browser alerts</div>
+          <div className="text-[13px] font-medium">{t("Browser alerts")}</div>
           <div className="text-[11px] text-muted">
             {permission === "granted"
-              ? "Enabled. Reminders appear as notifications while SVault is open."
+              ? t("Enabled. Reminders appear as notifications while SVault is open.")
               : permission === "denied"
-                ? "Blocked in browser settings. In-app reminders still work."
-                : "Allow notifications to get a nudge when something runs out."}
+                ? t("Blocked in browser settings. In-app reminders still work.")
+                : t("Allow notifications to get a nudge when something runs out.")}
           </div>
         </div>
         {permission !== "granted" && permission !== "denied" && permission !== "unsupported" && (
           <Button size="sm" variant="secondary" onClick={() => void askPermission()}>
-            Enable
+            {t("Enable")}
           </Button>
         )}
-        {permission === "granted" && <Badge tone="brand">on</Badge>}
+        {permission === "granted" && <Badge tone="brand">{t("on")}</Badge>}
       </Card>
 
       {!items ? (
@@ -155,11 +157,11 @@ export function NotificationsPage() {
       ) : items.length === 0 ? (
         <EmptyState
           icon="bell"
-          title="No reminders"
-          body="Set a reorder point on items you never want to run out of, add expiry dates to batches, or wait for a house invitation."
+          title={t("No reminders")}
+          body={t("Set a reorder point on items you never want to run out of, add expiry dates to batches, or wait for a house invitation.")}
           action={
             <Button variant="secondary" onClick={() => void scan()}>
-              Run a check
+              {t("Run a check")}
             </Button>
           }
         />
@@ -181,10 +183,10 @@ export function NotificationsPage() {
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-2">
-                      <span className="truncate text-sm font-medium">{item.title}</span>
+                      <span className="truncate text-sm font-medium">{t(item.title)}</span>
                       {!item.read && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-brand" />}
                     </span>
-                    <span className="mt-0.5 block text-[11px] leading-relaxed text-muted">{item.body}</span>
+                    <span className="mt-0.5 block text-[11px] leading-relaxed text-muted">{t(item.body)}</span>
                     <span className="mt-1 flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-muted">
                       <span>{relativeTime(item.createdAt)}</span>
                       {item.houseName && item.houseId !== house.id && (
@@ -207,7 +209,7 @@ export function NotificationsPage() {
 
       <div className="mt-4 sm:hidden">
         <Button block variant="secondary" icon="refresh" loading={busy} onClick={() => void scan()}>
-          Check now
+          {t("Check now")}
         </Button>
       </div>
     </div>

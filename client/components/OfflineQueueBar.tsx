@@ -3,6 +3,7 @@ import { useAuth } from "@/state";
 import { Badge, Button, Sheet } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { useToast } from "@/components/toast";
+import { useI18n } from "@/i18n";
 import {
   clearQueuedActions,
   listQueuedActions,
@@ -15,6 +16,7 @@ import {
 
 export function OfflineQueueBar() {
   const { user, house } = useAuth();
+  const { t } = useI18n();
   const toast = useToast();
   const [actions, setActions] = useState<QueuedStockAction[]>([]);
   const [online, setOnline] = useState(() => (typeof navigator === "undefined" ? true : navigator.onLine));
@@ -38,15 +40,15 @@ export function OfflineQueueBar() {
       if (result.conflict) {
         setConflict(result.conflict);
       } else if (result.synced > 0) {
-        toast.success(`Synced ${result.synced} queued change${result.synced === 1 ? "" : "s"}`);
+        toast.success(t(result.synced === 1 ? "Synced {count} queued change" : "Synced {count} queued changes", { count: result.synced }));
       }
       await refresh();
     } catch {
-      toast.error("Could not sync the offline queue");
+      toast.error(t("Could not sync the offline queue"));
     } finally {
       setSyncing(false);
     }
-  }, [user, house, syncing, online, toast, refresh]);
+  }, [user, house, syncing, online, toast, refresh, t]);
 
   useEffect(() => {
     void refresh();
@@ -83,7 +85,7 @@ export function OfflineQueueBar() {
   if (!actions.length) {
     return online ? null : (
       <div className="mb-3 flex items-center gap-2 rounded-xl border border-warn/30 bg-warn-soft px-3 py-2 text-[11px] text-warn">
-        <Icon name="wifi" size={13} /> You are offline. Stock changes will be queued.
+        <Icon name="wifi" size={13} /> {t("You are offline. Stock changes will be queued.")}
       </div>
     );
   }
@@ -92,11 +94,11 @@ export function OfflineQueueBar() {
     <>
       <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-warn/30 bg-warn-soft px-3 py-2 text-[11px] text-warn">
         <Icon name="clock" size={13} />
-        <strong>{actions.length} stock change{actions.length === 1 ? "" : "s"} pending sync</strong>
-        {!online && <span>· offline</span>}
+        <strong>{t(actions.length === 1 ? "{count} stock change pending sync" : "{count} stock changes pending sync", { count: actions.length })}</strong>
+        {!online && <span>· {t("offline")}</span>}
         <span className="ml-auto flex items-center gap-1.5">
           <Button size="sm" variant="secondary" onClick={() => void runSync()} loading={syncing} disabled={!online}>
-            Sync now
+            {t("Sync now")}
           </Button>
           <Button
             size="sm"
@@ -107,7 +109,7 @@ export function OfflineQueueBar() {
               await refresh();
             }}
           >
-            Discard
+            {t("Discard")}
           </Button>
         </span>
       </div>
@@ -115,8 +117,8 @@ export function OfflineQueueBar() {
       <Sheet
         open={Boolean(conflict)}
         onClose={() => setConflict(null)}
-        title="Stock count conflict"
-        description="This queued count is older than a change made on the server. Pick how to resolve it."
+        title={t("Stock count conflict")}
+        description={t("This queued count is older than a change made on the server. Pick how to resolve it.")}
         footer={
           <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
             <Button
@@ -128,7 +130,7 @@ export function OfflineQueueBar() {
                 await refresh();
               }}
             >
-              Discard my count
+              {t("Discard my count")}
             </Button>
             <Button
               onClick={async () => {
@@ -143,7 +145,7 @@ export function OfflineQueueBar() {
                 void runSync();
               }}
             >
-              Retry on the new baseline
+              {t("Retry on the new baseline")}
             </Button>
           </div>
         }
@@ -152,21 +154,20 @@ export function OfflineQueueBar() {
           <div className="space-y-2 text-sm">
             <div className="flex items-center gap-2">
               <strong>{conflict.action.itemName}</strong>
-              <Badge tone="warn">conflict</Badge>
+              <Badge tone="warn">{t("conflict")}</Badge>
             </div>
             <div className="grid grid-cols-2 gap-2 text-[12px]">
               <div className="rounded-lg bg-raised px-3 py-2">
-                <div className="text-muted">Queued count</div>
+                <div className="text-muted">{t("Queued count")}</div>
                 <div className="font-medium">{String(conflict.action.body.target ?? conflict.action.body.quantity ?? "—")} {conflict.action.unit}</div>
               </div>
               <div className="rounded-lg bg-raised px-3 py-2">
-                <div className="text-muted">Server now</div>
+                <div className="text-muted">{t("Server now")}</div>
                 <div className="font-medium">{String(conflict.details.currentQuantity ?? "—")} {conflict.action.unit}</div>
               </div>
             </div>
             <p className="text-[11px] text-muted">
-              Retrying keeps your count and uses the server's newer timestamp as the baseline. Discarding keeps the
-              server value.
+              {t("Retrying keeps your count and uses the server's newer timestamp as the baseline. Discarding keeps the server value.")}
             </p>
           </div>
         )}

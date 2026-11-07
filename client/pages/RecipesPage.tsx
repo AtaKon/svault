@@ -2,13 +2,15 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, qs } from "@/api";
 import { useHouse } from "@/state";
+import { useI18n } from "@/i18n";
 import { Badge, Button, Card, EmptyState, Input, PageHeader, Skeleton, Tabs, useDebounced } from "@/components/ui";
 import { Icon } from "@/components/icons";
-import { minutesLabel, plural, qty } from "@/format";
+import { minutesLabel, qty } from "@/format";
 import type { Recipe } from "@shared/types";
 
 export function RecipesPage() {
   const { house } = useHouse();
+  const { t } = useI18n();
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const [recipes, setRecipes] = useState<Recipe[] | null>(null);
@@ -50,18 +52,18 @@ export function RecipesPage() {
   return (
     <div>
       <PageHeader
-        eyebrow={`${qty(recipes?.length ?? 0)} recipes`}
-        title="The kitchen"
-        subtitle="Family recipes, scanned notes, and what you can cook tonight."
+        eyebrow={t("{count} recipes", { count: qty(recipes?.length ?? 0) })}
+        title={t("The kitchen")}
+        subtitle={t("Family recipes, scanned notes, and what you can cook tonight.")}
         actions={
           <>
             <div className="hidden sm:block">
               <Button variant="secondary" icon="camera" onClick={() => navigate("/recipes/scan")}>
-                Scan recipe
+                {t("Scan recipe")}
               </Button>
             </div>
             <Button icon="plus" onClick={() => navigate("/recipes/new")}>
-              New
+              {t("New")}
             </Button>
           </>
         }
@@ -71,17 +73,17 @@ export function RecipesPage() {
         <div className="flex gap-2">
           <div className="relative flex-1">
             <Icon name="search" size={17} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
-            <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search recipes or ingredients" className="pl-9" inputMode="search" />
+          <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t("Search recipes or ingredients")} className="pl-9" inputMode="search" />
           </div>
           <Button variant="secondary" icon="sparkles" onClick={() => navigate("/ideas")} className="shrink-0">
-            Ideas
+            {t("Ideas")}
           </Button>
         </div>
         <div className="flex items-center gap-2">
           <Tabs
             items={[
-              { value: "", label: "All" },
-              { value: "favorite", label: "Favourites" },
+              { value: "", label: t("All") },
+              { value: "favorite", label: t("Favourites") },
               ...tags.map((entry) => ({ value: `tag:${entry}`, label: entry })),
             ]}
             value={favorite ? "favorite" : tag ? `tag:${tag}` : ""}
@@ -111,15 +113,15 @@ export function RecipesPage() {
       ) : recipes.length === 0 ? (
         <EmptyState
           icon="utensils"
-          title="No recipes here yet"
-          body="Scan a handwritten recipe from a notebook, or write one down. Any ingredients you already own are marked automatically."
+          title={t("No recipes here yet")}
+          body={t("Scan a handwritten recipe from a notebook, or write one down. Any ingredients you already own are marked automatically.")}
           action={
             <div className="flex gap-2">
               <Button icon="camera" onClick={() => navigate("/recipes/scan")}>
-                Scan a recipe
+                {t("Scan a recipe")}
               </Button>
               <Button variant="secondary" onClick={() => navigate("/recipes/new")}>
-                Write one
+                {t("Write one")}
               </Button>
             </div>
           }
@@ -135,11 +137,11 @@ export function RecipesPage() {
                     <div className="min-w-0">
                       <div className="font-display text-lg leading-tight">{recipe.title}</div>
                       <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
-                        {recipe.servings ? <span>{plural(recipe.servings, "serving")}</span> : null}
+                        {recipe.servings ? <span>{t(recipe.servings === 1 ? "{count} serving" : "{count} servings", { count: recipe.servings })}</span> : null}
                         {recipe.prepMinutes || recipe.cookMinutes ? (
                           <span>· {minutesLabel((recipe.prepMinutes ?? 0) + (recipe.cookMinutes ?? 0))}</span>
                         ) : null}
-                        <span>· {plural(recipe.steps.length, "step")}</span>
+                        <span>· {t(recipe.steps.length === 1 ? "{count} step" : "{count} steps", { count: recipe.steps.length })}</span>
                       </div>
                     </div>
                     {recipe.favorite && <Icon name="heart" size={16} fill="currentColor" className="shrink-0 text-brand" />}
@@ -150,15 +152,15 @@ export function RecipesPage() {
                   <div className="mt-3 flex flex-wrap gap-1.5">
                     {recipe.match && (
                       <Badge tone={coverage >= 0.75 ? "brand" : coverage >= 0.4 ? "warn" : "neutral"}>
-                        {Math.round(coverage * 100)}% in stock
+                        {Math.round(coverage * 100)}% {t("in stock")}
                       </Badge>
                     )}
                     {(recipe.match?.missing.length ?? 0) > 0 && (
-                      <Badge tone="outline">{recipe.match!.missing.length} missing</Badge>
+                      <Badge tone="outline">{t("{count} missing", { count: recipe.match!.missing.length })}</Badge>
                     )}
                     {recipe.nutrition?.perServing?.energyKcal != null && (
                       <Badge tone="outline">
-                        ~{Math.round(recipe.nutrition.perServing.energyKcal)} kcal / portion
+                        ~{Math.round(recipe.nutrition.perServing.energyKcal)} kcal / {t("portion")}
                       </Badge>
                     )}
                     {recipe.tags.slice(0, 2).map((entry) => (
@@ -180,8 +182,8 @@ export function RecipesPage() {
             <Icon name="camera" size={17} />
           </span>
           <span>
-            <span className="block text-[13px] font-medium">Scan grandma's recipe</span>
-            <span className="block text-[11px] text-muted">Photo or note → clean steps</span>
+            <span className="block text-[13px] font-medium">{t("Scan grandma's recipe")}</span>
+            <span className="block text-[11px] text-muted">{t("Photo or note → clean steps")}</span>
           </span>
         </button>
         <button onClick={() => navigate("/ideas")} className="flex items-center gap-3 rounded-xl border border-line bg-surface px-3 py-3 text-left transition-colors hover:bg-raised sm:hidden">
@@ -189,8 +191,8 @@ export function RecipesPage() {
             <Icon name="sparkles" size={17} />
           </span>
           <span>
-            <span className="block text-[13px] font-medium">What can I cook?</span>
-            <span className="block text-[11px] text-muted">Ideas from what is in stock</span>
+            <span className="block text-[13px] font-medium">{t("What can I cook?")}</span>
+            <span className="block text-[11px] text-muted">{t("Ideas from what is in stock")}</span>
           </span>
         </button>
       </div>

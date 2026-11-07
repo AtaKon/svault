@@ -3,19 +3,20 @@ import { BrowserMultiFormatReader, type IScannerControls } from "@zxing/browser"
 import { BarcodeFormat } from "@zxing/library";
 import { Button, Spinner, cn } from "@/components/ui";
 import { Icon } from "@/components/icons";
+import { useI18n } from "@/i18n";
 
-function friendlyCameraError(error: unknown): string {
+function friendlyCameraError(error: unknown, t: (key: string) => string): string {
   const name = (error as { name?: string } | null)?.name ?? "";
   if (name === "NotAllowedError" || name === "SecurityError") {
-    return "Camera access was blocked. Allow the camera in your browser settings, or type the barcode below.";
+    return t("Camera access was blocked. Allow the camera in your browser settings, or type the barcode below.");
   }
   if (name === "NotFoundError" || name === "OverconstrainedError") {
-    return "No camera found on this device. You can still type the barcode below.";
+    return t("No camera found on this device. You can still type the barcode below.");
   }
   if (name === "NotReadableError") {
-    return "The camera is busy in another app. Close it and try again, or type the barcode below.";
+    return t("The camera is busy in another app. Close it and try again, or type the barcode below.");
   }
-  return "Could not start the camera. Type the barcode below instead.";
+  return t("Could not start the camera. Type the barcode below instead.");
 }
 
 export function BarcodeScanner({
@@ -25,6 +26,7 @@ export function BarcodeScanner({
   onDetected: (code: string, format?: string) => void;
   className?: string;
 }) {
+  const { t } = useI18n();
   const videoRef = useRef<HTMLVideoElement>(null);
   const controlsRef = useRef<IScannerControls | null>(null);
   const callbackRef = useRef(onDetected);
@@ -69,7 +71,7 @@ export function BarcodeScanner({
       .catch((err: unknown) => {
         if (cancelled) return;
         setStarting(false);
-        setError(friendlyCameraError(err));
+        setError(friendlyCameraError(err, t));
       });
 
     return () => {
@@ -81,7 +83,7 @@ export function BarcodeScanner({
         element.srcObject = null;
       }
     };
-  }, [facingMode, attempt]);
+  }, [facingMode, attempt, t]);
 
   return (
     <div className={cn("overflow-hidden rounded-3xl border border-line bg-black shadow-soft", className)}>
@@ -95,14 +97,14 @@ export function BarcodeScanner({
                 <p className="max-w-xs text-xs leading-relaxed">{error}</p>
                 <div className="flex gap-2">
                   <Button size="sm" variant="secondary" icon="refresh" onClick={() => setAttempt((n) => n + 1)}>
-                    Retry
+                    {t("Retry")}
                   </Button>
                 </div>
               </>
             ) : (
               <>
                 <Spinner size={24} />
-                <p className="text-xs">Starting camera…</p>
+                <p className="text-xs">{t("Starting camera…")}</p>
               </>
             )}
           </div>
@@ -121,7 +123,7 @@ export function BarcodeScanner({
             ))}
             <div className="absolute left-[12%] right-[12%] top-1/2 h-px bg-brand/70 shadow-[0_0_12px_2px_rgba(79,191,148,0.6)]" />
             <div className="absolute inset-x-0 bottom-3 text-center text-[11px] font-medium text-white/70">
-              Point the camera at a barcode
+              {t("Point the camera at a barcode")}
             </div>
           </div>
         )}
@@ -132,7 +134,7 @@ export function BarcodeScanner({
           className="absolute right-3 top-3 flex h-9 items-center gap-1.5 rounded-full bg-black/50 px-3 text-[11px] font-medium text-white/90 backdrop-blur transition-colors hover:bg-black/65"
         >
           <Icon name="refresh" size={13} />
-          Flip
+          {t("Flip")}
         </button>
       </div>
     </div>
