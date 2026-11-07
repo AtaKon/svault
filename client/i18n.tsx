@@ -174,8 +174,8 @@ const EL: Record<string, string> = {
   "Toggle theme": "Εναλλαγή θέματος",
   "Home inventory": "Οικιακό απόθεμα",
   "Admin console": "Κονσόλα διαχείρισης",
-  "instance": "διακομιστής",
-  "ready": "έτοιμο",
+  "instance": "σύστημα",
+  "ready": "Έτοιμο",
   "Switch to light mode": "Μετάβαση σε φωτεινή λειτουργία",
   "Switch to dark mode": "Μετάβαση σε σκοτεινή λειτουργία",
   "Self-hosted · your data stays on your machine": "Αυτοφιλοξενούμενο · τα δεδομένα σου μένουν στη συσκευή σου",
@@ -184,8 +184,8 @@ const EL: Record<string, string> = {
   "Use your browser menu and choose “Install app” or “Add to Home Screen”.": "Άνοιξε το μενού του προγράμματος περιήγησης και επίλεξε «Εγκατάσταση εφαρμογής» ή «Προσθήκη στην αρχική οθόνη».",
   "SVault installed": "Το SVault εγκαταστάθηκε",
   "this house": "αυτό το σπίτι",
-  "house": "σπίτι",
-  "houses": "σπίτια",
+  "{count} house": "{count} σπίτι",
+  "{count} houses": "{count} σπίτια",
 };
 
 interface I18nValue {

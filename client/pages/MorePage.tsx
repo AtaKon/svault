@@ -52,7 +52,11 @@ export function MorePage() {
 
   return (
     <div className="space-y-4">
-      <PageHeader eyebrow={t("Everything else")} title={t("More")} subtitle={`${house?.name ?? t("this house")} · ${houses.length} ${t(houses.length === 1 ? "house" : "houses")}`} />
+      <PageHeader
+        eyebrow={t("Everything else")}
+        title={t("More")}
+        subtitle={`${house?.name ?? t("this house")} · ${t(houses.length === 1 ? "{count} house" : "{count} houses", { count: houses.length })}`}
+      />
 
       <Card className="flex items-center gap-3 p-4">
         <Avatar name={user?.name ?? "?"} size={46} />
