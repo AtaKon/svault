@@ -319,7 +319,7 @@ export async function priceAlerts(houseId: string, thresholdPercent?: number): P
     const average = history.reduce((sum, value) => sum + value, 0) / history.length;
     if (average <= 0) continue;
     const percent = Math.round(((latest.price - average) / average) * 1000) / 10;
-    if (percent < threshold) continue;
+    if (percent <= threshold) continue;
     alerts.push({
       itemId: latest.itemId,
       itemName: latest.itemName,

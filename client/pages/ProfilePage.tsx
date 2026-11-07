@@ -470,7 +470,7 @@ function ApiTokensCard() {
       setTokens(data.tokens);
       setLoadError(false);
     } catch {
-      setTokens([]);
+      // Keep whatever list we already had; only flag that it is stale.
       setLoadError(true);
     }
   };

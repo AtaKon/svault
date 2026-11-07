@@ -4365,7 +4365,21 @@ describe("insights, household split and admin console", () => {
     // The import that introduced the price already created the reminder.
     assert.ok(scanned.data.created === 0 || scanned.data.created === 1);
     const reminders = await request(`/api/houses/${insightHouse}/notifications`);
-    assert.ok(reminders.data.notifications.some((entry: any) => entry.type === "price_alert"));
+    const priceReminders = reminders.data.notifications.filter((entry: any) => entry.type === "price_alert");
+    assert.equal(priceReminders.length, 1, "one reminder per item and month");
+
+    // A purchase exactly at the threshold is not "above" it.
+    const stricter = await request(`/api/houses/${insightHouse}/insights/settings`, {
+      method: "PATCH",
+      body: { priceAlertPercent: 50 },
+    });
+    assert.equal(stricter.status, 200);
+    const none = await request(`/api/houses/${insightHouse}/insights/price-alerts`);
+    assert.ok(!none.data.alerts.some((alert: any) => alert.itemId === milkId));
+    await request(`/api/houses/${insightHouse}/insights/settings`, {
+      method: "PATCH",
+      body: { priceAlertPercent: 20 },
+    });
   });
 
   it("suggests recipes and items to use up before they expire", async () => {
@@ -4472,7 +4486,8 @@ describe("insights, household split and admin console", () => {
       body: { paidBy: null },
     });
     assert.equal(unassigned.status, 200);
-    assert.equal(unassigned.data.paidBy, null);
+    // Clearing the payer stores the receipt creator, never null.
+    assert.equal(unassigned.data.paidBy, first.userId);
   });
 
   it("settles a three-person house with the smallest set of transfers", async () => {

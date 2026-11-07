@@ -28,7 +28,6 @@ All notable changes to SVault are documented here. The format follows
   shown once, stored hashed, limited to GET requests, and can be revoked at any time.
 - Waste movements now keep the weighted price of the batches they came from, so waste analytics can
   report its cost.
-
 - A detailed AI call log now records every request sent to the configured provider: receipt scans,
   bulk intake, recipe scans, recipe completion, food ideas and connection tests. Each entry keeps the
   operation, house, user, model, provider host, HTTP status, retry count, duration, token counts, cost,

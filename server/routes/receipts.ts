@@ -1196,7 +1196,12 @@ singleReceiptRoutes.patch(
     if (body.splitWith?.some((id) => !memberIds.includes(id))) {
       throw new ApiError(400, "Everyone sharing the cost must be in this house");
     }
-    const paidBy = body.paidBy === undefined ? receipt.paid_by ?? receipt.created_by ?? null : body.paidBy;
+    // Clearing the payer stores the receipt's creator explicitly, so the
+    // household maths always has a real payer.
+    const paidBy =
+      body.paidBy === undefined
+        ? receipt.paid_by ?? receipt.created_by ?? null
+        : body.paidBy ?? receipt.created_by ?? null;
     const splitWith = body.splitWith === undefined ? parseJson<string[]>(receipt.split_with, []) : body.splitWith;
     await run("UPDATE receipts SET paid_by = ?, split_with = ? WHERE id = ?", [
       paidBy,
