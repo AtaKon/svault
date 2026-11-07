@@ -176,6 +176,9 @@ export function AdminPage() {
   };
 
   const sweepFiles = async () => {
+    if ((files?.count ?? 0) > 0 && !window.confirm(`Remove ${files?.count} orphaned file${files?.count === 1 ? "" : "s"}? This cannot be undone.`)) {
+      return;
+    }
     setBusy(true);
     try {
       const result = await api<{ removed: number }>("/api/admin/files/sweep", { method: "POST", body: {} });
