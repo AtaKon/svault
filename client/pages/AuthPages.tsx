@@ -39,14 +39,14 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
   const [registration, setRegistration] = useState<{ mode: "open" | "invite" | "closed" } | null>(null);
 
   useEffect(() => {
-    if (oidcError) setError(oidcError);
+    if (oidcError) setError(t(oidcError));
     void api<{ enabled: boolean; label: string }>("/api/auth/oidc/status")
       .then(setOidc)
       .catch(() => undefined);
     void api<{ mode: "open" | "invite" | "closed" }>("/api/auth/registration")
       .then(setRegistration)
       .catch(() => undefined);
-  }, [oidcError]);
+  }, [oidcError, t]);
 
   // Without an invite, sign-up is only possible when the server is open.
   const signupBlocked = Boolean(
@@ -81,14 +81,14 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
       });
       if ("twoFactorRequired" in data && data.twoFactorRequired) {
         setChallenge(data.challenge);
-        toast.push("Enter your authenticator code");
+        toast.push(t("Enter your authenticator code"));
         return;
       }
       const session = data as { user: User; houses: House[] };
       await finishLogin(session);
-      toast.success(mode === "login" ? `Welcome back, ${session.user.name.split(" ")[0]}` : "Your vault is ready");
+      toast.success(mode === "login" ? t("Welcome back, {name}", { name: session.user.name.split(" ")[0] }) : t("Your vault is ready"));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong");
+      setError(err instanceof Error ? t(err.message) : t("Something went wrong"));
     } finally {
       setBusy(false);
     }
@@ -105,9 +105,9 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
         body: { challenge, code },
       });
       await finishLogin(data);
-      toast.success("Signed in");
+      toast.success(t("Signed in"));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "That code is not valid");
+      setError(err instanceof Error ? t(err.message) : t("That code is not valid"));
     } finally {
       setBusy(false);
     }
@@ -122,7 +122,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
         { method: "POST", body: { identifier: email.trim() || undefined } },
       );
       if (!options.options?.allowCredentials?.length && !options.discoverable) {
-        throw new Error("No passkey is registered for this account");
+        throw new Error(t("No passkey is registered for this account"));
       }
       const response = await startAuthentication({ optionsJSON: options.options });
       const data = await api<{ user: User; houses: House[] }>("/api/auth/passkeys/login/verify", {
@@ -131,7 +131,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
       });
       await finishLogin(data);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : "Passkey sign-in failed");
+      setError(err instanceof ApiError ? t(err.message) : err instanceof Error ? t(err.message) : t("Passkey sign-in failed"));
     } finally {
       setPasskeyBusy(false);
     }
@@ -149,32 +149,27 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
           <LogoMark size={40} />
           <div>
             <div className="font-display text-2xl leading-none">SVault</div>
-            <div className="text-[10px] uppercase tracking-[0.22em] opacity-70">Home inventory</div>
+            <div className="text-[10px] uppercase tracking-[0.22em] opacity-70">{t("Home inventory")}</div>
           </div>
         </div>
         <div className="relative mt-auto max-w-md">
           <h1 className="font-display text-[42px] leading-[1.05]">
-            Everything you own,
-            <br />
-            in every house, in
-            <br />
-            one quiet place.
+            {t("Everything you own, in every house, in one quiet place.")}
           </h1>
           <p className="mt-4 max-w-sm text-sm leading-relaxed opacity-80">
-            Track stock, prices and expiry. Digitise your grandma's recipes. Build a labelled photo library
-            while you are at it.
+            {t("Track stock, prices and expiry. Digitise your grandma's recipes. Build a labelled photo library while you are at it.")}
           </p>
           <div className="mt-8 grid gap-3 sm:grid-cols-2">
             {FEATURES.map((feature) => (
               <div key={feature.title} className="rounded-2xl border border-white/15 bg-white/5 p-3 backdrop-blur">
                 <Icon name={feature.icon === "chef" ? "utensils" : feature.icon} size={17} className="opacity-90" />
-                <div className="mt-2 text-[13px] font-semibold">{feature.title}</div>
-                <div className="mt-0.5 text-[11px] leading-snug opacity-70">{feature.body}</div>
+                <div className="mt-2 text-[13px] font-semibold">{t(feature.title)}</div>
+                <div className="mt-0.5 text-[11px] leading-snug opacity-70">{t(feature.body)}</div>
               </div>
             ))}
           </div>
         </div>
-        <div className="relative mt-10 text-[11px] opacity-60">Self-hosted · Docker ready · Your data stays home</div>
+        <div className="relative mt-10 text-[11px] opacity-60">{t("Self-hosted · Docker ready · Your data stays home")}</div>
       </div>
 
       <div className="flex min-h-dvh flex-col justify-center px-5 py-10 sm:px-10 lg:px-16">
@@ -183,21 +178,21 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
             <LogoMark size={36} />
             <div>
               <div className="font-display text-xl leading-none">SVault</div>
-              <div className="text-[10px] uppercase tracking-[0.18em] text-muted">Home inventory</div>
+              <div className="text-[10px] uppercase tracking-[0.18em] text-muted">{t("Home inventory")}</div>
             </div>
           </div>
 
           <h2 className="font-display text-[30px] leading-tight">
-            {mode === "login" ? "Welcome back" : "Create your vault"}
+            {mode === "login" ? t("Welcome back") : t("Create your vault")}
           </h2>
           <p className="mt-1.5 text-sm text-muted">
-            {mode === "login" ? "Sign in to see what is in the house." : "One account, as many houses as you like."}
+            {mode === "login" ? t("Sign in to see what is in the house.") : t("One account, as many houses as you like.")}
           </p>
 
           {invite && (
             <div className="mt-4 flex items-center gap-2 rounded-xl border border-brand/30 bg-brand-soft px-3 py-2.5 text-xs text-brand">
               <Icon name="users" size={15} />
-              You have an invite — creating an account joins that house automatically.
+              {t("You have an invite — creating an account joins that house automatically.")}
             </div>
           )}
 
@@ -206,10 +201,10 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
               <div className="rounded-xl border border-brand/30 bg-brand-soft px-3 py-2.5 text-xs text-brand">
                 <div className="font-semibold">{t("Two-factor authentication")}</div>
                 <div className="mt-0.5 opacity-80">
-                  {backupCode ? "Enter one of your backup codes." : "Enter the 6-digit code from your authenticator app."}
+                  {backupCode ? t("Enter one of your backup codes.") : t("Enter the 6-digit code from your authenticator app.")}
                 </div>
               </div>
-              <Field label={backupCode ? "Backup code" : t("Authentication code")} required>
+              <Field label={backupCode ? t("Backup code") : t("Authentication code")} required>
                 <Input
                   autoFocus
                   value={code}
@@ -232,7 +227,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
                   setCode("");
                 }}
               >
-                {backupCode ? "Use the authenticator code" : t("Use a backup code")}
+                {backupCode ? t("Use the authenticator code") : t("Use a backup code")}
               </button>
               <button
                 type="button"
@@ -243,7 +238,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
                   setBackupCode(false);
                 }}
               >
-                Back to password
+                {t("Back to password")}
               </button>
             </form>
           ) : (
@@ -253,15 +248,15 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
                   <Icon name="key" size={16} className="mt-0.5 shrink-0" />
                   <span>
                     {registration?.mode === "closed"
-                      ? "Registration is closed on this server. Ask the administrator for an account."
-                      : "Registration on this server needs an invite link. Ask a house admin to invite you, then open the link they send."}
+                      ? t("Registration is closed on this server. Ask the administrator for an account.")
+                      : t("Registration on this server needs an invite link. Ask a house admin to invite you, then open the link they send.")}
                   </span>
                 </div>
               ) : (
               <form onSubmit={submit} className="mt-6 space-y-3.5">
                 {mode === "register" && (
-                  <Field label="Your name" required>
-                    <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Alex" autoComplete="name" required maxLength={80} />
+                  <Field label={t("Your name")} required>
+                    <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={"Alex"} autoComplete="name" required maxLength={80} />
                   </Field>
                 )}
                 <Field label={mode === "login" ? t("Email or username") : t("Email")} required>
@@ -269,18 +264,18 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
                     type={mode === "login" ? "text" : "email"}
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    placeholder={mode === "login" ? "you@example.com or your username" : "you@example.com"}
+                    placeholder={mode === "login" ? t("you@example.com or your username") : "you@example.com"}
                     autoComplete={mode === "login" ? "username" : "email"}
                     required
                     inputMode={mode === "login" ? "text" : "email"}
                   />
                 </Field>
                 {mode === "register" && (
-                  <Field label="Username" hint="optional — you can sign in with it instead of your email">
+                  <Field label={t("Username")} hint={t("optional — you can sign in with it instead of your email")}>
                     <Input
                       value={username}
                       onChange={(e) => setUsername(e.target.value)}
-                      placeholder="alex"
+                      placeholder={"alex"}
                       autoComplete="username"
                       minLength={3}
                       maxLength={32}
@@ -288,7 +283,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
                     />
                   </Field>
                 )}
-                <Field label={t("Password")} hint={mode === "register" ? "at least 8 characters" : undefined} required>
+                <Field label={t("Password")} hint={mode === "register" ? t("at least 8 characters") : undefined} required>
                   <Input
                     type="password"
                     value={password}
@@ -330,17 +325,17 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
             {mode === "login" ? (
               signupBlocked ? null : (
                 <>
-                  New here?{" "}
+                  {t("New here?")}{" "}
                   <Link className="font-medium text-brand hover:underline" to={`/register${invite ? `?invite=${invite}` : ""}`}>
-                    Create an account
+                    {t("Create an account")}
                   </Link>
                 </>
               )
             ) : (
               <>
-                Already have one?{" "}
+                {t("Already have one?")}{" "}
                 <Link className="font-medium text-brand hover:underline" to={`/login${invite ? `?invite=${invite}` : ""}`}>
-                  Sign in
+                  {t("Sign in")}
                 </Link>
               </>
             )}
@@ -348,7 +343,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
 
           <div className="mt-10 flex items-center justify-center gap-1.5 text-[11px] text-muted">
             <Icon name="wifi" size={13} />
-            Works offline once installed
+            {t("Works offline once installed")}
           </div>
         </div>
       </div>
@@ -357,6 +352,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
 }
 
 export function JoinPage() {
+  const { t } = useI18n();
   const { code = "" } = useParams();
   const { user, setSession, refresh } = useAuth();
   const navigate = useNavigate();
@@ -368,7 +364,7 @@ export function JoinPage() {
   useEffect(() => {
     api<any>(`/api/auth/invites/${encodeURIComponent(code)}`)
       .then(setInfo)
-      .catch((err) => setError(err instanceof Error ? err.message : "Invite not found"));
+      .catch((err) => setError(err instanceof Error ? t(err.message) : t("Invite not found")));
   }, [code]);
 
   const accept = async () => {
@@ -379,10 +375,10 @@ export function JoinPage() {
       });
       setSession(data);
       await refresh();
-      toast.success(`Joined ${info?.houseName ?? "the house"}`);
+      toast.success(t("Joined {house}", { house: info?.houseName ?? t("the house") }));
       navigate("/", { replace: true });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not join");
+      setError(err instanceof Error ? t(err.message) : t("Could not join"));
     } finally {
       setBusy(false);
     }
@@ -397,10 +393,10 @@ export function JoinPage() {
         </div>
         {error ? (
           <div className="mt-6">
-            <div className="font-display text-xl">Invite unavailable</div>
+            <div className="font-display text-xl">{t("Invite unavailable")}</div>
             <p className="mt-1 text-sm text-muted">{error}</p>
             <Link to="/" className="mt-4 inline-block text-sm font-medium text-brand hover:underline">
-              Back to your vault
+              {t("Back to your vault")}
             </Link>
           </div>
         ) : !info ? (
@@ -410,24 +406,26 @@ export function JoinPage() {
           </div>
         ) : (
           <div className="mt-6">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">House invitation</div>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">{t("House invitation")}</div>
             <div className="mt-1 font-display text-2xl leading-tight">{info.houseName}</div>
             <p className="mt-2 text-sm text-muted">
-              {info.inviterName ? `${info.inviterName} invited you` : "You have been invited"} as a {info.role} ·{" "}
-              {info.memberCount} member{info.memberCount === 1 ? "" : "s"} already inside.
+              {info.inviterName
+                ? t("{name} invited you", { name: info.inviterName })
+                : t("You have been invited")} {t("with the role {role}", { role: t(info.role) })} ·{" "}
+              {t("{count} members already inside.", { count: info.memberCount })}
             </p>
             <div className="mt-5 space-y-2">
               {user ? (
                 <Button block onClick={accept} loading={busy}>
-                  Join {info.houseName}
+                  {t("Join {house}", { house: info.houseName })}
                 </Button>
               ) : (
                 <>
                   <Button block onClick={() => navigate(`/register?invite=${encodeURIComponent(code)}`)}>
-                    Create an account to join
+                    {t("Create an account to join")}
                   </Button>
                   <Button variant="secondary" block onClick={() => navigate(`/login?invite=${encodeURIComponent(code)}`)}>
-                    I already have an account
+                    {t("I already have an account")}
                   </Button>
                 </>
               )}
@@ -440,9 +438,10 @@ export function JoinPage() {
 }
 
 export function NoHousePage() {
+  const { t } = useI18n();
   const { refresh } = useAuth();
   const toast = useToast();
-  const [name, setName] = useState("My home");
+  const [name, setName] = useState(() => t("My home"));
   const [busy, setBusy] = useState(false);
 
   const submit = async (event: FormEvent) => {
@@ -451,9 +450,9 @@ export function NoHousePage() {
     try {
       await api("/api/houses", { method: "POST", body: { name } });
       await refresh();
-      toast.success("House created");
+      toast.success(t("House created"));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not create the house");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not create the house"));
     } finally {
       setBusy(false);
     }
@@ -463,14 +462,14 @@ export function NoHousePage() {
     <div className="flex min-h-dvh items-center justify-center px-4">
       <Card className="w-full max-w-sm p-6">
         <LogoMark size={38} />
-        <h1 className="mt-4 font-display text-2xl">Create your first house</h1>
-        <p className="mt-1 text-sm text-muted">Stock, recipes and photos are grouped by house.</p>
+        <h1 className="mt-4 font-display text-2xl">{t("Create your first house")}</h1>
+        <p className="mt-1 text-sm text-muted">{t("Stock, recipes and photos are grouped by house.")}</p>
         <form onSubmit={submit} className="mt-4 space-y-3">
-          <Field label="House name" required>
+          <Field label={t("House name")} required>
             <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={80} autoFocus />
           </Field>
           <Button type="submit" block loading={busy} disabled={!name.trim()}>
-            Create house
+            {t("Create house")}
           </Button>
         </form>
       </Card>

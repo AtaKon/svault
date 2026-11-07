@@ -10,6 +10,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { Icon, type IconName } from "./icons";
+import { useI18n } from "@/i18n";
 
 export function cn(...parts: (string | false | null | undefined)[]) {
   return parts.filter(Boolean).join(" ");
@@ -100,13 +101,14 @@ export function IconButton({
 }
 
 export function Spinner({ size = 18, className }: { size?: number; className?: string }) {
+  const { t } = useI18n();
   return (
     <svg
       width={size}
       height={size}
       viewBox="0 0 24 24"
       className={cn("animate-spin", className)}
-      aria-label="Loading"
+      aria-label={t("Loading")}
       role="status"
     >
       <circle cx="12" cy="12" r="9" stroke="currentColor" strokeOpacity="0.2" strokeWidth="3" fill="none" />
@@ -297,13 +299,14 @@ export function PageHeader({
   back?: () => void;
   eyebrow?: ReactNode;
 }) {
+  const { t } = useI18n();
   return (
     <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
       <div className="flex min-w-0 items-start gap-3">
         {back && (
           <button
             onClick={back}
-            aria-label="Go back"
+            aria-label={t("Go back")}
             className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-line bg-surface text-muted transition-colors hover:text-ink"
           >
             <Icon name="arrowLeft" size={17} />
@@ -413,6 +416,7 @@ export function Sheet({
   footer?: ReactNode;
   wide?: boolean;
 }) {
+  const { t } = useI18n();
   useEffect(() => {
     if (!open) return;
     const onKey = (event: KeyboardEvent) => {
@@ -445,7 +449,7 @@ export function Sheet({
               {title && <div className="font-display text-xl leading-tight">{title}</div>}
               {description && <div className="mt-0.5 text-xs text-muted">{description}</div>}
             </div>
-            <IconButton icon="close" label="Close" onClick={onClose} className="-mr-1.5 -mt-0.5" />
+            <IconButton icon="close" label={t("Close")} onClick={onClose} className="-mr-1.5 -mt-0.5" />
           </div>
         )}
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">{children}</div>
@@ -475,6 +479,7 @@ export function ConfirmDialog({
   danger?: boolean;
   loading?: boolean;
 }) {
+  const { t } = useI18n();
   return (
     <Sheet
       open={open}
@@ -483,8 +488,7 @@ export function ConfirmDialog({
       footer={
         <div className="flex justify-end gap-2">
           <Button variant="secondary" onClick={onClose} disabled={loading}>
-            Cancel
-          </Button>
+            {t("Cancel ")}</Button>
           <Button variant={danger ? "danger" : "primary"} onClick={onConfirm} loading={loading}>
             {confirmLabel}
           </Button>

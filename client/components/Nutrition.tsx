@@ -191,13 +191,13 @@ export function NutritionFormCard({
             {t("Values per 100 g or 100 ml. Linked OpenFoodFacts products fill these automatically.")}
           </p>
         </div>
-        {draft.source === "openfoodfacts" ? <Badge tone="brand">OpenFoodFacts</Badge> : <Badge tone="outline">{t("Manual")}</Badge>}
+        {draft.source === "openfoodfacts" ? <Badge tone="brand">{t("OpenFoodFacts")}</Badge> : <Badge tone="outline">{t("Manual")}</Badge>}
       </div>
       <div className="grid grid-cols-2 gap-3">
         <Field label={t("Values per")}>
           <Select value={draft.basis} onChange={(event) => update({ basis: event.target.value as NutritionBasis })}>
             <option value="100g">100 g</option>
-            <option value="100ml">100 ml</option>
+            <option value="100ml">{"100 ml"}</option>
           </Select>
         </Field>
         <Field label={t("Serving size")} hint={t("optional, e.g. 30 g")}>

@@ -64,7 +64,7 @@ export function InventoryPage() {
       setTotal(data.total);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("Could not load items"));
+      setError(err instanceof Error ? t(err.message) : t("Could not load items"));
     }
   }, [house.id, query, categoryId, locationId, low, expiring, sort, t]);
 
@@ -96,7 +96,7 @@ export function InventoryPage() {
         : t("Nothing new to add"));
       if (count) navigate("/shopping");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : t("Could not add low-stock items"));
+      toast.error(err instanceof Error ? t(err.message) : t("Could not add low-stock items"));
     }
   };
 

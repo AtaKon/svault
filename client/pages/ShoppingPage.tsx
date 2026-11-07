@@ -335,7 +335,7 @@ function AddLineSheet({
             <Input value={quantity} onChange={(event) => setQuantity(event.target.value)} inputMode="decimal" />
           </Field>
           <Field label={t("Unit")}>
-            <Input value={unit} onChange={(event) => setUnit(event.target.value)} placeholder="pcs" maxLength={10} />
+            <Input value={unit} onChange={(event) => setUnit(event.target.value)} placeholder={t("pcs")} maxLength={10} />
           </Field>
         </div>
         <Field label={t("Note")}>
@@ -441,7 +441,7 @@ function CheckSheet({
             <Input value={quantity} onChange={(event) => setQuantity(event.target.value)} inputMode="decimal" />
           </Field>
           <Field label={t("Unit")}>
-            <Input value={unit} onChange={(event) => setUnit(event.target.value)} placeholder={item?.unit ?? "pcs"} maxLength={10} />
+            <Input value={unit} onChange={(event) => setUnit(event.target.value)} placeholder={item?.unit ?? t("pcs")} maxLength={10} />
           </Field>
         </div>
         <div className="grid grid-cols-2 gap-3">

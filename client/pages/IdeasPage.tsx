@@ -7,6 +7,7 @@ import { Icon } from "@/components/icons";
 import { useToast } from "@/components/toast";
 import { minutesLabel, plural, relativeTime } from "@/format";
 import type { IdeaResponse } from "@shared/types";
+import { useI18n } from "@/i18n";
 
 interface IdeaRun extends IdeaResponse {
   id: string;
@@ -25,6 +26,7 @@ const QUICK_PROMPTS = [
 ];
 
 export function IdeasPage() {
+  const { t } = useI18n();
   const { house, can } = useHouse();
   const navigate = useNavigate();
   const toast = useToast();
@@ -59,7 +61,7 @@ export function IdeasPage() {
       setPrompt(text);
       void loadHistory();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not generate ideas");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not generate ideas"));
     } finally {
       setLoading(false);
     }
@@ -73,10 +75,10 @@ export function IdeasPage() {
         method: "POST",
         body: { index },
       });
-      toast.success("Saved to your recipes");
+      toast.success(t("Saved to your recipes"));
       navigate(`/recipes/${data.recipeId}`);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not save the idea");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not save the idea"));
     } finally {
       setSavingIndex(null);
     }
@@ -86,9 +88,9 @@ export function IdeasPage() {
     <div className="space-y-5">
       <PageHeader
         back={() => navigate("/recipes")}
-        eyebrow="From your shelves"
-        title="What can I cook?"
-        subtitle="Recommendations built from what is actually in this house — saved recipes first."
+        eyebrow={t("From your shelves")}
+        title={t("What can I cook?")}
+        subtitle={t("Recommendations built from what is actually in this house — saved recipes first.")}
       />
 
       <Card className="p-4">
@@ -96,7 +98,7 @@ export function IdeasPage() {
           rows={2}
           value={prompt}
           onChange={(event) => setPrompt(event.target.value)}
-          placeholder="Anything you fancy? “Something quick with the spinach”, “dinner for four”, “no oven”…"
+          placeholder={t("Anything you fancy? “Something quick with the spinach”, “dinner for four”, “no oven”…")}
           maxLength={500}
         />
         <div className="mt-2 flex flex-wrap gap-1.5">
@@ -109,17 +111,16 @@ export function IdeasPage() {
               }}
               className="rounded-full border border-line bg-surface px-2.5 py-1 text-[11px] text-muted transition-colors hover:border-brand/40 hover:text-brand"
             >
-              {entry}
+              {t(entry)}
             </button>
           ))}
         </div>
         <div className="mt-3 flex items-center justify-between gap-3">
           <span className="text-[11px] text-muted">
-            {can("member") ? "Ideas use current stock, quantities and saved recipes." : "Read-only — ask a member to generate ideas."}
+            {can("member") ? t("Ideas use current stock, quantities and saved recipes.") : t("Read-only — ask a member to generate ideas.")}
           </span>
           <Button icon="sparkles" loading={loading} onClick={() => void generate()} disabled={!can("member")}>
-            Get ideas
-          </Button>
+            {t("Get ideas ")}</Button>
         </div>
       </Card>
 
@@ -135,22 +136,22 @@ export function IdeasPage() {
         <div className="space-y-3">
           <div className="flex flex-wrap items-center gap-2">
             <Badge tone={result.provider === "ai" ? "brand" : "neutral"}>
-              {result.provider === "ai" ? "AI chef" : "Local suggestions"}
+              {result.provider === "ai" ? t("AI chef") : t("Local suggestions")}
             </Badge>
             <span className="text-sm text-muted">{result.summary}</span>
           </div>
           {result.warning && (
             <div className="flex items-start gap-2 rounded-xl border border-line bg-raised px-3 py-2 text-[11px] leading-relaxed text-muted">
               <Icon name="alert" size={14} className="mt-0.5 shrink-0" />
-              {result.warning}
+              {t(result.warning)}
             </div>
           )}
           {result.ideas.length === 0 ? (
             <EmptyState
               icon="utensils"
-              title="No ideas this time"
-              body="Add a few items or save a recipe, then ask again."
-              action={<Button onClick={() => navigate("/items/new")}>Add an item</Button>}
+              title={t("No ideas this time")}
+              body={t("Add a few items or save a recipe, then ask again.")}
+              action={<Button onClick={() => navigate("/items/new")}>{t("Add an item")}</Button>}
             />
           ) : (
             <div className="grid gap-3 lg:grid-cols-2">
@@ -158,13 +159,13 @@ export function IdeasPage() {
                 <Card key={`${idea.title}-${index}`} className="flex flex-col p-4">
                   <div className="flex items-start justify-between gap-2">
                     <div className="font-display text-lg leading-tight">{idea.title}</div>
-                    <Badge tone="outline">{idea.source === "recipe" ? "saved recipe" : "new idea"}</Badge>
+                    <Badge tone="outline">{idea.source === "recipe" ? t("saved recipe") : t("new idea")}</Badge>
                   </div>
                   <p className="mt-1 text-xs leading-relaxed text-muted">{idea.rationale}</p>
                   <div className="mt-2 flex gap-2 text-[11px] text-muted">
                     {idea.timeMinutes ? <span>⏱ {minutesLabel(idea.timeMinutes)}</span> : null}
                     {idea.servings ? <span>· {plural(idea.servings, "serving")}</span> : null}
-                    <span>· {plural(idea.uses.length, "ingredient")} from home</span>
+                    <span>· {plural(idea.uses.length, "ingredient")} {' '}{t(" from home")}</span>
                   </div>
 
                   {idea.uses.length > 0 && (
@@ -189,7 +190,7 @@ export function IdeasPage() {
                   {idea.steps.length > 0 && (
                     <details className="mt-3 text-sm">
                       <summary className="cursor-pointer text-[11px] font-semibold uppercase tracking-[0.1em] text-muted">
-                        Method ({idea.steps.length})
+                        {t("Method (")}{idea.steps.length})
                       </summary>
                       <ol className="mt-2 space-y-1.5">
                         {idea.steps.map((step, stepIndex) => (
@@ -205,8 +206,7 @@ export function IdeasPage() {
                   <div className="mt-3 flex gap-2">
                     {idea.recipeId ? (
                       <Button size="sm" variant="secondary" icon="book" onClick={() => navigate(`/recipes/${idea.recipeId}`)}>
-                        Open recipe
-                      </Button>
+                        {t("Open recipe ")}</Button>
                     ) : null}
                     <Button
                       size="sm"
@@ -217,8 +217,7 @@ export function IdeasPage() {
                       disabled={!can("member") || savingIndex !== null}
                       onClick={() => void saveIdea(index)}
                     >
-                      Save as recipe
-                    </Button>
+                      {t("Save as recipe ")}</Button>
                   </div>
                 </Card>
               ))}
@@ -232,8 +231,7 @@ export function IdeasPage() {
           <div className="absolute inset-0 bg-grid opacity-40" />
           <div className="relative">
             <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
-              <Icon name="utensils" size={14} /> How it works
-            </div>
+              <Icon name="utensils" size={14} /> {' '}{t(" How it works ")}</div>
             <div className="mt-2 grid gap-3 sm:grid-cols-3">
               {[
                 { title: "We read your stock", body: "Quantities, categories and expiry are taken into account." },
@@ -242,18 +240,16 @@ export function IdeasPage() {
               ].map((step, index) => (
                 <div key={step.title} className="rounded-xl border border-line bg-surface p-3">
                   <div className="font-display text-lg text-brand">{String(index + 1).padStart(2, "0")}</div>
-                  <div className="mt-1 text-[13px] font-medium">{step.title}</div>
-                  <div className="mt-0.5 text-[11px] leading-relaxed text-muted">{step.body}</div>
+                  <div className="mt-1 text-[13px] font-medium">{t(step.title)}</div>
+                  <div className="mt-0.5 text-[11px] leading-relaxed text-muted">{t(step.body)}</div>
                 </div>
               ))}
             </div>
             <div className="mt-4 flex flex-wrap gap-2">
               <Button icon="sparkles" onClick={() => void generate()} disabled={!can("member")}>
-                Try it now
-              </Button>
+                {t("Try it now ")}</Button>
               <Button variant="secondary" onClick={() => navigate("/settings?tab=ai")}>
-                AI settings
-              </Button>
+                {t("AI settings ")}</Button>
             </div>
           </div>
         </Card>
@@ -261,7 +257,7 @@ export function IdeasPage() {
 
       {history.length > 0 && (
         <Card className="p-4">
-          <h2 className="mb-2 font-display text-lg">Earlier ideas</h2>
+          <h2 className="mb-2 font-display text-lg">{t("Earlier ideas")}</h2>
           <div className="divide-y divide-line">
             {history.slice(0, 6).map((run) => (
               <button
@@ -274,9 +270,9 @@ export function IdeasPage() {
               >
                 <Icon name="sparkles" size={15} className="shrink-0 text-muted" />
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[13px]">{run.prompt || "General suggestions"}</span>
+                  <span className="block truncate text-[13px]">{run.prompt || t("General suggestions")}</span>
                   <span className="block text-[11px] text-muted">
-                    {run.ideas.length} ideas · {relativeTime(run.createdAt)}
+                    {run.ideas.length} {' '}{t(" ideas · ")}{' '}{relativeTime(run.createdAt)}
                   </span>
                 </span>
                 <Icon name="chevronRight" size={14} className="text-muted" />

@@ -138,13 +138,28 @@ export function initials(name: string): string {
 }
 
 export function plural(count: number, singular: string, pluralForm = `${singular}s`): string {
-  return `${count} ${count === 1 ? singular : pluralForm}`;
+  let noun = count === 1 ? singular : pluralForm;
+  if (formatLocale?.toLowerCase().startsWith("el")) {
+    const greek: Record<string, string> = {
+      serving: "μερίδα",
+      servings: "μερίδες",
+      ingredient: "υλικό",
+      ingredients: "υλικά",
+      step: "βήμα",
+      steps: "βήματα",
+    };
+    noun = greek[noun] ?? noun;
+  }
+  return `${qty(count)} ${noun}`;
 }
 
 export function minutesLabel(minutes: number | null | undefined): string {
   if (!minutes) return "";
-  if (minutes < 60) return `${minutes} min`;
+  const greek = formatLocale?.toLowerCase().startsWith("el");
+  const minute = greek ? "λεπ." : "min";
+  const hour = greek ? "ώρ." : "h";
+  if (minutes < 60) return `${qty(minutes)} ${minute}`;
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;
-  return m ? `${h} h ${m} min` : `${h} h`;
+  return m ? `${qty(h)} ${hour} ${qty(m)} ${minute}` : `${qty(h)} ${hour}`;
 }

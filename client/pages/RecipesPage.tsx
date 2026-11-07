@@ -160,7 +160,7 @@ export function RecipesPage() {
                     )}
                     {recipe.nutrition?.perServing?.energyKcal != null && (
                       <Badge tone="outline">
-                        ~{Math.round(recipe.nutrition.perServing.energyKcal)} kcal / {t("portion")}
+                        ~{Math.round(recipe.nutrition.perServing.energyKcal)} {' '}{t(" kcal / ")}{' '}{t("portion")}
                       </Badge>
                     )}
                     {recipe.tags.slice(0, 2).map((entry) => (

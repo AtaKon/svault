@@ -34,7 +34,7 @@ export function NotificationsPage() {
       const data = await api<{ notifications: Notification[] }>("/api/notifications?limit=200");
       setItems(data.notifications);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not load reminders");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not load reminders"));
       setItems([]);
     }
   }, [toast]);
@@ -50,7 +50,7 @@ export function NotificationsPage() {
       setItems((current) => current?.map((item) => ({ ...item, read: true })) ?? current);
       window.dispatchEvent(new Event("sv:refresh-badges"));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not mark reminders read");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not mark reminders read"));
     } finally {
       setBusy(false);
     }
@@ -66,11 +66,11 @@ export function NotificationsPage() {
       window.dispatchEvent(new Event("sv:refresh-badges"));
       const unread = scanned.notifications.filter((item) => !item.read);
       if (unread.length && typeof Notification !== "undefined" && Notification.permission === "granted") {
-        new Notification("SVault", { body: `${unread.length} reminder${unread.length === 1 ? "" : "s"} need attention` });
+        new Notification("SVault", { body: t("{count} reminders need attention", { count: unread.length }) });
       }
-      toast.success(scanned.notifications.length ? "Reminders refreshed" : "Everything looks stocked");
+      toast.success(scanned.notifications.length ? t("Reminders refreshed") : t("Everything looks stocked"));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not scan reminders");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not scan reminders"));
     } finally {
       setBusy(false);
     }
@@ -81,7 +81,7 @@ export function NotificationsPage() {
     const result = await Notification.requestPermission();
     setPermission(result);
     if (result === "granted") {
-      new Notification("SVault", { body: "Browser reminders are on. Low stock and expiring items will surface here." });
+      new Notification("SVault", { body: t("Browser reminders are on. Low stock and expiring items will surface here.") });
     }
   };
 

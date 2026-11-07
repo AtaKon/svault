@@ -86,7 +86,7 @@ export function AppShell() {
           Notification.permission === "granted"
         ) {
           new Notification("SVault", {
-            body: fresh.length === 1 ? fresh[0].title : `${fresh.length} new reminders`,
+            body: fresh.length === 1 ? t(fresh[0].title) : t("{count} new reminders", { count: fresh.length }),
           });
         }
         notificationsPrimed.current = true;
@@ -158,7 +158,7 @@ export function AppShell() {
             className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm text-muted transition-colors hover:bg-raised hover:text-ink"
           >
             <Icon name={theme === "dark" ? "sun" : "moon"} size={17} />
-            {theme === "dark" ? "Light mode" : "Dark mode"}
+            {theme === "dark" ? t("Light mode") : t("Dark mode")}
           </button>
           <button
             onClick={() => navigate("/profile")}
@@ -288,7 +288,7 @@ export function AppShell() {
           await refresh();
           selectHouse(created.id);
           setCreateOpen(false);
-          toast.success(`${created.name} added`);
+      toast.success(t("{house} added", { house: created.name }));
         }}
       />
     </div>

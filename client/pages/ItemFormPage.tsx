@@ -97,7 +97,7 @@ export function ItemFormPage() {
           setLoading(false);
         })
         .catch((err) => {
-          toast.error(err instanceof Error ? err.message : "Could not load the item");
+          toast.error(err instanceof Error ? t(err.message) : t("Could not load the item"));
           setLoading(false);
         });
     }
@@ -119,7 +119,7 @@ export function ItemFormPage() {
     const trimmed = code.trim();
     if (!trimmed) return;
     if (barcodes.includes(trimmed)) {
-      toast.push("That barcode is already on the item");
+      toast.push(t("That barcode is already on the item"));
       return;
     }
     setBarcodes((current) => [...current, trimmed]);
@@ -225,7 +225,7 @@ export function ItemFormPage() {
               </Field>
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <Field label={t("Stock unit")} required hint="pcs, kg, g, l…">
+              <Field label={t("Stock unit")} required hint={t("pcs, kg, g, l…")}>
                 <Input value={unit} onChange={(e) => setUnit(e.target.value)} list="unit-options" maxLength={10} />
                 <datalist id="unit-options">
                   {UNIT_OPTIONS.map((option) => (

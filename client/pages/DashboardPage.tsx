@@ -30,7 +30,7 @@ export function DashboardPage() {
       setData(result);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("Could not load the dashboard"));
+      setError(err instanceof Error ? t(err.message) : t("Could not load the dashboard"));
     }
   }, [house.id, t]);
 
@@ -70,7 +70,7 @@ export function DashboardPage() {
         : t("Nothing new to add"));
       if (count) navigate("/shopping");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : t("Could not add low-stock items"));
+      toast.error(err instanceof Error ? t(err.message) : t("Could not add low-stock items"));
     }
   };
 

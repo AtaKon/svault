@@ -59,7 +59,7 @@ export function ItemCard({
       setCurrent(detail);
       onUpdated?.(detail);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : t("Could not update stock"));
+      toast.error(err instanceof Error ? t(err.message) : t("Could not update stock"));
     } finally {
       setBusy(null);
     }
@@ -273,7 +273,7 @@ export function StockDialog({
           body,
           baseUpdatedAt: item.updatedAt,
         });
-        toast.push("Queued offline — it will sync when you reconnect");
+        toast.push(t("Queued offline — it will sync when you reconnect"));
         onClose();
         return;
       }
@@ -282,7 +282,7 @@ export function StockDialog({
       toast.success(t(action === "add" ? "Stock added" : action === "set" ? "Stock counted" : "Stock updated"));
       onClose();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not update stock");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not update stock"));
     } finally {
       setBusy(false);
     }

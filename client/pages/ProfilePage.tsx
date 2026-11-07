@@ -490,9 +490,9 @@ function ApiTokensCard() {
       setFresh(created.token);
       setName("");
       await load();
-      toast.success("Token created. Copy it now; it is shown only once.");
+      toast.success(t("Token created. Copy it now; it is shown only once."));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not create the token");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not create the token"));
     } finally {
       setCreating(false);
     }
@@ -571,7 +571,7 @@ function ApiTokensCard() {
       <form onSubmit={create} className="mt-3 flex items-end gap-2">
         <div className="min-w-0 flex-1">
           <Field label={t("New token name")}>
-            <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Home Assistant" maxLength={80} />
+            <Input value={name} onChange={(event) => setName(event.target.value)} placeholder={"Home Assistant"} maxLength={80} />
           </Field>
         </div>
         <Button type="submit" size="sm" icon="key" loading={creating} disabled={!name.trim()}>

@@ -9,8 +9,10 @@ import { useToast } from "@/components/toast";
 import { ocrImage } from "@/ocr";
 import { qty } from "@/format";
 import type { IntakeParseResult, IntakeRow, Item } from "@shared/types";
+import { useI18n } from "@/i18n";
 
 export function IntakePage() {
+  const { t } = useI18n();
   const { house, can } = useHouse();
   const toast = useToast();
   const navigate = useNavigate();
@@ -62,9 +64,9 @@ export function IntakePage() {
         { mode: "receipt" },
       );
       setText(recognized);
-      toast.success("Photo read — check the text before parsing");
+      toast.success(t("Photo read — check the text before parsing"));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not read the photo");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not read the photo"));
     } finally {
       setOcrRunning(false);
       setReading(false);
@@ -86,9 +88,9 @@ export function IntakePage() {
       });
       setResult(data);
       setRows(data.rows);
-      if (!data.rows.length) toast.push(data.warning ?? "No product lines were found");
+      if (!data.rows.length) toast.push(t(data.warning ?? "No product lines were found"));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not parse the intake");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not parse the intake"));
     } finally {
       setParsing(false);
     }
@@ -120,9 +122,11 @@ export function IntakePage() {
         `/api/houses/${house.id}/intake/commit`,
         { method: "POST", body: { rows: payload } },
       );
-      toast.success(
-        `Intake saved: ${data.created.length} new, ${data.updated.length} updated${data.skipped ? `, ${data.skipped} skipped` : ""}`,
-      );
+      toast.success(t("Intake saved: {created} new, {updated} updated{skipped}", {
+        created: data.created.length,
+        updated: data.updated.length,
+        skipped: data.skipped ? t(", {count} skipped", { count: data.skipped }) : "",
+      }));
       setRows([]);
       setResult(null);
       setUploadedPath(null);
@@ -130,7 +134,7 @@ export function IntakePage() {
       setBarcodes([]);
       navigate("/items");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not commit the intake");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not commit the intake"));
     } finally {
       setCommitting(false);
     }
@@ -140,12 +144,11 @@ export function IntakePage() {
     <div className="space-y-4">
       <PageHeader
         eyebrow={house.name}
-        title="Bulk intake"
-        subtitle="Bring in a whole shop at once. Review every line before anything is written."
+        title={t("Bulk intake")}
+        subtitle={t("Bring in a whole shop at once. Review every line before anything is written.")}
         actions={
           <Button variant="secondary" icon="box" onClick={() => navigate("/items")}>
-            Inventory
-          </Button>
+            {t("Inventory ")}</Button>
         }
       />
 
@@ -165,31 +168,29 @@ export function IntakePage() {
                   : "rounded-full border border-line px-3 py-1.5 text-[12px] text-muted hover:bg-raised"
               }
             >
-              {option.label}
+              {t(option.label)}
             </button>
           ))}
         </div>
 
         {mode === "receipt" ? (
           <>
-            <Field label="Receipt text" hint="OCR, paste or type one product per line">
+            <Field label={t("Receipt text")} hint={t("OCR, paste or type one product per line")}>
               <Textarea
                 rows={7}
                 value={text}
                 onChange={(event) => setText(event.target.value)}
-                placeholder={"MILK 1.50\nBREAD 2.00\nCHEESE 4.20"}
+                placeholder={"ΓΑΛΑ 1,50\nΨΩΜΙ 2,00\nΤΥΡΙ 4,20"}
               />
             </Field>
             <div className="flex flex-wrap items-center gap-2">
               <input ref={fileRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={(event) => void readPhoto(event.target.files?.[0])} />
               <Button variant="secondary" icon="camera" onClick={() => fileRef.current?.click()} loading={reading}>
-                Read a photo
-              </Button>
-              {ocrRunning && <span className="text-[11px] text-muted">Reading {ocrProgress}%…</span>}
-              {uploadedPath && <Badge tone="brand">photo attached</Badge>}
+                {t("Read a photo ")}</Button>
+              {ocrRunning && <span className="text-[11px] text-muted">{t("Reading ")}{' '}{ocrProgress}%…</span>}
+              {uploadedPath && <Badge tone="brand">{t("photo attached")}</Badge>}
               <Button onClick={() => void parse()} loading={parsing} icon="sparkles">
-                Parse lines
-              </Button>
+                {t("Parse lines ")}</Button>
             </div>
           </>
         ) : (
@@ -198,7 +199,7 @@ export function IntakePage() {
               <Input
                 value={barcodeEntry}
                 onChange={(event) => setBarcodeEntry(event.target.value)}
-                placeholder="Type or paste a barcode"
+                placeholder={t("Type or paste a barcode")}
                 inputMode="numeric"
                 onKeyDown={(event) => {
                   if (event.key === "Enter") {
@@ -218,11 +219,9 @@ export function IntakePage() {
                   setBarcodeEntry("");
                 }}
               >
-                Queue
-              </Button>
+                {t("Queue ")}</Button>
               <Button variant="secondary" icon="scan" onClick={() => setScanOpen(true)}>
-                Scan
-              </Button>
+                {t("Scan ")}</Button>
             </div>
             {barcodes.length > 0 && (
               <div className="flex flex-wrap gap-1.5">
@@ -231,7 +230,7 @@ export function IntakePage() {
                     key={`${code}-${index}`}
                     onClick={() => setBarcodes((current) => current.filter((_entry, position) => position !== index))}
                     className="inline-flex items-center gap-1 rounded-full border border-line bg-surface px-2.5 py-1 text-[11px] font-mono text-muted hover:border-danger/40 hover:text-danger"
-                    title="Remove"
+                    title={t("Remove")}
                   >
                     {code}
                     <Icon name="close" size={11} />
@@ -240,31 +239,30 @@ export function IntakePage() {
               </div>
             )}
             <Button onClick={() => void parse()} loading={parsing} icon="barcode" disabled={!barcodes.length}>
-              Look up {barcodes.length || ""} barcode{barcodes.length === 1 ? "" : "s"}
+              {t("Look up ")}{' '}{barcodes.length || ""} {' '}{t(" barcode")}{barcodes.length === 1 ? "" : "s"}
             </Button>
           </>
         )}
 
         {result?.warning && (
-          <div className="rounded-xl border border-warn/30 bg-warn-soft px-3 py-2 text-[11px] text-warn">{result.warning}</div>
+          <div className="rounded-xl border border-warn/30 bg-warn-soft px-3 py-2 text-[11px] text-warn">{t(result.warning)}</div>
         )}
       </Card>
 
       {rows.length === 0 ? (
         <EmptyState
           icon="receipt"
-          title="Nothing to review yet"
-          body="Parse a receipt or queue barcodes above. You can edit every line before committing."
+          title={t("Nothing to review yet")}
+              body={t("Parse a receipt or queue barcodes above. You can edit every line before committing.")}
         />
       ) : (
         <Card className="overflow-hidden">
           <div className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-2.5">
-            <h2 className="font-display text-lg">Review</h2>
-            <Badge tone="outline">{rows.length} lines</Badge>
+            <h2 className="font-display text-lg">{t("Review")}</h2>
+            <Badge tone="outline">{rows.length} {' '}{t(" lines")}</Badge>
             {result?.vendorName && <Badge tone="brand">{result.vendorName}</Badge>}
             <Button size="sm" className="ml-auto" icon="check" onClick={() => void commit()} loading={committing} disabled={!can("member")}>
-              Commit {rows.filter((row) => row.action !== "skip").length} lines
-            </Button>
+              {t("Commit ")}{' '}{rows.filter((row) => row.action !== "skip").length} {' '}{t(" lines ")}</Button>
           </div>
           <div className="divide-y divide-line">
             {rows.map((row, index) => (
@@ -274,40 +272,40 @@ export function IntakePage() {
                     <Input
                       value={row.description}
                       onChange={(event) => updateRow(index, { description: event.target.value })}
-                      aria-label={`Line ${index + 1} description`}
+                      aria-label={t("Line {line} description", { line: index + 1 })}
                       maxLength={160}
                     />
                   </div>
-                  <IconButton icon="trash" label={`Remove line ${index + 1}`} onClick={() => setRows((current) => current.filter((_entry, position) => position !== index))} />
+                  <IconButton icon="trash" label={t("Remove line {line}", { line: index + 1 })} onClick={() => setRows((current) => current.filter((_entry, position) => position !== index))} />
                 </div>
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                  <Field label="Quantity">
+                  <Field label={t("Quantity")}>
                     <Input
                       value={String(row.quantity)}
                       inputMode="decimal"
                       onChange={(event) => updateRow(index, { quantity: Number(event.target.value) || 1 })}
                     />
                   </Field>
-                  <Field label="Unit">
-                    <Input value={row.unit ?? ""} onChange={(event) => updateRow(index, { unit: event.target.value || null })} placeholder="pcs" maxLength={10} />
+                  <Field label={t("Unit")}>
+                    <Input value={row.unit ?? ""} onChange={(event) => updateRow(index, { unit: event.target.value || null })} placeholder={t("pcs")} maxLength={10} />
                   </Field>
-                  <Field label="Unit price">
+                  <Field label={t("Unit price")}>
                     <Input
                       value={row.unitPrice == null ? "" : String(row.unitPrice)}
                       inputMode="decimal"
                       onChange={(event) => updateRow(index, { unitPrice: event.target.value ? Number(event.target.value) : null })}
                     />
                   </Field>
-                  <Field label="Action">
+                  <Field label={t("Action")}>
                     <Select value={row.action} onChange={(event) => updateRow(index, { action: event.target.value as IntakeRow["action"] })}>
-                      <option value="update">Update stock</option>
-                      <option value="create">Create item</option>
-                      <option value="skip">Skip</option>
+                      <option value="update">{t("Update stock")}</option>
+                      <option value="create">{t("Create item")}</option>
+                      <option value="skip">{t("Skip")}</option>
                     </Select>
                   </Field>
                 </div>
                 <div className="grid gap-2 sm:grid-cols-2">
-                  <Field label="Inventory item" hint={row.itemUnit ? `stocked in ${row.itemUnit}` : undefined}>
+                  <Field label={t("Inventory item")} hint={row.itemUnit ? t("stocked in {unit}", { unit: row.itemUnit }) : undefined}>
                     <Select
                       value={row.itemId ?? ""}
                       onChange={(event) =>
@@ -317,11 +315,10 @@ export function IntakePage() {
                         })
                       }
                     >
-                      <option value="">Create a new item</option>
+                      <option value="">{t("Create a new item")}</option>
                       {row.candidates.map((candidate) => (
                         <option key={`candidate-${candidate.itemId}`} value={candidate.itemId}>
-                          {candidate.name} · {qty(candidate.score * 100)}% match
-                        </option>
+                          {candidate.name} · {qty(candidate.score * 100)}{t("% match ")}</option>
                       ))}
                       {items
                         .filter((item) => !row.candidates.some((candidate) => candidate.itemId === item.id))
@@ -342,7 +339,7 @@ export function IntakePage() {
                         {candidate.name} · {Math.round(candidate.score * 100)}%
                       </button>
                     ))}
-                    {row.offName && <Badge tone="outline">catalog: {row.offName}</Badge>}
+                    {row.offName && <Badge tone="outline">{t("catalog: ")}{' '}{row.offName}</Badge>}
                   </div>
                 </div>
               </div>
@@ -351,13 +348,13 @@ export function IntakePage() {
         </Card>
       )}
 
-      <Sheet open={scanOpen} onClose={() => setScanOpen(false)} title="Scan barcodes" description="Each scan is added to the queue. Close when you are done.">
+      <Sheet open={scanOpen} onClose={() => setScanOpen(false)} title={t("Scan barcodes")} description={t("Each scan is added to the queue. Close when you are done.")}>
         <BarcodeScanner
           onDetected={(code) => {
             setBarcodes((current) => (current.includes(code) ? current : [...current, code]));
           }}
         />
-        <p className="mt-3 text-center text-[11px] text-muted">{barcodes.length} in the queue</p>
+        <p className="mt-3 text-center text-[11px] text-muted">{barcodes.length} {' '}{t(" in the queue")}</p>
       </Sheet>
     </div>
   );

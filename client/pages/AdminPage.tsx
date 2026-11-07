@@ -4,8 +4,9 @@ import { useAuth } from "@/state";
 import { Badge, Button, Card, EmptyState, Field, Input, PageHeader, Select, Skeleton, Stat, cn } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { useToast } from "@/components/toast";
-import { relativeTime, shortDate } from "@/format";
+import { money, relativeTime, shortDate } from "@/format";
 import type { AdminOverview, AdminSession, AdminUser, OrphanFile } from "@shared/types";
+import { useI18n } from "@/i18n";
 
 interface AiSpend {
   days: number;
@@ -16,6 +17,7 @@ interface AiSpend {
 }
 
 export function AdminPage() {
+  const { t } = useI18n();
   const { user } = useAuth();
   const toast = useToast();
   const [overview, setOverview] = useState<AdminOverview | null>(null);
@@ -74,22 +76,22 @@ export function AdminPage() {
     if (!overviewData) {
       const failure = results[0];
       const message = failure.status === "rejected" && failure.reason instanceof Error
-        ? failure.reason.message
-        : "Could not load the admin console";
+        ? t(failure.reason.message)
+        : t("Could not load the admin console");
       setOverviewError(message);
       toast.error(message);
     } else {
       setOverviewError(null);
     }
     setLoading(false);
-  }, [toast]);
+  }, [t, toast]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
   const saveRegistration = async (mode: "open" | "invite" | "closed") => {
-    if (mode === "open" && registration !== "open" && !window.confirm("Allow anyone who can reach this server to create an account?")) {
+    if (mode === "open" && registration !== "open" && !window.confirm(t("Allow anyone who can reach this server to create an account?"))) {
       return;
     }
     setBusy(true);
@@ -101,9 +103,9 @@ export function AdminPage() {
       setRegistration(result.mode);
       setRegistrationSource(result.source);
       setOverview((current) => (current ? { ...current, registration: result } : current));
-      toast.success(`Sign-up is now ${result.mode}`);
+      toast.success(t("Sign-up is now {mode}", { mode: t(result.mode) }));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not change registration");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not change registration"));
     } finally {
       setBusy(false);
     }
@@ -119,9 +121,9 @@ export function AdminPage() {
       setRegistration(result.mode);
       setRegistrationSource(result.source);
       setOverview((current) => (current ? { ...current, registration: result } : current));
-      toast.success(`Using the environment setting: ${result.mode}`);
+      toast.success(t("Using the environment setting: {mode}", { mode: t(result.mode) }));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not clear the override");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not clear the override"));
     } finally {
       setBusy(false);
     }
@@ -132,7 +134,7 @@ export function AdminPage() {
       await api(`/api/admin/users/${target.id}`, { method: "PATCH", body });
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not update the user");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not update the user"));
     }
   };
 
@@ -140,19 +142,19 @@ export function AdminPage() {
     try {
       await api(`/api/admin/sessions/${session.id}`, { method: "DELETE" });
       setSessions((current) => current?.filter((entry) => entry.id !== session.id) ?? null);
-      toast.success(`Signed out ${session.userName}`);
+      toast.success(t("Signed out {name}", { name: session.userName }));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not end the session");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not end the session"));
     }
   };
 
   const saveAiBudget = async () => {
     const value = Number(aiBudget);
     if (aiBudget.trim() === "" || !Number.isFinite(value) || value < 0) {
-      toast.error("Enter a monthly limit in USD, or 0 for no limit.");
+      toast.error(t("Enter a monthly limit in USD, or 0 for no limit."));
       return;
     }
-    if (value === 0 && (ai?.budget ?? 0) > 0 && !window.confirm("Remove the AI budget? AI calls will no longer be capped.")) {
+    if (value === 0 && (ai?.budget ?? 0) > 0 && !window.confirm(t("Remove the AI budget? AI calls will no longer be capped."))) {
       return;
     }
     aiBudgetTouched.current = true;
@@ -165,27 +167,27 @@ export function AdminPage() {
       setAi((current) => (current ? { ...current, budget: result.budget, monthSpend: result.monthSpend } : current));
       // Let the next background load re-seed from the server.
       aiBudgetTouched.current = false;
-      toast.success(result.budget ? "AI budget saved" : "AI budget removed");
+      toast.success(result.budget ? t("AI budget saved") : t("AI budget removed"));
     } catch (err) {
       // Let the next load re-seed the field from the server's real value.
       aiBudgetTouched.current = false;
-      toast.error(err instanceof Error ? err.message : "Could not save the AI budget");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not save the AI budget"));
     } finally {
       setBusy(false);
     }
   };
 
   const sweepFiles = async () => {
-    if ((files?.count ?? 0) > 0 && !window.confirm(`Remove ${files?.count} orphaned file${files?.count === 1 ? "" : "s"}? This cannot be undone.`)) {
+    if ((files?.count ?? 0) > 0 && !window.confirm(t("Remove {count} orphaned files? This cannot be undone.", { count: files?.count ?? 0 }))) {
       return;
     }
     setBusy(true);
     try {
       const result = await api<{ removed: number }>("/api/admin/files/sweep", { method: "POST", body: {} });
-      toast.success(result.removed ? `Removed ${result.removed} orphaned file${result.removed === 1 ? "" : "s"}` : "Nothing to remove");
+      toast.success(result.removed ? t("Removed {count} orphaned files", { count: result.removed }) : t("Nothing to remove"));
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not sweep files");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not sweep files"));
     } finally {
       setBusy(false);
     }
@@ -194,7 +196,7 @@ export function AdminPage() {
   if (loading) {
     return (
       <div className="space-y-4">
-        <PageHeader eyebrow="Instance" title="Admin" />
+        <PageHeader eyebrow={t("Instance")} title={t("Admin")} />
         <div className="grid gap-2 sm:grid-cols-4">
           {[0, 1, 2, 3].map((index) => (
             <Skeleton key={index} className="h-24" />
@@ -208,11 +210,11 @@ export function AdminPage() {
   if (!overview) {
     return (
       <div className="space-y-4">
-        <PageHeader eyebrow="Instance" title="Admin" />
+        <PageHeader eyebrow={t("Instance")} title={t("Admin")} />
         <EmptyState
           icon="settings"
-          title="Admin console unavailable"
-          body={overviewError ?? "Your account needs instance administrator access."}
+          title={t("Admin console unavailable")}
+          body={overviewError ?? t("Your account needs instance administrator access.")}
         />
       </div>
     );
@@ -220,22 +222,26 @@ export function AdminPage() {
 
   return (
     <div className="space-y-4">
-      <PageHeader eyebrow="Instance" title="Admin" subtitle="Users, sign-up, sessions, storage and AI spend" />
+      <PageHeader eyebrow={t("Instance")} title={t("Admin")} subtitle={t("Users, sign-up, sessions, storage and AI spend")} />
 
       {failedSections.length > 0 && (
         <div className="rounded-xl border border-warn/40 bg-warn-soft px-3 py-2 text-[11px] text-warn">
-          Some sections could not load: {failedSections.join(", ")}. Refresh to try again.
-        </div>
+          {t("Some sections could not load: ")}{' '}{failedSections.map((section) => t(section)).join(", ")}{t(". Refresh to try again. ")}</div>
       )}
 
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <Stat label="People" value={overview.users} icon="users" />
-        <Stat label="Houses" value={overview.houses} icon="home" />
-        <Stat label="Sessions" value={overview.sessions} hint={`${overview.pendingInvites} invites pending`} icon="key" />
+        <Stat label={t("People")} value={overview.users} icon="users" />
+        <Stat label={t("Houses")} value={overview.houses} icon="home" />
         <Stat
-          label="AI spend"
+          label={t("Sessions")}
+          value={overview.sessions}
+          hint={t(overview.pendingInvites === 1 ? "{count} invite pending" : "{count} invites pending", { count: overview.pendingInvites })}
+          icon="key"
+        />
+        <Stat
+          label={t("AI spend")}
           value={`$${(overview.ai.cost ?? 0).toFixed(2)}`}
-          hint={`${overview.ai.calls} calls / ${overview.ai.days} days`}
+          hint={t("{calls} calls / {days} days", { calls: overview.ai.calls, days: overview.ai.days })}
           tone="warn"
           icon="sparkles"
         />
@@ -244,11 +250,13 @@ export function AdminPage() {
       <Card className="p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <h2 className="font-display text-lg">Sign-up</h2>
+            <h2 className="font-display text-lg">{t("Sign-up")}</h2>
             <p className="text-[11px] text-muted">
               {overview.registration.source === "first-user"
-                ? "The first account is always allowed."
-                : `Currently set by ${overview.registration.source === "admin" ? "this console" : overview.registration.source}.`}
+                ? t("The first account is always allowed.")
+                : t("Currently set by {source}.", {
+                    source: t(overview.registration.source === "admin" ? "this console" : overview.registration.source),
+                  })}
             </p>
           </div>
           <div className="flex flex-col items-end gap-1.5">
@@ -258,9 +266,9 @@ export function AdminPage() {
               className="max-w-[180px]"
               disabled={busy || failedSections.includes("registration")}
             >
-              <option value="open">Open to anyone</option>
-              <option value="invite">Invite only</option>
-              <option value="closed">Closed</option>
+              <option value="open">{t("Open to anyone")}</option>
+              <option value="invite">{t("Invite only")}</option>
+              <option value="closed">{t("Closed")}</option>
             </Select>
             {registrationSource === "admin" && (
               <Button
@@ -270,15 +278,14 @@ export function AdminPage() {
                 disabled={failedSections.includes("registration")}
                 onClick={() => void clearRegistrationOverride()}
               >
-                Use environment default
-              </Button>
+                {t("Use environment default ")}</Button>
             )}
           </div>
         </div>
       </Card>
 
       <Card className="p-4">
-        <h2 className="font-display text-lg">People</h2>
+        <h2 className="font-display text-lg">{t("People")}</h2>
         <div className="mt-2 divide-y divide-line">
           {users?.map((entry) => (
             <div key={entry.id} className="flex flex-wrap items-center gap-2 py-2">
@@ -288,20 +295,20 @@ export function AdminPage() {
               <span className="min-w-0 flex-1">
                 <span className="flex items-center gap-1.5">
                   <span className="truncate text-sm">{entry.name}</span>
-                  {entry.isAdmin && <Badge tone="brand">admin</Badge>}
+                  {entry.isAdmin && <Badge tone="brand">{t("admin")}</Badge>}
                 </span>
                 <span className="block truncate text-[11px] text-muted">
-                  {entry.email} · {entry.houses} house{entry.houses === 1 ? "" : "s"} ·{" "}
-                  {entry.lastSessionAt ? `seen ${relativeTime(entry.lastSessionAt)}` : "never signed in"}
+                  {entry.email} · {entry.houses} {' '}{t(" house")}{entry.houses === 1 ? "" : "s"} ·{" "}
+                  {entry.lastSessionAt ? t("seen {date}", { date: relativeTime(entry.lastSessionAt) }) : t("never signed in")}
                 </span>
               </span>
               <TinyToggle
-                label="Dev"
+                label={t("Dev")}
                 on={entry.developerMode}
                 onChange={(value) => void patchUser(entry, { developerMode: value })}
               />
               <TinyToggle
-                label="Admin"
+                label={t("Admin")}
                 on={entry.isAdmin}
                 disabled={entry.id === user?.id}
                 onChange={(value) => void patchUser(entry, { isAdmin: value })}
@@ -314,15 +321,13 @@ export function AdminPage() {
       <Card className="p-4">
         <div className="flex items-center justify-between gap-2">
           <div>
-            <h2 className="font-display text-lg">Storage</h2>
+            <h2 className="font-display text-lg">{t("Storage")}</h2>
             <p className="text-[11px] text-muted">
-              {files?.count ?? 0} orphaned file{(files?.count ?? 0) === 1 ? "" : "s"} ·{" "}
-              {((files?.bytes ?? 0) / 1024 / 1024).toFixed(1)} MB unreferenced for over a day
-            </p>
+              {files?.count ?? 0} {' '}{t(" orphaned file")}{(files?.count ?? 0) === 1 ? "" : "s"} ·{" "}
+              {((files?.bytes ?? 0) / 1024 / 1024).toFixed(1)} {' '}{t(" MB unreferenced for over a day ")}</p>
           </div>
           <Button size="sm" variant="secondary" icon="trash" loading={busy} onClick={() => void sweepFiles()}>
-            Clean up
-          </Button>
+            {t("Clean up ")}</Button>
         </div>
         {files?.files.length ? (
           <div className="mt-2 max-h-48 space-y-1 overflow-y-auto">
@@ -330,37 +335,35 @@ export function AdminPage() {
               <div key={file.key} className="flex items-center gap-2 text-[11px] text-muted">
                 <Icon name="image" size={12} />
                 <span className="min-w-0 flex-1 truncate">{file.key}</span>
-                <span className="tabular-nums">{(file.size / 1024).toFixed(0)} kB</span>
+                <span className="tabular-nums">{(file.size / 1024).toFixed(0)} {' '}{t(" kB")}</span>
                 <span>{shortDate(file.modifiedAt)}</span>
               </div>
             ))}
           </div>
         ) : (
-          <p className="mt-2 text-[12px] text-muted">Every upload is referenced by a record.</p>
+          <p className="mt-2 text-[12px] text-muted">{t("Every upload is referenced by a record.")}</p>
         )}
         {files && files.count > files.files.length && (
           <p className="mt-2 text-[10px] text-muted">
-            Showing the {files.files.length} largest of {files.count} orphaned files.
-          </p>
+            {t("Showing the ")}{' '}{files.files.length} {' '}{t(" largest of ")}{' '}{files.count} {' '}{t(" orphaned files. ")}</p>
         )}
       </Card>
 
       <Card className="p-4">
         <div className="flex flex-wrap items-end justify-between gap-2">
           <div>
-            <h2 className="font-display text-lg">AI budget and spend</h2>
+            <h2 className="font-display text-lg">{t("AI budget and spend")}</h2>
             <p className="text-[11px] text-muted">
-              {ai?.monthSpend != null ? `$${(ai.monthSpend ?? 0).toFixed(2)} this month` : "No spend yet"}
-              {ai?.budget ? ` of $${ai.budget.toFixed(2)}` : " · no monthly limit"}
+              {ai?.monthSpend != null ? t("{amount} this month", { amount: money(ai.monthSpend ?? 0, "USD") }) : t("No spend yet")}
+              {ai?.budget ? ` of $${ai.budget.toFixed(2)}` : t(" · no monthly limit")}
             </p>
           </div>
           <div className="flex items-end gap-2">
-            <Field label="Monthly limit (USD)">
+            <Field label={t("Monthly limit (USD)")}>
               <Input value={aiBudget} inputMode="decimal" onChange={(event) => setAiBudget(event.target.value)} className="w-28" />
             </Field>
             <Button size="sm" variant="secondary" loading={busy} onClick={() => void saveAiBudget()}>
-              Save
-            </Button>
+              {t("Save ")}</Button>
           </div>
         </div>
         {ai?.budget ? (
@@ -371,24 +374,24 @@ export function AdminPage() {
             />
           </div>
         ) : null}
-        <p className="mt-3 text-[11px] text-muted">Spend by house, last {ai?.days ?? 30} days</p>
+        <p className="mt-3 text-[11px] text-muted">{t("Spend by house, last ")}{' '}{ai?.days ?? 30} {' '}{t(" days")}</p>
         <div className="mt-2 space-y-1">
           {ai?.byHouse.length ? (
             ai.byHouse.map((entry) => (
               <div key={entry.name} className="flex items-center gap-2 text-sm">
                 <span className="min-w-0 flex-1 truncate">{entry.name}</span>
-                <span className="text-[11px] text-muted">{entry.calls} calls</span>
+                <span className="text-[11px] text-muted">{entry.calls} {' '}{t(" calls")}</span>
                 <span className="w-16 text-right tabular-nums">${entry.cost.toFixed(3)}</span>
               </div>
             ))
           ) : (
-            <p className="text-[12px] text-muted">No AI calls in this period.</p>
+            <p className="text-[12px] text-muted">{t("No AI calls in this period.")}</p>
           )}
         </div>
       </Card>
 
       <Card className="p-4">
-        <h2 className="font-display text-lg">Active sessions</h2>
+        <h2 className="font-display text-lg">{t("Active sessions")}</h2>
         <div className="mt-2 divide-y divide-line">
           {sessions?.length ? (
             sessions.slice(0, 40).map((session) => (
@@ -399,23 +402,22 @@ export function AdminPage() {
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-[12px]">{session.userName}</span>
                   <span className="block truncate text-[10px] text-muted">
-                    {session.userEmail} · {session.userAgent?.slice(0, 42) ?? "unknown device"}
+                    {session.userEmail} · {session.userAgent?.slice(0, 42) ?? t("unknown device")}
                   </span>
                 </span>
-                <span className="hidden text-[10px] text-muted sm:block">until {shortDate(session.expiresAt)}</span>
+                <span className="hidden text-[10px] text-muted sm:block">{t("until ")}{' '}{shortDate(session.expiresAt)}</span>
                 {session.userId !== user?.id && (
                   <Button size="sm" variant="ghost" onClick={() => void revokeSession(session)}>
-                    End
-                  </Button>
+                    {t("End ")}</Button>
                 )}
               </div>
             ))
           ) : (
-            <p className="py-2 text-[12px] text-muted">No active sessions.</p>
+            <p className="py-2 text-[12px] text-muted">{t("No active sessions.")}</p>
           )}
         </div>
         {(sessions?.length ?? 0) > 40 && (
-          <p className="mt-2 text-[10px] text-muted">Showing 40 of {sessions?.length}. Older sessions are hidden.</p>
+          <p className="mt-2 text-[10px] text-muted">{t("Showing 40 of ")}{' '}{sessions?.length}{t(". Older sessions are hidden.")}</p>
         )}
       </Card>
     </div>

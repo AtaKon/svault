@@ -64,7 +64,7 @@ export function OffProductPicker({
       }
       const data = await api<OffSearchResult>(`/api/catalog/search?q=${encodeURIComponent(q)}&online=1`);
       setProducts(data.products);
-      setWarning(data.warning);
+      setWarning(data.warning ? t(data.warning) : null);
     } catch (err) {
       setWarning(err instanceof Error ? t(err.message) : t("Could not search OpenFoodFacts"));
       setProducts([]);
@@ -99,7 +99,7 @@ export function OffProductPicker({
         </Button>
       </form>
 
-      {warning && <p className="mt-3 rounded-xl bg-warn-soft px-3 py-2 text-[11px] text-warn">{warning}</p>}
+      {warning && <p className="mt-3 rounded-xl bg-warn-soft px-3 py-2 text-[11px] text-warn">{t(warning)}</p>}
 
       {busy && (
         <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted">
@@ -136,13 +136,13 @@ export function OffProductPicker({
                 </span>
                 {product.nutrition?.energyKcal != null && (
                   <span className="block truncate text-[10px] text-muted">
-                    {Math.round(product.nutrition.energyKcal)} kcal / 100 {product.nutrition.basis === "100ml" ? "ml" : "g"}
+                    {Math.round(product.nutrition.energyKcal)} {' '}{t(" kcal / 100 ")}{' '}{product.nutrition.basis === "100ml" ? "ml" : "g"}
                   </span>
                 )}
                 <span className="mt-0.5 block truncate font-mono text-[10px] text-muted">{product.code}</span>
               </span>
               <span className="flex shrink-0 flex-col items-end gap-1">
-                {product.nutriscore && <Badge tone="outline">Nutri {product.nutriscore.toUpperCase()}</Badge>}
+                {product.nutriscore && <Badge tone="outline">{t("Nutri ")}{' '}{product.nutriscore.toUpperCase()}</Badge>}
                 <Icon name="plus" size={14} className="text-brand" />
               </span>
             </button>

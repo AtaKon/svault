@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useI18n } from "@/i18n";
 import { useNavigate } from "react-router-dom";
 import { api, ApiError, prepareImage } from "@/api";
 import { useAuth, useHouse } from "@/state";
@@ -9,7 +10,7 @@ import { ocrImage } from "@/ocr";
 import { mergeOcrTexts } from "@/ocr-merge";
 import { scanDocument } from "@/document-scan";
 import { stitchImages } from "@/image-stitch";
-import { money, aiCostLabel, receiptTemplateLabel, shortDate, todayInput } from "@/format";
+import { money, aiCostLabel, receiptTemplateLabel, relativeTime, shortDate, todayInput } from "@/format";
 import { OffProductPicker } from "@/components/OffProductPicker";
 import { ItemPickerSheet } from "@/components/ItemPickerSheet";
 import { ZoomableImage } from "@/components/ZoomableImage";
@@ -135,16 +136,16 @@ function clampText(value: string, max: number): string {
   return value.trim().slice(0, max);
 }
 
-function receiptErrorMessage(err: unknown): string {
+function receiptErrorMessage(err: unknown, t: (key: string) => string): string {
   if (err instanceof ApiError && err.details) {
     const details = err.details as { formErrors?: string[]; fieldErrors?: Record<string, string[]> };
     const fields = Object.entries(details.fieldErrors ?? {}).flatMap(([field, messages]) =>
-      messages.map((message) => `${field}: ${message}`),
+      messages.map((message) => `${t(field)}: ${t(message)}`),
     );
-    const summary = [...(details.formErrors ?? []), ...fields].slice(0, 3).join("; ");
-    if (summary) return `${err.message}: ${summary}`;
+    const summary = [...(details.formErrors ?? []).map(t), ...fields].slice(0, 3).join("; ");
+    if (summary) return `${t(err.message)}: ${summary}`;
   }
-  return err instanceof Error ? err.message : "Could not add the receipt";
+  return err instanceof Error ? t(err.message) : t("Could not add the receipt");
 }
 
 function emptyLine(key: string): DraftLine {
@@ -236,15 +237,11 @@ async function uploadStillThere(path: string): Promise<boolean> {
 }
 
 function timeAgo(iso: string): string {
-  const minutes = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
-  if (!Number.isFinite(minutes) || minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes} min ago`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours} h ago`;
-  return shortDate(iso);
+  return relativeTime(iso);
 }
 
 export function ReceiptScanPage() {
+  const { t } = useI18n();
   const { house } = useHouse();
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -509,7 +506,7 @@ export function ReceiptScanPage() {
     if (!page) return;
     setOcrRunning(true);
     setOcrProgress(0);
-    setOcrStatus(count > 1 ? `Reading page ${index + 1} of ${count}` : "Starting OCR");
+    setOcrStatus(count > 1 ? t("Reading page {page} of {count}", { page: index + 1, count }) : t("Starting OCR"));
     setOcrError(null);
     patchPage(key, { status: "reading" });
     try {
@@ -517,7 +514,9 @@ export function ReceiptScanPage() {
         page.file,
         (progress, status) => {
           setOcrProgress(progress);
-          setOcrStatus(count > 1 ? `Page ${index + 1} of ${count} · ${status}` : status);
+          setOcrStatus(count > 1
+            ? `${t("Page {page} of {count}", { page: index + 1, count })} · ${t(status)}`
+            : t(status));
         },
         { mode: "receipt" },
       );
@@ -525,12 +524,12 @@ export function ReceiptScanPage() {
       patchPage(key, { text: recognised, status: "done" });
       if (!recognised) {
         setOcrError(
-          `Page ${index + 1} had no detectable text. Try a sharper, flatter photo or type the lines manually.`,
+          t("Page {page} had no detectable text. Try a sharper, flatter photo or type the lines manually.", { page: index + 1 }),
         );
       }
     } catch (err) {
       patchPage(key, { status: "error" });
-      setOcrError(err instanceof Error ? err.message : `Page ${index + 1}: OCR failed`);
+      setOcrError(err instanceof Error ? t(err.message) : t("Page {page}: OCR failed", { page: index + 1 }));
     } finally {
       setOcrRunning(false);
     }
@@ -594,7 +593,7 @@ export function ReceiptScanPage() {
       if (previous && previous !== path) releaseUpload(previous);
     } catch (err) {
       if (sequence === stitchSeqRef.current) {
-        toast.error(err instanceof Error ? err.message : "Could not combine the photos");
+        toast.error(err instanceof Error ? t(err.message) : t("Could not combine the photos"));
       }
     } finally {
       if (sequence === stitchSeqRef.current) setStitching(false);
@@ -630,7 +629,7 @@ export function ReceiptScanPage() {
           void startPageUpload(page);
           await runPageOcr(page.key, start + offset, start + files.length);
         } catch (err) {
-          toast.error(err instanceof Error ? err.message : "Could not read that photo");
+          toast.error(err instanceof Error ? t(err.message) : t("Could not read that photo"));
         }
       }
     } finally {
@@ -689,19 +688,19 @@ export function ReceiptScanPage() {
       .filter((path): path is string => Boolean(path))
       .slice(0, MAX_VISION_PAGES);
     if (!text.trim() && !uploadedPath && !pageImages.length) {
-      toast.error("Add a photo or paste the receipt text first");
+      toast.error(t("Add a photo or paste the receipt text first"));
       return;
     }
     if (uploading) {
-      toast.error("The scan is still being stored");
+      toast.error(t("The scan is still being stored"));
       return;
     }
     if (ocrRunning) {
-      toast.error("OCR is still running");
+      toast.error(t("OCR is still running"));
       return;
     }
     if (pagesRef.current.length > MAX_VISION_PAGES) {
-      toast.push(`Only the first ${MAX_VISION_PAGES} photos are sent to the vision model.`);
+      toast.push(t("Only the first {count} photos are sent to the vision model.", { count: MAX_VISION_PAGES }));
     }
     setBusy(true);
     try {
@@ -716,11 +715,11 @@ export function ReceiptScanPage() {
       });
       applyScan(data);
       if (!data.draft.lines.length) {
-        toast.push("No product lines found — add them by hand below.");
+        toast.push(t("No product lines found — add them by hand below."));
       }
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not read the receipt");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not read the receipt"));
     } finally {
       setBusy(false);
     }
@@ -875,22 +874,22 @@ export function ReceiptScanPage() {
     for (const page of pagesRef.current) {
       if (page.uploadedPath && page.uploadedPath !== receipt.image) deleteUpload(page.uploadedPath);
     }
-    toast.success(`${included.length} line${included.length === 1 ? "" : "s"} added from ${receipt.vendorName ?? "your receipt"}`);
+    toast.success(t(included.length === 1 ? "{count} line added from {vendor}" : "{count} lines added from {vendor}", { count: included.length, vendor: receipt.vendorName ?? t("your receipt") }));
     window.dispatchEvent(new Event("sv:refresh-badges"));
     navigate("/receipts", { replace: true });
   };
 
   const save = async (allowDuplicate = false) => {
     if (uploading) {
-      toast.error("The scan is still being stored");
+      toast.error(t("The scan is still being stored"));
       return;
     }
     if (!included.length) {
-      toast.error("Include at least one line");
+      toast.error(t("Include at least one line"));
       return;
     }
     if (included.some((line) => !line.description.trim())) {
-      toast.error("Every included line needs a description");
+      toast.error(t("Every included line needs a description"));
       return;
     }
     const rows = included;
@@ -902,7 +901,7 @@ export function ReceiptScanPage() {
       });
       if (check && !check.ok) {
         const count = check.lines.filter((entry) => entry.error).length;
-        toast.error(`${count} line${count === 1 ? " needs" : "s need"} attention before saving`);
+        toast.error(t(count === 1 ? "{count} line needs attention before saving" : "{count} lines need attention before saving", { count }));
         return;
       }
       if (check?.duplicateOf && !allowDuplicate) {
@@ -936,7 +935,7 @@ export function ReceiptScanPage() {
           });
         }
       }
-      toast.error(receiptErrorMessage(err));
+      toast.error(receiptErrorMessage(err, t));
     } finally {
       setSaving(false);
     }
@@ -1066,7 +1065,7 @@ export function ReceiptScanPage() {
         await rebuildStitch({ reusePath: stitchAlive && restored.length > 1 ? stored.stitchedPath : null });
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not restore the draft");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not restore the draft"));
       markDraftReady(true);
     } finally {
       setResuming(false);
@@ -1090,21 +1089,20 @@ export function ReceiptScanPage() {
   const offLine = lines.find((line) => line.key === offLineKey) ?? null;
   const pickerLine = lines.find((line) => line.key === pickerLineKey) ?? null;
   const shownCurrency = currency || house.currency;
-  const locationName = (id: string) => locations.find((location) => location.id === id)?.name ?? "another place";
+  const locationName = (id: string) => locations.find((location) => location.id === id)?.name ?? t("another place");
   const canReRead = aiAvailable && Boolean(text.trim() || uploadedPath);
 
   return (
     <div className="space-y-4">
       <PageHeader
         back={() => navigate("/receipts")}
-        eyebrow="Receipt intake"
-        title="Scan a shopping receipt"
-        subtitle="Photograph the receipt — one shot or several for a long one — check the lines, and the whole shop lands in inventory with the shop recorded."
+        eyebrow={t("Receipt intake")}
+        title={t("Scan a shopping receipt")}
+        subtitle={t("Photograph the receipt — one shot or several for a long one — check the lines, and the whole shop lands in inventory with the shop recorded.")}
         actions={
           showWorkspace ? (
             <Button variant="ghost" size="sm" icon="refresh" onClick={reset}>
-              Start over
-            </Button>
+              {t("Start over")}</Button>
           ) : undefined
         }
       />
@@ -1116,17 +1114,17 @@ export function ReceiptScanPage() {
               <Icon name="receipt" size={17} />
             </span>
             <div>
-              <div className="text-sm font-medium">Resume your unsaved receipt?</div>
+              <div className="text-sm font-medium">{t("Resume your unsaved receipt?")}</div>
               <div className="text-[11px] text-muted">
                 {[
                   pendingDraft.data.vendorName || null,
                   pendingDraft.data.pages?.length
-                    ? `${pendingDraft.data.pages.length} photo${pendingDraft.data.pages.length === 1 ? "" : "s"}`
+                    ? t(pendingDraft.data.pages.length === 1 ? "{count} photo" : "{count} photos", { count: pendingDraft.data.pages.length })
                     : null,
                   pendingDraft.data.lines?.length
-                    ? `${pendingDraft.data.lines.length} line${pendingDraft.data.lines.length === 1 ? "" : "s"}`
+                    ? t(pendingDraft.data.lines.length === 1 ? "{count} line" : "{count} lines", { count: pendingDraft.data.lines.length })
                     : null,
-                  `saved ${timeAgo(pendingDraft.savedAt)}`,
+                  t("saved {date}", { date: timeAgo(pendingDraft.savedAt) }),
                 ]
                   .filter(Boolean)
                   .join(" · ")}
@@ -1135,11 +1133,9 @@ export function ReceiptScanPage() {
           </div>
           <div className="flex gap-2">
             <Button size="sm" variant="secondary" onClick={discardDraft} disabled={resuming}>
-              Discard
-            </Button>
+              {t("Discard")}</Button>
             <Button size="sm" icon="refresh" loading={resuming} onClick={() => void resumeDraft()}>
-              Resume
-            </Button>
+              {t("Resume")}</Button>
           </div>
         </Card>
       )}
@@ -1151,13 +1147,12 @@ export function ReceiptScanPage() {
               <Icon name="receipt" size={28} />
             </span>
             <div>
-              <div className="font-display text-xl">Add the receipt photos</div>
-              <div className="mt-1 text-xs text-muted">Any angle · each paper is straightened on this device</div>
+              <div className="font-display text-xl">{t("Add the receipt photos")}</div>
+              <div className="mt-1 text-xs text-muted">{t("Any angle · each paper is straightened on this device")}</div>
             </div>
             <div className="flex flex-wrap justify-center gap-2">
               <Button type="button" icon="camera" disabled={Boolean(pendingDraft)} onClick={() => cameraRef.current?.click()}>
-                Take photo
-              </Button>
+                {t("Take photo")}</Button>
               <Button
                 type="button"
                 variant="secondary"
@@ -1165,12 +1160,10 @@ export function ReceiptScanPage() {
                 disabled={Boolean(pendingDraft)}
                 onClick={() => libraryRef.current?.click()}
               >
-                Upload photos
-              </Button>
+                {t("Upload photos")}</Button>
             </div>
             <p className="text-[11px] text-muted">
-              JPG, PNG or HEIC from your camera roll. A long receipt can be photographed in several overlapping shots.
-            </p>
+              {t("JPG, PNG or HEIC from your camera roll. A long receipt can be photographed in several overlapping shots.")}</p>
             <input
               ref={cameraRef}
               type="file"
@@ -1201,15 +1194,12 @@ export function ReceiptScanPage() {
               <Icon name="store" size={19} />
             </div>
             <div>
-              <div className="font-display text-lg">Where did you shop?</div>
+              <div className="font-display text-lg">{t("Where did you shop?")}</div>
               <p className="mt-1 text-xs leading-relaxed text-muted">
-                Each line records the shop, the price and the purchase date. Existing items get new batches — unknown
-                products become new inventory items, ready to review.
-              </p>
+                {t("Each line records the shop, the price and the purchase date. Existing items get new batches — unknown products become new inventory items, ready to review.")}</p>
             </div>
             <Button variant="secondary" icon="pencil" disabled={Boolean(pendingDraft)} onClick={() => setManualMode(true)}>
-              Type or paste the receipt
-            </Button>
+              {t("Type or paste the receipt")}</Button>
           </Card>
         </div>
       ) : (
@@ -1219,7 +1209,7 @@ export function ReceiptScanPage() {
               {displayPreview ? (
                 <ZoomableImage
                   src={displayPreview}
-                  alt={pages.length > 1 ? "Combined receipt scan" : "Receipt scan"}
+                  alt={pages.length > 1 ? t("Combined receipt scan") : t("Receipt scan")}
                   className="max-h-[380px] w-full bg-raised object-contain"
                 />
               ) : (
@@ -1227,8 +1217,8 @@ export function ReceiptScanPage() {
                   <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-soft text-brand">
                     <Icon name="receipt" size={22} />
                   </span>
-                  <div className="text-sm font-medium">Type the receipt</div>
-                  <div className="max-w-xs text-[11px] text-muted">One product per line, price at the end.</div>
+                  <div className="text-sm font-medium">{t("Type the receipt")}</div>
+                  <div className="max-w-xs text-[11px] text-muted">{t("One product per line, price at the end.")}</div>
                 </div>
               )}
 
@@ -1239,7 +1229,7 @@ export function ReceiptScanPage() {
                       <button
                         type="button"
                         onClick={() => setViewKey("combined")}
-                        aria-label="View the combined scan"
+                        aria-label={t("View the combined scan")}
                         className={cn(
                           "relative h-16 w-14 shrink-0 overflow-hidden rounded-lg border bg-raised",
                           viewKey === "combined" ? "border-brand ring-2 ring-brand/30" : "border-line",
@@ -1253,8 +1243,7 @@ export function ReceiptScanPage() {
                           </span>
                         )}
                         <span className="absolute inset-x-0 bottom-0 bg-black/55 py-0.5 text-center text-[9px] font-medium text-white">
-                          All
-                        </span>
+                          {t("All")}</span>
                       </button>
                     )}
                     {pages.map((page, index) => (
@@ -1262,7 +1251,7 @@ export function ReceiptScanPage() {
                         key={page.key}
                         type="button"
                         onClick={() => setViewKey(page.key)}
-                        aria-label={`View receipt page ${index + 1}`}
+                        aria-label={t("View receipt page {page}", { page: index + 1 })}
                         className={cn(
                           "relative h-16 w-14 shrink-0 overflow-hidden rounded-lg border bg-raised",
                           viewKey === page.key ? "border-brand ring-2 ring-brand/30" : "border-line",
@@ -1283,27 +1272,27 @@ export function ReceiptScanPage() {
                     <button
                       type="button"
                       onClick={() => libraryRef.current?.click()}
-                      aria-label="Add another receipt photo"
+                      aria-label={t("Add another receipt photo")}
                       className="flex h-16 w-14 shrink-0 flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-line text-muted transition-colors hover:border-brand hover:text-brand"
                     >
                       <Icon name="plus" size={15} />
-                      <span className="text-[9px]">Add</span>
+                      <span className="text-[9px]">{t("Add")}</span>
                     </button>
                   </div>
 
                   {activePage ? (
                     <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-muted">
                       <span>
-                        Page {activeIndex + 1} of {pages.length}
-                        {activePage.trimmed ? " · straightened" : ""}
-                        {activePage.upload === "error" ? " · not uploaded" : ""}
+                        {t("Page")} {activeIndex + 1} {t("of")} {pages.length}
+                        {activePage.trimmed ? t(" · straightened") : ""}
+                        {activePage.upload === "error" ? t(" · not uploaded") : ""}
                       </span>
                       <span className="flex items-center gap-1">
                         <button
                           type="button"
                           onClick={() => void runPageOcr(activePage.key, activeIndex, pages.length)}
                           disabled={ocrRunning || stitching || activePage.status === "reading"}
-                          aria-label="Re-run OCR for this page"
+                          aria-label={t("Re-run OCR for this page")}
                           className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-raised disabled:opacity-30"
                         >
                           <Icon name="refresh" size={13} />
@@ -1312,7 +1301,7 @@ export function ReceiptScanPage() {
                           type="button"
                           onClick={() => void movePage(activePage.key, -1)}
                           disabled={activeIndex <= 0}
-                          aria-label="Move this page earlier"
+                          aria-label={t("Move this page earlier")}
                           className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-raised disabled:opacity-30"
                         >
                           <Icon name="arrowLeft" size={13} />
@@ -1321,7 +1310,7 @@ export function ReceiptScanPage() {
                           type="button"
                           onClick={() => void movePage(activePage.key, 1)}
                           disabled={activeIndex >= pages.length - 1}
-                          aria-label="Move this page later"
+                          aria-label={t("Move this page later")}
                           className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-raised disabled:opacity-30"
                         >
                           <Icon name="chevronRight" size={13} />
@@ -1329,7 +1318,7 @@ export function ReceiptScanPage() {
                         <button
                           type="button"
                           onClick={() => void removePage(activePage.key)}
-                          aria-label="Remove this page"
+                          aria-label={t("Remove this page")}
                           className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-raised hover:text-danger"
                         >
                           <Icon name="trash" size={13} />
@@ -1338,8 +1327,9 @@ export function ReceiptScanPage() {
                     </div>
                   ) : (
                     <div className="mt-1 text-[11px] text-muted">
-                      {pages.length} photo{pages.length === 1 ? "" : "s"} stitched into one scan
-                      {mergeRemoved > 0 ? ` · ${mergeRemoved} duplicate line${mergeRemoved === 1 ? "" : "s"} skipped` : ""}
+                      {pages.length} {pages.length === 1 ? t("photo") : t("photos")} {t("stitched into one scan")}{mergeRemoved > 0
+                        ? t(mergeRemoved === 1 ? " · {count} duplicate line skipped" : " · {count} duplicate lines skipped", { count: mergeRemoved })
+                        : ""}
                     </div>
                   )}
                 </div>
@@ -1348,23 +1338,21 @@ export function ReceiptScanPage() {
               <div className="flex items-center justify-between px-3 py-2 text-[11px] text-muted">
                 <span>
                   {uploading
-                    ? "Storing the scan…"
+                    ? t("Storing the scan…")
                     : uploadedPath
                       ? pages.length > 1
-                        ? `${pages.length} photos stitched · scan stored`
-                        : "Scan stored with the receipt"
+                        ? t("{count} photos stitched · scan stored", { count: pages.length })
+                        : t("Scan stored with the receipt")
                       : pages.length
-                        ? "Scan not stored yet"
-                        : "No photo"}
+                        ? t("Scan not stored yet")
+                        : t("No photo")}
                 </span>
                 <span className="flex items-center gap-2">
                   <button type="button" onClick={() => cameraRef.current?.click()} className="font-medium text-brand hover:underline">
-                    Camera
-                  </button>
+                    {t("Camera")}</button>
                   <span>·</span>
                   <button type="button" onClick={() => libraryRef.current?.click()} className="font-medium text-brand hover:underline">
-                    Upload
-                  </button>
+                    {t("Upload")}</button>
                 </span>
               </div>
               <input
@@ -1395,13 +1383,12 @@ export function ReceiptScanPage() {
 
             <Card className="p-4">
               <div className="flex items-center justify-between gap-2">
-                <h2 className="font-display text-lg">Recognised text</h2>
+                <h2 className="font-display text-lg">{t("Recognised text")}</h2>
                 <div className="flex flex-wrap items-center justify-end gap-1.5 text-[11px] text-muted">
-                  {pages.length > 1 && <Badge tone="outline">{pages.length} pages</Badge>}
+                  {pages.length > 1 && <Badge tone="outline">{pages.length} {t("pages")}</Badge>}
                   {mergeRemoved > 0 && (
                     <Badge tone="brand">
-                      {mergeRemoved} duplicate line{mergeRemoved === 1 ? "" : "s"} skipped
-                    </Badge>
+                      {mergeRemoved} {t("duplicate line")}{mergeRemoved === 1 ? "" : t("s")} {t("skipped")}</Badge>
                   )}
                   {ocrRunning && (
                     <span className="flex items-center gap-1.5">
@@ -1418,14 +1405,13 @@ export function ReceiptScanPage() {
               {ocrRunning && <p className="mt-1.5 text-[11px] text-muted">{ocrStatus}</p>}
               {ocrError && (
                 <div className="mt-2 rounded-xl bg-warn-soft px-3 py-2 text-[11px] text-warn">
-                  {ocrError} You can still edit the text below or add lines by hand.
-                </div>
+                  {ocrError} {t("You can still edit the text below or add lines by hand.")}</div>
               )}
               <Textarea
                 rows={8}
                 value={text}
                 onChange={(event) => setText(event.target.value)}
-                placeholder={"CORNER MARKET\n12/10/2026\nMilk 1.5 l 2.40\nBread 3.10\nTOTAL 5.50"}
+                placeholder={t("CORNER MARKET\n12/10/2026\nMilk 1.5 l 2.40\nBread 3.10\nTOTAL 5.50")}
                 className="mt-2 text-[13px]"
               />
               <div className="mt-2 flex flex-wrap gap-2">
@@ -1438,12 +1424,10 @@ export function ReceiptScanPage() {
                     onClick={() => void rerunAllOcr()}
                     disabled={ocrRunning || stitching}
                   >
-                    Re-run OCR
-                  </Button>
+                    {t("Re-run OCR")}</Button>
                 )}
                 <Button type="button" size="sm" icon="sparkles" loading={busy} onClick={() => void readReceipt()}>
-                  Read receipt
-                </Button>
+                  {t("Read receipt")}</Button>
               </div>
             </Card>
           </div>
@@ -1451,27 +1435,27 @@ export function ReceiptScanPage() {
           <div className="space-y-3">
             <Card className="space-y-3 p-4">
               <div className="flex items-center justify-between gap-2">
-                <h2 className="font-display text-lg">Receipt details</h2>
+                <h2 className="font-display text-lg">{t("Receipt details")}</h2>
                 {provider && (
                   <div className="flex items-center gap-1.5">
                     <Badge tone={provider === "local" ? "neutral" : "brand"}>
                       {provider === "template"
-                        ? receiptTemplateLabel(templateId) ?? "template"
+                        ? t(receiptTemplateLabel(templateId) ?? "template")
                         : provider === "ai"
-                          ? "AI read"
-                          : "local read"}
+                          ? t("AI read")
+                          : t("local read")}
                     </Badge>
                     {aiCost != null && <Badge tone="outline">{aiCostLabel(aiCost)}</Badge>}
                   </div>
                 )}
               </div>
-              {warning && <p className="rounded-xl bg-raised px-3 py-2 text-[11px] leading-relaxed text-muted">{warning}</p>}
-              <Field label="Shop" hint="starts a new shop if unknown">
+              {warning && <p className="rounded-xl bg-raised px-3 py-2 text-[11px] leading-relaxed text-muted">{t(warning)}</p>}
+              <Field label={t("Shop")} hint={t("starts a new shop if unknown")}>
                 <Input
                   value={vendorName}
                   onChange={(event) => setVendorName(event.target.value)}
                   list="receipt-vendor-options"
-                  placeholder="Corner Market, bakery, online shop…"
+                  placeholder={t("Corner Market, bakery, online shop…")}
                   maxLength={80}
                 />
                 <datalist id="receipt-vendor-options">
@@ -1481,10 +1465,10 @@ export function ReceiptScanPage() {
                 </datalist>
               </Field>
               <div className="grid grid-cols-2 gap-3">
-                <Field label="Purchased on">
+                <Field label={t("Purchased on")}>
                   <Input type="date" value={purchasedAt} onChange={(event) => setPurchasedAt(event.target.value)} />
                 </Field>
-                <Field label="Total" hint={currency || "currency"}>
+                <Field label={t("Total")} hint={currency || t("currency")}>
                   <Input
                     type="number"
                     inputMode="decimal"
@@ -1497,7 +1481,7 @@ export function ReceiptScanPage() {
                 </Field>
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <Field label="Net" hint="before tax">
+                <Field label={t("Net")} hint={t("before tax")}>
                   <Input
                     type="number"
                     inputMode="decimal"
@@ -1512,7 +1496,7 @@ export function ReceiptScanPage() {
                     }
                   />
                 </Field>
-                <Field label="Tax / VAT" hint="included in total">
+                <Field label={t("Tax / VAT")} hint={t("included in total")}>
                   <Input
                     type="number"
                     inputMode="decimal"
@@ -1526,21 +1510,21 @@ export function ReceiptScanPage() {
               </div>
               {taxBreakdown.length > 0 && (
                 <div className="rounded-xl bg-raised px-3 py-2">
-                  <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">VAT split</div>
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">{t("VAT split")}</div>
                   <div className="mt-1.5 flex flex-wrap gap-1.5">
                     {taxBreakdown.map((entry, index) => (
                       <Badge key={`${entry.rate ?? "tax"}-${index}`} tone="outline">
-                        {entry.rate != null ? `${entry.rate}%` : "Tax"} · {money(entry.tax, shownCurrency)}
-                        <span className="font-normal opacity-70">of {money(entry.gross, shownCurrency)}</span>
+                        {entry.rate != null ? `${entry.rate}%` : t("Tax")} · {money(entry.tax, shownCurrency)}
+                        <span className="font-normal opacity-70">{t("of")} {money(entry.gross, shownCurrency)}</span>
                       </Badge>
                     ))}
                   </div>
                 </div>
               )}
               <div className="grid grid-cols-[1fr_96px] gap-3">
-                <Field label="Put everything in" hint="lines can override">
+                <Field label={t("Put everything in")} hint={t("lines can override")}>
                   <Select value={locationId} onChange={(event) => setLocationId(event.target.value)}>
-                    <option value="">Unassigned</option>
+                    <option value="">{t("Unassigned")}</option>
                     {locations.map((location) => (
                       <option key={location.id} value={location.id}>
                         {location.icon} {location.name}
@@ -1548,7 +1532,7 @@ export function ReceiptScanPage() {
                     ))}
                   </Select>
                 </Field>
-                <Field label="Currency">
+                <Field label={t("Currency")}>
                   <Input
                     value={currency}
                     onChange={(event) => setCurrency(event.target.value.toUpperCase().slice(0, 3))}
@@ -1562,26 +1546,24 @@ export function ReceiptScanPage() {
             <Card className="p-4">
               <div className="mb-2 flex items-center justify-between gap-2">
                 <div>
-                  <h2 className="font-display text-lg">Products</h2>
+                  <h2 className="font-display text-lg">{t("Products")}</h2>
                   <p className="text-[11px] text-muted">
-                    {included.length} of {lines.length} included
-                    {newItemCount ? ` · ${newItemCount} new item${newItemCount === 1 ? "" : "s"}` : ""}
-                    {lineErrors ? ` · ${lineErrors} to fix` : ""}
+                    {included.length} {t("of")} {lines.length} {t("included")}{newItemCount
+                      ? t(newItemCount === 1 ? " · {count} new item" : " · {count} new items", { count: newItemCount })
+                      : ""}
+                    {lineErrors ? t(" · {count} to fix", { count: lineErrors }) : ""}
                   </p>
                 </div>
                 <Button size="sm" variant="secondary" icon="plus" onClick={addLine}>
-                  Add line
-                </Button>
+                  {t("Add line")}</Button>
               </div>
 
               <p className="mb-2 text-[11px] leading-relaxed text-muted">
-                Pin a line to an existing item and SVault remembers this shop-specific name for your next receipt.
-              </p>
+                {t("Pin a line to an existing item and SVault remembers this shop-specific name for your next receipt.")}</p>
 
               {lines.length === 0 ? (
                 <p className="py-3 text-sm text-muted">
-                  Read the receipt or tap “Add line” to start. Prices and quantities can be corrected here.
-                </p>
+                  {t("Read the receipt or tap “Add line” to start. Prices and quantities can be corrected here.")}</p>
               ) : (
                 <div className="space-y-2">
                   {lines.map((line) => {
@@ -1609,7 +1591,7 @@ export function ReceiptScanPage() {
                             checked={line.include}
                             onChange={(event) => updateLine(line.key, { include: event.target.checked })}
                             className="mt-1 h-4 w-4 shrink-0 accent-[var(--sv-brand)]"
-                            aria-label="Include this line"
+                            aria-label={t("Include this line")}
                           />
                           <div className="min-w-0 flex-1 space-y-2">
                             <div className="flex items-start gap-2">
@@ -1618,7 +1600,7 @@ export function ReceiptScanPage() {
                                 onChange={(event) =>
                                   updateLine(line.key, { description: event.target.value, itemId: "", itemName: null, itemUnit: null })
                                 }
-                                placeholder="Product"
+                                placeholder={t("Product")}
                                 className="h-9 text-[13px]"
                                 maxLength={160}
                               />
@@ -1629,7 +1611,7 @@ export function ReceiptScanPage() {
                                   "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg hover:bg-raised",
                                   hasOverrides ? "text-brand" : "text-muted",
                                 )}
-                                aria-label={line.expanded ? "Hide line details" : "Show line details"}
+                                aria-label={line.expanded ? t("Hide line details") : t("Show line details")}
                                 aria-expanded={line.expanded}
                               >
                                 <Icon name={line.expanded ? "chevronDown" : "more"} size={14} />
@@ -1638,46 +1620,46 @@ export function ReceiptScanPage() {
                                 type="button"
                                 onClick={() => removeLine(line.key)}
                                 className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-raised hover:text-danger"
-                                aria-label="Remove line"
+                                aria-label={t("Remove line")}
                               >
                                 <Icon name="close" size={14} />
                               </button>
                             </div>
                             {line.rawDescription && line.rawDescription !== line.description && (
-                              <div className="truncate text-[10px] text-muted">receipt: {line.rawDescription}</div>
+                              <div className="truncate text-[10px] text-muted">{t("receipt:")} {line.rawDescription}</div>
                             )}
                             <div className="grid grid-cols-3 gap-2">
                               <Input
                                 value={line.quantity}
                                 onChange={(event) => updateLine(line.key, { quantity: event.target.value })}
-                                placeholder="Qty"
+                                placeholder={t("Qty")}
                                 inputMode="decimal"
                                 className="h-9 text-[12px]"
-                                aria-label="Quantity"
+                                aria-label={t("Quantity")}
                               />
                               <Input
                                 value={line.unit}
                                 onChange={(event) => updateLine(line.key, { unit: event.target.value })}
-                                placeholder="Unit"
+                                placeholder={t("Unit")}
                                 className="h-9 text-[12px]"
                                 maxLength={10}
-                                aria-label="Unit"
+                                aria-label={t("Unit")}
                               />
                               <Input
                                 value={line.unitPrice}
                                 onChange={(event) => updateLine(line.key, { unitPrice: event.target.value })}
-                                placeholder={`Price / ${line.unit || "unit"}`}
+                                placeholder={t("Price / {unit}", { unit: line.unit || t("unit") })}
                                 inputMode="decimal"
                                 className="h-9 text-[12px]"
-                                aria-label="Unit price"
+                                aria-label={t("Unit price")}
                               />
                             </div>
                             <div className="flex flex-wrap items-center gap-2 text-[11px]">
-                              {line.taxRate != null && <Badge tone="outline">VAT {line.taxRate}%</Badge>}
+                              {line.taxRate != null && <Badge tone="outline">{t("VAT ")}{' '}{line.taxRate}%</Badge>}
                               {(line.discount ?? 0) > 0 && <Badge tone="brand">−{money(line.discount, shownCurrency)}</Badge>}
                               {line.itemId ? (
                                 <Badge tone="brand">
-                                  <Icon name="box" size={10} /> {line.itemName ?? check?.itemName ?? "chosen item"}
+                                  <Icon name="box" size={10} /> {line.itemName ?? check?.itemName ?? t("chosen item")}
                                   {(line.itemUnit ?? check?.itemUnit) ? (
                                     <span className="font-normal opacity-80">· {line.itemUnit ?? check?.itemUnit}</span>
                                   ) : null}
@@ -1687,13 +1669,12 @@ export function ReceiptScanPage() {
                                   <Icon name="box" size={10} /> {check.itemName}
                                   <span className="font-normal opacity-80">
                                     · {check.itemUnit}
-                                    {check.match === "fuzzy" ? " · similar name" : ""}
+                                    {check.match === "fuzzy" ? t(" · similar name") : ""}
                                   </span>
                                 </Badge>
                               ) : check?.willCreate || (check && !check.itemId && !check.error) ? (
                                 <Badge tone="outline">
-                                  <Icon name="plus" size={10} /> new item
-                                </Badge>
+                                  <Icon name="plus" size={10} /> {t("new item")}</Badge>
                               ) : null}
                               {suggestion && (!check?.itemId || check.itemId !== suggestion.id) && (
                                 <span className="inline-flex items-center gap-1.5">
@@ -1713,8 +1694,7 @@ export function ReceiptScanPage() {
                                     }
                                     className="text-[10px] font-medium text-brand hover:underline"
                                   >
-                                    use
-                                  </button>
+                                    {t("use")}</button>
                                 </span>
                               )}
                               {line.offCode ? (
@@ -1728,8 +1708,7 @@ export function ReceiptScanPage() {
                                     onClick={() => setOffLineKey(line.key)}
                                     className="text-[10px] font-medium text-brand hover:underline"
                                   >
-                                    change
-                                  </button>
+                                    {t("change")}</button>
                                   <button
                                     type="button"
                                     onClick={() =>
@@ -1744,8 +1723,7 @@ export function ReceiptScanPage() {
                                     }
                                     className="text-[10px] text-muted hover:text-danger"
                                   >
-                                    clear
-                                  </button>
+                                    {t("clear")}</button>
                                 </span>
                               ) : line.description.trim() ? (
                                 <button
@@ -1753,42 +1731,41 @@ export function ReceiptScanPage() {
                                   onClick={() => setOffLineKey(line.key)}
                                   className="text-[10px] font-medium text-brand hover:underline"
                                 >
-                                  Find OpenFoodFacts
-                                </button>
+                                  {t("Find OpenFoodFacts")}</button>
                               ) : null}
                               {!line.expanded && line.locationId && <Badge tone="outline">{locationName(line.locationId)}</Badge>}
-                              {!line.expanded && line.expiresAt && <Badge tone="outline">exp {shortDate(line.expiresAt)}</Badge>}
+                              {!line.expanded && line.expiresAt && <Badge tone="outline">{t("exp")} {shortDate(line.expiresAt)}</Badge>}
                             </div>
                             <div className="flex items-center gap-2">
                               <button
                                 type="button"
                                 onClick={() => setPickerLineKey(line.key)}
                                 className="flex h-8 min-w-0 flex-1 items-center justify-between gap-2 rounded-lg border border-line bg-surface px-2.5 text-left text-[12px] hover:bg-raised"
-                                aria-label="Match to item"
+                                aria-label={t("Match to item")}
                               >
-                                <span className="truncate">{line.itemId ? line.itemName ?? "Chosen item" : "Auto (match or create)"}</span>
+                                <span className="truncate">{line.itemId ? line.itemName ?? t("Chosen item") : t("Auto (match or create)")}</span>
                                 <Icon name="chevronDown" size={12} />
                               </button>
                               <Input
                                 value={line.lineTotal}
                                 onChange={(event) => updateLine(line.key, { lineTotal: event.target.value })}
-                                placeholder="Line total"
+                                placeholder={t("Line total")}
                                 inputMode="decimal"
                                 className="h-8 w-[96px] text-[12px]"
-                                aria-label="Line total"
+                                aria-label={t("Line total")}
                               />
                             </div>
                             {check?.error && <p className="text-[11px] leading-snug text-danger">{check.error}</p>}
                             {line.expanded && (
                               <div className="grid grid-cols-1 gap-2 rounded-lg bg-raised p-2 min-[360px]:grid-cols-2">
-                                <Field label="Place">
+                                <Field label={t("Place")}>
                                   <Select
                                     value={line.locationId}
                                     onChange={(event) => updateLine(line.key, { locationId: event.target.value })}
                                     className="h-9 text-[12px]"
                                   >
                                     <option value="">
-                                      Same as receipt{locationId ? ` (${locationName(locationId)})` : ""}
+                                      {t("Same as receipt")}{locationId ? ` (${locationName(locationId)})` : ""}
                                     </option>
                                     {locations.map((location) => (
                                       <option key={location.id} value={location.id}>
@@ -1797,7 +1774,7 @@ export function ReceiptScanPage() {
                                     ))}
                                   </Select>
                                 </Field>
-                                <Field label="Best before" hint="optional">
+                                <Field label={t("Best before")} hint={t("optional")}>
                                   <Input
                                     type="date"
                                     value={line.expiresAt}
@@ -1836,12 +1813,9 @@ export function ReceiptScanPage() {
                 disabled={!included.length || Boolean(pendingDraft)}
                 onClick={() => void save()}
               >
-                Add {included.length || ""} line{included.length === 1 ? "" : "s"} to inventory
-              </Button>
+                {t("Add")} {included.length || ""} {t("line")}{included.length === 1 ? "" : t("s")} {t("to inventory")}</Button>
               <p className="mt-2 text-[11px] text-muted">
-                Matched items receive a new batch with the price, shop and date. New items are created with the quantity
-                and unit from the receipt — you can refine them afterwards.
-              </p>
+                {t("Matched items receive a new batch with the price, shop and date. New items are created with the quantity and unit from the receipt — you can refine them afterwards.")}</p>
             </Card>
           </div>
         </div>
@@ -1852,7 +1826,7 @@ export function ReceiptScanPage() {
         onClose={() => setOffLineKey(null)}
         onSelect={applyOffProduct}
         initialQuery={offLine?.barcode ?? offLine?.description ?? ""}
-        title="Match receipt line"
+        title={t("Match receipt line")}
       />
 
       <ItemPickerSheet
@@ -1876,33 +1850,29 @@ export function ReceiptScanPage() {
       <Sheet
         open={Boolean(duplicate)}
         onClose={() => setDuplicate(null)}
-        title="Already saved?"
+        title={t("Already saved?")}
         footer={
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={() => setDuplicate(null)} disabled={saving}>
-              Cancel
-            </Button>
+              {t("Cancel")}</Button>
             <Button loading={saving} onClick={() => void save(true)}>
-              Save anyway
-            </Button>
+              {t("Save anyway")}</Button>
           </div>
         }
       >
         {duplicate && (
           <div className="space-y-3 text-sm">
             <p className="text-muted">
-              A receipt from <span className="font-medium text-ink">{duplicate.vendorName ?? "this shop"}</span> on{" "}
-              {duplicate.purchasedAt ? shortDate(duplicate.purchasedAt) : "the same day"} with the same total (
-              {money(duplicate.total, shownCurrency)}) is already in SVault. Saving again adds the stock a second time.
-            </p>
+              {t("A receipt from")} <span className="font-medium text-ink">{duplicate.vendorName ?? t("this shop")}</span> {t("on")}{" "}
+              {duplicate.purchasedAt ? shortDate(duplicate.purchasedAt) : t("the same day")} {t("with the same total (")}{money(duplicate.total, shownCurrency)}{t(") is already in SVault. Saving again adds the stock a second time.")}</p>
             <button
               type="button"
               onClick={() => navigate(`/receipts?receipt=${encodeURIComponent(duplicate.id)}`)}
               className="inline-flex items-center gap-1 text-[13px] font-medium text-brand hover:underline"
             >
-              Open the saved receipt <Icon name="arrowUpRight" size={13} />
+              {t("Open the saved receipt")} <Icon name="arrowUpRight" size={13} />
             </button>
-            <p className="text-[11px] text-muted">Your draft stays on this device if you open it.</p>
+            <p className="text-[11px] text-muted">{t("Your draft stays on this device if you open it.")}</p>
           </div>
         )}
       </Sheet>
@@ -1912,14 +1882,10 @@ export function ReceiptScanPage() {
           <Icon name="key" size={17} />
         </span>
         <div className="text-[11px] leading-relaxed text-muted">
-          Receipt OCR runs in your browser with English and Greek language data. When AI is enabled in{" "}
+          {t("Receipt OCR runs in your browser with English and Greek language data. When AI is enabled in")}{" "}
           <button onClick={() => navigate("/settings?tab=ai")} className="font-medium text-brand hover:underline">
-            Settings → AI
-          </button>
-          , the recognised text and — if a vision model is configured — the photos are sent to your provider to tidy the
-          lines. Without it, SVault uses a local line parser and you correct anything it missed. An unsaved scan is kept
-          on this device until you save or discard it.
-        </div>
+            {t("Settings → AI")}</button>
+          {t(", the recognised text and — if a vision model is configured — the photos are sent to your provider to tidy the lines. Without it, SVault uses a local line parser and you correct anything it missed. An unsaved scan is kept on this device until you save or discard it.")}</div>
       </Card>
     </div>
   );
@@ -1949,11 +1915,12 @@ function ReconciliationBar({
   rereading: boolean;
   onReRead: () => void;
 }) {
+  const { t } = useI18n();
   return (
     <div className="mt-3 space-y-2">
       {savings > 0 && (
         <div className="flex items-center justify-between rounded-xl bg-brand-soft px-3 py-2 text-xs text-brand">
-          <span>Money saved</span>
+          <span>{t("Money saved")}</span>
           <span className="font-semibold">{money(savings, currency)}</span>
         </div>
       )}
@@ -1967,14 +1934,14 @@ function ReconciliationBar({
         <div className="flex items-center justify-between gap-2">
           <span className={printedTotal == null || !hasLines ? "text-muted" : undefined}>
             {!hasLines
-              ? "Products total"
+              ? t("Products total")
               : printedTotal == null
-                ? "Products total · no receipt total to check against"
+                ? t("Products total · no receipt total to check against")
                 : ok
-                  ? "Lines match the receipt total"
+                  ? t("Lines match the receipt total")
                   : (difference ?? 0) > 0
-                    ? "Lines are short of the receipt total"
-                    : "Lines add up to more than the receipt total"}
+                    ? t("Lines are short of the receipt total")
+                    : t("Lines add up to more than the receipt total")}
           </span>
           <span className="flex items-center gap-1.5 font-medium">
             {ok && printedTotal != null && hasLines && <Icon name="check" size={13} />}
@@ -1985,13 +1952,11 @@ function ReconciliationBar({
         {printedTotal != null && hasLines && !ok && difference != null && (
           <div className="mt-1 flex flex-wrap items-center justify-between gap-2 text-[11px]">
             <span>
-              Gap {money(Math.abs(difference), currency)}
-              {savings > 0 ? ` after ${money(savings, currency)} savings` : ""} — check for missing or misread lines.
-            </span>
+              {t("Gap")} {money(Math.abs(difference), currency)}
+              {savings > 0 ? t(" after {amount} savings", { amount: money(savings, currency) }) : ""} {t("— check for missing or misread lines.")}</span>
             {canReRead && (
               <Button size="sm" variant="secondary" icon="sparkles" loading={rereading} onClick={onReRead}>
-                Re-read with AI
-              </Button>
+                {t("Re-read with AI")}</Button>
             )}
           </div>
         )}

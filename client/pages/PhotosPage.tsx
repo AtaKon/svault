@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useI18n } from "@/i18n";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, imageSize, prepareImage, qs } from "@/api";
 import { useHouse } from "@/state";
@@ -20,10 +21,11 @@ import {
 import { Icon } from "@/components/icons";
 import { PhotoViewer } from "@/components/PhotoViewer";
 import { useToast } from "@/components/toast";
-import { plural, qty } from "@/format";
+import { qty } from "@/format";
 import type { Photo, PhotoCollection } from "@shared/types";
 
 export function PhotosPage() {
+  const { t } = useI18n();
   const { house, can } = useHouse();
   const navigate = useNavigate();
   const toast = useToast();
@@ -53,7 +55,7 @@ export function PhotosPage() {
       const data = await api<PhotoCollection[]>(`/api/houses/${house.id}/collections`);
       setCollections(data);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not load folders");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not load folders"));
       setCollections([]);
     }
   }, [house.id, toast]);
@@ -66,7 +68,7 @@ export function PhotosPage() {
       setPhotos((current) => (offset > 0 ? [...(current ?? []), ...data.photos] : data.photos));
       setTotal(data.total);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not load photos");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not load photos"));
       if (offset === 0) setPhotos([]);
     }
   }, [house.id, collectionId, unlabeled, itemId, toast]);
@@ -108,10 +110,10 @@ export function PhotosPage() {
       form.append("meta", JSON.stringify(meta));
       if (collectionId) form.append("collectionId", collectionId);
       await api(`/api/houses/${house.id}/photos`, { method: "POST", body: form });
-      toast.success(`${plural(list.length, "photo")} uploaded`);
+      toast.success(t("{count} photos uploaded", { count: list.length }));
       await Promise.all([loadPhotos(), loadCollections()]);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Upload failed");
+      toast.error(err instanceof Error ? t(err.message) : t("Upload failed"));
     } finally {
       setUploading(null);
       if (fileRef.current) fileRef.current.value = "";
@@ -128,9 +130,9 @@ export function PhotosPage() {
       await loadCollections();
       setFolderOpen(false);
       setParam("collection", folder.id);
-      toast.success("Folder created");
+      toast.success(t("Folder created"));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not create the folder");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not create the folder"));
     } finally {
       setBusy(false);
     }
@@ -141,12 +143,12 @@ export function PhotosPage() {
     setBusy(true);
     try {
       await api(`/api/houses/${house.id}/collections/${selectedCollection.id}`, { method: "DELETE" });
-      toast.success("Folder deleted");
+      toast.success(t("Folder deleted"));
       setDeleteCollectionOpen(false);
       setParam("collection", null);
       await Promise.all([loadCollections(), loadPhotos()]);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not delete the folder");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not delete the folder"));
     } finally {
       setBusy(false);
     }
@@ -158,29 +160,25 @@ export function PhotosPage() {
     <div className="space-y-4">
       <PageHeader
         back={() => navigate("/more")}
-        eyebrow={`${qty(total)} photos`}
-        title="Photo library"
-        subtitle="Folders of photos, labelled for training your own vision models."
+        eyebrow={t("{count} photos", { count: total })}
+        title={t("Photo library")}
+        subtitle={t("Folders of photos, labelled for training your own vision models.")}
         actions={
           <>
             <div className="hidden sm:block">
               <Button variant="secondary" icon="upload" onClick={() => setDatasetOpen(true)} disabled={!can("member")}>
-                Import dataset
-              </Button>
+                {t("Import dataset")}</Button>
             </div>
             <div className="hidden sm:block">
               <Button variant="secondary" icon="image" onClick={() => setReviewOpen(true)}>
-                Review
-              </Button>
+                {t("Review")}</Button>
             </div>
             <div className="hidden sm:block">
               <Button variant="secondary" icon="download" onClick={() => setExportOpen(true)}>
-                Export
-              </Button>
+                {t("Export")}</Button>
             </div>
             <Button icon="upload" onClick={() => fileRef.current?.click()} loading={Boolean(uploading)}>
-              Upload
-            </Button>
+              {t("Upload")}</Button>
           </>
         }
       />
@@ -197,8 +195,8 @@ export function PhotosPage() {
       {uploading && (
         <Card className="p-3">
           <div className="flex items-center justify-between text-[11px] text-muted">
-            <span>Preparing and uploading {uploading.total} photos…</span>
-            <span>keep the app open</span>
+            <span>{t("Preparing and uploading")} {uploading.total} {t("photos…")}</span>
+            <span>{t("keep the app open")}</span>
           </div>
           <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-raised">
             <div className="h-full w-1/3 animate-pulse rounded-full bg-brand" />
@@ -221,7 +219,7 @@ export function PhotosPage() {
             <Icon name="grid" size={16} />
           </span>
           <span>
-            <span className="block text-[12px] font-medium">All photos</span>
+            <span className="block text-[12px] font-medium">{t("All photos")}</span>
             <span className="block text-[10px] text-muted">{qty(collections?.reduce((sum, folder) => sum + folder.photoCount, 0) ?? 0)}</span>
           </span>
         </button>
@@ -240,8 +238,7 @@ export function PhotosPage() {
             <span className="max-w-[140px]">
               <span className="block truncate text-[12px] font-medium">{folder.name}</span>
               <span className="block text-[10px] text-muted">
-                {qty(folder.photoCount)} · {qty(folder.labeledCount)} labelled
-              </span>
+                {qty(folder.photoCount)} · {qty(folder.labeledCount)} {t("labelled")}</span>
             </span>
           </button>
         ))}
@@ -252,7 +249,7 @@ export function PhotosPage() {
           <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-surface">
             <Icon name="plus" size={16} />
           </span>
-          <span className="text-[12px] font-medium">New folder</span>
+          <span className="text-[12px] font-medium">{t("New folder")}</span>
         </button>
       </div>
 
@@ -261,12 +258,12 @@ export function PhotosPage() {
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <span className="truncate text-sm font-medium">{selectedCollection.name}</span>
-              <Badge tone="neutral">{qty(selectedCollection.photoCount)} photos</Badge>
+              <Badge tone="neutral">{qty(selectedCollection.photoCount)} {t("photos")}</Badge>
             </div>
-            <div className="text-[11px] text-muted">{selectedCollection.description || "No description"}</div>
+            <div className="text-[11px] text-muted">{selectedCollection.description || t("No description")}</div>
           </div>
           {can("member") && (
-            <IconButton icon="trash" label="Delete folder" onClick={() => setDeleteCollectionOpen(true)} className="hover:text-danger" />
+            <IconButton icon="trash" label={t("Delete folder")} onClick={() => setDeleteCollectionOpen(true)} className="hover:text-danger" />
           )}
         </Card>
       )}
@@ -279,14 +276,13 @@ export function PhotosPage() {
             unlabeled ? "border-warn/40 bg-warn-soft text-warn" : "border-line bg-surface text-muted hover:text-ink",
           )}
         >
-          Unlabelled only
-        </button>
+          {t("Unlabelled only")}</button>
         {itemId && (
           <button onClick={() => setParam("itemId", null)} className="inline-flex items-center gap-1 rounded-full bg-brand-soft px-2 py-0.5 text-[11px] font-medium text-brand">
-            Linked to item <Icon name="close" size={11} />
+            {t("Linked to item")} <Icon name="close" size={11} />
           </button>
         )}
-        <span className="ml-auto text-[11px] text-muted">{photos ? `${photos.length} shown` : ""}</span>
+        <span className="ml-auto text-[11px] text-muted">{photos ? t("{count} shown", { count: photos.length }) : ""}</span>
       </div>
 
       {!photos ? (
@@ -298,12 +294,11 @@ export function PhotosPage() {
       ) : photos.length === 0 ? (
         <EmptyState
           icon="image"
-          title="No photos here yet"
-          body="Upload photos of your shelves, products or rooms. Draw boxes and name them, then export a YOLO or COCO dataset."
+          title={t("No photos here yet")}
+          body={t("Upload photos of your shelves, products or rooms. Draw boxes and name them, then export a YOLO or COCO dataset.")}
           action={
             <Button icon="upload" onClick={() => fileRef.current?.click()}>
-              Upload photos
-            </Button>
+              {t("Upload photos")}</Button>
           }
         />
       ) : (
@@ -316,12 +311,12 @@ export function PhotosPage() {
             >
               <img src={photo.url} alt={photo.originalName} loading="lazy" className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]" />
               <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-1 bg-gradient-to-t from-black/70 to-transparent px-1.5 pb-1.5 pt-4 text-[10px] text-white">
-                <span className="truncate">{photo.labels[0]?.label ?? "unlabeled"}</span>
+                <span className="truncate">{photo.labels[0]?.label ?? t("unlabeled")}</span>
                 {photo.labels.length > 0 && <span>{photo.labels.length}</span>}
               </div>
               {photo.split !== "unassigned" && (
                 <span className="absolute left-1 top-1 rounded bg-black/60 px-1 py-0.5 text-[9px] font-semibold uppercase text-white">
-                  {photo.split}
+                  {t(photo.split)}
                 </span>
               )}
             </button>
@@ -340,8 +335,7 @@ export function PhotosPage() {
               setLoadingMore(false);
             }}
           >
-            Load more · {total - photos.length} left
-          </Button>
+            {t("Load more ·")} {total - photos.length} {t("left")}</Button>
         </div>
       )}
 
@@ -350,13 +344,9 @@ export function PhotosPage() {
           <Icon name="image" size={17} />
         </span>
         <div className="text-[11px] leading-relaxed text-muted">
-          Every label becomes a class in the export. Boxes are written as normalized YOLO coordinates and as COCO
-          annotations, together with train/val/test splits, <code>data.yaml</code> and a manifest. Photos without boxes
-          still export as classification samples.
-          <div className="mt-2 flex gap-2">
+          {t("Every label becomes a class in the export. Boxes are written as normalized YOLO coordinates and as COCO annotations, together with train/val/test splits,")} <code>data.yaml</code> {t("and a manifest. Photos without boxes still export as classification samples.")}<div className="mt-2 flex gap-2">
             <Button size="sm" variant="secondary" icon="download" onClick={() => setExportOpen(true)}>
-              Export dataset
-            </Button>
+              {t("Export dataset")}</Button>
           </div>
         </div>
       </Card>
@@ -385,19 +375,16 @@ export function PhotosPage() {
       <Sheet
         open={exportOpen}
         onClose={() => setExportOpen(false)}
-        title="Export training dataset"
-        description={selectedCollection ? selectedCollection.name : "All photos in this house"}
+        title={t("Export training dataset")}
+        description={selectedCollection ? selectedCollection.name : t("All photos in this house")}
         footer={
           <Button variant="secondary" block onClick={() => setExportOpen(false)}>
-            Done
-          </Button>
+            {t("Done")}</Button>
         }
       >
         <div className="space-y-3">
           <p className="text-sm text-muted">
-            Download a zip with the images, labels, class list, splits and a manifest. Use it directly with
-            YOLOv8/Ultralytics or COCO-based tooling.
-          </p>
+            {t("Download a zip with the images, labels, class list, splits and a manifest. Use it directly with YOLOv8/Ultralytics or COCO-based tooling.")}</p>
           <a
             href={`/api/houses/${house.id}/photos/export${qs({ format: "yolo", collectionId })}`}
             className="flex items-center gap-3 rounded-xl border border-line bg-surface p-3 transition-colors hover:bg-raised"
@@ -406,8 +393,8 @@ export function PhotosPage() {
               <Icon name="download" size={18} />
             </span>
             <span className="flex-1">
-              <span className="block text-sm font-medium">YOLO dataset</span>
-              <span className="block text-[11px] text-muted">images/ + labels/ by split, data.yaml, classes.txt</span>
+              <span className="block text-sm font-medium">{t("YOLO dataset")}</span>
+              <span className="block text-[11px] text-muted">{"images/ + labels/ by split, data.yaml, classes.txt"}</span>
             </span>
             <Icon name="arrowUpRight" size={16} className="text-muted" />
           </a>
@@ -419,14 +406,13 @@ export function PhotosPage() {
               <Icon name="download" size={18} />
             </span>
             <span className="flex-1">
-              <span className="block text-sm font-medium">COCO dataset</span>
-              <span className="block text-[11px] text-muted">annotations.coco.json with absolute boxes</span>
+              <span className="block text-sm font-medium">{t("COCO dataset")}</span>
+              <span className="block text-[11px] text-muted">{t("annotations.coco.json with absolute boxes")}</span>
             </span>
             <Icon name="arrowUpRight" size={16} className="text-muted" />
           </a>
           <p className="text-[11px] text-muted">
-            Only photos with bounding boxes produce YOLO label rows. Add boxes by opening a photo and dragging on it.
-          </p>
+            {t("Only photos with bounding boxes produce YOLO label rows. Add boxes by opening a photo and dragging on it.")}</p>
         </div>
       </Sheet>
 
@@ -434,9 +420,9 @@ export function PhotosPage() {
         open={deleteCollectionOpen}
         onClose={() => setDeleteCollectionOpen(false)}
         onConfirm={() => void deleteCollection()}
-        title={`Delete ${selectedCollection?.name ?? "folder"}?`}
-        body="Photos stay in the library but are no longer in this folder."
-        confirmLabel="Delete folder"
+        title={t("Delete {name}?", { name: selectedCollection?.name ?? t("folder") })}
+        body={t("Photos stay in the library but are no longer in this folder.")}
+        confirmLabel={t("Delete folder")}
         loading={busy}
       />
 
@@ -472,6 +458,7 @@ function NewFolderSheet({
   busy: boolean;
   onCreate: (name: string, description: string) => void | Promise<void>;
 }) {
+  const { t } = useI18n();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
 
@@ -486,19 +473,18 @@ function NewFolderSheet({
     <Sheet
       open={open}
       onClose={onClose}
-      title="New photo folder"
-      description="Group a shelf, a product type or a room."
+      title={t("New photo folder")}
+      description={t("Group a shelf, a product type or a room.")}
       footer={
         <Button block loading={busy} disabled={!name.trim()} onClick={() => void onCreate(name, description)}>
-          Create folder
-        </Button>
+          {t("Create folder")}</Button>
       }
     >
       <div className="space-y-3">
-        <Field label="Folder name" required>
-          <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Fridge shelf 2, boots, pantry jars…" autoFocus maxLength={80} />
+        <Field label={t("Folder name")} required>
+          <Input value={name} onChange={(event) => setName(event.target.value)} placeholder={t("Fridge shelf 2, boots, pantry jars…")} autoFocus maxLength={80} />
         </Field>
-        <Field label="Description" hint="optional">
+        <Field label={t("Description")} hint={t("optional")}>
           <Textarea rows={2} value={description} onChange={(event) => setDescription(event.target.value)} maxLength={500} />
         </Field>
       </div>
@@ -527,11 +513,12 @@ function DatasetImportSheet({
   onClose: () => void;
   onImported: () => void | Promise<void>;
 }) {
+  const { t } = useI18n();
   const toast = useToast();
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<DatasetPreview | null>(null);
   const [mapping, setMapping] = useState<Record<string, string>>({});
-  const [collectionName, setCollectionName] = useState("Imported dataset");
+  const [collectionName, setCollectionName] = useState("");
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -539,7 +526,7 @@ function DatasetImportSheet({
     setFile(null);
     setPreview(null);
     setMapping({});
-    setCollectionName("Imported dataset");
+    setCollectionName("");
   }, [open]);
 
   const inspect = async (next: File | null) => {
@@ -555,9 +542,9 @@ function DatasetImportSheet({
       });
       setPreview(data);
       setMapping(Object.fromEntries(data.classes.map((name) => [name, name])));
-      toast.success(`Read ${data.total} images (${data.labelled} labelled)`);
+      toast.success(t("Read {total} images ({labelled} labelled)", { total: data.total, labelled: data.labelled }));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not read the dataset");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not read the dataset"));
       setPreview(null);
     } finally {
       setBusy(false);
@@ -571,16 +558,16 @@ function DatasetImportSheet({
       const form = new FormData();
       form.append("dataset", file);
       form.append("mapping", JSON.stringify(mapping));
-      form.append("collectionName", collectionName.trim() || "Imported dataset");
+      form.append("collectionName", collectionName.trim() || t("Imported dataset"));
       const result = await api<{ imported: number; skipped: number; labels: number; errors: { file: string; error: string }[] }>(
         `/api/houses/${houseId}/photos/dataset/import`,
         { method: "POST", body: form },
       );
-      toast.success(`Imported ${result.imported} photos and ${result.labels} labels`);
-      if (result.errors.length) toast.push(`${result.errors.length} files were skipped`);
+      toast.success(t("Imported {photos} photos and {labels} labels", { photos: result.imported, labels: result.labels }));
+      if (result.errors.length) toast.push(t("{count} files were skipped", { count: result.errors.length }));
       await onImported();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not import the dataset");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not import the dataset"));
     } finally {
       setBusy(false);
     }
@@ -591,16 +578,14 @@ function DatasetImportSheet({
       open={open}
       onClose={onClose}
       wide
-      title="Import a YOLO or COCO dataset"
-      description="Preserve boxes and splits, then map imported class names to your labels."
+      title={t("Import a YOLO or COCO dataset")}
+      description={t("Preserve boxes and splits, then map imported class names to your labels.")}
       footer={
         <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
           <Button variant="secondary" onClick={onClose} disabled={busy}>
-            Cancel
-          </Button>
+            {t("Cancel")}</Button>
           <Button onClick={() => void importNow()} loading={busy} disabled={!preview || !preview.total}>
-            Import dataset
-          </Button>
+            {t("Import dataset")}</Button>
         </div>
       }
     >
@@ -610,8 +595,8 @@ function DatasetImportSheet({
             <Icon name="upload" size={18} />
           </span>
           <span className="min-w-0 flex-1">
-            <span className="block text-sm font-medium">{file?.name ?? "Choose a dataset zip"}</span>
-            <span className="block text-[11px] text-muted">images + labels/classes.txt/data.yaml, or images + annotations.json</span>
+            <span className="block text-sm font-medium">{file?.name ?? t("Choose a dataset zip")}</span>
+            <span className="block text-[11px] text-muted">{"images + labels/classes.txt/data.yaml, or images + annotations.json"}</span>
           </span>
           <input type="file" accept=".zip,application/zip" className="hidden" onChange={(event) => void inspect(event.target.files?.[0] ?? null)} />
         </label>
@@ -620,24 +605,24 @@ function DatasetImportSheet({
           <>
             <div className="flex flex-wrap gap-2 text-[11px]">
               <Badge tone="brand">{preview.kind.toUpperCase()}</Badge>
-              <Badge tone="outline">{preview.total} images</Badge>
-              <Badge tone="outline">{preview.labelled} labelled</Badge>
-              <Badge tone="outline">train {preview.splits.train ?? 0}</Badge>
-              <Badge tone="outline">val {preview.splits.val ?? 0}</Badge>
-              <Badge tone="outline">test {preview.splits.test ?? 0}</Badge>
-              <Badge tone="outline">unassigned {preview.splits.unassigned ?? 0}</Badge>
+              <Badge tone="outline">{preview.total} {t("images")}</Badge>
+              <Badge tone="outline">{preview.labelled} {t("labelled")}</Badge>
+              <Badge tone="outline">{t("train ")}{' '}{preview.splits.train ?? 0}</Badge>
+              <Badge tone="outline">{t("val ")}{' '}{preview.splits.val ?? 0}</Badge>
+              <Badge tone="outline">{t("test ")}{' '}{preview.splits.test ?? 0}</Badge>
+              <Badge tone="outline">{t("unassigned ")}{' '}{preview.splits.unassigned ?? 0}</Badge>
             </div>
             {preview.errors.length > 0 && (
               <div className="rounded-xl border border-warn/30 bg-warn-soft px-3 py-2 text-[11px] text-warn">
-                {preview.errors.slice(0, 3).join(" · ")}
-                {preview.errors.length > 3 ? ` · +${preview.errors.length - 3} more` : ""}
+                {preview.errors.slice(0, 3).map((message) => t(message)).join(" · ")}
+                {preview.errors.length > 3 ? t(" · +{count} more", { count: preview.errors.length - 3 }) : ""}
               </div>
             )}
-            <Field label="Folder name">
-              <Input value={collectionName} onChange={(event) => setCollectionName(event.target.value)} maxLength={80} />
+            <Field label={t("Folder name")}>
+              <Input value={collectionName || t("Imported dataset")} onChange={(event) => setCollectionName(event.target.value)} maxLength={80} />
             </Field>
             <div>
-              <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">Class mapping</div>
+              <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">{t("Class mapping")}</div>
               <div className="space-y-1.5">
                 {preview.classes.map((name) => (
                   <div key={name} className="flex items-center gap-2">
@@ -645,13 +630,13 @@ function DatasetImportSheet({
                     <Input
                       value={mapping[name] ?? ""}
                       onChange={(event) => setMapping((current) => ({ ...current, [name]: event.target.value }))}
-                      placeholder="target label or __skip"
+                      placeholder={t("target label or __skip")}
                       className="h-9 flex-1 text-[12px]"
                     />
                   </div>
                 ))}
               </div>
-              <p className="mt-1.5 text-[10px] text-muted">Use <code>__skip</code> to drop a class.</p>
+              <p className="mt-1.5 text-[10px] text-muted">{t("Use")} <code>__skip</code> {t("to drop a class.")}</p>
             </div>
           </>
         )}
@@ -679,6 +664,7 @@ function LabelReviewSheet({
   onClose: () => void;
   onChanged: () => void;
 }) {
+  const { t } = useI18n();
   const toast = useToast();
   const [photos, setPhotos] = useState<ReviewPhoto[]>([]);
   const [index, setIndex] = useState(0);
@@ -697,7 +683,7 @@ function LabelReviewSheet({
       setLabels(labelList);
       setIndex((current) => Math.min(current, Math.max(0, review.photos.length - 1)));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not load the review queue");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not load the review queue"));
     }
   }, [houseId, toast]);
 
@@ -720,7 +706,7 @@ function LabelReviewSheet({
     setPhotos((rows) => rows.filter((row) => row.id !== current.id));
     setIndex((value) => Math.max(0, Math.min(value, photos.length - 2)));
     onChanged();
-    toast.success("Photo deleted");
+    toast.success(t("Photo deleted"));
   };
 
   const bulkLabel = async (action: "rename" | "merge" | "delete") => {
@@ -731,13 +717,17 @@ function LabelReviewSheet({
         method: "POST",
         body: { action, from: rename.trim(), to: target.trim() || undefined },
       });
-      toast.success(`${result.affected} label${result.affected === 1 ? "" : "s"} updated`);
+      toast.success(
+        result.affected === 1
+          ? t("{count} label updated", { count: result.affected })
+          : t("{count} labels updated", { count: result.affected }),
+      );
       setRename("");
       setTarget("");
       await load();
       onChanged();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not update labels");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not update labels"));
     } finally {
       setBusy(false);
     }
@@ -761,12 +751,12 @@ function LabelReviewSheet({
   });
 
   return (
-    <Sheet open={open} onClose={onClose} wide title="Review labels" description="← → move · S changes split · D deletes (owner/admin)">
+    <Sheet open={open} onClose={onClose} wide title={t("Review labels")} description={t("← → move · S changes split · D deletes (owner/admin)")}>
       <div className="space-y-4">
         <div className="flex flex-wrap gap-2 text-[11px]">
-          <Badge tone="danger">{photos.filter((photo) => photo.reason === "unlabeled").length} unlabeled</Badge>
-          <Badge tone="warn">{photos.filter((photo) => photo.reason === "classification-only").length} classification only</Badge>
-          <Badge tone="outline">{photos.length} in queue</Badge>
+          <Badge tone="danger">{photos.filter((photo) => photo.reason === "unlabeled").length} {t("unlabeled")}</Badge>
+          <Badge tone="warn">{photos.filter((photo) => photo.reason === "classification-only").length} {t("classification only")}</Badge>
+          <Badge tone="outline">{photos.length} {t("in queue")}</Badge>
         </div>
 
         {current ? (
@@ -778,7 +768,7 @@ function LabelReviewSheet({
               <div>
                 <div className="truncate text-sm font-medium">{current.originalName}</div>
                 <div className="text-[11px] text-muted">
-                  {current.labelCount} labels · {current.boxCount} boxes · {current.split}
+                  {current.labelCount} {t("labels ·")} {current.boxCount} {t("boxes ·")} {t(current.split)}
                 </div>
               </div>
               <div className="flex flex-wrap gap-1.5">
@@ -787,65 +777,58 @@ function LabelReviewSheet({
                     {label.label}
                   </Badge>
                 ))}
-                {!current.labels.length && <Badge tone="danger">No labels</Badge>}
+                {!current.labels.length && <Badge tone="danger">{t("No labels")}</Badge>}
               </div>
               <div>
-                <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">Split</div>
+                <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">{t("Split")}</div>
                 <div className="flex flex-wrap gap-1.5">
                   {(["unassigned", "train", "val", "test"] as const).map((split) => (
                     <Button key={split} size="sm" variant={current.split === split ? "primary" : "secondary"} onClick={() => void setSplit(split)}>
-                      {split}
+                      {t(split)}
                     </Button>
                   ))}
                 </div>
               </div>
               <div className="flex flex-wrap gap-2">
                 <Button size="sm" variant="secondary" onClick={() => setIndex((value) => Math.max(0, value - 1))} disabled={index === 0}>
-                  Previous
-                </Button>
+                  {t("Previous")}</Button>
                 <Button size="sm" variant="secondary" onClick={() => setIndex((value) => Math.min(value + 1, photos.length - 1))} disabled={index >= photos.length - 1}>
-                  Next
-                </Button>
+                  {t("Next")}</Button>
                 {canDelete && (
                   <Button size="sm" variant="danger" onClick={() => void deleteCurrent()}>
-                    Delete photo
-                  </Button>
+                    {t("Delete photo")}</Button>
                 )}
               </div>
             </div>
           </div>
         ) : (
           <div className="rounded-xl border border-dashed border-line px-4 py-8 text-center text-sm text-muted">
-            Nothing to review. Every photo has a label.
-          </div>
+            {t("Nothing to review. Every photo has a label.")}</div>
         )}
 
         <div className="rounded-xl border border-line p-3">
-          <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">Bulk label actions</div>
+          <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">{t("Bulk label actions")}</div>
           <div className="space-y-2">
             <select
               value={rename}
               onChange={(event) => setRename(event.target.value)}
               className="h-9 w-full rounded-lg border border-line bg-surface px-2 text-[12px]"
             >
-              <option value="">Choose a label…</option>
+              <option value="">{t("Choose a label…")}</option>
               {labels.map((entry) => (
                 <option key={entry.label} value={entry.label}>
                   {entry.label} ({entry.count})
                 </option>
               ))}
             </select>
-            <Input value={target} onChange={(event) => setTarget(event.target.value)} placeholder="Rename/merge target" className="h-9 text-[12px]" />
+            <Input value={target} onChange={(event) => setTarget(event.target.value)} placeholder={t("Rename/merge target")} className="h-9 text-[12px]" />
             <div className="flex flex-wrap gap-2">
               <Button size="sm" variant="secondary" loading={busy} disabled={!rename.trim() || !target.trim()} onClick={() => void bulkLabel("rename")}>
-                Rename
-              </Button>
+                {t("Rename")}</Button>
               <Button size="sm" variant="secondary" loading={busy} disabled={!rename.trim() || !target.trim()} onClick={() => void bulkLabel("merge")}>
-                Merge
-              </Button>
+                {t("Merge")}</Button>
               <Button size="sm" variant="danger" loading={busy} disabled={!rename.trim()} onClick={() => void bulkLabel("delete")}>
-                Delete label
-              </Button>
+                {t("Delete label")}</Button>
             </div>
           </div>
         </div>

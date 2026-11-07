@@ -8,6 +8,7 @@ import { ZoomableImage } from "@/components/ZoomableImage";
 import { useToast } from "@/components/toast";
 import { UNIT_OPTIONS } from "@/units";
 import type { Recipe } from "@shared/types";
+import { useI18n } from "@/i18n";
 
 interface IngredientRow {
   name: string;
@@ -17,6 +18,7 @@ interface IngredientRow {
 }
 
 export function RecipeFormPage() {
+  const { t } = useI18n();
   const { recipeId } = useParams();
   const editing = Boolean(recipeId);
   const { house } = useHouse();
@@ -72,7 +74,7 @@ export function RecipeFormPage() {
         setLoading(false);
       })
       .catch((err) => {
-        toast.error(err instanceof Error ? err.message : "Could not load the recipe");
+        toast.error(err instanceof Error ? t(err.message) : t("Could not load the recipe"));
         setLoading(false);
       });
   }, [editing, recipeId, toast]);
@@ -86,7 +88,7 @@ export function RecipeFormPage() {
       const data = await api<{ path: string }>(`/api/houses/${house.id}/recipes/upload`, { method: "POST", body: form });
       setImage(data.path);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not upload the photo");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not upload the photo"));
     } finally {
       setImageBusy(false);
     }
@@ -127,27 +129,27 @@ export function RecipeFormPage() {
       const recipe = editing
         ? await api<Recipe>(`/api/recipes/${recipeId}`, { method: "PATCH", body })
         : await api<Recipe>(`/api/houses/${house.id}/recipes`, { method: "POST", body });
-      toast.success(editing ? "Recipe saved" : "Recipe added");
+      toast.success(t(editing ? "Recipe saved" : "Recipe added"));
       navigate(`/recipes/${recipe.id}`, { replace: true });
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not save the recipe");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not save the recipe"));
     } finally {
       setSaving(false);
     }
   };
 
-  if (loading) return <LoadingBlock label="Loading recipe" />;
+  if (loading) return <LoadingBlock label={t("Loading recipe")} />;
 
   return (
     <form onSubmit={submit}>
       <PageHeader
         back={() => navigate(-1)}
-        eyebrow={editing ? "Edit recipe" : "New recipe"}
-        title={editing ? title || "Untitled recipe" : "Write a recipe"}
-        subtitle="Keep it simple — ingredients, steps, and the little notes that matter."
+        eyebrow={editing ? t("Edit recipe") : t("New recipe")}
+        title={editing ? title || t("Untitled recipe") : t("Write a recipe")}
+        subtitle={t("Keep it simple — ingredients, steps, and the little notes that matter.")}
         actions={
           <Button type="submit" loading={saving} disabled={!title.trim()}>
-            {editing ? "Save" : "Create"}
+            {editing ? t("Save") : t("Create")}
           </Button>
         }
       />
@@ -155,31 +157,31 @@ export function RecipeFormPage() {
       <div className="grid gap-4 lg:grid-cols-[1.15fr_1fr]">
         <div className="space-y-4">
           <Card className="space-y-3 p-4">
-            <Field label="Title" required>
-              <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Grandma's lemon cake" autoFocus={!editing} maxLength={160} />
+            <Field label={t("Title")} required>
+              <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder={t("Grandma's lemon cake")} autoFocus={!editing} maxLength={160} />
             </Field>
-            <Field label="Description" hint="optional">
-              <Textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Where it comes from, when you make it…" maxLength={2000} />
+            <Field label={t("Description")} hint={t("optional")}>
+              <Textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} placeholder={t("Where it comes from, when you make it…")} maxLength={2000} />
             </Field>
             <div className="grid grid-cols-3 gap-3">
-              <Field label="Servings">
+              <Field label={t("Servings")}>
                 <Input type="number" min="0" value={servings} onChange={(e) => setServings(e.target.value)} placeholder="4" />
               </Field>
-              <Field label="Prep min">
+              <Field label={t("Prep min")}>
                 <Input type="number" min="0" value={prep} onChange={(e) => setPrep(e.target.value)} placeholder="15" />
               </Field>
-              <Field label="Cook min">
+              <Field label={t("Cook min")}>
                 <Input type="number" min="0" value={cook} onChange={(e) => setCook(e.target.value)} placeholder="45" />
               </Field>
             </div>
-            <Field label="Tags" hint="comma separated">
-              <Input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="dessert, family, baking" />
+            <Field label={t("Tags")} hint={t("comma separated")}>
+              <Input value={tags} onChange={(e) => setTags(e.target.value)} placeholder={t("dessert, family, baking")} />
             </Field>
           </Card>
 
           <Card className="p-4">
             <div className="mb-3 flex items-center justify-between">
-              <h2 className="font-display text-lg">Ingredients</h2>
+              <h2 className="font-display text-lg">{t("Ingredients")}</h2>
               <Button
                 type="button"
                 size="sm"
@@ -187,8 +189,7 @@ export function RecipeFormPage() {
                 icon="plus"
                 onClick={() => setIngredients((current) => [...current, { name: "", quantity: "", unit: "", optional: false }])}
               >
-                Add
-              </Button>
+                {t("Add ")}</Button>
             </div>
             <div className="space-y-2">
               {ingredients.map((row, index) => (
@@ -196,20 +197,20 @@ export function RecipeFormPage() {
                   <Input
                     value={row.name}
                     onChange={(e) => updateIngredient(index, { name: e.target.value })}
-                    placeholder="Ingredient"
+                    placeholder={t("Ingredient")}
                     className="h-10 flex-1 text-[13px]"
                   />
                   <Input
                     value={row.quantity}
                     onChange={(e) => updateIngredient(index, { quantity: e.target.value })}
-                    placeholder="Qty"
+                    placeholder={t("Qty")}
                     inputMode="decimal"
                     className="h-10 w-16 shrink-0 text-[13px]"
                   />
                   <Input
                     value={row.unit}
                     onChange={(e) => updateIngredient(index, { unit: e.target.value })}
-                    placeholder="Unit"
+                    placeholder={t("Unit")}
                     list="recipe-units"
                     className="h-10 w-20 shrink-0 text-[13px]"
                   />
@@ -217,7 +218,7 @@ export function RecipeFormPage() {
                     type="button"
                     onClick={() => setIngredients((current) => current.filter((_, i) => i !== index))}
                     className="flex h-9 w-8 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-danger-soft hover:text-danger"
-                    aria-label="Remove ingredient"
+                    aria-label={t("Remove ingredient")}
                   >
                     <Icon name="close" size={14} />
                   </button>
@@ -229,15 +230,14 @@ export function RecipeFormPage() {
                 <option key={option} value={option} />
               ))}
             </datalist>
-            <p className="mt-2 text-[11px] text-muted">Optional ingredients can be marked after saving.</p>
+            <p className="mt-2 text-[11px] text-muted">{t("Optional ingredients can be marked after saving.")}</p>
           </Card>
 
           <Card className="p-4">
             <div className="mb-3 flex items-center justify-between">
-              <h2 className="font-display text-lg">Method</h2>
+              <h2 className="font-display text-lg">{t("Method")}</h2>
               <Button type="button" size="sm" variant="secondary" icon="plus" onClick={() => setSteps((current) => [...current, ""])}>
-                Add step
-              </Button>
+                {t("Add step ")}</Button>
             </div>
             <div className="space-y-2">
               {steps.map((step, index) => (
@@ -249,14 +249,14 @@ export function RecipeFormPage() {
                     rows={2}
                     value={step}
                     onChange={(e) => setSteps((current) => current.map((value, i) => (i === index ? e.target.value : value)))}
-                    placeholder={index === 0 ? "Preheat the oven to 180°C…" : "Next step…"}
+                    placeholder={index === 0 ? t("Preheat the oven to 180°C…") : t("Next step…")}
                     className="text-[13px]"
                   />
                   <button
                     type="button"
                     onClick={() => setSteps((current) => current.filter((_, i) => i !== index))}
                     className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-danger-soft hover:text-danger"
-                    aria-label="Remove step"
+                    aria-label={t("Remove step")}
                   >
                     <Icon name="close" size={14} />
                   </button>
@@ -268,7 +268,7 @@ export function RecipeFormPage() {
 
         <div className="space-y-4">
           <Card className="p-4">
-            <h2 className="mb-3 font-display text-lg">Photo</h2>
+            <h2 className="mb-3 font-display text-lg">{t("Photo")}</h2>
             <div className="flex gap-3">
               <button
                 type="button"
@@ -279,14 +279,13 @@ export function RecipeFormPage() {
               </button>
               <div className="space-y-2">
                 <Button type="button" size="sm" variant="secondary" icon="upload" onClick={() => fileRef.current?.click()} loading={imageBusy}>
-                  {image ? "Replace" : "Add photo"}
+                  {image ? t("Replace") : t("Add photo")}
                 </Button>
                 {image && (
                   <Button type="button" size="sm" variant="ghost" icon="close" onClick={() => setImage(null)}>
-                    Remove
-                  </Button>
+                    {t("Remove ")}</Button>
                 )}
-                <p className="text-[11px] text-muted">Shows at the top of the recipe and in the list.</p>
+                <p className="text-[11px] text-muted">{t("Shows at the top of the recipe and in the list.")}</p>
               </div>
             </div>
             <input
@@ -302,18 +301,17 @@ export function RecipeFormPage() {
           </Card>
 
           <Card className="space-y-3 p-4">
-            <h2 className="font-display text-lg">Quick options</h2>
+            <h2 className="font-display text-lg">{t("Quick options")}</h2>
             <label className="flex items-center justify-between gap-3 text-sm">
-              Favourite
-              <input type="checkbox" checked={favorite} onChange={(e) => setFavorite(e.target.checked)} className="h-5 w-5 accent-[var(--sv-brand)]" />
+              {t("Favourite ")}<input type="checkbox" checked={favorite} onChange={(e) => setFavorite(e.target.checked)} className="h-5 w-5 accent-[var(--sv-brand)]" />
             </label>
-            {source !== "manual" && <Badge tone="brand">Imported from {source === "scan" ? "a scan" : "AI"}</Badge>}
+            {source !== "manual" && <Badge tone="brand">{t("Imported from ")}{' '}{source === "scan" ? t("a scan") : t("AI")}</Badge>}
             {sourceImage && (
               <div>
-                <div className="text-[11px] font-semibold uppercase tracking-wide text-muted">Original scan</div>
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-muted">{t("Original scan")}</div>
                 <ZoomableImage
                   src={sourceImage}
-                  alt="Original recipe scan"
+                  alt={t("Original recipe scan")}
                   wrapperClassName="mt-1 overflow-hidden rounded-lg border border-line"
                   className="w-full"
                 />
@@ -321,22 +319,21 @@ export function RecipeFormPage() {
             )}
             {ocrText && (
               <details className="text-xs text-muted">
-                <summary className="cursor-pointer font-medium text-muted">Raw OCR text</summary>
+                <summary className="cursor-pointer font-medium text-muted">{t("Raw OCR text")}</summary>
                 <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap rounded-lg bg-raised p-2 text-[10px] leading-relaxed">{ocrText}</pre>
               </details>
             )}
           </Card>
 
           <Card className="p-4">
-            <h2 className="font-display text-lg">Faster: scan it</h2>
-            <p className="mt-1 text-xs text-muted">Photograph a handwritten recipe and let OCR + AI structure it for you.</p>
+            <h2 className="font-display text-lg">{t("Faster: scan it")}</h2>
+            <p className="mt-1 text-xs text-muted">{t("Photograph a handwritten recipe and let OCR + AI structure it for you.")}</p>
             <Button type="button" variant="secondary" size="sm" icon="camera" className="mt-3" onClick={() => navigate("/recipes/scan")}>
-              Open scanner
-            </Button>
+              {t("Open scanner ")}</Button>
           </Card>
 
           <Button type="submit" block size="lg" loading={saving} disabled={!title.trim()}>
-            {editing ? "Save recipe" : "Create recipe"}
+            {editing ? t("Save recipe") : t("Create recipe")}
           </Button>
         </div>
       </div>
