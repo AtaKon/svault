@@ -38,13 +38,13 @@ export function MorePage() {
   const install = async () => {
     const prompt = window.__svInstallPrompt;
     if (!prompt) {
-      toast.push("Use your browser menu and choose “Install app” or “Add to Home Screen”.");
+      toast.push(t("Use your browser menu and choose “Install app” or “Add to Home Screen”."));
       return;
     }
     await prompt.prompt();
     const choice = await prompt.userChoice;
     if (choice.outcome === "accepted") {
-      toast.success("SVault installed");
+      toast.success(t("SVault installed"));
       window.__svInstallPrompt = null;
       setCanInstall(false);
     }
@@ -52,7 +52,11 @@ export function MorePage() {
 
   return (
     <div className="space-y-4">
-      <PageHeader eyebrow="Everything else" title="More" subtitle={`${house?.name ?? "this house"} · ${houses.length} house${houses.length === 1 ? "" : "s"}`} />
+      <PageHeader
+        eyebrow={t("Everything else")}
+        title={t("More")}
+        subtitle={`${house?.name ?? t("this house")} · ${t(houses.length === 1 ? "{count} house" : "{count} houses", { count: houses.length })}`}
+      />
 
       <Card className="flex items-center gap-3 p-4">
         <Avatar name={user?.name ?? "?"} size={46} />
@@ -61,7 +65,7 @@ export function MorePage() {
           <div className="truncate text-[11px] text-muted">{user?.email}</div>
         </div>
         <Button size="sm" variant="secondary" onClick={() => navigate("/profile")}>
-          Profile
+          {t("Profile")}
         </Button>
       </Card>
 
@@ -77,7 +81,7 @@ export function MorePage() {
             </span>
             <span className="min-w-0 flex-1">
               <span className="block text-[13px] font-medium">{t(link.label)}</span>
-              <span className="block truncate text-[11px] text-muted">{link.description}</span>
+              <span className="block truncate text-[11px] text-muted">{t(link.description)}</span>
             </span>
             <Icon name="chevronRight" size={15} className="text-muted" />
           </button>
@@ -93,10 +97,10 @@ export function MorePage() {
             <Icon name="settings" size={18} />
           </span>
           <span className="min-w-0 flex-1">
-            <span className="block text-[13px] font-medium">Admin console</span>
-            <span className="block truncate text-[11px] text-muted">People, sign-up, sessions, storage, AI spend</span>
+            <span className="block text-[13px] font-medium">{t("Admin console")}</span>
+            <span className="block truncate text-[11px] text-muted">{t("People, sign-up, sessions, storage, AI spend")}</span>
           </span>
-          <Badge tone="outline">instance</Badge>
+          <Badge tone="outline">{t("instance")}</Badge>
           <Icon name="chevronRight" size={15} className="text-muted" />
         </button>
       )}
@@ -110,8 +114,8 @@ export function MorePage() {
             <Icon name="list" size={18} />
           </span>
           <span className="min-w-0 flex-1">
-            <span className="block text-[13px] font-medium">Developer</span>
-            <span className="block truncate text-[11px] text-muted">AI call log, tokens, cost and errors</span>
+            <span className="block text-[13px] font-medium">{t("Developer")}</span>
+            <span className="block truncate text-[11px] text-muted">{t("AI call log, tokens, cost and errors")}</span>
           </span>
           <Badge tone="brand">dev</Badge>
           <Icon name="chevronRight" size={15} className="text-muted" />
@@ -119,12 +123,12 @@ export function MorePage() {
       )}
 
       <Card className="p-4">
-        <h2 className="mb-3 font-display text-lg">App</h2>
+        <h2 className="mb-3 font-display text-lg">{t("App")}</h2>
         <div className="space-y-1">
           <button onClick={() => void install()} className="flex w-full items-center gap-3 rounded-lg px-2 py-2.5 text-left text-sm transition-colors hover:bg-raised">
             <Icon name="download" size={17} className="text-muted" />
-            <span className="flex-1">Install on this device</span>
-            {canInstall ? <Badge tone="brand">ready</Badge> : <Icon name="chevronRight" size={14} className="text-muted" />}
+            <span className="flex-1">{t("Install on this device")}</span>
+            {canInstall ? <Badge tone="brand">{t("ready")}</Badge> : <Icon name="chevronRight" size={14} className="text-muted" />}
           </button>
           <button
             onClick={() => {
@@ -134,14 +138,14 @@ export function MorePage() {
             className="flex w-full items-center gap-3 rounded-lg px-2 py-2.5 text-left text-sm transition-colors hover:bg-raised"
           >
             <Icon name={theme === "dark" ? "sun" : "moon"} size={17} className="text-muted" />
-            <span className="flex-1">{theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}</span>
+            <span className="flex-1">{t(theme === "dark" ? "Switch to light mode" : "Switch to dark mode")}</span>
           </button>
           <button
             onClick={() => navigate("/settings?tab=data")}
             className="flex w-full items-center gap-3 rounded-lg px-2 py-2.5 text-left text-sm transition-colors hover:bg-raised"
           >
             <Icon name="download" size={17} className="text-muted" />
-            <span className="flex-1">Export data</span>
+            <span className="flex-1">{t("Export data")}</span>
             <Icon name="chevronRight" size={14} className="text-muted" />
           </button>
           <button
@@ -149,7 +153,7 @@ export function MorePage() {
             className="flex w-full items-center gap-3 rounded-lg px-2 py-2.5 text-left text-sm text-danger transition-colors hover:bg-danger-soft"
           >
             <Icon name="logout" size={17} />
-            <span className="flex-1">Sign out</span>
+            <span className="flex-1">{t("Sign out")}</span>
           </button>
         </div>
       </Card>
@@ -158,7 +162,7 @@ export function MorePage() {
         <LogoMark size={28} />
         <div className="text-[11px] leading-tight text-muted">
           <div className="font-medium text-ink">SVault 1.0</div>
-          <div>Self-hosted · your data stays on your machine</div>
+          <div>{t("Self-hosted · your data stays on your machine")}</div>
         </div>
       </div>
 
@@ -169,9 +173,9 @@ export function MorePage() {
           await signOut();
           navigate("/login", { replace: true });
         }}
-        title="Sign out?"
-        body="You can sign back in any time. Inventory stays in your house."
-        confirmLabel="Sign out"
+        title={t("Sign out?")}
+        body={t("You can sign back in any time. Inventory stays in your house.")}
+        confirmLabel={t("Sign out")}
         danger={false}
       />
     </div>
