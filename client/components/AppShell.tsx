@@ -19,6 +19,7 @@ const NAV: { to: string; label: string; icon: IconName; end?: boolean }[] = [
 ];
 
 const EXTRA: { to: string; label: string; icon: IconName }[] = [
+  { to: "/insights", label: "Insights", icon: "price" },
   { to: "/shopping", label: "Shopping list", icon: "list" },
   { to: "/plan", label: "Meal plan", icon: "calendar" },
   { to: "/intake", label: "Bulk intake", icon: "upload" },
@@ -144,6 +145,7 @@ export function AppShell() {
           {EXTRA.map((item) => (
             <SideLink key={item.to} {...item} label={t(item.label)} badge={item.to === "/notifications" && unread > 0 ? unread : undefined} />
           ))}
+          {user?.isAdmin && <SideLink to="/admin" label="Admin" icon="settings" />}
           {user?.developerMode && <SideLink to="/developer" label="Developer" icon="list" />}
         </nav>
 
@@ -226,7 +228,7 @@ export function AppShell() {
           {NAV.map((item) => {
             const moreActive =
               item.to === "/more" &&
-              ["/more", "/photos", "/ideas", "/shopping", "/plan", "/intake", "/receipts", "/notifications", "/settings", "/profile", "/developer"].some(
+              ["/more", "/photos", "/ideas", "/shopping", "/plan", "/intake", "/receipts", "/notifications", "/settings", "/profile", "/developer", "/insights", "/admin"].some(
                 (path) => location.pathname === path || location.pathname.startsWith(`${path}/`),
               );
             return (

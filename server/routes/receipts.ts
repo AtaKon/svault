@@ -40,6 +40,7 @@ import {
   uploadBelongsTo,
 } from "../services/receipt-scans.js";
 import { reconcileReceipt, reconciliationGap } from "../../shared/receipt-reconcile.js";
+import { parseEReceipt, receiptHouseCurrency, scanPriceAlerts } from "../services/insights.js";
 import type {
   ReceiptDeleteResult,
   ReceiptDraft,
@@ -327,6 +328,10 @@ const importBody = z.object({
   provider: z.string().max(40).nullish(),
   aiCost: z.number().nullish(),
   savings: boundedNumber(0, 1e9).nullish(),
+  /** Who paid for this receipt; defaults to the person importing it. */
+  paidBy: z.string().max(60).nullish(),
+  /** Members sharing the cost; defaults to everyone in the house. */
+  splitWith: z.array(z.string().max(60)).max(50).optional(),
   lines: z.array(lineInput).min(1).max(200),
 });
 
@@ -395,6 +400,31 @@ receiptRoutes.delete(
 
 /** Below this a template's own parse is double-checked by AI when one is configured. */
 const TEMPLATE_CONFIDENCE_THRESHOLD = 0.75;
+
+/**
+ * Turn the text of an e-receipt (email body, copied PDF text, or e-invoice
+ * JSON) into a draft. Nothing is saved: the client reviews it and calls the
+ * normal import endpoint, so stock rules and duplicate checks still apply.
+ */
+receiptRoutes.post(
+  "/:houseId/receipts/e-receipt/parse",
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req, "member");
+    const body = parseBody(
+      z.object({
+        text: z.string().trim().min(1).max(100000),
+      }),
+      req.body,
+    );
+    try {
+      const currency = await receiptHouseCurrency(houseId);
+      const parsed = parseEReceipt(body.text, currency);
+      res.json({ ...parsed, currency });
+    } catch (error) {
+      throw new ApiError(400, error instanceof Error ? error.message : "Could not read that e-receipt");
+    }
+  }),
+);
 
 function draftReconciliation(draft: ReceiptDraft) {
   return reconcileReceipt({ total: draft.total, savings: draft.savings ?? null, lines: draft.lines });
@@ -744,6 +774,17 @@ receiptRoutes.post(
     const lineSavings = round(body.lines.reduce((sum, line) => sum + Math.abs(line.discount ?? 0), 0), 2);
     const savings = body.savings != null ? round(Math.max(0, body.savings), 2) : lineSavings > 0 ? lineSavings : null;
     const purchasedAt = body.purchasedAt ?? now().slice(0, 10);
+    const memberRows = await all<{ user_id: string }>("SELECT user_id FROM house_members WHERE house_id = ?", [houseId]);
+    const memberIds = memberRows.map((row) => row.user_id);
+    const defaultPayer = memberIds.length ? memberIds[0] : req.user!.id;
+    const paidBy =
+      body.paidBy && memberIds.includes(body.paidBy)
+        ? body.paidBy
+        : memberIds.includes(req.user!.id)
+          ? req.user!.id
+          : defaultPayer;
+    const requestedSplit = (body.splitWith ?? memberIds).filter((id) => memberIds.includes(id));
+    const splitWith = requestedSplit.length ? requestedSplit : [paidBy];
 
     // Resolve OpenFoodFacts before the transaction: product fetches are network
     // calls and must never hold the SQLite write lock.
@@ -765,8 +806,9 @@ receiptRoutes.post(
       await run(
         `INSERT INTO receipts
           (id, house_id, vendor_id, vendor_name, purchased_at, currency, total, subtotal, tax, tax_breakdown,
-           template_id, template_confidence, provider, ai_cost, savings, image, ocr_text, source, notes, created_by, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           template_id, template_confidence, provider, ai_cost, savings, image, ocr_text, source, notes,
+           paid_by, split_with, created_by, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           receiptId,
           houseId,
@@ -787,6 +829,8 @@ receiptRoutes.post(
           body.ocrText ?? null,
           scan || body.image ? "scan" : "manual",
           body.notes ?? null,
+          paidBy,
+          JSON.stringify(splitWith),
           req.user!.id,
           now(),
         ],
@@ -922,6 +966,13 @@ receiptRoutes.post(
     });
 
     for (const itemId of touchedItems) await afterStockChange(itemId);
+    // Price alerts are best effort: a new receipt must never fail because an
+    // insight query did.
+    try {
+      await scanPriceAlerts(houseId);
+    } catch {
+      /* ignore */
+    }
     if (scan) {
       // The page photos only fed the vision model; the stored receipt keeps
       // the stitched image. Drop the rest now instead of leaving orphans.
@@ -1124,6 +1175,39 @@ singleReceiptRoutes.get(
   "/:receiptId",
   handler(async (req, res) => {
     const { houseId, receipt } = await receiptAccess(req);
+    res.json(await receiptDetail(houseId, receipt.id));
+  }),
+);
+
+singleReceiptRoutes.patch(
+  "/:receiptId",
+  handler(async (req, res) => {
+    const { receipt, houseId } = await receiptAccess(req, "member");
+    const body = parseBody(
+      z.object({
+        paidBy: z.string().max(60).nullish(),
+        splitWith: z.array(z.string().max(60)).max(50).optional(),
+      }),
+      req.body ?? {},
+    );
+    const memberRows = await all<{ user_id: string }>("SELECT user_id FROM house_members WHERE house_id = ?", [houseId]);
+    const memberIds = memberRows.map((row) => row.user_id);
+    if (body.paidBy && !memberIds.includes(body.paidBy)) throw new ApiError(400, "That person is not in this house");
+    if (body.splitWith?.some((id) => !memberIds.includes(id))) {
+      throw new ApiError(400, "Everyone sharing the cost must be in this house");
+    }
+    // Clearing the payer stores the receipt's creator explicitly, so the
+    // household maths always has a real payer.
+    const paidBy =
+      body.paidBy === undefined
+        ? receipt.paid_by ?? receipt.created_by ?? null
+        : body.paidBy ?? receipt.created_by ?? null;
+    const splitWith = body.splitWith === undefined ? parseJson<string[]>(receipt.split_with, []) : body.splitWith;
+    await run("UPDATE receipts SET paid_by = ?, split_with = ? WHERE id = ?", [
+      paidBy,
+      JSON.stringify(splitWith),
+      receipt.id,
+    ]);
     res.json(await receiptDetail(houseId, receipt.id));
   }),
 );

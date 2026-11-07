@@ -180,18 +180,29 @@ export async function removeStock(opts: StockOpts & { waste?: boolean }): Promis
           : `Only ${round(scoped)} ${item.unit} available`,
       );
     }
+    // Keep the value of what was consumed or wasted: the weighted average of
+    // the lots it came from, expressed per item unit.
+    let priced = 0;
+    let value = 0;
     for (const lot of lots) {
       if (remaining <= 0) break;
       const take = Math.min(Number(lot.quantity), remaining);
+      if (lot.unit_price != null && Number(lot.unit_price) >= 0) {
+        priced += take;
+        value += take * Number(lot.unit_price);
+      }
       await run("UPDATE stock_lots SET quantity = ? WHERE id = ?", [round(Number(lot.quantity) - take), lot.id]);
       remaining = round(remaining - take);
     }
+    const normalizedPrice = priced > 0 ? round(value / priced, 4) : null;
     return await recordMovement({
       item,
       type: opts.waste ? "waste" : "out",
       delta: -requested,
       unit: opts.unit ?? item.unit,
       quantity: requested,
+      unitPrice: normalizedPrice == null ? null : pricePerUnit(normalizedPrice, item.unit, opts.unit ?? item.unit),
+      normalizedPrice,
       locationId: opts.locationId ?? null,
       userId: opts.userId,
       reason: opts.reason ?? (opts.waste ? "Wasted" : "Consumed"),

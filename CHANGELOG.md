@@ -8,6 +8,26 @@ All notable changes to SVault are documented here. The format follows
 
 ### Added
 
+- A new **Insights** page brings spending together: monthly budget and progress, spend by month, shop
+  and category, waste value, price alerts, a use-it-up view with matching recipes, cheapest-shop hints
+  for open shopping-list lines, and a household split with settle-up suggestions. Each house stores its
+  own monthly budget, price-alert threshold and use-it-up horizon.
+- Price alerts compare each purchased unit price with the item's average and create one in-app reminder
+  per item and month when it is above the house threshold. They run after a receipt import and on
+  demand.
+- Receipts now record who paid and who shares the cost. The Insights page edits the payer or shares a
+  receipt with everyone, and shows per-member balances and transfers.
+- E-receipt import: paste the text of an emailed receipt or PDF, or an e-invoice JSON payload, into
+  **Purchases -> E-receipt**. It is parsed into the usual reviewable draft and saved through the normal
+  import, so duplicates, units and stock rules still apply.
+- An instance **Admin** console for the administrator: people (including developer and admin flags),
+  registration mode (open, invite-only or closed) without a restart, active sessions with revoke,
+  orphaned-upload cleanup, and AI spend by house with a monthly instance budget that pauses AI calls
+  when it is reached.
+- Read-only API tokens for Home Assistant, Grafana and scripts, managed on the profile page. Tokens are
+  shown once, stored hashed, limited to GET requests, and can be revoked at any time.
+- Waste movements now keep the weighted price of the batches they came from, so waste analytics can
+  report its cost.
 - A detailed AI call log now records every request sent to the configured provider: receipt scans,
   bulk intake, recipe scans, recipe completion, food ideas and connection tests. Each entry keeps the
   operation, house, user, model, provider host, HTTP status, retry count, duration, token counts, cost,

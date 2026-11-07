@@ -89,6 +89,10 @@ dashes and underscores.
 Login accepts `{ "identifier": "alex", "password": "..." }`, or `email`/`username` instead of
 `identifier`. The older `{ "email": "alex@example.com" }` form keeps working.
 
+Read-only API tokens authenticate with `Authorization: Bearer svt_...` instead of the session cookie.
+They can call `GET`/`HEAD` endpoints for every house the user belongs to; any write returns `403`.
+Create and revoke them under `/api/tokens` (see below).
+
 `POST /api/auth/login` and `/register` return:
 
 ```json
@@ -748,6 +752,58 @@ See the [user guide](user-guide.md#export-a-dataset) for the archive layout.
 
 Joining a house — by accepting an invite or being added by an admin — creates a `house` notification
 addressed to that user only. Other members do not see it.
+
+## Insights
+
+Mounted at `/api/houses/:houseId/insights`. Reads need `viewer`; changing settings needs `admin`.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/spend?months=6` | Month-to-date spend, budget progress, monthly averages, spend by month, shop and category. Includes the house's insight settings. |
+| `GET` | `/waste?months=6` | Value of `waste` stock movements by month and item. Cost is quantity times the weighted price of the batches. |
+| `GET` | `/price-alerts` | Purchases in the last 45 days at least the threshold above the item's earlier average. |
+| `POST` | `/price-alerts/scan` | Create in-app reminders for those alerts (one per item per month) and return `{ created, alerts }`. |
+| `GET` | `/use-it-up?days=7` | Expiring lots grouped by item plus recipes that use them. Defaults to `useItUpDays` from settings. |
+| `GET` | `/shopping-prices` | Best recent unit price and shop for each open shopping-list line. |
+| `GET` | `/household` | Per-member `paid`, `share` and `balance`, settle-up transfers, and the recent receipts used. |
+| `PATCH` | `/settings` | Set `{ monthlyBudget, priceAlertPercent, useItUpDays }`; stored in the house settings. |
+
+Receipts accept `paidBy` and `splitWith` on import, and `PATCH /api/receipts/:receiptId` changes them
+later. An empty `splitWith` means everyone currently in the house.
+
+`POST /api/houses/:houseId/receipts/e-receipt/parse` takes `{ text }` (plain receipt text or e-invoice
+JSON) and returns `{ format, draft, reconciliation, currency }`. It writes nothing; post the draft to
+`/receipts` to import it.
+
+## API tokens
+
+Mounted at `/api/tokens`, session-authenticated.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/` | Tokens for the caller (never the secret). |
+| `POST` | `/` | `{ name }`; returns the token once as `token`. Maximum 20 per user. |
+| `DELETE` | `/:id` | Revoke one token. |
+
+Tokens are stored as SHA-256 hashes, authenticate as `Authorization: Bearer svt_...`, and are read-only.
+
+## Admin console
+
+Mounted at `/api/admin`. Every route requires the instance administrator (`403` otherwise).
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/overview` | Counts of people, houses, sessions and pending invites, orphaned uploads, AI spend and registration mode. |
+| `GET` | `/users?q=` | People with house/session counts and last session. |
+| `PATCH` | `/users/:id` | `{ isAdmin, developerMode }`. You cannot demote yourself or remove the last admin. |
+| `GET` | `/sessions` | Active sessions with user and device. |
+| `DELETE` | `/sessions/:id` | End one session. |
+| `GET` | `/registration` | Effective mode, its source, the admin override and the environment value. |
+| `PATCH` | `/registration` | `{ mode: "open" \| "invite" \| "closed" \| "environment" }`. `environment` removes the override. |
+| `GET` | `/files` | Orphaned uploads older than a day (largest first). |
+| `POST` | `/files/sweep` | Delete them. |
+| `GET` | `/ai?days=30` | AI calls and cost by house and by operation, plus the monthly budget and spend. |
+| `PATCH` | `/ai/budget` | `{ monthlyBudget }` in USD. `0` removes the limit. Once reached, AI endpoints return `429`. |
 
 ## Utility
 

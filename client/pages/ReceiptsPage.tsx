@@ -27,7 +27,10 @@ import type {
   PurchaseAnalytics,
   Receipt,
   ReceiptDeleteResult,
+  ReceiptDraft,
+  ReceiptDuplicate,
   ReceiptLine,
+  ReceiptReconciliation,
   ReceiptTemplate,
   Vendor,
   VendorSuggestion,
@@ -74,6 +77,7 @@ export function ReceiptsPage() {
   const [analyticsRange, setAnalyticsRange] = useState("12");
   const [templates, setTemplates] = useState<ReceiptTemplate[]>([]);
   const [deleteTemplate, setDeleteTemplate] = useState<ReceiptTemplate | null>(null);
+  const [eReceiptOpen, setEReceiptOpen] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -315,7 +319,10 @@ export function ReceiptsPage() {
                 Shops
               </Button>
             </div>
-            <Button icon="scan" onClick={() => navigate("/receipts/scan")}>
+            <Button variant="secondary" icon="upload" onClick={() => setEReceiptOpen(true)} disabled={!can("member")}>
+              E-receipt
+            </Button>
+            <Button icon="scan" onClick={() => navigate("/receipts/scan")} disabled={!can("member")}>
               Scan receipt
             </Button>
           </>
@@ -777,6 +784,16 @@ export function ReceiptsPage() {
         loading={busy}
       />
 
+      <EReceiptSheet
+        open={eReceiptOpen}
+        houseId={house.id}
+        onClose={() => setEReceiptOpen(false)}
+        onSaved={async () => {
+          setEReceiptOpen(false);
+          await load();
+        }}
+      />
+
       <div className="flex flex-wrap gap-2">
         <Badge tone="outline">
           <Icon name="receipt" size={11} /> receipt-first inventory
@@ -1111,5 +1128,193 @@ function SpendStat({
       <div className="mt-1.5 font-display text-xl leading-none">{value}</div>
       {hint && <div className="mt-1 text-[10px] text-muted">{hint}</div>}
     </div>
+  );
+}
+
+/**
+ * E-receipt import: paste the text of an emailed receipt or an e-invoice JSON
+ * payload. The server parses it into the same draft shape as a scan; saving
+ * goes through the normal import endpoint so stock, units and duplicates are
+ * still checked.
+ */
+function EReceiptSheet({
+  open,
+  houseId,
+  onClose,
+  onSaved,
+}: {
+  open: boolean;
+  houseId: string;
+  onClose: () => void;
+  onSaved: () => void | Promise<void>;
+}) {
+  const toast = useToast();
+  const [text, setText] = useState("");
+  const [draft, setDraft] = useState<ReceiptDraft | null>(null);
+  const [reconciliation, setReconciliation] = useState<ReceiptReconciliation | null>(null);
+  const [duplicate, setDuplicate] = useState<ReceiptDuplicate | null>(null);
+  const [currency, setCurrency] = useState("EUR");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setText("");
+    setDraft(null);
+    setReconciliation(null);
+    setDuplicate(null);
+    setCurrency("EUR");
+  }, [open]);
+
+  const parse = async () => {
+    setBusy(true);
+    try {
+      const result = await api<{
+        draft: ReceiptDraft;
+        reconciliation: ReceiptReconciliation;
+        currency: string;
+      }>(`/api/houses/${houseId}/receipts/e-receipt/parse`, { method: "POST", body: { text } });
+      setDraft(result.draft);
+      setReconciliation(result.reconciliation);
+      setDuplicate(null);
+      setCurrency(result.currency);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not read the e-receipt");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const save = async (allowDuplicate = false) => {
+    if (!draft) return;
+    setBusy(true);
+    try {
+      await api(`/api/houses/${houseId}/receipts`, {
+        method: "POST",
+        body: {
+          vendorName: draft.vendorName,
+          purchasedAt: draft.purchasedAt,
+          currency: draft.currency ?? currency,
+          total: draft.total,
+          subtotal: draft.subtotal,
+          tax: draft.tax,
+          taxBreakdown: draft.taxBreakdown,
+          savings: draft.savings,
+          notes: draft.notes,
+          allowDuplicate,
+          lines: draft.lines.map((line) => ({
+            description: line.description,
+            rawDescription: line.rawDescription,
+            quantity: line.quantity,
+            unit: line.unit,
+            unitPrice: line.unitPrice,
+            lineTotal: line.lineTotal,
+            taxRate: line.taxRate,
+            discount: line.discount,
+            barcode: line.barcode,
+          })),
+        },
+      });
+      toast.success("E-receipt imported");
+      await onSaved();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        const details = err.details as { duplicateOf?: ReceiptDuplicate } | undefined;
+        setDuplicate(details?.duplicateOf ?? { id: "", purchasedAt: null, total: draft.total, vendorName: draft.vendorName });
+      } else {
+        toast.error(err instanceof Error ? err.message : "Could not save the e-receipt");
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Sheet
+      open={open}
+      onClose={onClose}
+      title="Import an e-receipt"
+      description="Paste the text of an emailed receipt, a copied PDF, or an e-invoice JSON payload."
+      footer={
+        draft ? (
+          duplicate ? (
+            <Button block variant="warn" loading={busy} onClick={() => void save(true)}>
+              Import anyway
+            </Button>
+          ) : (
+            <Button block loading={busy} onClick={() => void save()}>
+              Save receipt
+            </Button>
+          )
+        ) : (
+          <Button block loading={busy} disabled={!text.trim()} onClick={() => void parse()}>
+            Read e-receipt
+          </Button>
+        )
+      }
+    >
+      <div className="space-y-3">
+        <Field label="E-receipt text">
+          <Textarea
+            value={text}
+            onChange={(event) => {
+              setText(event.target.value);
+              setDraft(null);
+              setDuplicate(null);
+            }}
+            rows={8}
+            placeholder={"Milk 1.50\nBread 2.20\nTotal 3.70"}
+            className="font-mono text-[12px]"
+          />
+        </Field>
+
+        {duplicate && (
+          <div className="rounded-xl border border-warn/40 bg-warn-soft p-3 text-[11px] text-warn">
+            This looks like a receipt you already saved
+            {duplicate.purchasedAt ? ` on ${shortDate(duplicate.purchasedAt)}` : ""}
+            {duplicate.total == null ? "" : ` for ${money(duplicate.total, currency)}`}. Importing it again adds
+            its stock twice.
+          </div>
+        )}
+
+        {draft && (
+          <div className="space-y-2">
+            <div className="rounded-xl border border-line bg-raised/50 p-3 text-[12px]">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-medium">{draft.vendorName ?? "Unknown shop"}</span>
+                <span className="tabular-nums">
+                  {draft.total == null ? "No total" : money(draft.total, draft.currency ?? currency)}
+                </span>
+              </div>
+              <div className="mt-0.5 text-[11px] text-muted">
+                {draft.purchasedAt ? shortDate(draft.purchasedAt) : "No date"} · {draft.lines.length} line
+                {draft.lines.length === 1 ? "" : "s"}
+              </div>
+              {reconciliation && reconciliation.difference != null && !reconciliation.ok && (
+                <div className="mt-1 text-[11px] text-warn">
+                  Lines are off by {money(Math.abs(reconciliation.difference), draft.currency ?? currency)} from the printed
+                  total. Check before saving.
+                </div>
+              )}
+            </div>
+            <div className="max-h-56 space-y-1 overflow-y-auto rounded-xl border border-line p-2">
+              {draft.lines.map((line, index) => (
+                <div key={index} className="flex items-center gap-2 text-[11px]">
+                  <span className="min-w-0 flex-1 truncate">{line.description}</span>
+                  <span className="text-muted">
+                    {qty(line.quantity)} {line.unit ?? ""}
+                  </span>
+                  <span className="w-16 text-right tabular-nums">
+                    {line.lineTotal == null ? "" : money(line.lineTotal, draft.currency ?? currency)}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <button type="button" className="text-[11px] text-brand" onClick={() => setDraft(null)}>
+              Edit the text instead
+            </button>
+          </div>
+        )}
+      </div>
+    </Sheet>
   );
 }

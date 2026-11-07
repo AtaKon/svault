@@ -11,6 +11,7 @@ const EL: Record<string, string> = {
   Scan: "Σάρωση",
   Kitchen: "Κουζίνα",
   More: "Περισσότερα",
+  Insights: "Στατιστικά",
   "Shopping list": "Λίστα αγορών",
   "Meal plan": "Πλάνο γευμάτων",
   "Bulk intake": "Μαζική εισαγωγή",

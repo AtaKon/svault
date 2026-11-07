@@ -248,6 +248,8 @@ export function serializeReceipt(row: any, lines?: any[]): Receipt {
     ocrText: row.ocr_text ?? null,
     source: row.source === "manual" ? "manual" : "scan",
     notes: row.notes ?? null,
+    paidBy: row.paid_by ?? null,
+    splitWith: parseJson<string[]>(row.split_with, []),
     lineCount: row.line_count == null ? undefined : Number(row.line_count),
     lines,
     createdAt: row.created_at,

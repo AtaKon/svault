@@ -82,8 +82,10 @@ export async function houseUploadUrls(houseId: string): Promise<string[]> {
   return urls;
 }
 
-/** Remove files in the upload folders that no row references and that are older than `maxAgeMs`. */
-export async function sweepOrphanUploads(maxAgeMs = ORPHAN_AGE_MS): Promise<number> {
+/** Files that no row references and that are older than `maxAgeMs`. */
+export async function orphanCandidates(
+  maxAgeMs = ORPHAN_AGE_MS,
+): Promise<{ key: string; path: string; size: number; modifiedAt: string }[]> {
   const referenced = new Set<string>();
   for (const { table, column } of UPLOAD_URL_COLUMNS) {
     const rows = await all<{ url: string | null }>(
@@ -99,7 +101,7 @@ export async function sweepOrphanUploads(maxAgeMs = ORPHAN_AGE_MS): Promise<numb
   }
 
   const cutoff = Date.now() - maxAgeMs;
-  let removed = 0;
+  const found: { key: string; path: string; size: number; modifiedAt: string }[] = [];
   for (const folder of UPLOAD_FOLDERS) {
     const dir = path.join(UPLOAD_DIR, folder);
     let entries: fs.Dirent[];
@@ -112,12 +114,31 @@ export async function sweepOrphanUploads(maxAgeMs = ORPHAN_AGE_MS): Promise<numb
       if (!entry.isFile() || referenced.has(`${folder}/${entry.name}`)) continue;
       const file = path.join(dir, entry.name);
       try {
-        if (fs.statSync(file).mtimeMs > cutoff) continue;
-        fs.rmSync(file, { force: true });
-        removed++;
+        const stat = fs.statSync(file);
+        if (stat.mtimeMs > cutoff) continue;
+        found.push({
+          key: `${folder}/${entry.name}`,
+          path: file,
+          size: stat.size,
+          modifiedAt: new Date(stat.mtimeMs).toISOString(),
+        });
       } catch {
         /* a file that vanished meanwhile is fine */
       }
+    }
+  }
+  return found;
+}
+
+/** Remove files in the upload folders that no row references and that are older than `maxAgeMs`. */
+export async function sweepOrphanUploads(maxAgeMs = ORPHAN_AGE_MS): Promise<number> {
+  let removed = 0;
+  for (const candidate of await orphanCandidates(maxAgeMs)) {
+    try {
+      fs.rmSync(candidate.path, { force: true });
+      removed++;
+    } catch {
+      /* the sweep will try again */
     }
   }
   return removed;

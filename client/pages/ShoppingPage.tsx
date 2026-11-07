@@ -19,7 +19,7 @@ import {
 import { Icon } from "@/components/icons";
 import { useToast } from "@/components/toast";
 import { qty, todayInput } from "@/format";
-import type { Item, Location, ShoppingItem } from "@shared/types";
+import type { Item, Location, ShoppingItem, ShoppingPriceHint } from "@shared/types";
 
 interface Groups {
   [key: string]: ShoppingItem[];
@@ -37,17 +37,20 @@ export function ShoppingPage() {
   const [editTarget, setEditTarget] = useState<ShoppingItem | null>(null);
   const [busy, setBusy] = useState(false);
   const [checkTarget, setCheckTarget] = useState<ShoppingItem | null>(null);
+  const [priceHints, setPriceHints] = useState<Record<string, ShoppingPriceHint>>({});
 
   const load = useCallback(async () => {
     try {
-      const [list, inventory, places] = await Promise.all([
+      const [list, inventory, places, hints] = await Promise.all([
         api<{ items: ShoppingItem[] }>(`/api/houses/${house.id}/shopping`),
         api<{ items: Item[] }>(`/api/houses/${house.id}/items?limit=1000`),
         api<Location[]>(`/api/houses/${house.id}/locations`),
+        api<{ hints: ShoppingPriceHint[] }>(`/api/houses/${house.id}/insights/shopping-prices`).catch(() => ({ hints: [] })),
       ]);
       setItems(list.items);
       setCatalog(inventory.items);
       setLocations(places);
+      setPriceHints(Object.fromEntries(hints.hints.map((hint) => [hint.lineId, hint])));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not load the shopping list");
     } finally {
@@ -195,6 +198,13 @@ export function ShoppingPage() {
                         </span>
                         {item.source !== "manual" && <Badge tone="outline">{item.source.replace("_", " ")}</Badge>}
                         {item.note && <span className="truncate">{item.note}</span>}
+                        {!item.checked && priceHints[item.id] && (
+                          <span className="truncate text-brand">
+                            cheapest {priceHints[item.id].cheapest.vendorName} · {priceHints[item.id].cheapest.price.toFixed(2)}{" "}
+                            {priceHints[item.id].currency}
+                            {priceHints[item.id].unit ? `/${priceHints[item.id].unit}` : ""}
+                          </span>
+                        )}
                       </div>
                     </div>
                     <IconButton icon="pencil" label={`Edit ${item.name}`} onClick={() => setEditTarget(item)} disabled={!can("member")} />

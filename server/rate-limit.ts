@@ -135,6 +135,8 @@ export const limiters = {
   invite: new RateLimiter("INVITE", { max: 30, windowMs: 10 * 60_000 }),
   /** AI-backed endpoints, per signed-in user (or IP). They can cost real money. */
   ai: new RateLimiter("AI", { max: 60, windowMs: 10 * 60_000 }),
+  /** Repeated insight scans, which walk receipt and movement history. */
+  insights: new RateLimiter("INSIGHTS", { max: 60, windowMs: 10 * 60_000 }),
 };
 
 export const userOrIp = (req: Request) => (req.user ? `user:${req.user.id}` : `ip:${clientIp(req)}`);

@@ -480,6 +480,10 @@ export interface Receipt {
   ocrText: string | null;
   source: "scan" | "manual";
   notes: string | null;
+  /** Member who paid; the household split uses it together with `splitWith`. */
+  paidBy: string | null;
+  /** Members who share the cost. An empty list means the whole house. */
+  splitWith: string[];
   lineCount?: number;
   lines?: ReceiptLine[];
   createdAt: string;
@@ -929,4 +933,182 @@ export interface AiCallLogPage {
   logs: AiCallLog[];
   total: number;
   summary: AiCallLogSummary;
+}
+
+/* --------------------------------------------------------------- insights */
+
+export interface HouseBudgetSettings {
+  /** Monthly grocery budget in the house currency; 0 disables it. */
+  monthlyBudget: number;
+  /** A purchase this many percent above the item's average raises an alert. */
+  priceAlertPercent: number;
+  /** How many days ahead the "use it up" view looks; 1–60. */
+  useItUpDays: number;
+}
+
+export interface SpendInsight {
+  currency: string;
+  month: string;
+  monthTotal: number;
+  monthReceipts: number;
+  budget: number;
+  budgetRemaining: number | null;
+  budgetPercent: number | null;
+  averagePerMonth: number;
+  byMonth: { month: string; total: number; receipts: number }[];
+  byShop: { vendorName: string; total: number; receipts: number }[];
+  byCategory: { name: string; total: number; lines: number }[];
+  settings: HouseBudgetSettings;
+}
+
+export interface WasteInsight {
+  currency: string;
+  months: number;
+  currentMonth: string;
+  currentMonthCost: number;
+  totalCost: number;
+  byMonth: { month: string; cost: number; events: number }[];
+  topItems: {
+    itemId: string | null;
+    itemName: string;
+    unit: string | null;
+    category: string | null;
+    cost: number;
+    quantity: number;
+    events: number;
+  }[];
+}
+
+export interface PriceAlert {
+  itemId: string;
+  itemName: string;
+  unit: string | null;
+  vendorName: string | null;
+  receiptId: string;
+  purchasedAt: string;
+  price: number;
+  averagePrice: number;
+  percent: number;
+  sampleSize: number;
+  currency: string;
+}
+
+export interface HouseholdBalance {
+  userId: string;
+  name: string;
+  role: string;
+  paid: number;
+  share: number;
+  /** Positive means the house owes this person money. */
+  balance: number;
+}
+
+export interface HouseholdSettlement {
+  fromUserId: string;
+  fromName: string;
+  toUserId: string;
+  toName: string;
+  amount: number;
+}
+
+export interface HouseholdReceipt {
+  id: string;
+  purchasedAt: string | null;
+  vendorName: string | null;
+  total: number | null;
+  paidBy: string | null;
+  payerName: string | null;
+  splitWith: string[];
+  participantNames: string[];
+}
+
+export interface UseItUpLot {
+  id: string;
+  quantity: number;
+  expiresAt: string;
+  locationName: string | null;
+}
+
+export interface UseItUpItem {
+  itemId: string;
+  name: string;
+  unit: string | null;
+  quantity: number;
+  expiresAt: string;
+  daysLeft: number;
+  locationName: string | null;
+  lots: UseItUpLot[];
+}
+
+export interface UseItUpRecipe {
+  recipeId: string;
+  title: string;
+  image: string | null;
+  servings: number | null;
+  matched: string[];
+  missing: string[];
+  score: number;
+}
+
+export interface ShoppingPriceHint {
+  lineId: string;
+  itemId: string | null;
+  name: string;
+  unit: string | null;
+  currency: string;
+  cheapest: { vendorName: string; price: number; purchasedAt: string; unit: string | null };
+  vendors: { vendorName: string; price: number; purchasedAt: string; unit: string | null }[];
+}
+
+export interface ApiToken {
+  id: string;
+  name: string;
+  lastUsedAt: string | null;
+  expiresAt: string | null;
+  createdAt: string;
+}
+
+export interface ApiTokenCreated extends ApiToken {
+  /** Shown once; only its hash is stored. */
+  token: string;
+}
+
+export interface AdminOverview {
+  users: number;
+  houses: number;
+  sessions: number;
+  pendingInvites: number;
+  uploads: { count: number; bytes: number };
+  ai: { calls: number; cost: number; errors: number; days: number; budget: number; monthSpend: number };
+  registration: { mode: "open" | "invite" | "closed"; source: string };
+  database: string;
+}
+
+export interface AdminUser {
+  id: string;
+  email: string;
+  username: string | null;
+  name: string;
+  isAdmin: boolean;
+  developerMode: boolean;
+  houses: number;
+  sessions: number;
+  lastSessionAt: string | null;
+  createdAt: string;
+}
+
+export interface AdminSession {
+  id: string;
+  userId: string;
+  userName: string;
+  userEmail: string;
+  userAgent: string | null;
+  createdAt: string;
+  expiresAt: string;
+}
+
+export interface OrphanFile {
+  key: string;
+  size: number;
+  modifiedAt: string;
 }

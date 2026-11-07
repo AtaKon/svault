@@ -100,7 +100,7 @@ await new Promise<void>((resolve) => {
 });
 
 const { app } = await import("../index.js");
-const { closeDb, run } = await import("../db.js");
+const { closeDb, get, run } = await import("../db.js");
 const { heuristicRecipe, parseIngredientLine, localIdeas } = await import("../services/recipe-local.js");
 const { heuristicReceipt } = await import("../services/receipt-local.js");
 const { parseLidlReceipt } = await import("../services/receipt-lidl.js");
@@ -126,8 +126,11 @@ let aiBase = "";
 let cookie = "";
 const aiRequests: any[] = [];
 
-async function request(pathname: string, options: { method?: string; body?: unknown; auth?: string } = {}) {
-  const headers: Record<string, string> = {};
+async function request(
+  pathname: string,
+  options: { method?: string; body?: unknown; auth?: string; headers?: Record<string, string> } = {},
+) {
+  const headers: Record<string, string> = { ...(options.headers ?? {}) };
   const useCookie = options.auth === undefined ? cookie : options.auth;
   if (useCookie) headers.cookie = useCookie;
   let body: BodyInit | undefined;
@@ -4260,5 +4263,508 @@ describe("receipt scan fixes", () => {
     const milkAliases = await request(`/api/items/${milk.data.id}/aliases`);
     assert.equal(milkAliases.data.length, 1, "a chosen item is learned");
     assert.equal(milkAliases.data[0].rawName, "MILK FRESH 1L");
+  });
+});
+
+describe("insights, household split and admin console", () => {
+  let insightHouse = "";
+  let secondUserId = "";
+  let milkId = "";
+  let latestReceiptId = "";
+  const month = new Date().toISOString().slice(0, 7);
+  const at = (day: number) => `${month}-${String(day).padStart(2, "0")}`;
+
+  it("creates a house and puts a second member in it", async () => {
+    const created = await request("/api/houses", { method: "POST", body: { name: "Insight House", currency: "EUR" } });
+    assert.equal(created.status, 201);
+    insightHouse = created.data.id;
+    const me = await request("/api/auth/me", { auth: secondUserCookie });
+    secondUserId = me.data.user.id;
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
+      insightHouse,
+      secondUserId,
+      "member",
+      new Date().toISOString(),
+    ]);
+  });
+
+  it("imports receipts that feed spend, price alerts and the household split", async () => {
+    const milk = await request(`/api/houses/${insightHouse}/items`, {
+      method: "POST",
+      body: { name: "Insight milk", unit: "l", reorderPoint: 1 },
+    });
+    assert.equal(milk.status, 201);
+    milkId = milk.data.id;
+
+    for (const [day, total] of [
+      [1, 1],
+      [2, 1],
+      [3, 1.5],
+    ] as const) {
+      const imported = await request(`/api/houses/${insightHouse}/receipts`, {
+        method: "POST",
+        body: {
+          vendorName: "Price Mart",
+          purchasedAt: at(day),
+          currency: "EUR",
+          total,
+          lines: [{ description: "Insight milk", itemId: milkId, quantity: 1, unit: "l", lineTotal: total }],
+        },
+      });
+      assert.equal(imported.status, 201, JSON.stringify(imported.data));
+      if (day === 3) latestReceiptId = imported.data.id;
+    }
+  });
+
+  it("tracks the budget and monthly spend", async () => {
+    const saved = await request(`/api/houses/${insightHouse}/insights/settings`, {
+      method: "PATCH",
+      body: { monthlyBudget: 10, priceAlertPercent: 20 },
+    });
+    assert.equal(saved.status, 200, JSON.stringify(saved.data));
+
+    assert.equal(
+      (
+        await request(`/api/houses/${insightHouse}/insights/settings`, {
+          method: "PATCH",
+          body: { priceAlertPercent: 0 },
+        })
+      ).status,
+      400,
+    );
+    assert.equal(
+      (
+        await request(`/api/houses/${insightHouse}/insights/settings`, {
+          method: "PATCH",
+          body: { monthlyBudget: -1 },
+        })
+      ).status,
+      400,
+    );
+
+    const spend = await request(`/api/houses/${insightHouse}/insights/spend?months=6`);
+    assert.equal(spend.status, 200);
+    assert.equal(spend.data.monthTotal, 3.5);
+    assert.equal(spend.data.budget, 10);
+    assert.equal(spend.data.budgetPercent, 35);
+    assert.equal(spend.data.byShop[0].vendorName, "Price Mart");
+  });
+
+  it("keeps insights inside the house and settings admin-only", async () => {
+    const forbidden = await request(`/api/houses/${insightHouse}/insights/settings`, {
+      auth: secondUserCookie,
+      method: "PATCH",
+      body: { monthlyBudget: 1 },
+    });
+    assert.equal(forbidden.status, 403);
+
+    const foreign = await request("/api/houses", {
+      auth: secondUserCookie,
+      method: "POST",
+      body: { name: "Private insights house", currency: "EUR" },
+    });
+    assert.equal(foreign.status, 201);
+    for (const path of ["spend", "waste", "household", "use-it-up", "shopping-prices", "price-alerts"]) {
+      assert.equal((await request(`/api/houses/${foreign.data.id}/insights/${path}`)).status, 404, path);
+    }
+  });
+
+  it("finds purchases that are clearly above the usual price", async () => {
+    const alerts = await request(`/api/houses/${insightHouse}/insights/price-alerts`);
+    assert.equal(alerts.status, 200);
+    const milkAlert = alerts.data.alerts.find((alert: any) => alert.itemId === milkId);
+    assert.ok(milkAlert, JSON.stringify(alerts.data));
+    assert.equal(milkAlert.price, 1.5);
+    assert.equal(milkAlert.averagePrice, 1);
+    assert.equal(milkAlert.percent, 50);
+    assert.equal(milkAlert.vendorName, "Price Mart");
+
+    const scanned = await request(`/api/houses/${insightHouse}/insights/price-alerts/scan`, { method: "POST", body: {} });
+    assert.equal(scanned.status, 200);
+    // The import that introduced the price already created the reminder.
+    assert.ok(scanned.data.created === 0 || scanned.data.created === 1);
+    const reminders = await request(`/api/houses/${insightHouse}/notifications`);
+    const priceReminders = reminders.data.notifications.filter((entry: any) => entry.type === "price_alert");
+    assert.equal(priceReminders.length, 1, "one reminder per item and month");
+
+    // A purchase exactly at the threshold is not "above" it.
+    const stricter = await request(`/api/houses/${insightHouse}/insights/settings`, {
+      method: "PATCH",
+      body: { priceAlertPercent: 50 },
+    });
+    assert.equal(stricter.status, 200);
+    const none = await request(`/api/houses/${insightHouse}/insights/price-alerts`);
+    assert.ok(!none.data.alerts.some((alert: any) => alert.itemId === milkId));
+    await request(`/api/houses/${insightHouse}/insights/settings`, {
+      method: "PATCH",
+      body: { priceAlertPercent: 20 },
+    });
+  });
+
+  it("suggests recipes and items to use up before they expire", async () => {
+    const soon = new Date(Date.now() + 2 * 864e5).toISOString().slice(0, 10);
+    const yoghurt = await request(`/api/houses/${insightHouse}/items`, {
+      method: "POST",
+      body: {
+        name: "Useup yoghurt",
+        unit: "pcs",
+        initialStock: { quantity: 1, expiresAt: soon, unitPrice: 2 },
+      },
+    });
+    assert.equal(yoghurt.status, 201);
+    const result = await request(`/api/houses/${insightHouse}/insights/use-it-up?days=7`);
+    assert.equal(result.status, 200);
+    assert.ok(result.data.items.some((item: any) => item.name === "Useup yoghurt"));
+  });
+
+  it("prices open shopping lines from recent receipts", async () => {
+    const line = await request(`/api/houses/${insightHouse}/shopping`, {
+      method: "POST",
+      body: { name: "Insight milk", itemId: milkId, quantity: 1, unit: "l" },
+    });
+    assert.equal(line.status, 201, JSON.stringify(line.data));
+    const hints = await request(`/api/houses/${insightHouse}/insights/shopping-prices`);
+    assert.equal(hints.status, 200);
+    const hint = hints.data.hints.find((entry: any) => entry.itemId === milkId);
+    assert.ok(hint, JSON.stringify(hints.data));
+    assert.equal(hint.cheapest.vendorName, "Price Mart");
+    assert.equal(hint.cheapest.price, 1);
+  });
+
+  it("values wasted stock", async () => {
+    const bread = await request(`/api/houses/${insightHouse}/items`, {
+      method: "POST",
+      body: { name: "Waste bread", unit: "pcs", initialStock: { quantity: 2, unitPrice: 1.5 } },
+    });
+    assert.equal(bread.status, 201);
+    // A second, cheaper batch: wasting three takes both and must be valued at
+    // the weighted average (2 × 1.50 + 1 × 0.50 = 3.50).
+    const cheaper = await request(`/api/items/${bread.data.id}/stock`, {
+      method: "POST",
+      body: { action: "add", quantity: 2, unitPrice: 0.5 },
+    });
+    assert.equal(cheaper.status, 200);
+    const wasted = await request(`/api/items/${bread.data.id}/stock`, {
+      method: "POST",
+      body: { action: "waste", quantity: 3 },
+    });
+    assert.equal(wasted.status, 200, JSON.stringify(wasted.data));
+    // An unpriced batch contributes nothing.
+    const peel = await request(`/api/houses/${insightHouse}/items`, {
+      method: "POST",
+      body: { name: "Unpriced peel", unit: "pcs", initialStock: { quantity: 1 } },
+    });
+    assert.equal(peel.status, 201);
+    await request(`/api/items/${peel.data.id}/stock`, { method: "POST", body: { action: "waste", quantity: 1 } });
+    const waste = await request(`/api/houses/${insightHouse}/insights/waste?months=6`);
+    assert.equal(waste.status, 200);
+    assert.equal(waste.data.totalCost, 3.5, JSON.stringify(waste.data));
+    assert.equal(waste.data.byMonth[waste.data.byMonth.length - 1].events, 2);
+    assert.ok(waste.data.topItems.some((item: any) => item.itemName === "Waste bread"));
+  });
+
+  it("splits receipts between the people who paid", async () => {
+    const changed = await request(`/api/receipts/${latestReceiptId}`, {
+      method: "PATCH",
+      body: { paidBy: secondUserId },
+    });
+    assert.equal(changed.status, 200, JSON.stringify(changed.data));
+    assert.equal(changed.data.paidBy, secondUserId);
+
+    const household = await request(`/api/houses/${insightHouse}/insights/household`);
+    assert.equal(household.status, 200);
+    const second = household.data.balances.find((entry: any) => entry.userId === secondUserId);
+    const first = household.data.balances.find((entry: any) => entry.userId !== secondUserId);
+    assert.ok(second && first);
+    // Owner paid 2.00 and the second member paid 1.50; each owes 1.75.
+    assert.equal(first.balance, 0.25);
+    assert.equal(second.balance, -0.25);
+    assert.deepEqual(
+      household.data.settlements.map((entry: any) => [entry.fromUserId, entry.toUserId, entry.amount]),
+      [[secondUserId, first.userId, 0.25]],
+    );
+    // Everybody in the house shares a receipt, including a member with no
+    // balance of their own yet.
+    assert.deepEqual([...household.data.receipts[0].splitWith].sort(), [first.userId, secondUserId].sort());
+    assert.deepEqual(
+      [...household.data.members.map((member: any) => member.userId)].sort(),
+      [first.userId, secondUserId].sort(),
+    );
+    const outsider = await request(`/api/receipts/${latestReceiptId}`, {
+      method: "PATCH",
+      body: { paidBy: "usr_not_in_this_house" },
+    });
+    assert.equal(outsider.status, 400);
+    const outsiderSplit = await request(`/api/receipts/${latestReceiptId}`, {
+      method: "PATCH",
+      body: { splitWith: [secondUserId, "usr_not_in_this_house"] },
+    });
+    assert.equal(outsiderSplit.status, 400);
+    const unassigned = await request(`/api/receipts/${latestReceiptId}`, {
+      method: "PATCH",
+      body: { paidBy: null },
+    });
+    assert.equal(unassigned.status, 200);
+    // Clearing the payer stores the receipt creator, never null.
+    assert.equal(unassigned.data.paidBy, first.userId);
+    // Omitting paidBy leaves the current payer alone.
+    const untouched = await request(`/api/receipts/${latestReceiptId}`, {
+      method: "PATCH",
+      body: { splitWith: [secondUserId, first.userId] },
+    });
+    assert.equal(untouched.status, 200);
+    assert.equal(untouched.data.paidBy, first.userId);
+  });
+
+  it("settles a three-person house with the smallest set of transfers", async () => {
+    const house = await request("/api/houses", { method: "POST", body: { name: "Split House", currency: "EUR" } });
+    assert.equal(house.status, 201);
+    const thirdId = "usr_third_saver";
+    await run(
+      `INSERT INTO users (id, email, username, name, password_hash, is_admin, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [thirdId, "third@example.com", "third", "Third Saver", "s1$00$00", 0, new Date().toISOString()],
+    );
+    for (const userId of [secondUserId, thirdId]) {
+      await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
+        house.data.id,
+        userId,
+        "member",
+        new Date().toISOString(),
+      ]);
+    }
+    const paid = await request(`/api/houses/${house.data.id}/receipts`, {
+      method: "POST",
+      body: {
+        vendorName: "Split Mart",
+        purchasedAt: at(5),
+        currency: "EUR",
+        total: 30,
+        paidBy: thirdId,
+        lines: [{ description: "Shared groceries", quantity: 1, lineTotal: 30 }],
+      },
+    });
+    assert.equal(paid.status, 201, JSON.stringify(paid.data));
+
+    const household = await request(`/api/houses/${house.data.id}/insights/household`);
+    assert.equal(household.status, 200);
+    const total = household.data.balances.reduce((sum: number, entry: any) => sum + entry.balance, 0);
+    assert.ok(Math.abs(total) < 0.01, JSON.stringify(household.data.balances));
+    const third = household.data.balances.find((entry: any) => entry.userId === thirdId);
+    assert.equal(third.balance, 20);
+    assert.equal(household.data.settlements.length, 2);
+    assert.ok(household.data.settlements.every((entry: any) => entry.toUserId === thirdId));
+    assert.equal(
+      household.data.settlements.reduce((sum: number, entry: any) => sum + entry.amount, 0),
+      20,
+    );
+  });
+
+  it("reads an e-receipt without writing anything", async () => {
+    const parsed = await request(`/api/houses/${insightHouse}/receipts/e-receipt/parse`, {
+      method: "POST",
+      body: { text: "Price Mart\nMilk 1.50\nBread 2.20\nTOTAL 3.70" },
+    });
+    assert.equal(parsed.status, 200, JSON.stringify(parsed.data));
+    assert.ok(parsed.data.draft.lines.length >= 2);
+    assert.equal(parsed.data.draft.total, 3.7);
+    const json = await request(`/api/houses/${insightHouse}/receipts/e-receipt/parse`, {
+      method: "POST",
+      body: { text: JSON.stringify({ vendorName: "JSON Mart", total: 4, lines: [{ name: "Rice", quantity: 2, price: 2 }] }) },
+    });
+    assert.equal(json.status, 200, JSON.stringify(json.data));
+    assert.equal(json.data.format, "json");
+    assert.equal(json.data.draft.lines[0].lineTotal, 4);
+
+    // A printed total that does not match the lines is still returned as a
+    // draft, with a reconciliation warning; the normal import decides.
+    const mismatch = await request(`/api/houses/${insightHouse}/receipts/e-receipt/parse`, {
+      method: "POST",
+      body: { text: "Mismatch Mart\nMilk 1.50\nTOTAL 100.00" },
+    });
+    assert.equal(mismatch.status, 200);
+    assert.equal(mismatch.data.reconciliation.ok, false);
+    assert.ok(mismatch.data.reconciliation.difference > 0);
+
+    assert.equal(
+      (await request(`/api/houses/${insightHouse}/receipts/e-receipt/parse`, { method: "POST", body: { text: "" } })).status,
+      400,
+    );
+    assert.equal(
+      (
+        await request(`/api/houses/${insightHouse}/receipts/e-receipt/parse`, {
+          method: "POST",
+          body: { text: "{not json" },
+        })
+      ).status,
+      400,
+    );
+    assert.equal(
+      (
+        await request(`/api/houses/${insightHouse}/receipts/e-receipt/parse`, {
+          method: "POST",
+          body: { text: "{\"lines\":[]}" },
+        })
+      ).status,
+      400,
+    );
+    assert.equal(
+      (
+        await request(`/api/houses/${insightHouse}/receipts/e-receipt/parse`, {
+          method: "POST",
+          body: { text: "x".repeat(100_001) },
+        })
+      ).status,
+      400,
+    );
+  });
+
+  it("warns on a duplicate e-receipt before importing it twice", async () => {
+    const text = "Duplicate Mart\nDup rice 9.99\nTOTAL 9.99";
+    const parsed = await request(`/api/houses/${insightHouse}/receipts/e-receipt/parse`, {
+      method: "POST",
+      body: { text },
+    });
+    assert.equal(parsed.status, 200);
+    const body = {
+      vendorName: "Duplicate Mart",
+      purchasedAt: at(4),
+      currency: "EUR",
+      lines: parsed.data.draft.lines,
+    };
+    const first = await request(`/api/houses/${insightHouse}/receipts`, { method: "POST", body });
+    assert.equal(first.status, 201, JSON.stringify(first.data));
+    const again = await request(`/api/houses/${insightHouse}/receipts`, { method: "POST", body });
+    assert.equal(again.status, 409);
+    assert.equal(again.data.duplicateOf.total, 9.99);
+    const forced = await request(`/api/houses/${insightHouse}/receipts`, {
+      method: "POST",
+      body: { ...body, allowDuplicate: true },
+    });
+    assert.equal(forced.status, 201, JSON.stringify(forced.data));
+  });
+
+  it("gives instance administrators a console and keeps it private", async () => {
+    for (const path of ["overview", "users", "sessions", "files", "ai", "registration"]) {
+      const forbidden = await request(`/api/admin/${path}`, { auth: secondUserCookie });
+      assert.equal(forbidden.status, 403, path);
+    }
+    const overview = await request("/api/admin/overview");
+    assert.equal(overview.status, 200);
+    assert.ok(overview.data.users >= 2);
+    assert.equal(overview.data.database, "sqlite");
+    assert.equal((await request("/api/admin/files/sweep", { auth: secondUserCookie, method: "POST", body: {} })).status, 403);
+    const sweep = await request("/api/admin/files/sweep", { method: "POST", body: {} });
+    assert.equal(sweep.status, 200);
+    assert.equal(typeof sweep.data.removed, "number");
+
+    const budget = await request("/api/admin/ai/budget", { method: "PATCH", body: { monthlyBudget: 5 } });
+    assert.equal(budget.status, 200);
+    assert.equal(budget.data.budget, 5);
+    assert.equal((await request("/api/admin/ai/budget", { method: "PATCH", body: { monthlyBudget: 0 } })).data.budget, 0);
+
+    const me = await request("/api/auth/me");
+    const demoteSelf = await request(`/api/admin/users/${me.data.user.id}`, {
+      method: "PATCH",
+      body: { isAdmin: false },
+    });
+    assert.equal(demoteSelf.status, 400, "an admin cannot lock themselves out");
+
+    for (const mode of ["closed", "invite", "open"] as const) {
+      const changed = await request("/api/admin/registration", { method: "PATCH", body: { mode } });
+      assert.equal(changed.status, 200);
+      assert.equal(changed.data.source, "admin");
+      assert.equal((await request("/api/auth/registration", { auth: "" })).data.mode, mode);
+    }
+    const invalid = await request("/api/admin/registration", { method: "PATCH", body: { mode: "sometimes" } });
+    assert.equal(invalid.status, 400);
+    const reset = await request("/api/admin/registration", { method: "PATCH", body: { mode: "environment" } });
+    assert.equal(reset.status, 200);
+    assert.notEqual(reset.data.source, "admin");
+    const status = await request("/api/admin/registration");
+    assert.equal(status.data.override, null);
+    assert.equal((await request("/api/auth/registration", { auth: "" })).data.mode, "open");
+  });
+
+  it("pauses AI calls when the instance budget is spent", async () => {
+    // Exactly at the budget is already over the line.
+    const spent = await request("/api/admin/ai/budget", { method: "PATCH", body: { monthlyBudget: 1 } });
+    assert.equal(spent.status, 200);
+    await run(
+      `INSERT INTO ai_call_logs (id, operation, status, cost, created_at) VALUES (?, ?, ?, ?, ?)`,
+      ["ail_budget_test", "test", "ok", 1, new Date().toISOString()],
+    );
+    const aiPaths = [
+      "receipts/scan",
+      "recipes/scan",
+      "intake/parse",
+      "ideas",
+      "ai/test",
+    ];
+    for (const path of aiPaths) {
+      const blocked = await request(`/api/houses/${insightHouse}/${path}`, { method: "POST", body: {} });
+      assert.equal(blocked.status, 429, `${path}: ${JSON.stringify(blocked.data)}`);
+    }
+    const blockedRecipe = await request("/api/recipes/rcp_missing/ai", { method: "POST", body: {} });
+    assert.equal(blockedRecipe.status, 429, JSON.stringify(blockedRecipe.data));
+
+    // One dollar under the line lets the request reach the normal config check.
+    const under = await request("/api/admin/ai/budget", { method: "PATCH", body: { monthlyBudget: 2 } });
+    assert.equal(under.data.budget, 2);
+    assert.equal((await request(`/api/houses/${insightHouse}/ai/test`, { method: "POST", body: {} })).status, 400);
+
+    const unlimited = await request("/api/admin/ai/budget", { method: "PATCH", body: { monthlyBudget: 0 } });
+    assert.equal(unlimited.data.budget, 0);
+    const allowed = await request(`/api/houses/${insightHouse}/ai/test`, { method: "POST", body: {} });
+    assert.equal(allowed.status, 400, "without a budget the endpoint reaches the AI configuration check");
+    await run("DELETE FROM ai_call_logs WHERE id = ?", ["ail_budget_test"]);
+  });
+
+  it("issues read-only API tokens", async () => {
+    const created = await request("/api/tokens", { method: "POST", body: { name: "Test dashboard" } });
+    assert.equal(created.status, 201, JSON.stringify(created.data));
+    assert.ok(created.data.token.startsWith("svt_"));
+    const storedRow = await get<{ token_hash: string }>("SELECT token_hash FROM api_tokens WHERE id = ?", [
+      created.data.id,
+    ]);
+    assert.notEqual(storedRow?.token_hash, created.data.token, "the plain token is never stored");
+    assert.equal(storedRow?.token_hash?.length, 64);
+    const bearer = { authorization: `Bearer ${created.data.token}` };
+
+    const read = await request("/api/houses", { auth: "", headers: bearer });
+    assert.equal(read.status, 200);
+    assert.equal((await request("/api/houses", { auth: "", headers: bearer, method: "HEAD" })).status, 200);
+    assert.ok(read.data.some((house: any) => house.id === insightHouse));
+    // A house created by the other user: the owner's token is not a member.
+    const foreign = await request("/api/houses", {
+      auth: secondUserCookie,
+      method: "POST",
+      body: { name: "Second user house", currency: "EUR" },
+    });
+    assert.equal(foreign.status, 201);
+    assert.equal((await request(`/api/houses/${foreign.data.id}`, { auth: "", headers: bearer })).status, 404);
+
+    const write = await request("/api/houses", { auth: "", headers: bearer, method: "POST", body: { name: "Token house" } });
+    assert.equal(write.status, 403);
+    const patch = await request(`/api/houses/${insightHouse}`, {
+      auth: "",
+      headers: bearer,
+      method: "PATCH",
+      body: { name: "Token rename" },
+    });
+    assert.equal(patch.status, 403);
+    const remove = await request(`/api/tokens/${created.data.id}`, { auth: "", headers: bearer, method: "DELETE" });
+    assert.equal(remove.status, 403);
+    assert.equal((await request("/api/admin/overview", { auth: "", headers: bearer })).status, 403);
+    assert.equal((await request("/api/tokens", { auth: "", headers: bearer })).status, 403);
+
+    const list = await request("/api/tokens");
+    assert.equal(list.status, 200);
+    assert.equal(list.data.tokens[0].name, "Test dashboard");
+    assert.equal(list.data.tokens[0].token, undefined);
+    assert.ok(list.data.tokens[0].lastUsedAt, "using a token records when it was last used");
+    const revoked = await request(`/api/tokens/${created.data.id}`, { method: "DELETE" });
+    assert.equal(revoked.status, 200);
+    assert.equal((await request("/api/houses", { auth: "", headers: bearer })).status, 401);
   });
 });

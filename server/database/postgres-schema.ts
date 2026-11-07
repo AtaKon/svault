@@ -32,6 +32,23 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);
 
+CREATE TABLE IF NOT EXISTS api_tokens (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  last_used_at TEXT,
+  expires_at TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS api_tokens_user ON api_tokens(user_id);
+
+CREATE TABLE IF NOT EXISTS instance_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS user_totp (
   user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   secret TEXT NOT NULL,
@@ -224,6 +241,8 @@ CREATE TABLE IF NOT EXISTS receipts (
   ocr_text TEXT,
   source TEXT NOT NULL DEFAULT 'scan',
   notes TEXT,
+  paid_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  split_with TEXT NOT NULL DEFAULT '[]',
   created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL
 );
@@ -605,6 +624,8 @@ export const POSTGRES_MIGRATIONS: string[] = [
   "ALTER TABLE catalog_mappings DROP CONSTRAINT IF EXISTS catalog_mappings_country_vendor_key_raw_key_key",
   "CREATE UNIQUE INDEX IF NOT EXISTS catalog_mappings_scope ON catalog_mappings(house_id, country, vendor_key, raw_key)",
   "CREATE INDEX IF NOT EXISTS catalog_mappings_house ON catalog_mappings(house_id)",
+  "ALTER TABLE receipts ADD COLUMN IF NOT EXISTS paid_by TEXT",
+  "ALTER TABLE receipts ADD COLUMN IF NOT EXISTS split_with TEXT NOT NULL DEFAULT '[]'",
 ];
 
 /**
