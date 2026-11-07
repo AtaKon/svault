@@ -964,6 +964,8 @@ export interface SpendInsight {
 export interface WasteInsight {
   currency: string;
   months: number;
+  currentMonth: string;
+  currentMonthCost: number;
   totalCost: number;
   byMonth: { month: string; cost: number; events: number }[];
   topItems: {

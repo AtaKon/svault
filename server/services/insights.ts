@@ -217,9 +217,12 @@ export async function wasteInsight(houseId: string, months = 6): Promise<WasteIn
     items.set(key, entry);
   }
 
+  const currentMonth = keys[keys.length - 1];
   return {
     currency: house?.currency ?? "EUR",
     months: count,
+    currentMonth,
+    currentMonthCost: money(byMonthMap.get(currentMonth)?.cost ?? 0),
     totalCost: money(totalCost),
     byMonth: keys.map((key) => ({ month: key, cost: money(byMonthMap.get(key)?.cost ?? 0), events: byMonthMap.get(key)?.events ?? 0 })),
     topItems: [...items.values()]

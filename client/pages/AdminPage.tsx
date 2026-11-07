@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/api";
 import { useAuth } from "@/state";
 import { Badge, Button, Card, EmptyState, Field, Input, PageHeader, Select, Skeleton, Stat, cn } from "@/components/ui";
@@ -25,6 +25,7 @@ export function AdminPage() {
   const [ai, setAi] = useState<AiSpend | null>(null);
   const [registration, setRegistration] = useState("invite");
   const [aiBudget, setAiBudget] = useState("0");
+  const aiBudgetTouched = useRef(false);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -54,7 +55,9 @@ export function AdminPage() {
     setSessions(sessionData?.sessions ?? null);
     setFiles(fileData);
     setAi(aiData);
-    setAiBudget(String(aiData?.budget || ""));
+    // Keep whatever the admin is typing; only seed the field from the server
+    // until they have touched it.
+    if (!aiBudgetTouched.current) setAiBudget(String(aiData?.budget || ""));
     if (registrationData) setRegistration(registrationData.mode);
     if (!overviewData) {
       const failure = results[0];
@@ -71,6 +74,9 @@ export function AdminPage() {
   }, [load]);
 
   const saveRegistration = async (mode: string) => {
+    if (mode === "open" && registration !== "open" && !window.confirm("Allow anyone who can reach this server to create an account?")) {
+      return;
+    }
     setBusy(true);
     try {
       const result = await api<{ mode: "open" | "invite" | "closed"; source: string }>("/api/admin/registration", {
@@ -107,6 +113,7 @@ export function AdminPage() {
   };
 
   const saveAiBudget = async () => {
+    aiBudgetTouched.current = true;
     setBusy(true);
     try {
       const result = await api<{ budget: number; monthSpend: number }>("/api/admin/ai/budget", {
@@ -255,6 +262,11 @@ export function AdminPage() {
         ) : (
           <p className="mt-2 text-[12px] text-muted">Every upload is referenced by a record.</p>
         )}
+        {files && files.count > files.files.length && (
+          <p className="mt-2 text-[10px] text-muted">
+            Showing the {files.files.length} largest of {files.count} orphaned files.
+          </p>
+        )}
       </Card>
 
       <Card className="p-4">
@@ -326,6 +338,9 @@ export function AdminPage() {
             <p className="py-2 text-[12px] text-muted">No active sessions.</p>
           )}
         </div>
+        {(sessions?.length ?? 0) > 40 && (
+          <p className="mt-2 text-[10px] text-muted">Showing 40 of {sessions?.length}. Older sessions are hidden.</p>
+        )}
       </Card>
     </div>
   );

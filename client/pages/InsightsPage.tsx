@@ -207,8 +207,8 @@ export function InsightsPage() {
         />
         <Stat
           label="Wasted"
-          value={money(waste.byMonth[waste.byMonth.length - 1]?.cost ?? 0, waste.currency)}
-          hint={`this month · ${money(waste.totalCost, waste.currency)} in 6 months`}
+          value={money(waste.currentMonthCost, waste.currency)}
+          hint={`${waste.currentMonth} · ${money(waste.totalCost, waste.currency)} in 6 months`}
           tone="warn"
           icon="trash"
         />
@@ -525,7 +525,7 @@ function ShoppingPriceCard({ houseId }: { houseId: string }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       const result = await api<{ hints: ShoppingPriceHint[] }>(`/api/houses/${houseId}/insights/shopping-prices`);
@@ -537,11 +537,11 @@ function ShoppingPriceCard({ houseId }: { houseId: string }) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [houseId]);
 
   useEffect(() => {
     void load();
-  }, [houseId]);
+  }, [load]);
 
   return (
     <Card className="p-4">
