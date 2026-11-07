@@ -4331,6 +4331,25 @@ describe("insights, household split and admin console", () => {
     assert.equal(spend.data.byShop[0].vendorName, "Price Mart");
   });
 
+  it("keeps insights inside the house and settings admin-only", async () => {
+    const forbidden = await request(`/api/houses/${insightHouse}/insights/settings`, {
+      auth: secondUserCookie,
+      method: "PATCH",
+      body: { monthlyBudget: 1 },
+    });
+    assert.equal(forbidden.status, 403);
+
+    const foreign = await request("/api/houses", {
+      auth: secondUserCookie,
+      method: "POST",
+      body: { name: "Private insights house", currency: "EUR" },
+    });
+    assert.equal(foreign.status, 201);
+    for (const path of ["spend", "waste", "household", "use-it-up", "shopping-prices", "price-alerts"]) {
+      assert.equal((await request(`/api/houses/${foreign.data.id}/insights/${path}`)).status, 404, path);
+    }
+  });
+
   it("finds purchases that are clearly above the usual price", async () => {
     const alerts = await request(`/api/houses/${insightHouse}/insights/price-alerts`);
     assert.equal(alerts.status, 200);
@@ -4516,6 +4535,16 @@ describe("insights, household split and admin console", () => {
     assert.equal(json.data.format, "json");
     assert.equal(json.data.draft.lines[0].lineTotal, 4);
 
+    // A printed total that does not match the lines is still returned as a
+    // draft, with a reconciliation warning; the normal import decides.
+    const mismatch = await request(`/api/houses/${insightHouse}/receipts/e-receipt/parse`, {
+      method: "POST",
+      body: { text: "Mismatch Mart\nMilk 1.50\nTOTAL 100.00" },
+    });
+    assert.equal(mismatch.status, 200);
+    assert.equal(mismatch.data.reconciliation.ok, false);
+    assert.ok(mismatch.data.reconciliation.difference > 0);
+
     assert.equal(
       (await request(`/api/houses/${insightHouse}/receipts/e-receipt/parse`, { method: "POST", body: { text: "" } })).status,
       400,
@@ -4611,6 +4640,8 @@ describe("insights, household split and admin console", () => {
     const reset = await request("/api/admin/registration", { method: "PATCH", body: { mode: "environment" } });
     assert.equal(reset.status, 200);
     assert.notEqual(reset.data.source, "admin");
+    const status = await request("/api/admin/registration");
+    assert.equal(status.data.override, null);
     assert.equal((await request("/api/auth/registration", { auth: "" })).data.mode, "open");
   });
 

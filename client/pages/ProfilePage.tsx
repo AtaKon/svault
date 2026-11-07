@@ -497,6 +497,7 @@ function ApiTokensCard() {
   };
 
   const revoke = async (token: ApiToken) => {
+    if (!window.confirm(`Revoke “${token.name}”? Anything using it stops working immediately.`)) return;
     try {
       await api(`/api/tokens/${token.id}`, { method: "DELETE" });
       await load();

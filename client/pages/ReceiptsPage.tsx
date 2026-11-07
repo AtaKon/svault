@@ -1162,6 +1162,7 @@ function EReceiptSheet({
     setDraft(null);
     setReconciliation(null);
     setDuplicate(null);
+    setCurrency("EUR");
   }, [open]);
 
   const parse = async () => {

@@ -143,12 +143,20 @@ export function AdminPage() {
   };
 
   const saveAiBudget = async () => {
+    const value = Number(aiBudget);
+    if (aiBudget.trim() === "" || !Number.isFinite(value) || value < 0) {
+      toast.error("Enter a monthly limit in USD, or 0 for no limit.");
+      return;
+    }
+    if (value === 0 && (ai?.budget ?? 0) > 0 && !window.confirm("Remove the AI budget? AI calls will no longer be capped.")) {
+      return;
+    }
     aiBudgetTouched.current = true;
     setBusy(true);
     try {
       const result = await api<{ budget: number; monthSpend: number }>("/api/admin/ai/budget", {
         method: "PATCH",
-        body: { monthlyBudget: Math.max(0, Number(aiBudget) || 0) },
+        body: { monthlyBudget: value },
       });
       setAi((current) => (current ? { ...current, budget: result.budget, monthSpend: result.monthSpend } : current));
       toast.success(result.budget ? "AI budget saved" : "AI budget removed");
@@ -233,14 +241,20 @@ export function AdminPage() {
               value={registration}
               onChange={(event) => void saveRegistration(event.target.value as "open" | "invite" | "closed")}
               className="max-w-[180px]"
-              disabled={busy}
+              disabled={busy || failedSections.includes("registration")}
             >
               <option value="open">Open to anyone</option>
               <option value="invite">Invite only</option>
               <option value="closed">Closed</option>
             </Select>
             {registrationSource === "admin" && (
-              <Button size="sm" variant="ghost" loading={busy} onClick={() => void clearRegistrationOverride()}>
+              <Button
+                size="sm"
+                variant="ghost"
+                loading={busy}
+                disabled={failedSections.includes("registration")}
+                onClick={() => void clearRegistrationOverride()}
+              >
                 Use environment default
               </Button>
             )}

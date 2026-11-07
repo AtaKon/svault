@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "@/api";
 import { useAuth, useHouse } from "@/state";
@@ -39,6 +39,7 @@ export function InsightsPage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [editingBudget, setEditingBudget] = useState(false);
+  const editingBudgetRef = useRef(false);
   const [budget, setBudget] = useState("0");
   const [threshold, setThreshold] = useState("20");
 
@@ -58,8 +59,11 @@ export function InsightsPage() {
       setAlerts(alertData.alerts);
       setUseItUp(useItUpData);
       setHousehold(householdData);
-      setBudget(String(spendData.budget || ""));
-      setThreshold(String(spendData.settings.priceAlertPercent));
+      // Never overwrite a budget the admin is in the middle of editing.
+      if (!editingBudgetRef.current) {
+        setBudget(String(spendData.budget || ""));
+        setThreshold(String(spendData.settings.priceAlertPercent));
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not load insights");
     } finally {
@@ -83,6 +87,7 @@ export function InsightsPage() {
         },
       });
       setSpend((current) => (current ? { ...current, budget: settings.monthlyBudget, settings } : current));
+      editingBudgetRef.current = false;
       setEditingBudget(false);
       toast.success("Budget updated");
       await load();
@@ -235,7 +240,15 @@ export function InsightsPage() {
             </p>
           </div>
           {can("admin") && (
-            <Button size="sm" variant="ghost" icon="pencil" onClick={() => setEditingBudget((open) => !open)}>
+            <Button
+              size="sm"
+              variant="ghost"
+              icon="pencil"
+              onClick={() => {
+                editingBudgetRef.current = !editingBudget;
+                setEditingBudget(!editingBudget);
+              }}
+            >
               {editingBudget ? "Cancel" : "Edit"}
             </Button>
           )}
@@ -490,7 +503,7 @@ export function InsightsPage() {
                       disabled={!can("member")}
                       className="h-8 max-w-[120px] rounded-lg border border-line bg-surface px-1.5 text-[11px] disabled:opacity-50"
                     >
-                      <option value="">Unassigned</option>
+                      <option value="">Default (receipt owner)</option>
                       {household.members.map((member) => (
                         <option key={member.userId} value={member.userId}>
                           {member.name}
