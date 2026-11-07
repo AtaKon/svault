@@ -119,7 +119,7 @@ export function AppShell() {
           <LogoMark size={34} />
           <div>
             <div className="font-display text-lg leading-none">SVault</div>
-            <div className="mt-0.5 text-[10px] uppercase tracking-[0.18em] text-muted">Home inventory</div>
+            <div className="mt-0.5 text-[10px] uppercase tracking-[0.18em] text-muted">{t("Home inventory")}</div>
           </div>
         </div>
 
@@ -145,8 +145,8 @@ export function AppShell() {
           {EXTRA.map((item) => (
             <SideLink key={item.to} {...item} label={t(item.label)} badge={item.to === "/notifications" && unread > 0 ? unread : undefined} />
           ))}
-          {user?.isAdmin && <SideLink to="/admin" label="Admin" icon="settings" />}
-          {user?.developerMode && <SideLink to="/developer" label="Developer" icon="list" />}
+          {user?.isAdmin && <SideLink to="/admin" label={t("Admin")} icon="settings" />}
+          {user?.developerMode && <SideLink to="/developer" label={t("Developer")} icon="list" />}
         </nav>
 
         <div className="mt-auto space-y-2">
@@ -193,7 +193,7 @@ export function AppShell() {
           <button
             onClick={() => navigate("/notifications")}
             className="relative flex h-10 w-10 items-center justify-center rounded-xl text-muted hover:bg-raised hover:text-ink"
-            aria-label="Reminders"
+            aria-label={t("Reminders")}
           >
             <Icon name="bell" size={19} />
             {unread > 0 && (
@@ -208,7 +208,7 @@ export function AppShell() {
               setTheme(next);
             }}
             className="flex h-10 w-10 items-center justify-center rounded-xl text-muted hover:bg-raised hover:text-ink"
-            aria-label="Toggle theme"
+            aria-label={t("Toggle theme")}
           >
             <Icon name={theme === "dark" ? "sun" : "moon"} size={18} />
           </button>
