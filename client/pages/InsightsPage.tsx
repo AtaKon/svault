@@ -123,6 +123,10 @@ export function InsightsPage() {
       // House membership, not the balance rows: a member with no receipts yet
       // still shares the cost.
       const everyone = household?.members.map((member) => member.userId) ?? [];
+      if (!everyone.length) {
+        toast.error("Could not load the house members. Refresh and try again.");
+        return;
+      }
       await api(`/api/receipts/${receipt.id}`, { method: "PATCH", body: { splitWith: everyone } });
       await load();
     } catch (err) {

@@ -4434,10 +4434,10 @@ describe("insights, household split and admin console", () => {
     // Everybody in the house shares a receipt, including a member with no
     // balance of their own yet.
     assert.deepEqual([...household.data.receipts[0].splitWith].sort(), [first.userId, secondUserId].sort());
-    assert.deepEqual([...household.data.members.map((member: any) => member.userId)].sort(), [
-      first.userId,
-      secondUserId,
-    ]);
+    assert.deepEqual(
+      [...household.data.members.map((member: any) => member.userId)].sort(),
+      [first.userId, secondUserId].sort(),
+    );
     const outsider = await request(`/api/receipts/${latestReceiptId}`, {
       method: "PATCH",
       body: { paidBy: "usr_not_in_this_house" },
@@ -4448,6 +4448,12 @@ describe("insights, household split and admin console", () => {
       body: { splitWith: [secondUserId, "usr_not_in_this_house"] },
     });
     assert.equal(outsiderSplit.status, 400);
+    const unassigned = await request(`/api/receipts/${latestReceiptId}`, {
+      method: "PATCH",
+      body: { paidBy: null },
+    });
+    assert.equal(unassigned.status, 200);
+    assert.equal(unassigned.data.paidBy, null);
   });
 
   it("reads an e-receipt without writing anything", async () => {
@@ -4484,6 +4490,15 @@ describe("insights, household split and admin console", () => {
         await request(`/api/houses/${insightHouse}/receipts/e-receipt/parse`, {
           method: "POST",
           body: { text: "{\"lines\":[]}" },
+        })
+      ).status,
+      400,
+    );
+    assert.equal(
+      (
+        await request(`/api/houses/${insightHouse}/receipts/e-receipt/parse`, {
+          method: "POST",
+          body: { text: "x".repeat(100_001) },
         })
       ).status,
       400,
@@ -4541,6 +4556,8 @@ describe("insights, household split and admin console", () => {
       assert.equal(changed.status, 200);
       assert.equal((await request("/api/auth/registration", { auth: "" })).data.mode, mode);
     }
+    const invalid = await request("/api/admin/registration", { method: "PATCH", body: { mode: "sometimes" } });
+    assert.equal(invalid.status, 400);
     const reset = await request("/api/admin/registration", { method: "PATCH", body: { mode: "environment" } });
     assert.equal(reset.status, 200);
     assert.equal((await request("/api/auth/registration", { auth: "" })).data.mode, "open");
@@ -4553,8 +4570,19 @@ describe("insights, household split and admin console", () => {
       `INSERT INTO ai_call_logs (id, operation, status, cost, created_at) VALUES (?, ?, ?, ?, ?)`,
       ["ail_budget_test", "test", "ok", 1, new Date().toISOString()],
     );
-    const blocked = await request(`/api/houses/${insightHouse}/ai/test`, { method: "POST", body: {} });
-    assert.equal(blocked.status, 429, JSON.stringify(blocked.data));
+    const aiPaths = [
+      "receipts/scan",
+      "recipes/scan",
+      "intake/parse",
+      "ideas",
+      "ai/test",
+    ];
+    for (const path of aiPaths) {
+      const blocked = await request(`/api/houses/${insightHouse}/${path}`, { method: "POST", body: {} });
+      assert.equal(blocked.status, 429, `${path}: ${JSON.stringify(blocked.data)}`);
+    }
+    const blockedRecipe = await request("/api/recipes/rcp_missing/ai", { method: "POST", body: {} });
+    assert.equal(blockedRecipe.status, 429, JSON.stringify(blockedRecipe.data));
 
     const unlimited = await request("/api/admin/ai/budget", { method: "PATCH", body: { monthlyBudget: 0 } });
     assert.equal(unlimited.data.budget, 0);
@@ -4577,10 +4605,14 @@ describe("insights, household split and admin console", () => {
     const read = await request("/api/houses", { auth: "", headers: bearer });
     assert.equal(read.status, 200);
     assert.ok(read.data.some((house: any) => house.id === insightHouse));
-    const otherHouses = await request("/api/houses", { auth: secondUserCookie });
-    const foreign = otherHouses.data.find((house: any) => house.id !== insightHouse);
-    assert.ok(foreign, "the second user has a house of their own");
-    assert.equal((await request(`/api/houses/${foreign.id}`, { auth: "", headers: bearer })).status, 404);
+    // A house created by the other user: the owner's token is not a member.
+    const foreign = await request("/api/houses", {
+      auth: secondUserCookie,
+      method: "POST",
+      body: { name: "Second user house", currency: "EUR" },
+    });
+    assert.equal(foreign.status, 201);
+    assert.equal((await request(`/api/houses/${foreign.data.id}`, { auth: "", headers: bearer })).status, 404);
 
     const write = await request("/api/houses", { auth: "", headers: bearer, method: "POST", body: { name: "Token house" } });
     assert.equal(write.status, 403);
@@ -4593,6 +4625,8 @@ describe("insights, household split and admin console", () => {
     assert.equal(patch.status, 403);
     const remove = await request(`/api/tokens/${created.data.id}`, { auth: "", headers: bearer, method: "DELETE" });
     assert.equal(remove.status, 403);
+    assert.equal((await request("/api/admin/overview", { auth: "", headers: bearer })).status, 403);
+    assert.equal((await request("/api/tokens", { auth: "", headers: bearer })).status, 403);
 
     const list = await request("/api/tokens");
     assert.equal(list.status, 200);

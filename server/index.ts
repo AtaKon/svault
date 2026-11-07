@@ -159,6 +159,12 @@ app.use("/api", (req, res, next) => {
     next();
     return;
   }
+  // Even an administrator's token should not expose the instance console or
+  // mint further tokens. Those stay behind a real signed-in session.
+  if (req.path.startsWith("/admin") || req.path.startsWith("/tokens")) {
+    res.status(403).json({ error: "API tokens cannot use this endpoint. Sign in with a session." });
+    return;
+  }
   if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") {
     next();
     return;
