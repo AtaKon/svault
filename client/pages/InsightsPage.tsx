@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "@/api";
-import { useHouse } from "@/state";
+import { useAuth, useHouse } from "@/state";
 import { Badge, Button, Card, EmptyState, Field, Input, PageHeader, Skeleton, Stat, cn } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { useToast } from "@/components/toast";
@@ -21,6 +21,7 @@ import type {
 
 interface HouseholdData {
   currency: string;
+  members: { userId: string; name: string; role: string }[];
   balances: HouseholdBalance[];
   settlements: HouseholdSettlement[];
   receipts: HouseholdReceipt[];
@@ -28,6 +29,7 @@ interface HouseholdData {
 
 export function InsightsPage() {
   const { house, can } = useHouse();
+  const { user } = useAuth();
   const toast = useToast();
   const [spend, setSpend] = useState<SpendInsight | null>(null);
   const [waste, setWaste] = useState<WasteInsight | null>(null);
@@ -109,7 +111,7 @@ export function InsightsPage() {
 
   const setPayer = async (receipt: HouseholdReceipt, paidBy: string) => {
     try {
-      await api(`/api/receipts/${receipt.id}`, { method: "PATCH", body: { paidBy } });
+      await api(`/api/receipts/${receipt.id}`, { method: "PATCH", body: { paidBy: paidBy || null } });
       await load();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not change the payer");
@@ -118,7 +120,9 @@ export function InsightsPage() {
 
   const shareWithEveryone = async (receipt: HouseholdReceipt) => {
     try {
-      const everyone = household?.balances.map((member) => member.userId) ?? [];
+      // House membership, not the balance rows: a member with no receipts yet
+      // still shares the cost.
+      const everyone = household?.members.map((member) => member.userId) ?? [];
       await api(`/api/receipts/${receipt.id}`, { method: "PATCH", body: { splitWith: everyone } });
       await load();
     } catch (err) {
@@ -134,7 +138,7 @@ export function InsightsPage() {
     () => Math.max(1, ...(waste?.byMonth.map((entry) => entry.cost) ?? [1])),
     [waste],
   );
-  const myBalance = household?.balances.reduce((sum, member) => sum + member.balance, 0) ?? 0;
+  const myBalance = household?.balances.find((member) => member.userId === user?.id)?.balance ?? 0;
 
   if (loading) {
     return (
@@ -482,7 +486,8 @@ export function InsightsPage() {
                       disabled={!can("member")}
                       className="h-8 max-w-[120px] rounded-lg border border-line bg-surface px-1.5 text-[11px] disabled:opacity-50"
                     >
-                      {household.balances.map((member) => (
+                      <option value="">Unassigned</option>
+                      {household.members.map((member) => (
                         <option key={member.userId} value={member.userId}>
                           {member.name}
                         </option>

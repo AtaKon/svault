@@ -362,6 +362,8 @@ export async function scanPriceAlerts(houseId: string): Promise<number> {
 
 export async function householdInsight(houseId: string): Promise<{
   currency: string;
+  /** Everyone in the house, including members with no receipts yet. */
+  members: { userId: string; name: string; role: string }[];
   balances: HouseholdBalance[];
   settlements: HouseholdSettlement[];
   receipts: {
@@ -448,7 +450,13 @@ export async function householdInsight(houseId: string): Promise<{
     };
   });
 
-  return { currency, balances, settlements: settle(balances), receipts: settled };
+  return {
+    currency,
+    members: members.map((member) => ({ userId: member.id, name: member.name, role: member.role })),
+    balances,
+    settlements: settle(balances),
+    receipts: settled,
+  };
 }
 
 /** Greedy "who pays whom" list; positive balances are owed money. */
