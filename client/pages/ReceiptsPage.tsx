@@ -322,7 +322,7 @@ export function ReceiptsPage() {
             <Button variant="secondary" icon="upload" onClick={() => setEReceiptOpen(true)} disabled={!can("member")}>
               E-receipt
             </Button>
-            <Button icon="scan" onClick={() => navigate("/receipts/scan")}>
+            <Button icon="scan" onClick={() => navigate("/receipts/scan")} disabled={!can("member")}>
               Scan receipt
             </Button>
           </>

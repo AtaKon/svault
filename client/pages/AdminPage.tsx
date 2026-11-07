@@ -27,6 +27,7 @@ export function AdminPage() {
   const [registrationSource, setRegistrationSource] = useState("default");
   const [aiBudget, setAiBudget] = useState("0");
   const [failedSections, setFailedSections] = useState<string[]>([]);
+  const [overviewError, setOverviewError] = useState<string | null>(null);
   const aiBudgetTouched = useRef(false);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -75,7 +76,10 @@ export function AdminPage() {
       const message = failure.status === "rejected" && failure.reason instanceof Error
         ? failure.reason.message
         : "Could not load the admin console";
+      setOverviewError(message);
       toast.error(message);
+    } else {
+      setOverviewError(null);
     }
     setLoading(false);
   }, [toast]);
@@ -159,6 +163,8 @@ export function AdminPage() {
         body: { monthlyBudget: value },
       });
       setAi((current) => (current ? { ...current, budget: result.budget, monthSpend: result.monthSpend } : current));
+      // Let the next background load re-seed from the server.
+      aiBudgetTouched.current = false;
       toast.success(result.budget ? "AI budget saved" : "AI budget removed");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not save the AI budget");
@@ -198,7 +204,11 @@ export function AdminPage() {
     return (
       <div className="space-y-4">
         <PageHeader eyebrow="Instance" title="Admin" />
-        <EmptyState icon="settings" title="Admin console unavailable" body="Your account needs instance administrator access." />
+        <EmptyState
+          icon="settings"
+          title="Admin console unavailable"
+          body={overviewError ?? "Your account needs instance administrator access."}
+        />
       </div>
     );
   }
@@ -219,7 +229,7 @@ export function AdminPage() {
         <Stat label="Sessions" value={overview.sessions} hint={`${overview.pendingInvites} invites pending`} icon="key" />
         <Stat
           label="AI spend"
-          value={`$${overview.ai.cost.toFixed(2)}`}
+          value={`$${(overview.ai.cost ?? 0).toFixed(2)}`}
           hint={`${overview.ai.calls} calls / ${overview.ai.days} days`}
           tone="warn"
           icon="sparkles"
@@ -335,7 +345,7 @@ export function AdminPage() {
           <div>
             <h2 className="font-display text-lg">AI budget and spend</h2>
             <p className="text-[11px] text-muted">
-              {ai?.monthSpend != null ? `$${ai.monthSpend.toFixed(2)} this month` : "No spend yet"}
+              {ai?.monthSpend != null ? `$${(ai.monthSpend ?? 0).toFixed(2)} this month` : "No spend yet"}
               {ai?.budget ? ` of $${ai.budget.toFixed(2)}` : " · no monthly limit"}
             </p>
           </div>

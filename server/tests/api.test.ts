@@ -4323,6 +4323,25 @@ describe("insights, household split and admin console", () => {
     });
     assert.equal(saved.status, 200, JSON.stringify(saved.data));
 
+    assert.equal(
+      (
+        await request(`/api/houses/${insightHouse}/insights/settings`, {
+          method: "PATCH",
+          body: { priceAlertPercent: 0 },
+        })
+      ).status,
+      400,
+    );
+    assert.equal(
+      (
+        await request(`/api/houses/${insightHouse}/insights/settings`, {
+          method: "PATCH",
+          body: { monthlyBudget: -1 },
+        })
+      ).status,
+      400,
+    );
+
     const spend = await request(`/api/houses/${insightHouse}/insights/spend?months=6`);
     assert.equal(spend.status, 200);
     assert.equal(spend.data.monthTotal, 3.5);

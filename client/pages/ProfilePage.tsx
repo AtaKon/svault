@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { startRegistration } from "@simplewebauthn/browser";
 import { api } from "@/api";
@@ -464,7 +464,7 @@ function ApiTokensCard() {
   const [fresh, setFresh] = useState<string | null>(null);
   const [loadError, setLoadError] = useState(false);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     try {
       const data = await api<{ tokens: ApiToken[] }>("/api/tokens");
       setTokens(data.tokens);
@@ -473,11 +473,11 @@ function ApiTokensCard() {
       // Keep whatever list we already had; only flag that it is stale.
       setLoadError(true);
     }
-  };
+  }, []);
 
   useEffect(() => {
     void load();
-  }, []);
+  }, [load]);
 
   const create = async (event: FormEvent) => {
     event.preventDefault();
