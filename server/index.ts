@@ -212,6 +212,10 @@ app.post("/api/houses/:houseId/intake/parse", aiLimit, aiBudgetGuard);
 app.post("/api/houses/:houseId/ideas", aiLimit, aiBudgetGuard);
 app.post("/api/houses/:houseId/ai/test", aiLimit, aiBudgetGuard);
 app.post("/api/recipes/:recipeId/ai", aiLimit, aiBudgetGuard);
+app.post(
+  "/api/houses/:houseId/insights/price-alerts/scan",
+  limitRequests(limiters.insights, userOrIp, "Too many price checks. Wait a few minutes and try again."),
+);
 
 app.use("/api/auth", authRoutes);
 app.use("/api/auth", passkeyRoutes);

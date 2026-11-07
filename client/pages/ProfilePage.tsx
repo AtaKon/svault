@@ -522,7 +522,11 @@ function ApiTokensCard() {
       {fresh && (
         <div className="mt-3 rounded-xl border border-brand/30 bg-brand-soft/50 p-3">
           <div className="text-[11px] font-semibold uppercase tracking-[0.1em] text-brand">Copy this token now</div>
-          <code ref={freshRef} className="mt-1 block select-all break-all rounded-lg bg-surface px-2 py-1.5 text-[11px]">
+          <code
+            ref={freshRef}
+            tabIndex={-1}
+            className="mt-1 block select-all break-all rounded-lg bg-surface px-2 py-1.5 text-[11px] outline-none"
+          >
             {fresh}
           </code>
           <div className="mt-2 flex gap-2">
@@ -546,6 +550,7 @@ function ApiTokensCard() {
               onClick={() => {
                 const range = document.createRange();
                 if (freshRef.current) {
+                  freshRef.current.focus();
                   range.selectNodeContents(freshRef.current);
                   const selection = window.getSelection();
                   selection?.removeAllRanges();
