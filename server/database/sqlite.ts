@@ -94,6 +94,8 @@ export class SqliteDriver implements DatabaseDriver {
     ensureColumn("receipts", "provider", "TEXT");
     ensureColumn("receipts", "ai_cost", "REAL");
     ensureColumn("receipts", "savings", "REAL");
+    ensureColumn("receipts", "paid_by", "TEXT REFERENCES users(id) ON DELETE SET NULL");
+    ensureColumn("receipts", "split_with", "TEXT NOT NULL DEFAULT '[]'");
     ensureColumn("receipt_lines", "raw_description", "TEXT");
     ensureColumn("receipt_lines", "tax_rate", "REAL");
     ensureColumn("receipt_lines", "discount", "REAL");
@@ -314,6 +316,26 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);
+
+/* Read-only API tokens for dashboards and home automation. Only a hash is
+   stored; the plain token is shown once when it is created. */
+CREATE TABLE IF NOT EXISTS api_tokens (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  last_used_at TEXT,
+  expires_at TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS api_tokens_user ON api_tokens(user_id);
+
+/* Instance-wide switches an admin can change without a restart. */
+CREATE TABLE IF NOT EXISTS instance_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS user_totp (
   user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
@@ -562,6 +584,8 @@ CREATE TABLE IF NOT EXISTS receipts (
   ocr_text TEXT,
   source TEXT NOT NULL DEFAULT 'scan',
   notes TEXT,
+  paid_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  split_with TEXT NOT NULL DEFAULT '[]',
   created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL
 );

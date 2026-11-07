@@ -8,6 +8,7 @@ import { useToast } from "@/components/toast";
 import { currentTheme, toggleTheme } from "@/theme";
 
 const LINKS: { to: string; label: string; description: string; icon: IconName; tint: string }[] = [
+  { to: "/insights", label: "Insights", description: "Spending, prices, waste and use-it-up", icon: "price", tint: "bg-warn-soft text-warn" },
   { to: "/shopping", label: "Shopping list", description: "From recipes, low stock and the plan", icon: "list", tint: "bg-brand-soft text-brand" },
   { to: "/plan", label: "Meal plan", description: "Seven days, scaled servings", icon: "calendar", tint: "bg-warn-soft text-warn" },
   { to: "/intake", label: "Bulk intake", description: "A receipt or a queue of barcodes", icon: "upload", tint: "bg-brand-soft text-brand" },
@@ -82,6 +83,23 @@ export function MorePage() {
           </button>
         ))}
       </div>
+
+      {user?.isAdmin && (
+        <button
+          onClick={() => navigate("/admin")}
+          className="flex w-full items-center gap-3 rounded-xl border border-line bg-surface px-3.5 py-3 text-left transition-colors hover:bg-raised"
+        >
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-raised text-muted">
+            <Icon name="settings" size={18} />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-[13px] font-medium">Admin console</span>
+            <span className="block truncate text-[11px] text-muted">People, sign-up, sessions, storage, AI spend</span>
+          </span>
+          <Badge tone="outline">instance</Badge>
+          <Icon name="chevronRight" size={15} className="text-muted" />
+        </button>
+      )}
 
       {user?.developerMode && (
         <button

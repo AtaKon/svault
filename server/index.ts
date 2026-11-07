@@ -28,7 +28,11 @@ import { importRoutes } from "./routes/imports.js";
 import { backupRoutes } from "./routes/backup.js";
 import { datasetRoutes } from "./routes/dataset.js";
 import { aiLogRoutes } from "./routes/ai-logs.js";
+import { insightRoutes } from "./routes/insights.js";
+import { adminRoutes } from "./routes/admin.js";
+import { apiTokenRoutes } from "./routes/api-tokens.js";
 import { inMaintenance } from "./maintenance.js";
+import { assertAiBudget } from "./services/ai-budget.js";
 import { scanAllHouses } from "./services/notifications.js";
 import { seedVendorCatalog } from "./services/vendors.js";
 import { seedProductCatalog } from "./services/product-catalog.js";
@@ -148,6 +152,20 @@ app.use("/api", (req, res, next) => {
 app.use(express.json({ limit: "2mb" }));
 app.use(attachUser);
 
+/* API tokens are read-only by design: they exist for dashboards and home
+   automation. Anything that changes data needs a signed-in session. */
+app.use("/api", (req, res, next) => {
+  if (!req.apiTokenReadOnly) {
+    next();
+    return;
+  }
+  if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") {
+    next();
+    return;
+  }
+  res.status(403).json({ error: "API tokens are read-only. Sign in to change data." });
+});
+
 app.use((_req, res, next) => {
   if (!inMaintenance()) {
     next();
@@ -179,12 +197,15 @@ app.post("/api/auth/passkeys/login/verify", limitRequests(limiters.passkey));
 app.get("/api/auth/invites/:code", limitRequests(limiters.invite));
 app.post("/api/auth/invites/:code/accept", limitRequests(limiters.invite));
 const aiLimit = limitRequests(limiters.ai, userOrIp, "Too many AI requests. Wait a few minutes and try again.");
-app.post("/api/houses/:houseId/receipts/scan", aiLimit);
-app.post("/api/houses/:houseId/recipes/scan", aiLimit);
-app.post("/api/houses/:houseId/intake/parse", aiLimit);
-app.post("/api/houses/:houseId/ideas", aiLimit);
-app.post("/api/houses/:houseId/ai/test", aiLimit);
-app.post("/api/recipes/:recipeId/ai", aiLimit);
+const aiBudgetGuard: express.RequestHandler = (_req, _res, next) => {
+  assertAiBudget().then(() => next()).catch(next);
+};
+app.post("/api/houses/:houseId/receipts/scan", aiLimit, aiBudgetGuard);
+app.post("/api/houses/:houseId/recipes/scan", aiLimit, aiBudgetGuard);
+app.post("/api/houses/:houseId/intake/parse", aiLimit, aiBudgetGuard);
+app.post("/api/houses/:houseId/ideas", aiLimit, aiBudgetGuard);
+app.post("/api/houses/:houseId/ai/test", aiLimit, aiBudgetGuard);
+app.post("/api/recipes/:recipeId/ai", aiLimit, aiBudgetGuard);
 
 app.use("/api/auth", authRoutes);
 app.use("/api/auth", passkeyRoutes);
@@ -206,7 +227,10 @@ app.use("/api/houses", intakeRoutes);
 app.use("/api/houses", importRoutes);
 app.use("/api/houses", backupRoutes);
 app.use("/api/houses", datasetRoutes);
+app.use("/api/houses", insightRoutes);
 app.use("/api/notifications", globalNotificationRoutes);
+app.use("/api/admin", adminRoutes);
+app.use("/api/tokens", apiTokenRoutes);
 app.use("/api/catalog", catalogRoutes);
 app.use("/api/items", itemRoutes);
 app.use("/api/recipes", singleRecipeRoutes);

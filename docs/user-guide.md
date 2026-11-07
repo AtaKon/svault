@@ -171,6 +171,36 @@ spending by shop, the VAT split and spending by item category. Pick 3, 6, 12 mon
 figures use what was recorded on each receipt; net falls back to total minus tax, or to total when no
 tax was entered.
 
+### Insights, budgets and the household split
+
+**More -> Insights** is the money view across the whole house. It shows this month's spend against a
+monthly budget, spending by month, shop and category, the value of stock written off as waste, price
+alerts, what is about to expire and who owes whom. Open it from the main menu or **More**.
+
+- **Budget**: a house admin sets a monthly budget and a price-alert threshold in **Insights**. The
+  dashboard shows what is left; over 80% is amber and over 100% is red.
+- **Price alerts**: after each receipt import, SVault compares the unit price you paid with the
+  average of your previous purchases of that item. When it is above the threshold, an in-app reminder
+  is created once per item and month. **Check prices** runs the comparison on demand.
+- **Cheapest shops for your list**: each open shopping-list line shows the best unit price seen on a
+  receipt in the last six months and the shop it came from.
+- **Use it up**: stock expiring in the next days, grouped by item, with recipes that use those
+  ingredients and how many other ingredients are still missing.
+- **Household split**: the payer and the people sharing each receipt. Balances are money paid minus
+  money owed, and SVault suggests the smallest set of transfers to settle up. Change the payer or
+  share a receipt with everyone from the recent-receipt list. New receipts default to the person
+  importing them, split across everyone in the house.
+- **Waste**: the recorded value of stock removed with **Waste** (rather than eaten or used), by month
+  and by item, using the weighted price of the batches it came from.
+
+### Importing an e-receipt
+
+**Purchases -> E-receipt** imports a receipt without a photo. Paste the text of an emailed receipt, the
+text copied from a PDF, or an e-invoice JSON payload. SVault parses it into the same reviewable draft
+as a scan — shop, date, total and product lines — and saves it through the normal import, so unit
+checks, duplicate detection and stock movement rules still apply. Nothing is written until you press
+**Save receipt**.
+
 The **Shops** tab lists the places you buy from. A shop is created automatically the first time a
 receipt uses a new name. You can also pick one under **Where from** when adding stock or an initial
 batch, and it is shown on the item's batches and history.

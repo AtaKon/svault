@@ -19,6 +19,9 @@ declare global {
     interface Request {
       user?: AuthUser;
       sessionToken?: string;
+      /** Set when the request authenticated with a read-only API token. */
+      apiTokenReadOnly?: boolean;
+      apiTokenId?: string;
     }
   }
 }
@@ -108,8 +111,61 @@ export function clearedCookie(): string {
 }
 
 export async function attachUser(req: Request, _res: Response, next: NextFunction) {
+  const bearer = bearerToken(req.headers.authorization);
+  if (bearer) {
+    const tokenUser = await readApiTokenUser(bearer);
+    if (tokenUser) {
+      req.user = tokenUser.user;
+      req.apiTokenReadOnly = true;
+      req.apiTokenId = tokenUser.tokenId;
+      next();
+      return;
+    }
+  }
   req.user = await readSessionUser(req) ?? undefined;
   next();
+}
+
+export const API_TOKEN_PREFIX = "svt_";
+
+function bearerToken(header: string | undefined): string | null {
+  if (!header) return null;
+  const match = /^Bearer\s+(.+)$/i.exec(header.trim());
+  if (!match) return null;
+  const token = match[1].trim();
+  return token.startsWith(API_TOKEN_PREFIX) ? token : null;
+}
+
+/** API tokens are read-only: they can call GET endpoints for the user's houses. */
+async function readApiTokenUser(token: string): Promise<{ user: AuthUser; tokenId: string } | null> {
+  const row = await get<any>(
+    `SELECT t.id AS token_id, t.expires_at, u.id, u.email, u.name, u.is_admin, u.developer_mode, u.created_at
+     FROM api_tokens t JOIN users u ON u.id = t.user_id
+     WHERE t.token_hash = ?`,
+    [hashToken(token)],
+  );
+  if (!row) return null;
+  if (row.expires_at && new Date(row.expires_at).getTime() < Date.now()) {
+    await run("DELETE FROM api_tokens WHERE id = ?", [row.token_id]);
+    return null;
+  }
+  // Best effort: a failed touch must never break the request.
+  try {
+    await run("UPDATE api_tokens SET last_used_at = ? WHERE id = ?", [new Date().toISOString(), row.token_id]);
+  } catch {
+    /* ignore */
+  }
+  return {
+    tokenId: row.token_id,
+    user: {
+      id: row.id,
+      email: row.email,
+      name: row.name,
+      isAdmin: !!row.is_admin,
+      developerMode: !!row.developer_mode,
+      createdAt: row.created_at,
+    },
+  };
 }
 
 export function requireAuth(req: Request, res: Response, next: NextFunction) {

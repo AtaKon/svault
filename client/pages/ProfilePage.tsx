@@ -8,7 +8,7 @@ import { Avatar, Badge, Button, Card, Field, Input, PageHeader, Switch } from "@
 import { Icon } from "@/components/icons";
 import { useToast } from "@/components/toast";
 import { shortDate } from "@/format";
-import type { House, User } from "@shared/types";
+import type { ApiToken, ApiTokenCreated, House, User } from "@shared/types";
 
 export function ProfilePage() {
   const { user, houses, setSession, signOut } = useAuth();
@@ -432,6 +432,8 @@ export function ProfilePage() {
         </div>
       </Card>
 
+      <ApiTokensCard />
+
       <Card className="flex items-center justify-between gap-3 p-4">
         <div>
           <div className="text-sm font-medium">Sign out of SVault</div>
@@ -450,5 +452,127 @@ export function ProfilePage() {
         </Button>
       </Card>
     </div>
+  );
+}
+
+/** Read-only API tokens for dashboards and home automation. */
+function ApiTokensCard() {
+  const toast = useToast();
+  const [tokens, setTokens] = useState<ApiToken[] | null>(null);
+  const [name, setName] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [fresh, setFresh] = useState<string | null>(null);
+
+  const load = async () => {
+    try {
+      const data = await api<{ tokens: ApiToken[] }>("/api/tokens");
+      setTokens(data.tokens);
+    } catch {
+      setTokens([]);
+    }
+  };
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  const create = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!name.trim()) return;
+    setCreating(true);
+    try {
+      const created = await api<ApiTokenCreated>("/api/tokens", { method: "POST", body: { name } });
+      setFresh(created.token);
+      setName("");
+      await load();
+      toast.success("Token created. Copy it now; it is shown only once.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not create the token");
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const revoke = async (token: ApiToken) => {
+    try {
+      await api(`/api/tokens/${token.id}`, { method: "DELETE" });
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not revoke the token");
+    }
+  };
+
+  return (
+    <Card className="p-4">
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <h2 className="font-display text-lg">API tokens</h2>
+          <p className="text-[11px] text-muted">
+            Read-only access to your houses for Home Assistant, Grafana or a script. Tokens cannot change data.
+          </p>
+        </div>
+        <Badge tone="outline">{tokens?.length ?? 0}</Badge>
+      </div>
+
+      {fresh && (
+        <div className="mt-3 rounded-xl border border-brand/30 bg-brand-soft/50 p-3">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.1em] text-brand">Copy this token now</div>
+          <code className="mt-1 block break-all rounded-lg bg-surface px-2 py-1.5 text-[11px]">{fresh}</code>
+          <div className="mt-2 flex gap-2">
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(fresh);
+                  toast.success("Copied");
+                } catch {
+                  toast.push("Select the token and copy it manually.");
+                }
+              }}
+            >
+              Copy
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setFresh(null)}>
+              Done
+            </Button>
+          </div>
+        </div>
+      )}
+
+      <form onSubmit={create} className="mt-3 flex items-end gap-2">
+        <div className="min-w-0 flex-1">
+          <Field label="New token name">
+            <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Home Assistant" maxLength={80} />
+          </Field>
+        </div>
+        <Button type="submit" size="sm" icon="key" loading={creating} disabled={!name.trim()}>
+          Create
+        </Button>
+      </form>
+
+      {tokens?.length ? (
+        <div className="mt-3 divide-y divide-line">
+          {tokens.map((token) => (
+            <div key={token.id} className="flex items-center gap-2 py-2">
+              <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-raised text-muted">
+                <Icon name="key" size={13} />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[12px]">{token.name}</span>
+                <span className="block text-[10px] text-muted">
+                  created {shortDate(token.createdAt)} · {token.lastUsedAt ? `used ${shortDate(token.lastUsedAt)}` : "never used"}
+                </span>
+              </span>
+              <Button size="sm" variant="ghost" className="text-danger hover:bg-danger-soft" onClick={() => void revoke(token)}>
+                Revoke
+              </Button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-3 text-[12px] text-muted">No tokens yet.</p>
+      )}
+    </Card>
   );
 }

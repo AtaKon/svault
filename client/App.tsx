@@ -28,6 +28,8 @@ import { ExtraPages } from "@/pages/ExtraPages";
 import { ShoppingPage } from "@/pages/ShoppingPage";
 import { PlanPage } from "@/pages/PlanPage";
 import { IntakePage } from "@/pages/IntakePage";
+import { InsightsPage } from "@/pages/InsightsPage";
+import { AdminPage } from "@/pages/AdminPage";
 
 export function App() {
   return (
@@ -61,6 +63,8 @@ export function App() {
         <Route path="/shopping" element={<ShoppingPage />} />
         <Route path="/plan" element={<PlanPage />} />
         <Route path="/intake" element={<IntakePage />} />
+        <Route path="/insights" element={<InsightsPage />} />
+        <Route path="/admin" element={<AdminPage />} />
         <Route path="/photos" element={<PhotosPage />} />
         <Route path="/notifications" element={<NotificationsPage />} />
         <Route path="/settings" element={<SettingsPage />} />
