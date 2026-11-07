@@ -167,6 +167,8 @@ export function AdminPage() {
       aiBudgetTouched.current = false;
       toast.success(result.budget ? "AI budget saved" : "AI budget removed");
     } catch (err) {
+      // Let the next load re-seed the field from the server's real value.
+      aiBudgetTouched.current = false;
       toast.error(err instanceof Error ? err.message : "Could not save the AI budget");
     } finally {
       setBusy(false);

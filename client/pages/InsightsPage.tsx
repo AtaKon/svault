@@ -37,6 +37,7 @@ export function InsightsPage() {
   const [useItUp, setUseItUp] = useState<{ items: UseItUpItem[]; recipes: UseItUpRecipe[]; days: number } | null>(null);
   const [household, setHousehold] = useState<HouseholdData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [editingBudget, setEditingBudget] = useState(false);
   const editingBudgetRef = useRef(false);
@@ -59,13 +60,16 @@ export function InsightsPage() {
       setAlerts(alertData.alerts);
       setUseItUp(useItUpData);
       setHousehold(householdData);
+      setLoadError(null);
       // Never overwrite a budget the admin is in the middle of editing.
       if (!editingBudgetRef.current) {
         setBudget(String(spendData.budget || ""));
         setThreshold(String(spendData.settings.priceAlertPercent));
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not load insights");
+      const message = err instanceof Error ? err.message : "Could not load insights";
+      setLoadError(message);
+      toast.error(message);
     } finally {
       setLoading(false);
     }
@@ -77,14 +81,21 @@ export function InsightsPage() {
   }, [load]);
 
   const saveSettings = async () => {
+    const budgetValue = budget.trim() === "" ? 0 : Number(budget);
+    const thresholdValue = Number(threshold);
+    if (!Number.isFinite(budgetValue) || budgetValue < 0) {
+      toast.error("Enter a monthly budget of 0 or more.");
+      return;
+    }
+    if (!Number.isFinite(thresholdValue) || thresholdValue < 1 || thresholdValue > 500) {
+      toast.error("The price-alert threshold must be between 1 and 500%.");
+      return;
+    }
     setBusy(true);
     try {
       const settings = await api<HouseBudgetSettings>(`/api/houses/${house.id}/insights/settings`, {
         method: "PATCH",
-        body: {
-          monthlyBudget: Math.max(0, Number(budget) || 0),
-          priceAlertPercent: Math.max(1, Number(threshold) || 20),
-        },
+        body: { monthlyBudget: budgetValue, priceAlertPercent: thresholdValue },
       });
       setSpend((current) => (current ? { ...current, budget: settings.monthlyBudget, settings } : current));
       editingBudgetRef.current = false;
@@ -167,7 +178,24 @@ export function InsightsPage() {
     return (
       <div className="space-y-4">
         <PageHeader eyebrow="Money & shelves" title="Insights" />
-        <EmptyState icon="price" title="Nothing to show yet" body="Scan a receipt or add stock and the insights will fill in." />
+        <EmptyState
+          icon="price"
+          title={loadError ? "Could not load insights" : "Nothing to show yet"}
+          body={loadError ?? "Scan a receipt or add stock and the insights will fill in."}
+          action={
+            loadError ? (
+              <Button
+                icon="refresh"
+                onClick={() => {
+                  setLoading(true);
+                  void load();
+                }}
+              >
+                Try again
+              </Button>
+            ) : undefined
+          }
+        />
       </div>
     );
   }

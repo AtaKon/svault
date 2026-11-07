@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { startRegistration } from "@simplewebauthn/browser";
 import { api } from "@/api";
@@ -463,6 +463,7 @@ function ApiTokensCard() {
   const [creating, setCreating] = useState(false);
   const [fresh, setFresh] = useState<string | null>(null);
   const [loadError, setLoadError] = useState(false);
+  const freshRef = useRef<HTMLElement | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -521,7 +522,9 @@ function ApiTokensCard() {
       {fresh && (
         <div className="mt-3 rounded-xl border border-brand/30 bg-brand-soft/50 p-3">
           <div className="text-[11px] font-semibold uppercase tracking-[0.1em] text-brand">Copy this token now</div>
-          <code className="mt-1 block break-all rounded-lg bg-surface px-2 py-1.5 text-[11px]">{fresh}</code>
+          <code ref={freshRef} className="mt-1 block select-all break-all rounded-lg bg-surface px-2 py-1.5 text-[11px]">
+            {fresh}
+          </code>
           <div className="mt-2 flex gap-2">
             <Button
               size="sm"
@@ -536,6 +539,21 @@ function ApiTokensCard() {
               }}
             >
               Copy
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                const range = document.createRange();
+                if (freshRef.current) {
+                  range.selectNodeContents(freshRef.current);
+                  const selection = window.getSelection();
+                  selection?.removeAllRanges();
+                  selection?.addRange(range);
+                }
+              }}
+            >
+              Select
             </Button>
             <Button size="sm" variant="ghost" onClick={() => setFresh(null)}>
               Done
@@ -578,6 +596,9 @@ function ApiTokensCard() {
         <p className={loadError ? "mt-3 text-[12px] text-danger" : "mt-3 text-[12px] text-muted"}>
           {loadError ? "Could not load your tokens." : "No tokens yet."}
         </p>
+      )}
+      {loadError && tokens && tokens.length > 0 && (
+        <p className="mt-1 text-[10px] text-danger">This list may be out of date; refresh to be sure.</p>
       )}
     </Card>
   );

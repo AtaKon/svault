@@ -4507,6 +4507,13 @@ describe("insights, household split and admin console", () => {
     assert.equal(unassigned.status, 200);
     // Clearing the payer stores the receipt creator, never null.
     assert.equal(unassigned.data.paidBy, first.userId);
+    // Omitting paidBy leaves the current payer alone.
+    const untouched = await request(`/api/receipts/${latestReceiptId}`, {
+      method: "PATCH",
+      body: { splitWith: [secondUserId, first.userId] },
+    });
+    assert.equal(untouched.status, 200);
+    assert.equal(untouched.data.paidBy, first.userId);
   });
 
   it("settles a three-person house with the smallest set of transfers", async () => {
@@ -4680,7 +4687,8 @@ describe("insights, household split and admin console", () => {
   });
 
   it("pauses AI calls when the instance budget is spent", async () => {
-    const spent = await request("/api/admin/ai/budget", { method: "PATCH", body: { monthlyBudget: 0.01 } });
+    // Exactly at the budget is already over the line.
+    const spent = await request("/api/admin/ai/budget", { method: "PATCH", body: { monthlyBudget: 1 } });
     assert.equal(spent.status, 200);
     await run(
       `INSERT INTO ai_call_logs (id, operation, status, cost, created_at) VALUES (?, ?, ?, ?, ?)`,
@@ -4699,6 +4707,11 @@ describe("insights, household split and admin console", () => {
     }
     const blockedRecipe = await request("/api/recipes/rcp_missing/ai", { method: "POST", body: {} });
     assert.equal(blockedRecipe.status, 429, JSON.stringify(blockedRecipe.data));
+
+    // One dollar under the line lets the request reach the normal config check.
+    const under = await request("/api/admin/ai/budget", { method: "PATCH", body: { monthlyBudget: 2 } });
+    assert.equal(under.data.budget, 2);
+    assert.equal((await request(`/api/houses/${insightHouse}/ai/test`, { method: "POST", body: {} })).status, 400);
 
     const unlimited = await request("/api/admin/ai/budget", { method: "PATCH", body: { monthlyBudget: 0 } });
     assert.equal(unlimited.data.budget, 0);
