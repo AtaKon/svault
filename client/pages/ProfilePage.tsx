@@ -462,13 +462,16 @@ function ApiTokensCard() {
   const [name, setName] = useState("");
   const [creating, setCreating] = useState(false);
   const [fresh, setFresh] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState(false);
 
   const load = async () => {
     try {
       const data = await api<{ tokens: ApiToken[] }>("/api/tokens");
       setTokens(data.tokens);
+      setLoadError(false);
     } catch {
       setTokens([]);
+      setLoadError(true);
     }
   };
 
@@ -571,7 +574,9 @@ function ApiTokensCard() {
           ))}
         </div>
       ) : (
-        <p className="mt-3 text-[12px] text-muted">No tokens yet.</p>
+        <p className={loadError ? "mt-3 text-[12px] text-danger" : "mt-3 text-[12px] text-muted"}>
+          {loadError ? "Could not load your tokens." : "No tokens yet."}
+        </p>
       )}
     </Card>
   );

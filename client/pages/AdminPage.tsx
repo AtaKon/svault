@@ -29,27 +29,41 @@ export function AdminPage() {
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
-    try {
-      const [overviewData, userData, sessionData, fileData, aiData, registrationData] = await Promise.all([
-        api<AdminOverview>("/api/admin/overview"),
-        api<{ users: AdminUser[] }>("/api/admin/users"),
-        api<{ sessions: AdminSession[] }>("/api/admin/sessions"),
-        api<{ count: number; bytes: number; files: OrphanFile[] }>("/api/admin/files"),
-        api<AiSpend>("/api/admin/ai?days=30"),
-        api<{ mode: "open" | "invite" | "closed"; source: string }>("/api/admin/registration"),
-      ]);
-      setOverview(overviewData);
-      setUsers(userData.users);
-      setSessions(sessionData.sessions);
-      setFiles(fileData);
-      setAi(aiData);
-      setAiBudget(String(aiData.budget || ""));
-      setRegistration(registrationData.mode);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not load the admin console");
-    } finally {
-      setLoading(false);
+    // Each section stands on its own: one failing endpoint must not blank the
+    // whole console.
+    const results = await Promise.allSettled([
+      api<AdminOverview>("/api/admin/overview"),
+      api<{ users: AdminUser[] }>("/api/admin/users"),
+      api<{ sessions: AdminSession[] }>("/api/admin/sessions"),
+      api<{ count: number; bytes: number; files: OrphanFile[] }>("/api/admin/files"),
+      api<AiSpend>("/api/admin/ai?days=30"),
+      api<{ mode: "open" | "invite" | "closed"; source: string }>("/api/admin/registration"),
+    ]);
+    const pick = <T,>(index: number, fallback: T): T => {
+      const result = results[index];
+      return result.status === "fulfilled" ? (result.value as T) : fallback;
+    };
+    const overviewData = pick<AdminOverview | null>(0, null);
+    const userData = pick<{ users: AdminUser[] } | null>(1, null);
+    const sessionData = pick<{ sessions: AdminSession[] } | null>(2, null);
+    const fileData = pick<{ count: number; bytes: number; files: OrphanFile[] }>(3, { count: 0, bytes: 0, files: [] });
+    const aiData = pick<AiSpend | null>(4, null);
+    const registrationData = pick<{ mode: "open" | "invite" | "closed"; source: string } | null>(5, null);
+    setOverview(overviewData);
+    setUsers(userData?.users ?? null);
+    setSessions(sessionData?.sessions ?? null);
+    setFiles(fileData);
+    setAi(aiData);
+    setAiBudget(String(aiData?.budget || ""));
+    if (registrationData) setRegistration(registrationData.mode);
+    if (!overviewData) {
+      const failure = results[0];
+      const message = failure.status === "rejected" && failure.reason instanceof Error
+        ? failure.reason.message
+        : "Could not load the admin console";
+      toast.error(message);
     }
+    setLoading(false);
   }, [toast]);
 
   useEffect(() => {

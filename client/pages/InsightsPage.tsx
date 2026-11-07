@@ -514,14 +514,17 @@ export function InsightsPage() {
 function ShoppingPriceCard({ houseId }: { houseId: string }) {
   const [hints, setHints] = useState<ShoppingPriceHint[] | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(false);
 
   const load = async () => {
     setLoading(true);
     try {
       const result = await api<{ hints: ShoppingPriceHint[] }>(`/api/houses/${houseId}/insights/shopping-prices`);
       setHints(result.hints);
+      setError(false);
     } catch {
       setHints([]);
+      setError(true);
     } finally {
       setLoading(false);
     }
@@ -561,8 +564,12 @@ function ShoppingPriceCard({ houseId }: { houseId: string }) {
           ))}
         </div>
       ) : (
-        <p className="mt-3 text-[12px] text-muted">
-          {hints ? "Add lines to the shopping list and buy them once to see price hints." : "Loading…"}
+        <p className={cn("mt-3 text-[12px]", error ? "text-danger" : "text-muted")}>
+          {error
+            ? "Could not load price hints. Try refreshing."
+            : hints
+              ? "Add lines to the shopping list and buy them once to see price hints."
+              : "Loading…"}
         </p>
       )}
     </Card>

@@ -100,7 +100,7 @@ await new Promise<void>((resolve) => {
 });
 
 const { app } = await import("../index.js");
-const { closeDb, run } = await import("../db.js");
+const { closeDb, get, run } = await import("../db.js");
 const { heuristicRecipe, parseIngredientLine, localIdeas } = await import("../services/recipe-local.js");
 const { heuristicReceipt } = await import("../services/receipt-local.js");
 const { parseLidlReceipt } = await import("../services/receipt-lidl.js");
@@ -4392,7 +4392,8 @@ describe("insights, household split and admin console", () => {
     assert.equal(wasted.status, 200, JSON.stringify(wasted.data));
     const waste = await request(`/api/houses/${insightHouse}/insights/waste?months=6`);
     assert.equal(waste.status, 200);
-    assert.ok(waste.data.totalCost >= 1.5, JSON.stringify(waste.data));
+    assert.equal(waste.data.totalCost, 1.5, JSON.stringify(waste.data));
+    assert.equal(waste.data.byMonth[waste.data.byMonth.length - 1].events, 1);
     assert.ok(waste.data.topItems.some((item: any) => item.itemName === "Waste bread"));
   });
 
@@ -4416,6 +4417,9 @@ describe("insights, household split and admin console", () => {
       household.data.settlements.map((entry: any) => [entry.fromUserId, entry.toUserId, entry.amount]),
       [[secondUserId, first.userId, 0.25]],
     );
+    // Everybody in the house shares a receipt, including a member with no
+    // balance of their own yet.
+    assert.deepEqual([...household.data.receipts[0].splitWith].sort(), [first.userId, secondUserId].sort());
   });
 
   it("reads an e-receipt without writing anything", async () => {
@@ -4435,6 +4439,31 @@ describe("insights, household split and admin console", () => {
     assert.equal(json.data.draft.lines[0].lineTotal, 4);
   });
 
+  it("warns on a duplicate e-receipt before importing it twice", async () => {
+    const text = "Duplicate Mart\nDup rice 9.99\nTOTAL 9.99";
+    const parsed = await request(`/api/houses/${insightHouse}/receipts/e-receipt/parse`, {
+      method: "POST",
+      body: { text },
+    });
+    assert.equal(parsed.status, 200);
+    const body = {
+      vendorName: "Duplicate Mart",
+      purchasedAt: at(4),
+      currency: "EUR",
+      lines: parsed.data.draft.lines,
+    };
+    const first = await request(`/api/houses/${insightHouse}/receipts`, { method: "POST", body });
+    assert.equal(first.status, 201, JSON.stringify(first.data));
+    const again = await request(`/api/houses/${insightHouse}/receipts`, { method: "POST", body });
+    assert.equal(again.status, 409);
+    assert.equal(again.data.duplicateOf.total, 9.99);
+    const forced = await request(`/api/houses/${insightHouse}/receipts`, {
+      method: "POST",
+      body: { ...body, allowDuplicate: true },
+    });
+    assert.equal(forced.status, 201, JSON.stringify(forced.data));
+  });
+
   it("gives instance administrators a console and keeps it private", async () => {
     const forbidden = await request("/api/admin/overview", { auth: secondUserCookie });
     assert.equal(forbidden.status, 403);
@@ -4447,18 +4476,49 @@ describe("insights, household split and admin console", () => {
     assert.equal(budget.data.budget, 5);
     assert.equal((await request("/api/admin/ai/budget", { method: "PATCH", body: { monthlyBudget: 0 } })).data.budget, 0);
 
-    const closed = await request("/api/admin/registration", { method: "PATCH", body: { mode: "closed" } });
-    assert.equal(closed.status, 200);
-    assert.equal((await request("/api/auth/registration", { auth: "" })).data.mode, "closed");
+    const me = await request("/api/auth/me");
+    const demoteSelf = await request(`/api/admin/users/${me.data.user.id}`, {
+      method: "PATCH",
+      body: { isAdmin: false },
+    });
+    assert.equal(demoteSelf.status, 400, "an admin cannot lock themselves out");
+
+    for (const mode of ["closed", "invite", "open"] as const) {
+      const changed = await request("/api/admin/registration", { method: "PATCH", body: { mode } });
+      assert.equal(changed.status, 200);
+      assert.equal((await request("/api/auth/registration", { auth: "" })).data.mode, mode);
+    }
     const reset = await request("/api/admin/registration", { method: "PATCH", body: { mode: "environment" } });
     assert.equal(reset.status, 200);
     assert.equal((await request("/api/auth/registration", { auth: "" })).data.mode, "open");
+  });
+
+  it("pauses AI calls when the instance budget is spent", async () => {
+    const spent = await request("/api/admin/ai/budget", { method: "PATCH", body: { monthlyBudget: 0.01 } });
+    assert.equal(spent.status, 200);
+    await run(
+      `INSERT INTO ai_call_logs (id, operation, status, cost, created_at) VALUES (?, ?, ?, ?, ?)`,
+      ["ail_budget_test", "test", "ok", 1, new Date().toISOString()],
+    );
+    const blocked = await request(`/api/houses/${insightHouse}/ai/test`, { method: "POST", body: {} });
+    assert.equal(blocked.status, 429, JSON.stringify(blocked.data));
+
+    const unlimited = await request("/api/admin/ai/budget", { method: "PATCH", body: { monthlyBudget: 0 } });
+    assert.equal(unlimited.data.budget, 0);
+    const allowed = await request(`/api/houses/${insightHouse}/ai/test`, { method: "POST", body: {} });
+    assert.equal(allowed.status, 400, "without a budget the endpoint reaches the AI configuration check");
+    await run("DELETE FROM ai_call_logs WHERE id = ?", ["ail_budget_test"]);
   });
 
   it("issues read-only API tokens", async () => {
     const created = await request("/api/tokens", { method: "POST", body: { name: "Test dashboard" } });
     assert.equal(created.status, 201, JSON.stringify(created.data));
     assert.ok(created.data.token.startsWith("svt_"));
+    const storedRow = await get<{ token_hash: string }>("SELECT token_hash FROM api_tokens WHERE id = ?", [
+      created.data.id,
+    ]);
+    assert.notEqual(storedRow?.token_hash, created.data.token, "the plain token is never stored");
+    assert.equal(storedRow?.token_hash?.length, 64);
     const bearer = { authorization: `Bearer ${created.data.token}` };
 
     const read = await request("/api/houses", { auth: "", headers: bearer });
@@ -4467,11 +4527,21 @@ describe("insights, household split and admin console", () => {
 
     const write = await request("/api/houses", { auth: "", headers: bearer, method: "POST", body: { name: "Token house" } });
     assert.equal(write.status, 403);
+    const patch = await request(`/api/houses/${insightHouse}`, {
+      auth: "",
+      headers: bearer,
+      method: "PATCH",
+      body: { name: "Token rename" },
+    });
+    assert.equal(patch.status, 403);
+    const remove = await request(`/api/tokens/${created.data.id}`, { auth: "", headers: bearer, method: "DELETE" });
+    assert.equal(remove.status, 403);
 
     const list = await request("/api/tokens");
     assert.equal(list.status, 200);
     assert.equal(list.data.tokens[0].name, "Test dashboard");
     assert.equal(list.data.tokens[0].token, undefined);
+    assert.ok(list.data.tokens[0].lastUsedAt, "using a token records when it was last used");
     const revoked = await request(`/api/tokens/${created.data.id}`, { method: "DELETE" });
     assert.equal(revoked.status, 200);
     assert.equal((await request("/api/houses", { auth: "", headers: bearer })).status, 401);

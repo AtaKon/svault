@@ -28,6 +28,7 @@ import type {
   Receipt,
   ReceiptDeleteResult,
   ReceiptDraft,
+  ReceiptDuplicate,
   ReceiptLine,
   ReceiptReconciliation,
   ReceiptTemplate,
@@ -1151,6 +1152,7 @@ function EReceiptSheet({
   const [text, setText] = useState("");
   const [draft, setDraft] = useState<ReceiptDraft | null>(null);
   const [reconciliation, setReconciliation] = useState<ReceiptReconciliation | null>(null);
+  const [duplicate, setDuplicate] = useState<ReceiptDuplicate | null>(null);
   const [currency, setCurrency] = useState("EUR");
   const [busy, setBusy] = useState(false);
 
@@ -1159,6 +1161,7 @@ function EReceiptSheet({
     setText("");
     setDraft(null);
     setReconciliation(null);
+    setDuplicate(null);
   }, [open]);
 
   const parse = async () => {
@@ -1171,6 +1174,7 @@ function EReceiptSheet({
       }>(`/api/houses/${houseId}/receipts/e-receipt/parse`, { method: "POST", body: { text } });
       setDraft(result.draft);
       setReconciliation(result.reconciliation);
+      setDuplicate(null);
       setCurrency(result.currency);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not read the e-receipt");
@@ -1179,7 +1183,7 @@ function EReceiptSheet({
     }
   };
 
-  const save = async () => {
+  const save = async (allowDuplicate = false) => {
     if (!draft) return;
     setBusy(true);
     try {
@@ -1195,6 +1199,7 @@ function EReceiptSheet({
           taxBreakdown: draft.taxBreakdown,
           savings: draft.savings,
           notes: draft.notes,
+          allowDuplicate,
           lines: draft.lines.map((line) => ({
             description: line.description,
             rawDescription: line.rawDescription,
@@ -1212,7 +1217,8 @@ function EReceiptSheet({
       await onSaved();
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
-        toast.push("This receipt looks like one you already saved. Delete the old one first or scan it again to override.");
+        const details = err.details as { duplicateOf?: ReceiptDuplicate } | undefined;
+        setDuplicate(details?.duplicateOf ?? { id: "", purchasedAt: null, total: draft.total, vendorName: draft.vendorName });
       } else {
         toast.error(err instanceof Error ? err.message : "Could not save the e-receipt");
       }
@@ -1229,9 +1235,15 @@ function EReceiptSheet({
       description="Paste the text of an emailed receipt, a copied PDF, or an e-invoice JSON payload."
       footer={
         draft ? (
-          <Button block loading={busy} onClick={() => void save()}>
-            Save receipt
-          </Button>
+          duplicate ? (
+            <Button block variant="warn" loading={busy} onClick={() => void save(true)}>
+              Import anyway
+            </Button>
+          ) : (
+            <Button block loading={busy} onClick={() => void save()}>
+              Save receipt
+            </Button>
+          )
         ) : (
           <Button block loading={busy} disabled={!text.trim()} onClick={() => void parse()}>
             Read e-receipt
@@ -1246,12 +1258,22 @@ function EReceiptSheet({
             onChange={(event) => {
               setText(event.target.value);
               setDraft(null);
+              setDuplicate(null);
             }}
             rows={8}
             placeholder={"Milk 1.50\nBread 2.20\nTotal 3.70"}
             className="font-mono text-[12px]"
           />
         </Field>
+
+        {duplicate && (
+          <div className="rounded-xl border border-warn/40 bg-warn-soft p-3 text-[11px] text-warn">
+            This looks like a receipt you already saved
+            {duplicate.purchasedAt ? ` on ${shortDate(duplicate.purchasedAt)}` : ""}
+            {duplicate.total == null ? "" : ` for ${money(duplicate.total, currency)}`}. Importing it again adds
+            its stock twice.
+          </div>
+        )}
 
         {draft && (
           <div className="space-y-2">
