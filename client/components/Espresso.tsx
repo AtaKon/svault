@@ -545,7 +545,8 @@ export function EspressoLogCard({ item }: { item: ItemDetail }) {
     [item.id, item.name, item.brand, data?.summary],
   );
 
-  const canEdit = (shot: EspressoShot) => can("member") && (shot.userId === user?.id || can("admin"));
+  const canEdit = (shot: EspressoShot) =>
+    !!user && can("member") && (shot.userId === user.id || can("admin"));
 
   return (
     <Card className="p-4">

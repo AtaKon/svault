@@ -48,7 +48,8 @@ export function EspressoPage() {
   const beans = data?.beans ?? [];
   const loggableBeans = beans.filter((bean) => bean.espresso);
   const summary = data?.summary;
-  const canEdit = (shot: EspressoShot) => can("member") && (shot.userId === user?.id || can("admin"));
+  const canEdit = (shot: EspressoShot) =>
+    !!user && can("member") && (shot.userId === user.id || can("admin"));
 
   if (loading && !data) return <LoadingBlock label={t("Loading espresso shots")} />;
 
@@ -148,6 +149,7 @@ export function EspressoPage() {
                 icon="plus"
                 onClick={() => {
                   setEditing(null);
+                  setSheetSession((current) => current + 1);
                   setSheetOpen(true);
                 }}
               >
