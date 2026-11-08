@@ -58,6 +58,7 @@ export function ContributionsPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [selected, setSelected] = useState<OffContributionCandidate | null>(null);
   const [fields, setFields] = useState<string[]>([]);
+  const [fieldSelections, setFieldSelections] = useState<Record<string, string[]>>({});
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [projectUsername, setProjectUsername] = useState("");
@@ -251,7 +252,7 @@ export function ContributionsPage() {
 
   const openReview = (candidate: OffContributionCandidate) => {
     setSelected(candidate);
-    setFields(candidate.fields);
+    setFields(fieldSelections[candidate.id] ?? candidate.fields);
     setPriceLocation(null);
     setLocations([]);
     setLocationQuery(candidate.price?.vendor ?? "");
@@ -320,7 +321,7 @@ export function ContributionsPage() {
         try {
           await api("/api/off/contributions", {
             method: "POST",
-            body: contributionBody(house.id, candidate, candidate.fields),
+            body: contributionBody(house.id, candidate, fieldSelections[candidate.id] ?? candidate.fields),
           });
           succeeded.push(candidate.id);
         } catch (error) {
@@ -804,9 +805,15 @@ export function ContributionsPage() {
                       className="mt-1"
                       checked={checked}
                       onChange={(event) =>
-                        setFields((current) =>
-                          event.target.checked ? [...current, field] : current.filter((entry) => entry !== field),
-                        )
+                        setFields((current) => {
+                          const next = event.target.checked
+                            ? [...current, field]
+                            : current.filter((entry) => entry !== field);
+                          if (selected) {
+                            setFieldSelections((selections) => ({ ...selections, [selected.id]: next }));
+                          }
+                          return next;
+                        })
                       }
                     />
                     <span className="min-w-0 flex-1">
