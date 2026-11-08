@@ -97,7 +97,6 @@ export class SqliteDriver implements DatabaseDriver {
     ensureColumn("receipts", "savings", "REAL");
     ensureColumn("receipts", "paid_by", "TEXT REFERENCES users(id) ON DELETE SET NULL");
     ensureColumn("receipts", "split_with", "TEXT NOT NULL DEFAULT '[]'");
-    ensureColumn("bills", "bill_type", "TEXT NOT NULL DEFAULT 'other'");
     ensureColumn("receipt_lines", "raw_description", "TEXT");
     ensureColumn("receipt_lines", "tax_rate", "REAL");
     ensureColumn("receipt_lines", "discount", "REAL");

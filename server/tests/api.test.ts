@@ -1,9 +1,10 @@
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createHmac, createSign, generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { splitAmountEvenly } from "../../shared/bill-splitting.js";
 
 const dataDir = mkdtempSync(path.join(tmpdir(), "svault-test-"));
 process.env.DATA_DIR = dataDir;
@@ -135,8 +136,12 @@ async function request(
   if (useCookie) headers.cookie = useCookie;
   let body: BodyInit | undefined;
   if (options.body !== undefined) {
-    headers["content-type"] = "application/json";
-    body = JSON.stringify(options.body);
+    if (options.body instanceof FormData) {
+      body = options.body;
+    } else {
+      headers["content-type"] = "application/json";
+      body = JSON.stringify(options.body);
+    }
   }
   const res = await fetch(base + pathname, { method: options.method ?? (body ? "POST" : "GET"), headers, body });
   const setCookie = res.headers.get("set-cookie");
@@ -4489,6 +4494,134 @@ describe("insights, household split and admin console", () => {
       "member",
       new Date().toISOString(),
     ]);
+  });
+
+  it("validates, stores and securely serves shared utility bills", async () => {
+    const createdHouse = await request("/api/houses", {
+      method: "POST",
+      body: { name: "Utility Bill House", currency: "GBP" },
+    });
+    assert.equal(createdHouse.status, 201);
+    const billHouse = createdHouse.data.id;
+    const owner = await request("/api/auth/me");
+    const ownerId = owner.data.user.id;
+    const billDir = path.join(dataDir, "uploads", "bills");
+    const files = () => readdirSync(billDir).sort();
+    const before = files();
+    const form = (pdf: Blob) => {
+      const fields = new FormData();
+      fields.set("name", "Electricity account");
+      fields.set("billType", "electricity");
+      fields.set("amount", "10.00");
+      fields.set("category", "to_split");
+      fields.set("paidBy", ownerId);
+      fields.append("document", pdf, "electricity.pdf");
+      return fields;
+    };
+    const pdf = new Blob(["%PDF-1.7\n% bill fixture"], { type: "application/pdf" });
+    const denied = await request(`/api/houses/${billHouse}/bills`, {
+      auth: secondUserCookie,
+      method: "POST",
+      body: form(pdf),
+    });
+    assert.equal(denied.status, 404);
+    assert.deepEqual(files(), before, "unauthorized multipart upload must not write a file");
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
+      billHouse,
+      secondUserId,
+      "member",
+      new Date().toISOString(),
+    ]);
+
+    const invalidPrefix = new Blob([`${"x".repeat(500)}%PDF-1.7`], { type: "application/pdf" });
+    const invalid = await request(`/api/houses/${billHouse}/bills`, { method: "POST", body: form(invalidPrefix) });
+    assert.equal(invalid.status, 400);
+    assert.deepEqual(files(), before, "invalid PDF signature must be removed");
+
+    const invalidAmount = await request(`/api/houses/${billHouse}/bills`, {
+      method: "POST",
+      body: { name: "Bad precision", amount: 1.005, billType: "electricity", category: "to_split" },
+    });
+    assert.equal(invalidAmount.status, 400);
+    const invalidType = await request(`/api/houses/${billHouse}/bills`, {
+      method: "POST",
+      body: { name: "Unknown type", amount: 1, billType: "gas_provider" },
+    });
+    assert.equal(invalidType.status, 400);
+    const invalidCurrency = await request(`/api/houses/${billHouse}/bills`, {
+      method: "POST",
+      body: { name: "Wrong currency", amount: 1, currency: "EUR", billType: "electricity" },
+    });
+    assert.equal(invalidCurrency.status, 400);
+
+    const accepted = await request(`/api/houses/${billHouse}/bills`, { method: "POST", body: form(pdf) });
+    assert.equal(accepted.status, 201, JSON.stringify(accepted.data));
+    assert.equal(accepted.data.currency, "GBP");
+    assert.deepEqual([...accepted.data.splitWith].sort(), [ownerId, secondUserId].sort());
+    const addedFile = files().find((file) => !before.includes(file));
+    assert.ok(addedFile);
+
+    const beforeUnauthorizedAttachment = files();
+    const deniedAttachment = await request(`/api/houses/${billHouse}/bills/${accepted.data.id}/document`, {
+      auth: "",
+      method: "POST",
+      body: form(pdf),
+    });
+    assert.equal(deniedAttachment.status, 401);
+    assert.deepEqual(files(), beforeUnauthorizedAttachment, "unauthorized replacement must not write a file");
+
+    const currencyPatch = await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { currency: "EUR" },
+    });
+    assert.equal(currencyPatch.status, 400, "patches cannot change the bill currency");
+    const badTypePatch = await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { billType: "gas_provider" },
+    });
+    assert.equal(badTypePatch.status, 400, "bill type is enum-validated on PATCH");
+
+    const documentResponse = await fetch(base + accepted.data.document, { headers: { cookie } });
+    assert.equal(documentResponse.status, 200);
+    assert.equal(documentResponse.headers.get("content-type"), "application/pdf");
+    assert.equal(documentResponse.headers.get("x-content-type-options"), "nosniff");
+    assert.match(documentResponse.headers.get("content-security-policy") ?? "", /sandbox/);
+    assert.equal((await request(`/uploads/bills/${addedFile}`)).status, 404);
+
+    const ledger = await request(`/api/houses/${billHouse}/insights/household`);
+    assert.equal(ledger.status, 200);
+    assert.equal(ledger.data.balances.find((row: any) => row.userId === ownerId).balance, 5);
+    assert.equal(ledger.data.balances.find((row: any) => row.userId === secondUserId).balance, -5);
+
+    // Bills and receipts are separate ledger entries; the API docs tell users
+    // not to record the same utility expense in both places.
+    const matchingReceipt = await request(`/api/houses/${billHouse}/receipts`, {
+      method: "POST",
+      body: {
+        vendorName: "Electric Utility",
+        purchasedAt: at(11),
+        currency: "GBP",
+        total: 10,
+        paidBy: ownerId,
+        lines: [{ description: "Electricity account", quantity: 1, lineTotal: 10 }],
+      },
+    });
+    assert.equal(matchingReceipt.status, 201, JSON.stringify(matchingReceipt.data));
+    const doubleRecordedLedger = await request(`/api/houses/${billHouse}/insights/household`);
+    assert.equal(doubleRecordedLedger.data.balances.find((row: any) => row.userId === ownerId).balance, 10);
+    assert.equal(doubleRecordedLedger.data.balances.find((row: any) => row.userId === secondUserId).balance, -10);
+
+    const deleted = await request(`/api/bills/${accepted.data.id}`, { method: "DELETE" });
+    assert.equal(deleted.status, 200);
+    assert.ok(!files().includes(addedFile), "deleting a bill removes its PDF");
+  });
+
+  it("keeps utility bill share allocation cent-exact", () => {
+    assert.deepEqual(splitAmountEvenly(10, 3), [3.34, 3.33, 3.33]);
+    assert.deepEqual(splitAmountEvenly(0.01, 3), [0.01, 0, 0]);
+    assert.deepEqual(splitAmountEvenly(0, 3), [0, 0, 0]);
+    assert.deepEqual(splitAmountEvenly(-1, 2), []);
+    assert.deepEqual(splitAmountEvenly(1, 0), []);
   });
 
   it("imports receipts that feed spend, price alerts and the household split", async () => {

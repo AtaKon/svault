@@ -52,7 +52,7 @@ const verifyPdf = (req: any, _res: any, next: (error?: unknown) => void) => {
     const prefix = Buffer.alloc(1024);
     let bytesRead: number;
     try { bytesRead = fs.readSync(fd, prefix, 0, prefix.length, 0); } finally { fs.closeSync(fd); }
-    if (prefix.subarray(0, bytesRead).indexOf(Buffer.from("%PDF-")) < 0) {
+    if (!prefix.subarray(0, bytesRead).subarray(0, 5).equals(Buffer.from("%PDF-"))) {
       throw new ApiError(400, "That file is not a valid PDF");
     }
   } catch (error) {
@@ -78,6 +78,7 @@ const input = z.object({
   splitWith: z.union([z.string(), z.array(z.string())]).optional(),
   notes: z.string().trim().max(1000).nullable().optional(),
 });
+const patchInput = input.partial().omit({ currency: true }).strict();
 
 function serialize(row: BillRow): UtilityBill {
   return {
@@ -129,8 +130,8 @@ async function billAccess(req: Request, minRole: "viewer" | "member" = "viewer")
   if (!roleAtLeast(role, minRole)) throw new ApiError(403, `Requires ${minRole} access`);
   return { bill, houseId: bill.house_id as string };
 }
-function deleteDocument(filename?: string | null) {
-  if (filename) fs.rmSync(uploadPath("bills", filename), { force: true });
+async function deleteDocument(filename?: string | null) {
+  if (filename) await fs.promises.rm(uploadPath("bills", filename), { force: true }).catch(() => undefined);
 }
 async function validatePeople(houseId: string, paidBy: string | null | undefined, splitWith: string[]) {
   const members = await all<{ user_id: string }>("SELECT user_id FROM house_members WHERE house_id = ?", [houseId]);
@@ -153,6 +154,10 @@ billRoutes.post("/:houseId/bills", requireHouseBillMember, pdfUpload.single("doc
     const houseId = String(req.params.houseId);
     const body = parseBody(input, req.body);
     const house = await get<any>("SELECT currency FROM houses WHERE id = ?", [houseId]);
+    const currency = String(house?.currency ?? "EUR").toUpperCase();
+    if (body.currency && body.currency.toUpperCase() !== currency) {
+      throw new ApiError(400, "Bills must use the house currency");
+    }
     const splitWith = body.category === "to_split" ? splitList(body.splitWith) : [];
     const members = await all<{ user_id: string }>("SELECT user_id FROM house_members WHERE house_id = ?", [houseId]);
     const paidBy = body.paidBy ?? req.user!.id;
@@ -160,7 +165,7 @@ billRoutes.post("/:houseId/bills", requireHouseBillMember, pdfUpload.single("doc
     const id = newId("bil");
     await run(`INSERT INTO bills (id, house_id, name, bill_type, category, amount, currency, due_date, paid_by, split_with, document, notes, created_by, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
-      id, houseId, body.name, body.billType, body.category, body.amount, (body.currency ?? house?.currency ?? "EUR").toUpperCase(),
+      id, houseId, body.name, body.billType, body.category, body.amount, currency,
       body.dueDate || null, paidBy, JSON.stringify(people), filename, body.notes || null, req.user!.id, now(),
     ]);
     created = true;
@@ -173,7 +178,7 @@ billRoutes.post("/:houseId/bills", requireHouseBillMember, pdfUpload.single("doc
 
 singleBillRoutes.patch("/:billId", handler(async (req, res) => {
   const { houseId, bill: current } = await billAccess(req, "member");
-  const body = parseBody(input.partial(), req.body);
+  const body = parseBody(patchInput, req.body);
   const category = body.category ?? current.category;
   let splitWith = category === "to_split"
     ? (body.splitWith === undefined ? parseJson<string[]>(current.split_with, []) : splitList(body.splitWith))
@@ -183,8 +188,8 @@ singleBillRoutes.patch("/:billId", handler(async (req, res) => {
   }
   const paidBy = body.paidBy === undefined ? current.paid_by : body.paidBy;
   const people = await validatePeople(houseId, paidBy, splitWith);
-  await run(`UPDATE bills SET name = ?, bill_type = ?, category = ?, amount = ?, currency = ?, due_date = ?, paid_by = ?, split_with = ?, notes = ? WHERE id = ?`, [
-    body.name ?? current.name, body.billType ?? current.bill_type ?? "other", category, body.amount ?? current.amount, (body.currency ?? current.currency).toUpperCase(),
+  await run(`UPDATE bills SET name = ?, bill_type = ?, category = ?, amount = ?, due_date = ?, paid_by = ?, split_with = ?, notes = ? WHERE id = ?`, [
+    body.name ?? current.name, body.billType ?? current.bill_type ?? "other", category, body.amount ?? current.amount,
     body.dueDate === undefined ? current.due_date : body.dueDate || null, paidBy ?? null, JSON.stringify(people),
     body.notes === undefined ? current.notes : body.notes || null, current.id,
   ]);
@@ -202,7 +207,7 @@ billRoutes.post("/:houseId/bills/:billId/document", requireBillDocumentMember, p
     discardUploads(req);
     throw error;
   }
-  deleteDocument(current.document);
+  await deleteDocument(current.document);
   res.json(serialize(await requireBillRow(current.id, houseId)));
 }));
 
@@ -220,6 +225,6 @@ billRoutes.get("/:houseId/bills/:billId/document", handler(async (req, res) => {
 singleBillRoutes.delete("/:billId", handler(async (req, res) => {
   const { bill } = await billAccess(req, "member");
   await run("DELETE FROM bills WHERE id = ?", [bill.id]);
-  deleteDocument(bill.document);
+  await deleteDocument(bill.document);
   res.json({ ok: true });
 }));
