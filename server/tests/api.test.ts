@@ -4718,10 +4718,16 @@ describe("insights, household split and admin console", () => {
 
   it("returns the queried barcode and propagates upstream Retry-After from the route", async () => {
     const code = "5201234500099";
-    await run(
-      "INSERT INTO item_barcodes (id, item_id, house_id, code, format, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-      ["bar_posokanei_route", milkId, insightHouse, code, "test", new Date().toISOString()],
-    );
+    const newerCode = "5201234500100";
+    for (const [id, barcode, createdAt] of [
+      ["bar_posokanei_route_old", code, "2020-01-01T00:00:00.000Z"],
+      ["bar_posokanei_route_new", newerCode, "2021-01-01T00:00:00.000Z"],
+    ]) {
+      await run(
+        "INSERT INTO item_barcodes (id, item_id, house_id, code, format, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        [id, milkId, insightHouse, barcode, "test", createdAt],
+      );
+    }
     await request(`/api/houses/${insightHouse}`, {
       method: "PATCH",
       body: { settings: { priceLookup: { enabled: true } } },
@@ -4780,6 +4786,15 @@ describe("insights, household split and admin console", () => {
     assert.equal(errorStatus, 502);
     assert.equal(errorBody.error, "External price lookup is unavailable. Try again later.");
     assert.equal(retryHeaders["Retry-After"], "120", "the global error handler preserves the route's header");
+
+    await request(`/api/houses/${insightHouse}/shopping/${line.data.item.id}/check`, {
+      method: "POST",
+      body: { addStock: false },
+    });
+    await assert.rejects(
+      makeRequest(async () => { throw new Error("must not reach the lookup"); }, {}),
+      (error: any) => error.status === 404 && error.message === "Open shopping line not found",
+    );
 
     const foreignHouse = await request("/api/houses", {
       auth: secondUserCookie,
@@ -5181,7 +5196,7 @@ describe("PosoKanei price lookup client", () => {
     const offers = await client.lookupPosoKaneiBarcode("12345678", userId);
     const cached = await client.lookupPosoKaneiBarcode("12345678", userId);
     assert.equal(calls, 1);
-    assert.equal(rateLimitCalls, 2, "per-user lookup limits apply to cache hits too");
+    assert.equal(rateLimitCalls, 1, "a cached result does not consume another per-user slot");
     assert.deepEqual(requestOptions?.redirect, "error");
     assert.equal(offers.length, 2);
     assert.equal(offers[0].retailer, "Store A");
@@ -5222,7 +5237,7 @@ describe("PosoKanei price lookup client", () => {
     assert.equal(userSlots, 0);
     assert.equal(globalSlots, 0);
     await assert.rejects(
-      client.lookupPosoKaneiBarcode("12345690", userId),
+      client.lookupPosoKaneiBarcode("12345690", "another-user"),
       (error: unknown) => error instanceof PosoKaneiUnavailableError && error.retryAfterSeconds != null,
     );
     assert.equal(userSlots, 0, "requests rejected before upstream access do not consume the user quota");
@@ -5368,6 +5383,17 @@ describe("PosoKanei price lookup client", () => {
     assert.equal(calls, 1);
   });
 
+  it("parses an HTTP-date Retry-After header", async () => {
+    const retryAt = new Date(Date.now() + 120_000).toUTCString();
+    const client = createPosoKaneiClient(async () =>
+      new Response("{}", { status: 429, headers: { "retry-after": retryAt } }), () => {});
+    await assert.rejects(
+      client.lookupPosoKaneiBarcode("12345700", userId),
+      (error: unknown) => error instanceof PosoKaneiUnavailableError &&
+        Number(error.retryAfterSeconds) >= 119 && Number(error.retryAfterSeconds) <= 120,
+    );
+  });
+
   it("rejects non-JSON and oversized streamed responses", async () => {
     const nonJsonClient = createPosoKaneiClient(async () =>
       new Response("<html>blocked</html>", { headers: { "content-type": "text/html" } }), () => {});
@@ -5442,7 +5468,7 @@ describe("PosoKanei price lookup client", () => {
     resolveResponse(new Response(JSON.stringify(product), { headers: { "content-type": "application/json" } }));
     const [one, two] = await Promise.all([first, second]);
     assert.equal(calls, 1);
-    assert.equal(rateLimitCalls, 2, "each user consumes their own lookup slot when joining a shared upstream request");
+    assert.equal(rateLimitCalls, 1, "joining an in-flight upstream request does not consume a user slot");
     assert.equal(globalRateLimitCalls, 1, "the shared upstream request consumes one global slot");
     assert.deepEqual(one, two);
   });

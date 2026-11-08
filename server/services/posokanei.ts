@@ -171,26 +171,18 @@ export function createPosoKaneiClient(
     const code = barcode.trim();
     if (!/^\d{8,14}$/.test(code)) return [];
     const now = Date.now();
-    const releaseUserLimit = consumeRateLimit(userId);
     const cached = cache.get(code);
     if (cached && cached.expiresAt > now) return cached.offers;
     if (upstreamBlockedUntil > now) {
-      releaseUserLimit?.();
       throw new PosoKaneiUnavailableError(
         "PosoKanei asked SVault to slow down. Try again later.",
         Math.ceil((upstreamBlockedUntil - now) / 1000),
       );
     }
     const existing = inFlight.get(code);
-    if (existing) {
-      try {
-        return await existing;
-      } catch (error) {
-        // This caller joined someone else's upstream request and did not cause it.
-        releaseUserLimit?.();
-        throw error;
-      }
-    }
+    if (existing) return existing;
+
+    const releaseUserLimit = consumeRateLimit(userId);
 
     let releaseGlobalLimit: ReleaseRateLimit;
     try {
@@ -254,7 +246,7 @@ export function createPosoKaneiClient(
         if (!upstreamRateLimited) {
           releaseUserLimit?.();
           releaseGlobalLimit?.();
-          upstreamBlockedUntil = Math.max(upstreamBlockedUntil, Date.now() + 60_000);
+          upstreamBlockedUntil = Math.max(upstreamBlockedUntil, Date.now() + 15_000);
         }
         throw normalizedError;
       }

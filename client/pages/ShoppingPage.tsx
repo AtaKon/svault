@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { api } from "@/api";
 import { useHouse } from "@/state";
@@ -43,6 +43,7 @@ export function ShoppingPage() {
   const [externalOffers, setExternalOffers] = useState<Record<string, ExternalShoppingOffer[]>>({});
   const [lookupBarcodes, setLookupBarcodes] = useState<Record<string, string>>({});
   const [lookingUp, setLookingUp] = useState<string | null>(null);
+  const lookupInProgress = useRef(false);
 
   const load = useCallback(async () => {
     try {
@@ -150,6 +151,8 @@ export function ShoppingPage() {
   };
 
   const lookupOffers = async (line: ShoppingItem) => {
+    if (lookupInProgress.current) return;
+    lookupInProgress.current = true;
     setLookingUp(line.id);
     try {
       const result = await api<{ barcode: string; offers: ExternalShoppingOffer[] }>(
@@ -161,6 +164,7 @@ export function ShoppingPage() {
     } catch (err) {
       toast.error(err instanceof Error ? t(err.message) : t("Could not check prices"));
     } finally {
+      lookupInProgress.current = false;
       setLookingUp(null);
     }
   };
