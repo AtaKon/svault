@@ -645,25 +645,8 @@ export const POSTGRES_MIGRATIONS: string[] = [
   "CREATE INDEX IF NOT EXISTS catalog_mappings_house ON catalog_mappings(house_id)",
   "ALTER TABLE receipts ADD COLUMN IF NOT EXISTS paid_by TEXT",
   "ALTER TABLE receipts ADD COLUMN IF NOT EXISTS split_with TEXT NOT NULL DEFAULT '[]'",
-  `CREATE TABLE IF NOT EXISTS bills (
-    id TEXT PRIMARY KEY,
-    house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
-    name TEXT NOT NULL,
-    bill_type TEXT NOT NULL DEFAULT 'other' CHECK (bill_type IN ('electricity', 'water', 'natural_gas', 'heating_oil', 'internet_telecom', 'rent', 'building_fees', 'municipal_fees', 'insurance', 'other')),
-    category TEXT NOT NULL DEFAULT 'personal',
-    ledger_confirmed INTEGER NOT NULL DEFAULT 0,
-    amount DOUBLE PRECISION NOT NULL,
-    currency TEXT NOT NULL,
-    due_date TEXT,
-    paid_by TEXT REFERENCES users(id) ON DELETE SET NULL,
-    split_with TEXT NOT NULL DEFAULT '[]',
-    document TEXT,
-    notes TEXT,
-    created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
-    created_at TEXT NOT NULL
-  )`,
-  // This single PostgreSQL statement is atomic. The prior CREATE TABLE is a
-  // no-op for an existing bills table; this block is the idempotent upgrade.
+  // POSTGRES_SCHEMA creates bills on fresh installs; this atomically upgrades
+  // an existing bills table created before ledger_confirmed was introduced.
   `DO $$
   BEGIN
     IF NOT EXISTS (

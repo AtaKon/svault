@@ -1,4 +1,4 @@
-import { all, get, parseJson, run, tables } from "../db.js";
+import { all, get, parseJson, run } from "../db.js";
 import { convert, round } from "../units.js";
 import { createNotification } from "./notifications.js";
 import { normalizeName } from "./shopping.js";
@@ -443,13 +443,11 @@ export async function householdInsight(houseId: string): Promise<{
 
   // Utility bills contribute to the household ledger only when explicitly
   // categorised as shared. Personal bills remain visible in Bills & splitting.
-  const bills = (await tables()).includes("bills")
-    ? await all<any>(
-      `SELECT amount, paid_by, split_with FROM bills
-       WHERE house_id = ? AND category = 'to_split' AND ledger_confirmed = 1 ORDER BY created_at`,
-      [houseId],
-    )
-    : [];
+  const bills = await all<any>(
+    `SELECT amount, paid_by, split_with FROM bills
+     WHERE house_id = ? AND category = 'to_split' AND ledger_confirmed = 1 ORDER BY created_at`,
+    [houseId],
+  );
   for (const bill of bills) {
     const total = money(bill.amount);
     const payer = bill.paid_by && memberIds.has(bill.paid_by) ? bill.paid_by : null;

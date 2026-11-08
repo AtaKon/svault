@@ -67,8 +67,9 @@ export class SqliteDriver implements DatabaseDriver {
      */
     const columns = (table: string) =>
       conn.prepare(`PRAGMA table_info(${table})`).all() as unknown as { name: string }[];
+    const hasColumn = (table: string, column: string) => columns(table).some((entry) => entry.name === column);
     const ensureColumn = (table: string, column: string, definition: string) => {
-      if (!columns(table).some((entry) => entry.name === column)) {
+      if (!hasColumn(table, column)) {
         conn.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
         return true;
       }
@@ -101,7 +102,7 @@ export class SqliteDriver implements DatabaseDriver {
     ensureColumn("receipts", "split_with", "TEXT NOT NULL DEFAULT '[]'");
     // Fresh rows default to unconfirmed; preserve the old ledger behavior for
     // shared bills that predate the acknowledgement column.
-    if (!columns("bills").some((entry) => entry.name === "ledger_confirmed")) {
+    if (!hasColumn("bills", "ledger_confirmed")) {
       // Adding the marker and preserving the old shared-bill ledger in one
       // transaction prevents a crash from leaving migrated rows unconfirmed.
       conn.exec("BEGIN");

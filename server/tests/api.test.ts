@@ -4777,6 +4777,8 @@ describe("insights, household split and admin console", () => {
     });
     assert.equal(splitStringPatch.status, 200);
     assert.deepEqual([...splitStringPatch.data.splitWith].sort(), [ownerId, secondUserId].sort());
+    assert.equal(splitStringPatch.data.category, "to_split", "split-only patches preserve the bill category");
+    assert.equal(splitStringPatch.data.billType, "electricity", "split-only patches preserve the bill type");
     const payerOnlyPatch = await request(`/api/bills/${accepted.data.id}`, {
       method: "PATCH",
       body: { paidBy: ownerId },
@@ -5498,6 +5500,7 @@ describe("bill ledger confirmation migration", () => {
       body: { name: "Existing personal bill", amount: 4, category: "personal" },
     });
     assert.equal(personalBill.status, 201);
+    await run("UPDATE bills SET ledger_confirmed = 1 WHERE id = ?", [personalBill.data.id]);
 
     await run("ALTER TABLE bills DROP COLUMN ledger_confirmed");
     await closeDb();

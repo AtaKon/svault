@@ -80,10 +80,17 @@ const input = z.object({
   ledgerConfirmed: z.union([z.boolean(), z.enum(["true", "false"]).transform((value) => value === "true")]).optional(),
   notes: z.string().trim().max(1000).nullable().optional(),
 });
-const patchInput = input.omit({ currency: true, billType: true, category: true }).extend({
+const patchInput = z.object({
+  name: input.shape.name.optional(),
   billType: z.enum(BILL_TYPE_VALUES).optional(),
   category: z.enum(["to_split", "personal"]).optional(),
-}).partial().strict();
+  amount: input.shape.amount.optional(),
+  dueDate: input.shape.dueDate.optional(),
+  paidBy: input.shape.paidBy.optional(),
+  splitWith: input.shape.splitWith.optional(),
+  ledgerConfirmed: input.shape.ledgerConfirmed.optional(),
+  notes: input.shape.notes.optional(),
+}).strict();
 
 function serialize(row: BillRow): UtilityBill {
   return {
@@ -124,7 +131,7 @@ const requireBillDocumentMember: RequestHandler = (req, _res, next) => {
   // Check both house membership and bill ownership before accepting the file.
   void (async () => {
     const { houseId } = await requireHouse(req, "member");
-    const bill = await billRow(String(req.params.billId), houseId);
+    const bill = await billRow(String(req.params.billId));
     if (!bill || bill.house_id !== houseId) throw new ApiError(404, "Bill not found");
   })().then(() => next(), next);
 };
