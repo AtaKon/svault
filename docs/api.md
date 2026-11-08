@@ -768,9 +768,9 @@ addressed to that user only. Other members do not see it.
 | `PATCH` | `/api/bills/:billId` | member+ | Update bill fields, payer, or participants. |
 | `DELETE` | `/api/bills/:billId` | member+ | Delete a bill and its attached PDF. |
 | `POST` | `/api/houses/:houseId/bills/:billId/document` | member+ | Attach or replace a PDF. |
-| `GET` | `/api/houses/:houseId/bills/:billId/document` | viewer+ | Read the attached PDF. |
+| `GET` | `/api/houses/:houseId/bills/:billId/document` | viewer+ | Download the attached PDF. |
 
-`billType` is one of `electricity`, `water`, `natural_gas`, `heating_oil`, `internet_telecom`, `rent`, `building_fees`, `municipal_fees`, `insurance`, or `other`. `category` is `to_split` or `personal`. Shared bills use equal cent-exact shares; when `to_split` is selected without `splitWith` or with an empty list, all current house members share it. When a member leaves, their payer/participant references are cleared on the next bill edit. Personal bills do not affect household balances. Bills and purchase receipts are separate ledger entries; the client requires confirmation that a shared bill is not also recorded as a purchase receipt, and each expense should be recorded in one place to avoid counting it twice. Bill PDFs are served as downloads through the authenticated document route; the storage path is private.
+`billType` is one of `electricity`, `water`, `natural_gas`, `heating_oil`, `internet_telecom`, `rent`, `building_fees`, `municipal_fees`, `insurance`, or `other`. `category` is `to_split` or `personal`. Shared bills use equal cent-exact shares; when `to_split` is selected without `splitWith` or with an empty list, all current house members share it. When a member leaves, their payer/participant references are cleared on the next bill edit. Personal bills do not affect household balances. Bills and purchase receipts are separate ledger entries; creating a shared bill or changing a personal bill to shared requires `ledgerConfirmed: true`, confirming the expense is not also recorded as a purchase receipt. Bill PDFs are served as downloads through the authenticated document route; the storage path is private.
 
 `splitWith` accepts an array of member IDs; multipart create forms may send it as a JSON-encoded array string. Omitting it or sending an empty array on a shared bill defaults to all current members.
 

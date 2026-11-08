@@ -76,6 +76,7 @@ export function BillsPage() {
       data.set("billType", billType);
       data.set("amount", String(numericAmount));
       data.set("category", category);
+      data.set("ledgerConfirmed", String(ledgerConfirmed));
       data.set("currency", house.currency || "EUR");
       data.set("dueDate", dueDate);
       data.set("paidBy", paidBy);
@@ -97,6 +98,14 @@ export function BillsPage() {
       await api(`/api/bills/${bill.id}`, { method: "PATCH", body });
       await load();
     } catch (err) { toast.error(err instanceof Error ? t(err.message) : t("Could not update the bill")); }
+  };
+  const changeCategory = (bill: UtilityBill, category: UtilityBill["category"]) => {
+    if (category === "to_split" && bill.category !== "to_split") {
+      if (!window.confirm(t("I confirm this expense is not already recorded as a purchase receipt."))) return;
+      void patchBill(bill, { category, ledgerConfirmed: true });
+      return;
+    }
+    void patchBill(bill, { category });
   };
   const removeBill = async (bill: UtilityBill) => {
     if (!window.confirm(t("Delete {name}?", { name: bill.name }))) return;
@@ -151,7 +160,8 @@ export function BillsPage() {
     <section className="space-y-3">
       <div className="flex items-end justify-between gap-3"><div><div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">{t("Bill history")}</div><h2 className="mt-1 font-display text-xl">{t("Your household bills")}</h2></div><Badge>{bills.length} {t("bills")}</Badge></div>
       {loading ? <div className="space-y-3"><Skeleton className="h-28"/><Skeleton className="h-28"/></div> : bills.length === 0 ? <EmptyState icon="receipt" title={t("No bills yet")} body={t("Add a bill manually or attach a PDF to start your household ledger.")} /> : <div className="space-y-3">{bills.map((bill) => {
-        const participants = bill.splitWith.map((id) => household?.members.find((member) => member.userId === id)).filter(Boolean) as Member[];
+        const selected = bill.splitWith.map((id) => household?.members.find((member) => member.userId === id)).filter(Boolean) as Member[];
+        const participants = selected.length ? selected : bill.category === "to_split" ? household?.members ?? [] : [];
         const shares = splitAmountEvenly(bill.amount, participants.length);
         const payer = household?.members.find((member) => member.userId === bill.paidBy);
         return <Card key={bill.id} className="p-4 sm:p-5"><div className="flex flex-wrap items-start justify-between gap-3">
@@ -161,7 +171,7 @@ export function BillsPage() {
           </div><div className="flex items-center gap-3"><div className="text-right"><div className="font-display text-xl">{money(bill.amount, bill.currency)}</div></div><button onClick={() => void removeBill(bill)} className="rounded-lg p-2 text-muted hover:bg-raised hover:text-danger" aria-label={t("Delete bill")}><Icon name="trash" size={17}/></button></div>
           </div>
           <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-line pt-3">
-            <Field label={t("Category")} className="w-44"><Select value={bill.category} onChange={(e) => void patchBill(bill, { category: e.target.value })}><option value="to_split">{t("To be split")}</option><option value="personal">{t("Personal")}</option></Select></Field>
+            <Field label={t("Category")} className="w-44"><Select value={bill.category} onChange={(e) => changeCategory(bill, e.target.value as UtilityBill["category"])}><option value="to_split">{t("To be split")}</option><option value="personal">{t("Personal")}</option></Select></Field>
             {bill.category === "to_split" && <><Field label={t("Paid by")} className="w-44"><Select value={bill.paidBy ?? ""} onChange={(e) => void patchBill(bill, { paidBy: e.target.value })}>{household?.members.map((member) => <option key={member.userId} value={member.userId}>{member.name}</option>)}</Select></Field><Field label={t("Split between")} className="min-w-[220px] flex-1"><div className="flex flex-wrap gap-2">{household?.members.map((member) => <label key={member.userId} className="flex cursor-pointer items-center gap-1.5 text-xs"><input type="checkbox" checked={bill.splitWith.includes(member.userId)} onChange={(event) => { if (!event.target.checked && bill.splitWith.length === 1) { toast.error(t("Select at least one person to split the bill.")); return; } const next = event.target.checked ? [...bill.splitWith, member.userId] : bill.splitWith.filter((id) => id !== member.userId); void patchBill(bill, { splitWith: next }); }} />{member.name}</label>)}</div></Field></>}
             {bill.document ? <a className="inline-flex items-center gap-2 text-sm font-medium text-brand hover:underline" href={bill.document} target="_blank" rel="noreferrer"><Icon name="receipt" size={16}/>{t("View bill PDF")}</a> : <label className="inline-flex cursor-pointer items-center gap-2 text-sm font-medium text-brand hover:underline"><Icon name="upload" size={16}/>{t("Attach PDF")}<input type="file" accept="application/pdf,.pdf" className="sr-only" onChange={(event) => { const nextFile = event.target.files?.[0]; if (nextFile) void uploadDocument(bill, nextFile); }} /></label>}
           </div>

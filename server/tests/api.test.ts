@@ -4511,13 +4511,14 @@ describe("insights, household split and admin console", () => {
     const billDir = path.join(dataDir, "uploads", "bills");
     const files = () => readdirSync(billDir).sort();
     const before = files();
-    const form = (pdf: Blob) => {
+    const form = (pdf: Blob, name = "Electricity account") => {
       const fields = new FormData();
-      fields.set("name", "Electricity account");
+      fields.set("name", name);
       fields.set("billType", "electricity");
       fields.set("amount", "10.00");
       fields.set("category", "to_split");
       fields.set("paidBy", ownerId);
+      fields.set("ledgerConfirmed", "true");
       fields.set("dueDate", "2025-02-01");
       fields.set("notes", "Preserve this utility note");
       fields.append("document", pdf, "electricity.pdf");
@@ -4543,11 +4544,54 @@ describe("insights, household split and admin console", () => {
     assert.equal(invalid.status, 400);
     assert.deepEqual(files(), before, "invalid PDF signature must be removed");
 
+    const beforePostInsertFailure = files();
+    await run(`CREATE TRIGGER delete_bill_after_insert AFTER INSERT ON bills
+      WHEN NEW.name = 'Post insert cleanup fixture'
+      BEGIN DELETE FROM bills WHERE id = NEW.id; END`);
+    try {
+      const postInsertFailure = await request(`/api/houses/${billHouse}/bills`, {
+        method: "POST",
+        body: form(pdf, "Post insert cleanup fixture"),
+      });
+      assert.equal(postInsertFailure.status, 404);
+      assert.deepEqual(files(), beforePostInsertFailure,
+        "files are removed if the insert succeeded but the subsequent row read fails");
+    } finally {
+      await run("DROP TRIGGER delete_bill_after_insert");
+    }
+
+    const beforeFailedInsert = files();
+    await run(`CREATE TRIGGER reject_bill_insert BEFORE INSERT ON bills
+      WHEN NEW.name = 'Rejected insert cleanup fixture'
+      BEGIN SELECT RAISE(FAIL, 'forced insert failure'); END`);
+    try {
+      const failedInsert = await request(`/api/houses/${billHouse}/bills`, {
+        method: "POST",
+        body: form(pdf, "Rejected insert cleanup fixture"),
+      });
+      assert.equal(failedInsert.status, 500);
+      assert.deepEqual(files(), beforeFailedInsert, "files are removed when the bill insert fails");
+    } finally {
+      await run("DROP TRIGGER reject_bill_insert");
+    }
+
     const invalidAmount = await request(`/api/houses/${billHouse}/bills`, {
       method: "POST",
-      body: { name: "Bad precision", amount: 1.005, billType: "electricity", category: "to_split" },
+      body: { name: "Bad precision", amount: 1.005, billType: "electricity", category: "to_split", ledgerConfirmed: true },
     });
     assert.equal(invalidAmount.status, 400);
+    for (const amount of [0, -1, 1_000_000_001]) {
+      const invalidValue = await request(`/api/houses/${billHouse}/bills`, {
+        method: "POST",
+        body: { name: "Invalid amount", amount, billType: "water" },
+      });
+      assert.equal(invalidValue.status, 400);
+    }
+    const invalidDate = await request(`/api/houses/${billHouse}/bills`, {
+      method: "POST",
+      body: { name: "Invalid due date", amount: 1, billType: "water", dueDate: "2024-02-30" },
+    });
+    assert.equal(invalidDate.status, 400);
     const invalidType = await request(`/api/houses/${billHouse}/bills`, {
       method: "POST",
       body: { name: "Unknown type", amount: 1, billType: "gas_provider" },
@@ -4560,25 +4604,30 @@ describe("insights, household split and admin console", () => {
     assert.equal(invalidCurrency.status, 400);
     const invalidSplitMember = await request(`/api/houses/${billHouse}/bills`, {
       method: "POST",
-      body: { name: "Invalid participant", amount: 1, billType: "water", category: "to_split", paidBy: ownerId, splitWith: ["usr_not_a_member"] },
+      body: { name: "Invalid participant", amount: 1, billType: "water", category: "to_split", ledgerConfirmed: true, paidBy: ownerId, splitWith: ["usr_not_a_member"] },
     });
     assert.equal(invalidSplitMember.status, 400);
+    const unconfirmedSharedBill = await request(`/api/houses/${billHouse}/bills`, {
+      method: "POST",
+      body: { name: "Unconfirmed shared bill", amount: 1, billType: "water", category: "to_split" },
+    });
+    assert.equal(unconfirmedSharedBill.status, 400, "the server enforces the duplicate-entry acknowledgement");
     const emptySplit = await request(`/api/houses/${billHouse}/bills`, {
       method: "POST",
-      body: { name: "Empty split defaults to everyone", amount: 1, billType: "water", category: "to_split", paidBy: ownerId, splitWith: [] },
+      body: { name: "Empty split defaults to everyone", amount: 1, billType: "water", category: "to_split", ledgerConfirmed: true, paidBy: ownerId, splitWith: [] },
     });
     assert.equal(emptySplit.status, 201);
     assert.deepEqual([...emptySplit.data.splitWith].sort(), [ownerId, secondUserId].sort());
     assert.equal((await request(`/api/bills/${emptySplit.data.id}`, { method: "DELETE" })).status, 200);
     const defaultPayerBill = await request(`/api/houses/${billHouse}/bills`, {
       method: "POST",
-      body: { name: "Default payer", amount: 1, billType: "water", category: "to_split", splitWith: [ownerId, secondUserId] },
+      body: { name: "Default payer", amount: 1, billType: "water", category: "to_split", ledgerConfirmed: true, splitWith: [ownerId, secondUserId] },
     });
     assert.equal(defaultPayerBill.status, 201);
     assert.equal(defaultPayerBill.data.paidBy, ownerId, "an omitted payer defaults to the submitting user");
     const explicitPayerBill = await request(`/api/houses/${billHouse}/bills`, {
       method: "POST",
-      body: { name: "Explicit payer", amount: 1, billType: "water", category: "to_split", paidBy: secondUserId, splitWith: [ownerId, secondUserId] },
+      body: { name: "Explicit payer", amount: 1, billType: "water", category: "to_split", ledgerConfirmed: true, paidBy: secondUserId, splitWith: [ownerId, secondUserId] },
     });
     assert.equal(explicitPayerBill.status, 201);
     assert.equal(explicitPayerBill.data.paidBy, secondUserId);
@@ -4586,11 +4635,19 @@ describe("insights, household split and admin console", () => {
     assert.equal((await request(`/api/bills/${explicitPayerBill.data.id}`, { method: "DELETE" })).status, 200);
     const defaultTypeBill = await request(`/api/houses/${billHouse}/bills`, {
       method: "POST",
-      body: { name: "Default bill type", amount: 1, category: "personal" },
+      body: { name: "Default bill type", amount: 1, category: "to_split", ledgerConfirmed: true },
     });
     assert.equal(defaultTypeBill.status, 201);
     assert.equal(defaultTypeBill.data.billType, "other");
+    assert.deepEqual([...defaultTypeBill.data.splitWith].sort(), [ownerId, secondUserId].sort());
     assert.equal((await request(`/api/bills/${defaultTypeBill.data.id}`, { method: "DELETE" })).status, 200);
+    const personalWithParticipants = await request(`/api/houses/${billHouse}/bills`, {
+      method: "POST",
+      body: { name: "Personal ignores participants", amount: 1, category: "personal", splitWith: [secondUserId] },
+    });
+    assert.equal(personalWithParticipants.status, 201);
+    assert.deepEqual(personalWithParticipants.data.splitWith, []);
+    assert.equal((await request(`/api/bills/${personalWithParticipants.data.id}`, { method: "DELETE" })).status, 200);
 
     const accepted = await request(`/api/houses/${billHouse}/bills`, { method: "POST", body: form(pdf) });
     assert.equal(accepted.status, 201, JSON.stringify(accepted.data));
@@ -4601,16 +4658,26 @@ describe("insights, household split and admin console", () => {
       run("UPDATE bills SET bill_type = 'gas_provider' WHERE id = ?", [accepted.data.id]),
       "the database rejects bill types outside the shared enum",
     );
+    await assert.rejects(
+      run(`INSERT INTO bills (id, house_id, name, bill_type, category, amount, currency, split_with, created_by, created_at)
+        SELECT 'bil_invalid_type_insert', house_id, 'Invalid type', 'gas_provider', 'personal', 1, currency, '[]', created_by, created_at FROM bills WHERE id = ?`, [accepted.data.id]),
+      "the bill type CHECK constraint also rejects invalid inserts",
+    );
     const toPersonal = await request(`/api/bills/${accepted.data.id}`, {
       method: "PATCH",
       body: { category: "personal" },
     });
     assert.equal(toPersonal.status, 200);
+    assert.deepEqual(toPersonal.data.splitWith, []);
     assert.equal(toPersonal.data.notes, "Preserve this utility note");
     assert.equal(toPersonal.data.dueDate, "2025-02-01");
-    const backToSplit = await request(`/api/bills/${accepted.data.id}`, {
+    assert.equal((await request(`/api/bills/${accepted.data.id}`, {
       method: "PATCH",
       body: { category: "to_split" },
+    })).status, 400, "the server requires acknowledgement when making a bill shared");
+    const backToSplit = await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { category: "to_split", ledgerConfirmed: true },
     });
     assert.equal(backToSplit.status, 200);
     assert.equal(backToSplit.data.notes, "Preserve this utility note");
@@ -4766,7 +4833,7 @@ describe("insights, household split and admin console", () => {
     ]);
     const nullPayerBill = await request(`/api/houses/${otherHouse.data.id}/bills`, {
       method: "POST",
-      body: { name: "Former payer fixture", amount: 6, billType: "water", category: "to_split", paidBy: secondUserId, splitWith: [ownerId, secondUserId] },
+      body: { name: "Former payer fixture", amount: 6, billType: "water", category: "to_split", ledgerConfirmed: true, paidBy: secondUserId, splitWith: [ownerId, secondUserId] },
     });
     assert.equal(nullPayerBill.status, 201);
     const payerBeforeLeaving = await request(`/api/houses/${otherHouse.data.id}/insights/household`);
@@ -4805,11 +4872,13 @@ describe("insights, household split and admin console", () => {
     const deleted = await request(`/api/bills/${accepted.data.id}`, { method: "DELETE" });
     assert.equal(deleted.status, 200);
     assert.ok(!files().includes(addedFile), "deleting a bill removes its PDF");
+    assert.equal((await request(`/api/bills/${accepted.data.id}`, { method: "DELETE" })).status, 404);
   });
 
   it("keeps utility bill share allocation cent-exact", () => {
     assert.deepEqual(splitAmountEvenly(10, 3), [3.34, 3.33, 3.33]);
-    assert.deepEqual(splitAmountEvenly(1.005, 2), [0.51, 0.5]);
+    assert.deepEqual(splitAmountEvenly(1.005, 2), [], "amounts with sub-cent precision are rejected like the bill API");
+    assert.deepEqual(splitAmountEvenly(1e15, 2), [], "unsafe cent totals are rejected");
     assert.deepEqual(splitAmountEvenly(0.01, 3), [0.01, 0, 0]);
     assert.deepEqual(splitAmountEvenly(0, 3), [0, 0, 0]);
     assert.deepEqual(splitAmountEvenly(-1, 2), []);

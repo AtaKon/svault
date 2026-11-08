@@ -76,6 +76,7 @@ const input = z.object({
   }, "Enter a valid due date").nullable().optional()),
   paidBy: z.preprocess((value) => value === "" ? null : value, z.string().max(60).nullable().optional()),
   splitWith: z.union([z.string(), z.array(z.string())]).optional(),
+  ledgerConfirmed: z.union([z.boolean(), z.enum(["true", "false"]).transform((value) => value === "true")]).optional(),
   notes: z.string().trim().max(1000).nullable().optional(),
 });
 const patchInput = input.omit({ currency: true, billType: true, category: true }).extend({
@@ -153,6 +154,7 @@ billRoutes.get("/:houseId/bills", handler(async (req, res) => {
 billRoutes.post("/:houseId/bills", requireHouseBillMember, pdfUpload.single("document"), verifyPdf, handler(async (req, res) => {
   const filename = req.file?.filename ?? null;
   let created = false;
+  let id: string | null = null;
   try {
     const houseId = String(req.params.houseId);
     const body = parseBody(input, req.body);
@@ -161,11 +163,14 @@ billRoutes.post("/:houseId/bills", requireHouseBillMember, pdfUpload.single("doc
     if (body.currency && body.currency.toUpperCase() !== currency) {
       throw new ApiError(400, "Bills must use the house currency");
     }
+    if (body.category === "to_split" && body.ledgerConfirmed !== true) {
+      throw new ApiError(400, "Confirm this bill is not also recorded as a purchase receipt");
+    }
     const splitWith = body.category === "to_split" ? splitList(body.splitWith) : [];
     const members = await all<{ user_id: string }>("SELECT user_id FROM house_members WHERE house_id = ?", [houseId]);
     const paidBy = body.paidBy ?? req.user!.id;
     const people = await validatePeople(houseId, paidBy, splitWith.length ? splitWith : (body.category === "to_split" ? members.map((m) => m.user_id) : []));
-    const id = newId("bil");
+    id = newId("bil");
     await run(`INSERT INTO bills (id, house_id, name, bill_type, category, amount, currency, due_date, paid_by, split_with, document, notes, created_by, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
       id, houseId, body.name, body.billType, body.category, body.amount, currency,
@@ -174,7 +179,18 @@ billRoutes.post("/:houseId/bills", requireHouseBillMember, pdfUpload.single("doc
     created = true;
     res.status(201).json(serialize(await requireBillRow(id, houseId)));
   } catch (error) {
-    if (!created) discardUploads(req);
+    if (!created) {
+      discardUploads(req);
+    } else if (filename && id) {
+      // If a post-insert read/serialization failed, detach the new file before
+      // deleting it. A concurrent deletion is already safe: this update is a no-op.
+      try {
+        await run("UPDATE bills SET document = NULL WHERE id = ? AND document = ?", [id, filename]);
+        discardUploads(req);
+      } catch {
+        // Keep the file if the database cannot confirm it is detached.
+      }
+    }
     throw error;
   }
 }));
@@ -183,6 +199,9 @@ singleBillRoutes.patch("/:billId", handler(async (req, res) => {
   const { houseId, bill: current } = await billAccess(req, "member");
   const body = parseBody(patchInput, req.body);
   const category = body.category ?? current.category;
+  if (current.category !== "to_split" && category === "to_split" && body.ledgerConfirmed !== true) {
+    throw new ApiError(400, "Confirm this bill is not also recorded as a purchase receipt");
+  }
   let splitWith = category === "to_split"
     ? (body.splitWith === undefined ? parseJson<string[]>(current.split_with, []) : splitList(body.splitWith))
     : [];

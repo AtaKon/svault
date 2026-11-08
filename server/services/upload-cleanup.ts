@@ -69,6 +69,7 @@ export async function removeUnreferencedUploads(urls: Iterable<unknown>): Promis
 }
 
 /** Upload URLs referenced by one house's rows. Collect them before deleting the house. */
+/** Return normalized upload references for cleanup; entries are not necessarily fetchable public URLs. */
 export async function houseUploadUrls(houseId: string): Promise<string[]> {
   const urls: string[] = [];
   for (const { table, column } of UPLOAD_URL_COLUMNS) {
