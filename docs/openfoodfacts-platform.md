@@ -33,11 +33,11 @@ new runtime dependency, mobile-first UI, and Open Database License (ODbL) compli
 
 ### Implementation status
 
-Phases 0–5 are implemented on `feat/off-multiservice-contribution`, with mock-backed tests for
-universal reads, project-aware cache, product writes/dry run, retry/backoff, Open Prices, NutriPatrol
-and Robotoff. Production writes remain disabled by default and still require a staging write test per
-project before `SV_OFF_WRITE_ENABLED=true`. Phase 6 hardening (daily limits, cache pruning, docs and
-admin stats) is in progress; the optional local product dump importer is intentionally deferred.
+Phases 0–6 are implemented on `feat/off-multiservice-contribution`, with mock-backed tests for
+universal reads, project-aware cache, product writes/dry run, retry/backoff, Open Prices, NutriPatrol,
+Robotoff, Folksonomy, bulk actions and daily limits. Production writes remain disabled by default and
+still require a staging write test per project before `SV_OFF_WRITE_ENABLED=true`. The optional local
+product dump importer is intentionally deferred.
 
 ---
 
