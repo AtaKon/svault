@@ -79,6 +79,7 @@ const EL: Record<string, string> = {
   "Best rating": "Καλύτερη βαθμολογία",
   "Shots": "Shots",
   "All coffees": "Όλοι οι καφέδες",
+  "All espresso beans are turned off. Re-enable one to log new shots; the existing history is still shown below.": "Όλοι οι καφέδες espresso είναι απενεργοποιημένοι. Ενεργοποίησε έναν για νέα shots· το υπάρχον ιστορικό εμφανίζεται παρακάτω.",
   "Filter by coffee": "Φίλτρο κατά καφέ",
   "Coffee": "Καφές",
   "by {name}": "από {name}",

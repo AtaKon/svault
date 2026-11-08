@@ -21,6 +21,7 @@ export function EspressoPage() {
   const [loading, setLoading] = useState(true);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [editing, setEditing] = useState<EspressoShot | null>(null);
+  const [sheetSession, setSheetSession] = useState(0);
   const requestId = useRef(0);
 
   const load = useCallback(async () => {
@@ -77,6 +78,7 @@ export function EspressoPage() {
               icon="plus"
               onClick={() => {
                 setEditing(null);
+                setSheetSession((current) => current + 1);
                 setSheetOpen(true);
               }}
             >
@@ -122,6 +124,12 @@ export function EspressoPage() {
         )}
       </Card>
 
+      {loggableBeans.length === 0 && (data?.shots.length ?? 0) > 0 && (
+        <Card className="p-3 text-[11px] leading-relaxed text-muted">
+          {t("All espresso beans are turned off. Re-enable one to log new shots; the existing history is still shown below.")}
+        </Card>
+      )}
+
       <Card className="p-4">
         <div className="mb-2 flex items-center justify-between gap-2">
           <h2 className="font-display text-lg">{t("Shots")}</h2>
@@ -157,6 +165,7 @@ export function EspressoPage() {
                 canEdit={canEdit(shot)}
                 onEdit={() => {
                   setEditing(shot);
+                  setSheetSession((current) => current + 1);
                   setSheetOpen(true);
                 }}
               />
@@ -166,6 +175,7 @@ export function EspressoPage() {
       </Card>
 
       <EspressoShotSheet
+        key={sheetSession}
         open={sheetOpen}
         onClose={() => setSheetOpen(false)}
         shot={editing}

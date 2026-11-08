@@ -513,6 +513,7 @@ export function EspressoLogCard({ item }: { item: ItemDetail }) {
   const [loading, setLoading] = useState(true);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [editing, setEditing] = useState<EspressoShot | null>(null);
+  const [sheetSession, setSheetSession] = useState(0);
 
   const load = useCallback(async () => {
     try {
@@ -563,6 +564,7 @@ export function EspressoLogCard({ item }: { item: ItemDetail }) {
             icon="plus"
             onClick={() => {
               setEditing(null);
+              setSheetSession((current) => current + 1);
               setSheetOpen(true);
             }}
           >
@@ -590,6 +592,7 @@ export function EspressoLogCard({ item }: { item: ItemDetail }) {
                 canEdit={canEdit(shot)}
                 onEdit={() => {
                   setEditing(shot);
+                  setSheetSession((current) => current + 1);
                   setSheetOpen(true);
                 }}
               />
@@ -607,6 +610,7 @@ export function EspressoLogCard({ item }: { item: ItemDetail }) {
       )}
 
       <EspressoShotSheet
+        key={sheetSession}
         open={sheetOpen}
         onClose={() => setSheetOpen(false)}
         shot={editing}
