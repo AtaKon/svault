@@ -116,7 +116,7 @@ const espressoShotBody = z.object({
   grinder: z.string().trim().max(80).nullish(),
   machine: z.string().trim().max(80).nullish(),
   tastingNotes: z.string().trim().max(500).nullish(),
-  tags: z.union([z.array(z.string().trim().max(40)), z.string().max(400)]).optional(),
+  tags: z.union([z.array(z.string().trim().max(40)).max(20), z.string().max(400)]).optional(),
   notes: z.string().trim().max(2000).nullish(),
 });
 
