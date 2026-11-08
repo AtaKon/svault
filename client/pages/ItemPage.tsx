@@ -84,7 +84,7 @@ export function ItemPage() {
       setItem(detail);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? t(err.message) : t("Could not load this item"));
+      setError(err instanceof Error ? err.message : t("Could not load this item"));
     }
   }, [itemId]);
 
@@ -138,7 +138,7 @@ export function ItemPage() {
       setItem(detail);
       window.dispatchEvent(new Event("sv:refresh-badges"));
     } catch (err) {
-      toast.error(err instanceof Error ? t(err.message) : t("Could not update stock"));
+      toast.error(err instanceof Error ? err.message : t("Could not update stock"));
     } finally {
       setQuickBusy(false);
     }
@@ -157,7 +157,7 @@ export function ItemPage() {
       setScanOpen(false);
       toast.success(t("Barcode linked"));
     } catch (err) {
-      toast.error(err instanceof Error ? t(err.message) : t("Could not add the barcode"));
+      toast.error(err instanceof Error ? err.message : t("Could not add the barcode"));
     } finally {
       setBarcodeBusy(false);
     }
@@ -169,7 +169,7 @@ export function ItemPage() {
       await api(`/api/items/${item.id}/barcodes/${barcodeId}`, { method: "DELETE" });
       setItem({ ...item, barcodes: item.barcodes.filter((barcode) => barcode.id !== barcodeId) });
     } catch (err) {
-      toast.error(err instanceof Error ? t(err.message) : t("Could not remove the barcode"));
+      toast.error(err instanceof Error ? err.message : t("Could not remove the barcode"));
     }
   };
 
@@ -189,7 +189,7 @@ export function ItemPage() {
           : t("Linked to OpenFoodFacts"),
       );
     } catch (err) {
-      toast.error(err instanceof Error ? t(err.message) : t("Could not link the product"));
+      toast.error(err instanceof Error ? err.message : t("Could not link the product"));
     } finally {
       setOffBusy(false);
     }
@@ -203,7 +203,7 @@ export function ItemPage() {
       setItem(result.item as ItemDetail);
       toast.success(result.filled.length ? t("Filled {fields}", { fields: result.filled.map((field) => t(field)).join(", ") }) : t("Nothing was empty to fill"));
     } catch (err) {
-      toast.error(err instanceof Error ? t(err.message) : t("Could not refresh OpenFoodFacts"));
+      toast.error(err instanceof Error ? err.message : t("Could not refresh OpenFoodFacts"));
     } finally {
       setOffBusy(false);
     }
@@ -218,7 +218,7 @@ export function ItemPage() {
       setOffUnlinkOpen(false);
       toast.success(t("OpenFoodFacts link removed"));
     } catch (err) {
-      toast.error(err instanceof Error ? t(err.message) : t("Could not remove the link"));
+      toast.error(err instanceof Error ? err.message : t("Could not remove the link"));
     } finally {
       setOffBusy(false);
     }
@@ -236,7 +236,7 @@ export function ItemPage() {
       setAliases(await api<ReceiptAlias[]>(`/api/items/${item.id}/aliases`));
       toast.success(t("Receipt name saved"));
     } catch (err) {
-      toast.error(err instanceof Error ? t(err.message) : t("Could not save the receipt name"));
+      toast.error(err instanceof Error ? err.message : t("Could not save the receipt name"));
     } finally {
       setAliasBusy(false);
     }
@@ -248,7 +248,7 @@ export function ItemPage() {
       await api(`/api/items/${item.id}/aliases/${aliasId}`, { method: "DELETE" });
       setAliases((current) => current.filter((alias) => alias.id !== aliasId));
     } catch (err) {
-      toast.error(err instanceof Error ? t(err.message) : t("Could not remove the receipt name"));
+      toast.error(err instanceof Error ? err.message : t("Could not remove the receipt name"));
     }
   };
 
@@ -260,7 +260,7 @@ export function ItemPage() {
       toast.success(t("{item} removed", { item: item.name }));
       navigate("/items", { replace: true });
     } catch (err) {
-      toast.error(err instanceof Error ? t(err.message) : t("Could not delete the item"));
+      toast.error(err instanceof Error ? err.message : t("Could not delete the item"));
       setDeleting(false);
     }
   };

@@ -1089,6 +1089,7 @@ describe("inventory and stock", () => {
   it("validates stock updates", async () => {
     const res = await request(`/api/items/${itemId}/stock`, { method: "POST", body: { action: "add", quantity: -1 } });
     assert.equal(res.status, 400);
+    assert.equal(res.data.error, "Invalid request");
   });
 });
 

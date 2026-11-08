@@ -66,13 +66,11 @@ export function OffProductPicker({
       setProducts(data.products);
       const warning = data.warningCode === "NOTHING_FOUND"
         ? t("Nothing found on OpenFoodFacts. Check the name or paste a barcode.")
-        : data.warningCode && data.warning
+        : data.warning
           ? t("OpenFoodFacts search warning: {message}", { message: data.warning })
           : data.warningCode
             ? t("OpenFoodFacts search returned a warning")
-            : data.warning
-              ? t("OpenFoodFacts search warning: {message}", { message: data.warning })
-              : null;
+            : null;
       setWarning(warning);
     } catch (err) {
       setWarning(err instanceof Error ? err.message : t("Could not search OpenFoodFacts"));
