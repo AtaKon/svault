@@ -332,7 +332,9 @@ are `community`. A local mapping is never overwritten by a seed file or import.
 
 Search responses include `project` and a stable `warningCode`: `NOTHING_FOUND` when an online search
 had no result, or `LIMITED_SEARCH` when the selected non-food project can only search this server's
-cache. The legacy warning text is kept for older clients.
+cache. The legacy warning text is kept for older clients. With `online=0`, `project=all` returns only
+the local cache across projects. `/api/catalog/product/:code` now defaults to universal routing;
+clients that need the old food-only behaviour pass `project=off`.
 
 Linking an item returns `{ item, product, filled, skipped }`. `filled` lists the first-class fields
 that were blank and are now populated (name, description, brand, image, category); `skipped` explains

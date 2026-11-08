@@ -1800,6 +1800,20 @@ describe("OpenFoodFacts links and shared catalogue", () => {
     );
   });
 
+  it("filters contribution projects with SV_OFF_CONTRIB_PROJECTS", async () => {
+    const saved = process.env.SV_OFF_CONTRIB_PROJECTS;
+    process.env.SV_OFF_CONTRIB_PROJECTS = "off";
+    try {
+      const { contributionProjectIds } = await import("../services/off/projects.js");
+      assert.deepEqual(contributionProjectIds(), ["off"]);
+      process.env.SV_OFF_CONTRIB_PROJECTS = "off,obf";
+      assert.deepEqual(contributionProjectIds(), ["off", "obf"]);
+    } finally {
+      if (saved === undefined) delete process.env.SV_OFF_CONTRIB_PROJECTS;
+      else process.env.SV_OFF_CONTRIB_PROJECTS = saved;
+    }
+  });
+
   it("treats a tampered stored session as disconnected instead of crashing", async () => {
     const row = await get<any>(
       "SELECT user_id, secret_ciphertext, secret_iv, secret_tag FROM user_off_accounts WHERE username = 'svault-test' AND project = 'off'",
@@ -1816,6 +1830,34 @@ describe("OpenFoodFacts links and shared catalogue", () => {
         "UPDATE user_off_accounts SET secret_ciphertext = ?, secret_iv = ?, secret_tag = ? WHERE username = 'svault-test' AND project = 'off'",
         [row.secret_ciphertext, row.secret_iv, row.secret_tag],
       );
+    }
+  });
+
+  it("does not store an account when Open Food Facts rejects the login", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes("/cgi/session.pl")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ status: "status not ok" }), {
+            status: 401,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+    try {
+      const rejected = await request("/api/off/accounts/opff/link", {
+        method: "POST",
+        body: { username: "rejected-user", password: "wrong-password" },
+      });
+      assert.equal(rejected.status, 401);
+      const stored = await get<any>(
+        "SELECT * FROM user_off_accounts WHERE username = 'rejected-user' AND project = 'opff'",
+      );
+      assert.equal(stored, undefined);
+    } finally {
+      globalThis.fetch = originalFetch;
     }
   });
 

@@ -51,6 +51,8 @@ export function ContributionsPage() {
   const [fields, setFields] = useState<string[]>([]);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [projectUsername, setProjectUsername] = useState("");
+  const [projectPassword, setProjectPassword] = useState("");
   const [consent, setConsent] = useState(false);
   const [priceUser, setPriceUser] = useState("");
   const [pricePassword, setPricePassword] = useState("");
@@ -72,9 +74,16 @@ export function ContributionsPage() {
   );
   const ready = candidates.filter((candidate) => candidate.ready);
   const blocked = candidates.filter((candidate) => !candidate.ready);
+  const availableProjects = (["off", "obf", "opff", "opf"] as OffProjectId[]).filter(
+    (project) => !summary?.accounts.some((entry) => entry.project === project),
+  );
+  const selectedProject = availableProjects.includes(accountProject) ? accountProject : availableProjects[0] ?? "off";
 
   const load = useCallback(async () => {
-    if (!house) return;
+    if (!house) {
+      setLoading(false);
+      return;
+    }
     setLoadError(null);
     try {
       const [accounts, candidateResult, history] = await Promise.all([
@@ -109,8 +118,8 @@ export function ContributionsPage() {
     void load();
   }, [load]);
 
-  const linkAccount = async (project: OffProjectId = "off") => {
-    if (!username.trim() || !password) {
+  const linkAccount = async (project: OffProjectId, account: string, secret: string) => {
+    if (!account.trim() || !secret) {
       toast.error(t("Enter your Open Food Facts username and password"));
       return;
     }
@@ -122,10 +131,15 @@ export function ContributionsPage() {
     try {
       await api(`/api/off/accounts/${project}/link`, {
         method: "POST",
-        body: { username: username.trim(), password, consent: true },
+        body: { username: account.trim(), password: secret, consent: true },
       });
-      setPassword("");
-      setUsername("");
+      if (project === "off") {
+        setUsername("");
+        setPassword("");
+      } else {
+        setProjectUsername("");
+        setProjectPassword("");
+      }
       toast.success(t("Open Food Facts account connected"));
       await load();
     } catch (error) {
@@ -150,7 +164,7 @@ export function ContributionsPage() {
 
   const answerQuestion = async (annotation: 1 | 0 | -1) => {
     if (!question) return;
-    // Robotoff: 1 = yes, 0 = no, -1 = skip. "Skip" below does not send anything.
+    // Robotoff: 1 = yes, 0 = no, -1 = skip. The UI sends only 1/0; "Skip" is local.
     setBusy("robotoff");
     try {
       await api("/api/off/robotoff/answers", {
@@ -424,7 +438,7 @@ export function ContributionsPage() {
                 </span>
               </label>
               <div className="sm:col-span-2">
-                <Button loading={busy === "link"} onClick={() => void linkAccount()}>
+                <Button loading={busy === "link"} onClick={() => void linkAccount("off", username, password)}>
                   {t("Connect account")}
                 </Button>
               </div>
@@ -438,10 +452,10 @@ export function ContributionsPage() {
             <div className="mt-2 grid gap-2 sm:grid-cols-3">
               <Field label={t("Project")}>
                 <Select
-                  value={accountProject}
+                  value={selectedProject}
                   onChange={(event) => setAccountProject(event.target.value as OffProjectId)}
                 >
-                  {(["off", "obf", "opff", "opf"] as OffProjectId[]).map((project) => (
+                  {availableProjects.map((project) => (
                     <option key={project} value={project}>
                       {t(offProjectLabel(project))}
                     </option>
@@ -449,19 +463,28 @@ export function ContributionsPage() {
                 </Select>
               </Field>
               <Field label={t("Username")}>
-                <Input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" />
+                <Input
+                  value={projectUsername}
+                  onChange={(event) => setProjectUsername(event.target.value)}
+                  autoComplete="username"
+                />
               </Field>
               <Field label={t("Password")}>
                 <Input
                   type="password"
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
+                  value={projectPassword}
+                  onChange={(event) => setProjectPassword(event.target.value)}
                   autoComplete="current-password"
                 />
               </Field>
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-2">
-              <Button size="sm" variant="secondary" loading={busy === "link"} onClick={() => void linkAccount(accountProject)}>
+              <Button
+                size="sm"
+                variant="secondary"
+                loading={busy === "link"}
+                onClick={() => void linkAccount(selectedProject, projectUsername, projectPassword)}
+              >
                 {t("Connect project")}
               </Button>
               {!consent && (
@@ -572,9 +595,6 @@ export function ContributionsPage() {
             </Button>
             <Button size="sm" variant="secondary" loading={busy === "robotoff"} onClick={() => void answerQuestion(0)}>
               {t("No")}
-            </Button>
-            <Button size="sm" variant="ghost" loading={busy === "robotoff"} onClick={() => void answerQuestion(-1)}>
-              {t("Not sure")}
             </Button>
             <Button size="sm" variant="ghost" onClick={() => setQuestion(null)}>
               {t("Skip")}
