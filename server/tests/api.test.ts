@@ -4723,6 +4723,15 @@ describe("insights, household split and admin console", () => {
     assert.equal(persisted.data.settings.ai.enabled, false);
     assert.equal(persisted.data.settings.notifications.digestHour, 8);
     assert.equal(persisted.data.settings.priceLookup.enabled, true);
+    const profilePatch = await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { name: "Settings merge renamed", currency: "USD" },
+    });
+    assert.equal(profilePatch.status, 200);
+    const afterProfilePatch = await request(`/api/houses/${houseId}`);
+    assert.equal(afterProfilePatch.data.name, "Settings merge renamed");
+    assert.equal(afterProfilePatch.data.currency, "USD");
+    assert.equal(afterProfilePatch.data.settings.priceLookup.enabled, true, "top-level edits preserve price lookup settings");
   });
 
   it("rate-limits authenticated offer validation requests before database reads", async () => {
@@ -5234,14 +5243,17 @@ describe("PosoKanei price lookup client", () => {
 
     const offers = await client.lookupPosoKaneiBarcode("12345678", userId);
     const cached = await client.lookupPosoKaneiBarcode("12345678", userId);
-    assert.equal(calls, 1);
-    assert.equal(rateLimitCalls, 1, "a cached result does not consume another per-user slot");
+    const otherUserOffers = await client.lookupPosoKaneiBarcode("12345678", "another-user");
+    assert.equal(calls, 2, "another user's lookup is not served from this user's cache");
+    assert.equal(rateLimitCalls, 2, "same-user cache hits do not consume slots, but another user makes a separately limited request");
     assert.deepEqual(requestOptions?.redirect, "error");
     assert.equal(offers.length, 2);
     assert.equal(offers[0].retailer, "Store A");
     assert.equal(offers[1].discount, true);
     assert.equal(offers[1].discountPercent, 20);
     assert.deepEqual(cached, offers);
+    assert.deepEqual(otherUserOffers.map(({ retailer, price }) => ({ retailer, price })),
+      offers.map(({ retailer, price }) => ({ retailer, price })));
   });
 
   it("negative-caches unknown barcodes", async () => {
@@ -5252,14 +5264,21 @@ describe("PosoKanei price lookup client", () => {
     }, () => {});
     assert.deepEqual(await client.lookupPosoKaneiBarcode("12345679", userId), []);
     assert.deepEqual(await client.lookupPosoKaneiBarcode("12345679", userId), []);
-    assert.equal(calls, 1);
+    assert.equal(calls, 1, "the unknown barcode is cached for the same user");
+    assert.deepEqual(await client.lookupPosoKaneiBarcode("12345679", "another-user"), []);
+    assert.equal(calls, 2, "negative cache entries are not shared across users");
   });
 
-  it("refunds user and global slots after an upstream failure and applies a shared cooldown", async () => {
+  it("refunds user and global slots after an upstream failure without blocking other barcodes", async () => {
     let userSlots = 0;
     let globalSlots = 0;
+    let calls = 0;
     const client = createPosoKaneiClient(
-      async () => { throw new TypeError("network unavailable"); },
+      async () => {
+        calls++;
+        if (calls === 1) throw new TypeError("network unavailable");
+        return new Response(null, { status: 404 });
+      },
       () => {
         userSlots++;
         return () => { userSlots--; };
@@ -5275,12 +5294,28 @@ describe("PosoKanei price lookup client", () => {
     );
     assert.equal(userSlots, 0);
     assert.equal(globalSlots, 0);
+    assert.deepEqual(await client.lookupPosoKaneiBarcode("12345690", "another-user"), []);
+    assert.equal(calls, 2, "a network failure cools down its barcode without pausing other barcodes");
+    assert.equal(userSlots, 1, "the successful unknown-barcode lookup retains its user slot");
+    assert.equal(globalSlots, 1, "the successful unknown-barcode lookup retains its global slot");
+  });
+
+  it("applies a short per-barcode cooldown after an upstream 500", async () => {
+    let calls = 0;
+    const client = createPosoKaneiClient(async () => {
+      calls++;
+      return calls === 1
+        ? new Response("upstream error", { status: 500 })
+        : new Response(null, { status: 404 });
+    }, () => {});
+    await assert.rejects(client.lookupPosoKaneiBarcode("12345672", userId), PosoKaneiUnavailableError);
+    assert.deepEqual(await client.lookupPosoKaneiBarcode("12345673", userId), []);
     await assert.rejects(
-      client.lookupPosoKaneiBarcode("12345690", "another-user"),
-      (error: unknown) => error instanceof PosoKaneiUnavailableError && error.retryAfterSeconds != null,
+      client.lookupPosoKaneiBarcode("12345672", "another-user"),
+      (error: unknown) => error instanceof PosoKaneiUnavailableError &&
+        Number(error.retryAfterSeconds) > 0 && Number(error.retryAfterSeconds) <= 15,
     );
-    assert.equal(userSlots, 0, "requests rejected before upstream access do not consume the user quota");
-    assert.equal(globalSlots, 0);
+    assert.equal(calls, 2, "the failed barcode is cooled down without blocking different barcodes");
   });
 
   it("does not mistake retry metadata on a non-429 failure for an upstream 429", async () => {
@@ -5301,25 +5336,28 @@ describe("PosoKanei price lookup client", () => {
     assert.equal(userSlots, 0, "non-429 failures refund the user reservation even if they carry retry metadata");
     assert.equal(globalSlots, 0, "non-429 failures refund the global reservation even if they carry retry metadata");
     await assert.rejects(
-      client.lookupPosoKaneiBarcode("12345679", "another-user"),
+      client.lookupPosoKaneiBarcode("12345678", "another-user"),
       (error: unknown) => error instanceof PosoKaneiUnavailableError &&
         Number(error.retryAfterSeconds) > 0 && Number(error.retryAfterSeconds) <= 15,
     );
   });
 
-  it("uses the short shared cooldown after a malformed successful response", async () => {
+  it("uses the short per-barcode cooldown after a malformed successful response", async () => {
     let calls = 0;
     const client = createPosoKaneiClient(async () => {
       calls++;
-      return new Response(JSON.stringify({ malformed: true }), { headers: { "content-type": "application/json" } });
+      return calls === 1
+        ? new Response(JSON.stringify({ malformed: true }), { headers: { "content-type": "application/json" } })
+        : new Response(null, { status: 404 });
     }, () => {});
     await assert.rejects(client.lookupPosoKaneiBarcode("12345701", userId), PosoKaneiUnavailableError);
     await assert.rejects(
-      client.lookupPosoKaneiBarcode("12345702", "another-user"),
+      client.lookupPosoKaneiBarcode("12345701", "another-user"),
       (error: unknown) => error instanceof PosoKaneiUnavailableError &&
         Number(error.retryAfterSeconds) > 0 && Number(error.retryAfterSeconds) <= 15,
     );
-    assert.equal(calls, 1, "malformed data pauses requests across barcodes and users for only 15 seconds");
+    assert.deepEqual(await client.lookupPosoKaneiBarcode("12345702", "another-user"), []);
+    assert.equal(calls, 2, "malformed data pauses only its barcode for 15 seconds");
   });
 
   it("charges the 429 attempt and shares its cooldown across barcodes and users", async () => {

@@ -166,15 +166,26 @@ export function createPosoKaneiClient(
   const cache = new Map<string, CachedLookup>();
   const inFlight = new Map<string, Promise<ExternalShoppingOffer[]>>();
   let upstreamBlockedUntil = 0;
+  const barcodeBlockedUntil = new Map<string, number>();
 
-  const cacheResult = (code: string, entry: CachedLookup) => {
-    cache.delete(code);
-    cache.set(code, entry);
+  const cacheResult = (key: string, entry: CachedLookup) => {
+    cache.delete(key);
+    cache.set(key, entry);
     if (cache.size <= 500) return;
     const now = Date.now();
     for (const [key, value] of cache) if (value.expiresAt <= now) cache.delete(key);
     // FIFO by write time; cache reads do not refresh eviction order.
     while (cache.size > 500) cache.delete(cache.keys().next().value!);
+  };
+
+  const pauseBarcode = (code: string, until: number) => {
+    const now = Date.now();
+    for (const [key, expiresAt] of barcodeBlockedUntil) {
+      if (expiresAt <= now) barcodeBlockedUntil.delete(key);
+    }
+    barcodeBlockedUntil.delete(code);
+    barcodeBlockedUntil.set(code, until);
+    while (barcodeBlockedUntil.size > 500) barcodeBlockedUntil.delete(barcodeBlockedUntil.keys().next().value!);
   };
 
   /** Fetch a product only by an exact barcode. The destination is a fixed,
@@ -183,7 +194,8 @@ export function createPosoKaneiClient(
     const code = barcode.trim();
     if (!/^\d{8,14}$/.test(code)) return [];
     const now = Date.now();
-    const cached = cache.get(code);
+    const requestKey = JSON.stringify([userId, code]);
+    const cached = cache.get(requestKey);
     if (cached && cached.expiresAt > now) return cached.offers;
     if (upstreamBlockedUntil > now) {
       throw new PosoKaneiUnavailableError(
@@ -191,9 +203,16 @@ export function createPosoKaneiClient(
         Math.ceil((upstreamBlockedUntil - now) / 1000),
       );
     }
+    const barcodeWaitUntil = barcodeBlockedUntil.get(code) ?? 0;
+    if (barcodeWaitUntil > now) {
+      throw new PosoKaneiUnavailableError(
+        "PosoKanei could not complete this barcode lookup. Try again later.",
+        Math.ceil((barcodeWaitUntil - now) / 1000),
+      );
+    }
+    if (barcodeWaitUntil) barcodeBlockedUntil.delete(code);
     // Share only within one user so another account cannot get a lookup result
     // without reserving its own per-user request slot.
-    const requestKey = JSON.stringify([userId, code]);
     const existing = inFlight.get(requestKey);
     if (existing) return existing;
 
@@ -224,7 +243,7 @@ export function createPosoKaneiClient(
         if (response.status === 404) {
           const offers: ExternalShoppingOffer[] = [];
           await cancelBody(response);
-          cacheResult(code, { expiresAt: Date.now() + 10 * 60_000, offers });
+          cacheResult(requestKey, { expiresAt: Date.now() + 10 * 60_000, offers });
           return offers;
         }
         if (response.status === 429) {
@@ -252,7 +271,7 @@ export function createPosoKaneiClient(
         }
         const fetchedAt = new Date().toISOString();
         const offers = parseOffers(payload, fetchedAt);
-        cacheResult(code, { expiresAt: Date.now() + CACHE_MS, offers });
+        cacheResult(requestKey, { expiresAt: Date.now() + CACHE_MS, offers });
         return offers;
       } catch (error) {
         const normalizedError = error instanceof PosoKaneiUnavailableError
@@ -261,7 +280,7 @@ export function createPosoKaneiClient(
         if (!upstreamRateLimited) {
           releaseUserLimit?.();
           releaseGlobalLimit?.();
-          upstreamBlockedUntil = Math.max(upstreamBlockedUntil, Date.now() + 15_000);
+          pauseBarcode(code, Date.now() + 15_000);
         }
         throw normalizedError;
       }
