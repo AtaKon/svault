@@ -248,6 +248,25 @@ CREATE TABLE IF NOT EXISTS receipts (
 );
 CREATE INDEX IF NOT EXISTS receipts_house ON receipts(house_id, created_at);
 
+CREATE TABLE IF NOT EXISTS bills (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  bill_type TEXT NOT NULL DEFAULT 'other' CHECK (bill_type IN ('electricity', 'water', 'natural_gas', 'heating_oil', 'internet_telecom', 'rent', 'building_fees', 'municipal_fees', 'insurance', 'other')),
+  category TEXT NOT NULL DEFAULT 'personal',
+  ledger_confirmed INTEGER NOT NULL DEFAULT 0,
+  amount DOUBLE PRECISION NOT NULL,
+  currency TEXT NOT NULL,
+  due_date TEXT,
+  paid_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  split_with TEXT NOT NULL DEFAULT '[]',
+  document TEXT,
+  notes TEXT,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS bills_house ON bills(house_id, due_date, created_at);
+
 CREATE TABLE IF NOT EXISTS stock_lots (
   id TEXT PRIMARY KEY,
   item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
@@ -626,6 +645,28 @@ export const POSTGRES_MIGRATIONS: string[] = [
   "CREATE INDEX IF NOT EXISTS catalog_mappings_house ON catalog_mappings(house_id)",
   "ALTER TABLE receipts ADD COLUMN IF NOT EXISTS paid_by TEXT",
   "ALTER TABLE receipts ADD COLUMN IF NOT EXISTS split_with TEXT NOT NULL DEFAULT '[]'",
+  // POSTGRES_SCHEMA creates bills on fresh installs; this atomically upgrades
+  // an existing bills table created before ledger_confirmed was introduced.
+  `DO $$
+  BEGIN
+    IF to_regclass('bills') IS NOT NULL THEN
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = current_schema() AND table_name = 'bills' AND column_name = 'ledger_confirmed'
+      ) THEN
+        -- Serialize concurrent startup migrations, then recheck in case another
+        -- process added the column while this one waited for the table lock.
+        LOCK TABLE bills IN ACCESS EXCLUSIVE MODE;
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = current_schema() AND table_name = 'bills' AND column_name = 'ledger_confirmed'
+        ) THEN
+          ALTER TABLE bills ADD COLUMN ledger_confirmed INTEGER NOT NULL DEFAULT 0;
+          UPDATE bills SET ledger_confirmed = 1 WHERE category = 'to_split';
+        END IF;
+      END IF;
+    END IF;
+  END $$`,
 ];
 
 /**
@@ -651,6 +692,7 @@ export const POSTGRES_TABLE_ORDER = [
   "items",
   "item_barcodes",
   "receipts",
+  "bills",
   "stock_lots",
   "stock_movements",
   "receipt_lines",
