@@ -1,5 +1,7 @@
 // Shared domain types used by both the API and the web client.
 
+import type { BillType } from "./bill-types.js";
+
 export type Role = "owner" | "admin" | "member" | "viewer";
 
 export interface User {
@@ -1030,6 +1032,21 @@ export interface HouseholdReceipt {
   payerName: string | null;
   splitWith: string[];
   participantNames: string[];
+}
+
+export interface UtilityBill {
+  id: string;
+  name: string;
+  billType: BillType;
+  category: "to_split" | "personal";
+  amount: number;
+  currency: string;
+  dueDate: string | null;
+  paidBy: string | null;
+  splitWith: string[];
+  document: string | null;
+  notes: string | null;
+  createdAt: string;
 }
 
 export interface UseItUpLot {
