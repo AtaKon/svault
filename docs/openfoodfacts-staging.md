@@ -190,8 +190,18 @@ curl -sS -X POST 'https://api.folksonomy.openfoodfacts.org/product' \
 
 The API is experimental; do not use it for production data until it is stable.
 
-## 10. Enable SVault writes
+## Review map
 
+When reviewing the implementation, start with these files:
+
+- `server/services/off/auth.ts`, `secrets.ts` — account link, encrypted sessions/tokens.
+- `server/services/off/contributions.ts`, `writer.ts` — queue, retries, allow-listed payloads.
+- `server/services/off/eligibility.ts`, `prices.ts`, `reports.ts`, `robotoff.ts`, `folksonomy.ts` — candidate detection and secondary services.
+- `server/database/sqlite.ts`, `server/database/postgres-schema.ts` — `(project, code)` cache migration and contribution tables.
+- `server/routes/off.ts` — API surface and consent gates.
+- `client/pages/ContributionsPage.tsx` — contribution review, account links, bulk and errors.
+
+## 10. Enable SVault writes
 Only after the staging checks pass:
 
 ```bash
