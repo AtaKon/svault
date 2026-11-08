@@ -185,12 +185,13 @@ billRoutes.post("/:houseId/bills", requireHouseBillMember, pdfUpload.single("doc
       discardUploads(req);
     } else if (filename && id) {
       // Roll back the row if a post-insert read/serialization failed. If another
-      // request already removed or changed it, this conditional delete is safe.
+      // request already changed it, keep the file while any bill still refers to it.
       try {
         await run("DELETE FROM bills WHERE id = ? AND document = ?", [id, filename]);
-        discardUploads(req);
+        const stillReferenced = await get("SELECT 1 FROM bills WHERE document = ? LIMIT 1", [filename]);
+        if (!stillReferenced) discardUploads(req);
       } catch {
-        // Keep the file if the database cannot confirm the row was rolled back.
+        // Keep the file if the database cannot confirm that no row refers to it.
       }
     }
     throw error;
@@ -205,7 +206,7 @@ singleBillRoutes.patch("/:billId", handler(async (req, res) => {
     throw new ApiError(400, "Confirm this bill is not also recorded as a purchase receipt");
   }
   const ledgerConfirmed = category === "to_split"
-    ? (current.category === "to_split" ? Boolean(current.ledger_confirmed) : body.ledgerConfirmed === true)
+    ? (body.ledgerConfirmed === undefined ? Boolean(current.ledger_confirmed) : body.ledgerConfirmed)
     : false;
   let splitWith = category === "to_split"
     ? (body.splitWith === undefined ? parseJson<string[]>(current.split_with, []) : splitList(body.splitWith))

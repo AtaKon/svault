@@ -662,6 +662,8 @@ export const POSTGRES_MIGRATIONS: string[] = [
     created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
     created_at TEXT NOT NULL
   )`,
+  // This single PostgreSQL statement is atomic. The prior CREATE TABLE is a
+  // no-op for an existing bills table; this block is the idempotent upgrade.
   `DO $$
   BEGIN
     IF NOT EXISTS (

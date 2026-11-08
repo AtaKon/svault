@@ -4567,6 +4567,27 @@ describe("insights, household split and admin console", () => {
       await run("DROP TRIGGER reassign_bill_after_insert");
     }
 
+    const beforeRetainedReferenceFailure = files();
+    await run(`CREATE TRIGGER rename_bill_after_insert AFTER INSERT ON bills
+      WHEN NEW.name = 'Retained reference cleanup fixture'
+      BEGIN UPDATE bills SET id = 'bil_retained_reference_fixture' WHERE id = NEW.id; END`);
+    let retainedDocument: string | undefined;
+    try {
+      const failedRead = await request(`/api/houses/${billHouse}/bills`, {
+        method: "POST",
+        body: form(pdf, "Retained reference cleanup fixture"),
+      });
+      assert.equal(failedRead.status, 404);
+      retainedDocument = (await get<{ document: string }>("SELECT document FROM bills WHERE id = ?", ["bil_retained_reference_fixture"]))?.document;
+      assert.ok(retainedDocument, "the adversarial trigger keeps the uploaded document referenced");
+      assert.ok(files().includes(retainedDocument), "cleanup keeps a file while a bill still references it");
+    } finally {
+      await run("DROP TRIGGER rename_bill_after_insert");
+      await run("DELETE FROM bills WHERE id = ?", ["bil_retained_reference_fixture"]);
+      if (retainedDocument) rmSync(path.join(billDir, retainedDocument), { force: true });
+    }
+    assert.deepEqual(files(), beforeRetainedReferenceFailure);
+
     const beforeFailedInsert = files();
     await run(`CREATE TRIGGER reject_bill_insert BEFORE INSERT ON bills
       WHEN NEW.name = 'Rejected insert cleanup fixture'
@@ -4769,7 +4790,31 @@ describe("insights, household split and admin console", () => {
     assert.equal(unconfirmedBillLedger.data.balances.find((row: any) => row.userId === ownerId).balance, 0);
     assert.equal(unconfirmedBillLedger.data.balances.find((row: any) => row.userId === secondUserId).balance, 0,
       "the ledger excludes any shared bill without persisted confirmation");
-    await run("UPDATE bills SET ledger_confirmed = 1 WHERE id = ?", [accepted.data.id]);
+    const reconfirmed = await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { ledgerConfirmed: true },
+    });
+    assert.equal(reconfirmed.status, 200);
+    assert.equal(Number((await get<{ ledger_confirmed: number }>("SELECT ledger_confirmed FROM bills WHERE id = ?", [accepted.data.id]))?.ledger_confirmed), 1,
+      "PATCH can confirm an already-shared bill that was previously excluded from the ledger");
+    const reconfirmedLedger = await request(`/api/houses/${billHouse}/insights/household`);
+    assert.equal(reconfirmedLedger.data.balances.find((row: any) => row.userId === ownerId).balance, 5);
+    assert.equal(reconfirmedLedger.data.balances.find((row: any) => row.userId === secondUserId).balance, -5);
+    const unconfirmedAgain = await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { ledgerConfirmed: false },
+    });
+    assert.equal(unconfirmedAgain.status, 200);
+    assert.equal(Number((await get<{ ledger_confirmed: number }>("SELECT ledger_confirmed FROM bills WHERE id = ?", [accepted.data.id]))?.ledger_confirmed), 0,
+      "PATCH can explicitly remove an existing shared bill from the ledger");
+    const stillUnconfirmed = await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { paidBy: ownerId },
+    });
+    assert.equal(stillUnconfirmed.status, 200);
+    assert.equal(Number((await get<{ ledger_confirmed: number }>("SELECT ledger_confirmed FROM bills WHERE id = ?", [accepted.data.id]))?.ledger_confirmed), 0,
+      "omitting ledgerConfirmed preserves its current value");
+    await request(`/api/bills/${accepted.data.id}`, { method: "PATCH", body: { ledgerConfirmed: true } });
 
     const documentResponse = await fetch(base + accepted.data.document, { headers: { cookie } });
     assert.equal(documentResponse.status, 200);

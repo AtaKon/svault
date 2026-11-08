@@ -42,6 +42,8 @@ import { pruneAiCallLogs } from "./services/ai-logs.js";
 import { sweepOrphanUploads } from "./services/upload-cleanup.js";
 import { initDb, closeDb, databaseKind } from "./db.js";
 
+// Apply every schema migration before creating or serving the application.
+// Insights may then safely query the bills table without a mid-migration gap.
 await initDb();
 ensureDirs();
 await seedVendorCatalog();
