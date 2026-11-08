@@ -786,9 +786,10 @@ Neither is written to purchase history. Each user's lookup requests, including c
 joining an in-flight lookup, are limited to two per 15 minutes. Actual upstream requests are limited
 to three instance-wide per 15 minutes; concurrent requests for the same barcode share one upstream
 fetch, including across users, because the result contains public price data only. Failed upstream
-requests refund their rate-limit slots and pause further lookups for one minute; upstream 429 responses
-use the supplied retry delay instead. Requests rejected by the shared cooldown or instance-wide quota
-do not consume a per-user slot.
+requests other than 429 refund their rate-limit slots and pause further lookups for one minute. An
+upstream 429 consumes both slots because a request reached the upstream, then pauses every barcode
+lookup instance-wide for the supplied retry delay. Requests rejected by the shared cooldown or
+instance-wide quota do not consume a per-user slot.
 PosoKanei does not publish an API contract, so responses may change or be unavailable.
 
 Receipts accept `paidBy` and `splitWith` on import, and `PATCH /api/receipts/:receiptId` changes them

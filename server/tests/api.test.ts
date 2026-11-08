@@ -4669,6 +4669,13 @@ describe("insights, household split and admin console", () => {
       400,
       "price lookup settings reject unknown fields",
     );
+    for (const invalidPriceLookup of [null, { enabled: "yes" }]) {
+      const invalid = await request(`/api/houses/${insightHouse}`, {
+        method: "PATCH",
+        body: { settings: { priceLookup: invalidPriceLookup } },
+      });
+      assert.equal(invalid.status, 400, JSON.stringify(invalid.data));
+    }
 
     const disabledAgain = await request(`/api/houses/${insightHouse}`, {
       method: "PATCH",
@@ -4683,6 +4690,30 @@ describe("insights, household split and admin console", () => {
     });
     assert.equal(checked.status, 200);
     assert.equal((await request(path)).status, 404, "checked lines cannot trigger lookups");
+  });
+
+  it("preserves AI and notification settings when price lookup settings are saved", async () => {
+    const created = await request("/api/houses", {
+      method: "POST",
+      body: { name: "Settings merge test", currency: "EUR" },
+    });
+    assert.equal(created.status, 201);
+    const houseId = created.data.id;
+    const initial = await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { enabled: false, model: "keep-model" }, notifications: { enabled: false, digestHour: 8 } } },
+    });
+    assert.equal(initial.status, 200);
+    const pricePatch = await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { priceLookup: { enabled: true } } },
+    });
+    assert.equal(pricePatch.status, 200);
+    const persisted = await request(`/api/houses/${houseId}`);
+    assert.equal(persisted.data.settings.ai.model, "keep-model");
+    assert.equal(persisted.data.settings.ai.enabled, false);
+    assert.equal(persisted.data.settings.notifications.digestHour, 8);
+    assert.equal(persisted.data.settings.priceLookup.enabled, true);
   });
 
   it("returns the queried barcode and propagates upstream Retry-After from the route", async () => {
@@ -5183,7 +5214,7 @@ describe("PosoKanei price lookup client", () => {
     assert.equal(globalSlots, 0);
   });
 
-  it("counts a 429 attempt once, refunds it, and blocks later requests before rate limiting", async () => {
+  it("charges the 429 attempt and shares its cooldown across barcodes and users", async () => {
     let userReservations = 0;
     let globalReservations = 0;
     let fetches = 0;
@@ -5202,14 +5233,15 @@ describe("PosoKanei price lookup client", () => {
       },
     );
     await assert.rejects(client.lookupPosoKaneiBarcode("12345691", userId), PosoKaneiUnavailableError);
-    assert.equal(userReservations, 0, "the upstream 429 attempt refunds the failed request's user slot");
-    assert.equal(globalReservations, 0);
+    assert.equal(userReservations, 1, "a request that reached the upstream consumes the user's slot");
+    assert.equal(globalReservations, 1, "a request that reached the upstream consumes the global slot");
     await assert.rejects(
-      client.lookupPosoKaneiBarcode("12345692", userId),
+      client.lookupPosoKaneiBarcode("12345692", "another-user"),
       (error: unknown) => error instanceof PosoKaneiUnavailableError && error.retryAfterSeconds === 120,
     );
     assert.equal(fetches, 1);
-    assert.equal(userReservations, 0, "the request rejected during upstream cooldown refunds the user slot");
+    assert.equal(userReservations, 1, "the second user's cooldown rejection refunds its reservation");
+    assert.equal(globalReservations, 1, "the cooldown rejection does not reserve another global slot");
   });
 
   it("maps upstream throttling to a 502 with Retry-After metadata", async () => {

@@ -245,12 +245,14 @@ export function createPosoKaneiClient(
         cacheResult(code, { expiresAt: Date.now() + CACHE_MS, offers });
         return offers;
       } catch (error) {
-        releaseUserLimit?.();
-        releaseGlobalLimit?.();
         const normalizedError = error instanceof PosoKaneiUnavailableError
           ? error
           : new PosoKaneiUnavailableError("PosoKanei could not be reached. Try again later.");
-        if (!normalizedError.retryAfterSeconds) {
+        // A 429 request reached the upstream, so keep both request reservations.
+        const upstreamRateLimited = normalizedError.retryAfterSeconds != null;
+        if (!upstreamRateLimited) {
+          releaseUserLimit?.();
+          releaseGlobalLimit?.();
           upstreamBlockedUntil = Math.max(upstreamBlockedUntil, Date.now() + 60_000);
         }
         throw normalizedError;
