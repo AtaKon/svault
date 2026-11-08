@@ -23,6 +23,7 @@ const MARKER = "<!-- svault-ai-review -->";
 const MAX_DIFF_CHARS = 60_000;
 const CHUNK_DIFF_CHARS = 45_000;
 const MAX_CHUNKS = 20;
+const MAX_TOTAL_DIFF_CHARS = 600_000;
 const RETRY_DIFF_CHARS = 30_000;
 const MAX_COMMENT_CHARS = 60_000;
 
@@ -171,7 +172,7 @@ Concrete tests or manual checks that are missing.`;
 
 ${header}
 
-Only review this part; other parts are reviewed separately. Do not report the diff as truncated. Cover every file visible here.
+Only review this part; other parts are reviewed separately. If a part ends with a continuation marker, the same file continues in the next part; do not report it as truncated. Cover every file visible here.
 Diff part ${index}:
 \`\`\`diff
 ${chunk}
@@ -304,7 +305,8 @@ async function reviewCall(prompt, budget) {
     return await requestReview(prompt, budget, reasoning);
   } catch (error) {
     // Only a rejection of the reasoning switch itself is worth a retry; any other
-    // 400 (unknown model, bad request) should fail with its own message.
+    // 400 (unknown model, bad request) should fail with its own message. If the
+    // model rejects thinking-off, all later calls use low effort intentionally.
     const rejectedReasoning = reasoning?.enabled === false && error.status === 400 && /reason|think/i.test(error.message);
     if (!rejectedReasoning) throw error;
     console.log(`The model cannot turn thinking off; asking for low effort instead. Original error: ${error.message}`);
@@ -317,6 +319,13 @@ let review = "";
 if (isPullRequest && fullDiff.length > MAX_DIFF_CHARS) {
   const chunks = splitDiff(fullDiff, CHUNK_DIFF_CHARS);
   const parts = [];
+  const tooLarge = fullDiff.length > MAX_TOTAL_DIFF_CHARS;
+  if (tooLarge) {
+    parts.push({
+      index: "size",
+      text: `### Blocking\n- The diff is ${fullDiff.length} characters, above the ${MAX_TOTAL_DIFF_CHARS}-character review budget. Split the PR before merging.\n`,
+    });
+  }
   if (chunks.length > MAX_CHUNKS) {
     parts.push({
       index: "overflow",
@@ -324,7 +333,7 @@ if (isPullRequest && fullDiff.length > MAX_DIFF_CHARS) {
     });
   }
   let consecutiveFailures = 0;
-  for (let index = 0; index < Math.min(chunks.length, MAX_CHUNKS); index++) {
+  for (let index = 0; index < (tooLarge ? 0 : Math.min(chunks.length, MAX_CHUNKS)); index++) {
     if (consecutiveFailures >= 3) {
       parts.push({
         index: "stopped",
@@ -357,6 +366,7 @@ if (isPullRequest && fullDiff.length > MAX_DIFF_CHARS) {
         index: index + 1,
         text: `### Blocking\n- Reviewer returned no answer for part ${index + 1}.\n`,
       });
+      continue;
     }
   }
   review = mergeChunkReviews(parts);

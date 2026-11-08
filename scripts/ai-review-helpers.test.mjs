@@ -25,12 +25,29 @@ test("splitDiff preserves every file header when splitting", () => {
   assert.equal(chunks.join("").match(/diff --git a\/b\.ts/g)?.length, 1);
 });
 
-test("splitDiff marks oversized single-file continuations and cuts on lines", () => {
-  const diff = `diff --git a/big.ts b/big.ts\n${Array.from({ length: 300 }, (_, i) => `+line ${i}`).join("\n")}`;
+test("splitDiff marks oversized single-file continuations and repeats file context", () => {
+  const diff = `diff --git a/big.ts b/big.ts\nindex 111..222 100644\n--- a/big.ts\n+++ b/big.ts\n@@ -1 +1 @@\n${Array.from({ length: 300 }, (_, i) => `+line ${i}`).join("\n")}`;
   const chunks = splitDiff(diff, 1_000);
   assert.ok(chunks.length > 1);
   for (const chunk of chunks.slice(0, -1)) assert.match(chunk, /\[Diff part continues in the next chunk\]/);
-  assert.ok(chunks.every((chunk) => !/\+\s*$/.test(chunk) || chunk.includes("continues")));
+  for (const chunk of chunks.slice(1)) assert.match(chunk, /^diff --git a\/big\.ts/);
+});
+
+test("mergeChunkReviews keeps prose blocking findings", () => {
+  const review = mergeChunkReviews([
+    {
+      index: 1,
+      text: "### Blocking\nThis change drops rows during migration without a backup.\n### Non-blocking\nNone.\n### Tests\nNone.",
+    },
+  ]);
+  assert.match(review, /Needs changes/);
+  assert.match(review, /drops rows during migration/);
+});
+
+test("clipComment handles text without a newline before the limit", () => {
+  const clipped = clipComment("x".repeat(500), 100);
+  assert.match(clipped, /truncated before 100 characters/);
+  assert.ok(clipped.length < 220);
 });
 
 test("mergeChunkReviews says ready when every part is clean", () => {

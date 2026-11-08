@@ -24,14 +24,20 @@ export function splitDiff(diff, limit) {
     if (!section.trim()) continue;
     if (section.length > limit) {
       flush();
+      const lines = section.split("\n");
+      const hunk = lines.findIndex((line) => line.startsWith("@@"));
+      const header = `${(hunk > 0 ? lines.slice(0, hunk) : [lines[0]]).join("\n")}\n`;
+      const reserve = header.length + 48;
       let rest = section;
+      let first = true;
       while (rest.length > limit) {
-        const end = safeCut(rest, limit);
-        const cut = rest.slice(0, end).replace(/\n+$/, "");
-        chunks.push(`${cut}\n\n[Diff part continues in the next chunk]\n`);
+        const end = safeCut(rest, Math.max(limit - reserve, 1_000));
+        const piece = rest.slice(0, end).replace(/\n+$/, "");
+        chunks.push(`${first ? "" : header}${piece}\n\n[Diff part continues in the next chunk]\n`);
         rest = rest.slice(end).replace(/^\n+/, "");
+        first = false;
       }
-      if (rest.trim()) chunks.push(rest);
+      if (rest.trim()) chunks.push(`${first ? "" : header}${rest}`);
       continue;
     }
     if (current && current.length + section.length > limit) flush();
@@ -69,6 +75,15 @@ export function mergeChunkReviews(parts) {
       (line) => !/^[-*]\s*(none|no non-blocking issues)\.?$/i.test(line),
     );
     const partTests = bullets(testsText).filter((line) => !/^[-*]\s*none\.?$/i.test(line));
+    if (!partBlocking.length && blockingText && !/^no blocking issues found\.?$/i.test(blockingText)) {
+      partBlocking.push(`- ${blockingText.slice(0, 2_000)}`);
+    }
+    if (!partNonBlocking.length && nonBlockingText && !/^none\.?$/i.test(nonBlockingText)) {
+      partNonBlocking.push(`- ${nonBlockingText.slice(0, 2_000)}`);
+    }
+    if (!partTests.length && testsText && !/^none\.?$/i.test(testsText)) {
+      partTests.push(`- ${testsText.slice(0, 2_000)}`);
+    }
     if (partBlocking.length) blocking.push(...partBlocking.map((line) => `[part ${part.index}] ${line}`));
     if (partNonBlocking.length) nonBlocking.push(...partNonBlocking.map((line) => `[part ${part.index}] ${line}`));
     if (partTests.length) tests.push(...partTests.map((line) => `[part ${part.index}] ${line}`));
@@ -97,9 +112,12 @@ ${testLines.length ? testLines.join("\n") : "None."}`;
 export function clipComment(text, limit) {
   if (text.length <= limit) return text;
   let cut = text.lastIndexOf("\n", Math.max(0, limit - 80));
-  if (cut < 1000) cut = Math.max(0, limit - 80);
+  if (cut < 1000) {
+    const space = text.lastIndexOf(" ", Math.max(0, limit - 80));
+    cut = space > 1000 ? space : Math.max(0, limit - 80);
+  }
   let out = text.slice(0, cut);
   const fences = (out.match(/^```/gm) || []).length;
   if (fences % 2) out += "\n```";
-  return `${out}\n\n[Review comment truncated at ${limit} characters]`;
+  return `${out}\n\n[Review comment truncated before ${limit} characters]`;
 }
