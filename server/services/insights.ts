@@ -440,6 +440,27 @@ export async function householdInsight(houseId: string): Promise<{
     }
   }
 
+  // Utility bills contribute to the household ledger only when explicitly
+  // categorised as shared. Personal bills remain visible in Bills & splitting.
+  const bills = await all<any>(
+    `SELECT amount, paid_by, split_with FROM bills
+     WHERE house_id = ? AND category = 'to_split' ORDER BY created_at`,
+    [houseId],
+  );
+  for (const bill of bills) {
+    const total = money(bill.amount);
+    const payer = bill.paid_by && memberIds.has(bill.paid_by) ? bill.paid_by : null;
+    const participants = parseJson<unknown>(bill.split_with, []);
+    const splitWith = (Array.isArray(participants) ? participants : []).filter(
+      (id): id is string => typeof id === "string" && memberIds.has(id),
+    );
+    if (payer) paid.set(payer, (paid.get(payer) ?? 0) + total);
+    if (splitWith.length) {
+      const share = total / splitWith.length;
+      for (const id of splitWith) owed.set(id, (owed.get(id) ?? 0) + share);
+    }
+  }
+
   const balances: HouseholdBalance[] = members.map((member) => {
     const memberPaid = money(paid.get(member.id) ?? 0);
     const memberShare = money(owed.get(member.id) ?? 0);

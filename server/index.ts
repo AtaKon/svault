@@ -14,6 +14,7 @@ import { oidcRoutes } from "./routes/oidc.js";
 import { houseRoutes } from "./routes/houses.js";
 import { inventoryRoutes, itemRoutes } from "./routes/inventory.js";
 import { receiptRoutes, singleReceiptRoutes } from "./routes/receipts.js";
+import { billRoutes, singleBillRoutes } from "./routes/bills.js";
 import { receiptTemplateRoutes } from "./routes/receipt-templates.js";
 import { recipeRoutes, singleRecipeRoutes } from "./routes/recipes.js";
 import { ideaRoutes, singleIdeaRoutes } from "./routes/ideas.js";
@@ -225,6 +226,7 @@ app.use("/api/houses", houseRoutes);
 app.use("/api/houses", aiLogRoutes);
 app.use("/api/houses", inventoryRoutes);
 app.use("/api/houses", receiptRoutes);
+app.use("/api/houses", billRoutes);
 app.use("/api/houses", receiptTemplateRoutes);
 app.use("/api/houses", recipeRoutes);
 app.use("/api/houses", ideaRoutes);
@@ -245,6 +247,7 @@ app.use("/api/catalog", catalogRoutes);
 app.use("/api/items", itemRoutes);
 app.use("/api/recipes", singleRecipeRoutes);
 app.use("/api/receipts", singleReceiptRoutes);
+app.use("/api/bills", singleBillRoutes);
 app.use("/api/ideas", singleIdeaRoutes);
 app.use("/api/photos", singlePhotoRoutes);
 
@@ -256,6 +259,10 @@ app.get("/api/health", (_req, res) => {
    down so nothing under /uploads can run script, even if a non-image slipped
    in through an older version: no sniffing, a sandboxing CSP, and anything
    that is not a known image extension is forced to download. */
+// Bill PDFs are served through the authenticated /api/bills/:id/document route.
+// Block direct static paths so an uploaded household document cannot be read
+// by someone who only knows its generated filename.
+app.use("/uploads/bills", (_req, _res, next) => next(new ApiError(404, "Not found")));
 app.use(
   "/uploads",
   express.static(UPLOAD_DIR, {

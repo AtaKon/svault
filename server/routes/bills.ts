@@ -1,0 +1,166 @@
+import { Router } from "express";
+import multer from "multer";
+import fs from "node:fs";
+import path from "node:path";
+import { randomBytes } from "node:crypto";
+import { z } from "zod";
+import { all, get, newId, now, parseJson, run } from "../db.js";
+import { memberRole, roleAtLeast, requireAuth } from "../auth.js";
+import { ApiError, handler, parseBody, requireHouse } from "../http.js";
+import { MAX_UPLOAD_BYTES, UPLOAD_DIR } from "../config.js";
+import { accessGuard, uploadPath, discardUploads } from "../upload.js";
+
+export const billRoutes = Router();
+export const singleBillRoutes = Router();
+billRoutes.use(requireAuth);
+singleBillRoutes.use(requireAuth);
+
+const billDir = path.join(UPLOAD_DIR, "bills");
+fs.mkdirSync(billDir, { recursive: true });
+const pdfUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, billDir),
+    filename: (_req, _file, cb) => cb(null, `${Date.now()}-${randomBytes(8).toString("hex")}.pdf`),
+  }),
+  limits: { fileSize: MAX_UPLOAD_BYTES, files: 1 },
+  fileFilter: (_req, file, cb) => file.mimetype === "application/pdf"
+    ? cb(null, true)
+    : cb(new ApiError(400, "Upload a PDF bill")),
+});
+const verifyPdf = (req: any, _res: any, next: (error?: unknown) => void) => {
+  if (!req.file) return next();
+  const fd = fs.openSync(req.file.path, "r");
+  const signature = Buffer.alloc(5);
+  try { fs.readSync(fd, signature, 0, 5, 0); } finally { fs.closeSync(fd); }
+  if (signature.toString("ascii") !== "%PDF-") {
+    discardUploads(req);
+    return next(new ApiError(400, "That file is not a valid PDF"));
+  }
+  next();
+};
+
+const input = z.object({
+  name: z.string().trim().min(1).max(120),
+  billType: z.enum(["electricity", "water", "natural_gas", "heating_oil", "internet_telecom", "rent", "building_fees", "municipal_fees", "insurance", "other"]).default("other"),
+  category: z.enum(["to_split", "personal"]).default("personal"),
+  amount: z.coerce.number().finite().positive().max(1_000_000_000),
+  currency: z.string().trim().length(3).default("EUR"),
+  dueDate: z.string().trim().max(10).nullable().optional(),
+  paidBy: z.string().max(60).nullable().optional(),
+  splitWith: z.union([z.string(), z.array(z.string())]).optional(),
+  notes: z.string().trim().max(1000).nullable().optional(),
+});
+
+function serialize(row: any) {
+  return {
+    id: row.id,
+    name: row.name,
+    billType: row.bill_type ?? "other",
+    category: row.category,
+    amount: Number(row.amount),
+    currency: row.currency,
+    dueDate: row.due_date ?? null,
+    paidBy: row.paid_by ?? null,
+    splitWith: parseJson<string[]>(row.split_with, []),
+    document: row.document ? `/api/bills/${row.id}/document` : null,
+    notes: row.notes ?? null,
+    createdAt: row.created_at,
+  };
+}
+function splitList(value: string | string[] | undefined): string[] {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== "string" || !value) return [];
+  try { const parsed = JSON.parse(value); return Array.isArray(parsed) ? parsed : []; } catch { return []; }
+}
+async function billRow(id: string, houseId?: string) {
+  return houseId
+    ? get<any>("SELECT * FROM bills WHERE id = ? AND house_id = ?", [id, houseId])
+    : get<any>("SELECT * FROM bills WHERE id = ?", [id]);
+}
+async function billAccess(req: any, minRole: "viewer" | "member" = "viewer") {
+  const bill = await billRow(String(req.params.billId));
+  if (!bill) throw new ApiError(404, "Bill not found");
+  const role = await memberRole(req.user!.id, bill.house_id);
+  if (!role) throw new ApiError(404, "Bill not found");
+  if (!roleAtLeast(role, minRole)) throw new ApiError(403, `Requires ${minRole} access`);
+  return { bill, houseId: bill.house_id as string };
+}
+async function deleteDocument(filename?: string | null) {
+  if (filename) fs.rmSync(uploadPath("bills", filename), { force: true });
+}
+async function validatePeople(houseId: string, paidBy: string | null | undefined, splitWith: string[]) {
+  const members = await all<{ user_id: string }>("SELECT user_id FROM house_members WHERE house_id = ?", [houseId]);
+  const ids = new Set(members.map((member) => member.user_id));
+  if (paidBy && !ids.has(paidBy)) throw new ApiError(400, "That person is not in this house");
+  if (splitWith.some((id) => !ids.has(id))) throw new ApiError(400, "Everyone sharing the bill must be in this house");
+  return [...new Set(splitWith)];
+}
+
+billRoutes.get("/:houseId/bills", handler(async (req, res) => {
+  const { houseId } = await requireHouse(req);
+  const rows = await all<any>("SELECT * FROM bills WHERE house_id = ? ORDER BY due_date IS NULL, due_date DESC, created_at DESC", [houseId]);
+  res.json(rows.map(serialize));
+}));
+
+billRoutes.post("/:houseId/bills", accessGuard("member"), pdfUpload.single("document"), verifyPdf, handler(async (req, res) => {
+  const { houseId } = await requireHouse(req, "member");
+  const body = parseBody(input, req.body);
+  const house = await get<any>("SELECT currency FROM houses WHERE id = ?", [houseId]);
+  const splitWith = body.category === "to_split" ? splitList(body.splitWith) : [];
+  const members = await all<{ user_id: string }>("SELECT user_id FROM house_members WHERE house_id = ?", [houseId]);
+  const paidBy = body.paidBy ?? req.user!.id;
+  const people = await validatePeople(houseId, paidBy, splitWith.length ? splitWith : (body.category === "to_split" ? members.map((m) => m.user_id) : []));
+  const id = newId("bil");
+  const filename = req.file?.filename ?? null;
+  try {
+    await run(`INSERT INTO bills (id, house_id, name, bill_type, category, amount, currency, due_date, paid_by, split_with, document, notes, created_by, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+      id, houseId, body.name, body.billType, body.category, body.amount, body.currency.toUpperCase() || house?.currency || "EUR",
+      body.dueDate || null, paidBy, JSON.stringify(people), filename, body.notes || null, req.user!.id, now(),
+    ]);
+  } catch (error) { await deleteDocument(filename); throw error; }
+  res.status(201).json(serialize(await billRow(id, houseId)));
+}));
+
+singleBillRoutes.patch("/:billId", handler(async (req, res) => {
+  const { houseId, bill: current } = await billAccess(req, "member");
+  const body = parseBody(input.partial(), req.body);
+  const category = body.category ?? current.category;
+  let splitWith = category === "to_split"
+    ? (body.splitWith === undefined ? parseJson<string[]>(current.split_with, []) : splitList(body.splitWith))
+    : [];
+  if (category === "to_split" && splitWith.length === 0) {
+    splitWith = (await all<{ user_id: string }>("SELECT user_id FROM house_members WHERE house_id = ?", [houseId])).map((member) => member.user_id);
+  }
+  const paidBy = body.paidBy === undefined ? current.paid_by : body.paidBy;
+  const people = await validatePeople(houseId, paidBy, splitWith);
+  await run(`UPDATE bills SET name = ?, bill_type = ?, category = ?, amount = ?, currency = ?, due_date = ?, paid_by = ?, split_with = ?, notes = ? WHERE id = ?`, [
+    body.name ?? current.name, body.billType ?? current.bill_type ?? "other", category, body.amount ?? current.amount, (body.currency ?? current.currency).toUpperCase(),
+    body.dueDate === undefined ? current.due_date : body.dueDate || null, paidBy ?? null, JSON.stringify(people),
+    body.notes === undefined ? current.notes : body.notes || null, current.id,
+  ]);
+  res.json(serialize(await billRow(current.id, houseId)));
+}));
+
+singleBillRoutes.post("/:billId/document", accessGuard((req) => billAccess(req, "member")), pdfUpload.single("document"), verifyPdf, handler(async (req, res) => {
+  const { houseId, bill: current } = await billAccess(req, "member");
+  if (!req.file) throw new ApiError(400, "Choose a PDF file");
+  await run("UPDATE bills SET document = ? WHERE id = ?", [req.file.filename, current.id]);
+  await deleteDocument(current.document);
+  res.json(serialize(await billRow(current.id, houseId)));
+}));
+
+singleBillRoutes.get("/:billId/document", handler(async (req, res) => {
+  const { bill } = await billAccess(req);
+  if (!bill?.document) throw new ApiError(404, "Bill PDF not found");
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(bill.name)}.pdf"`);
+  res.sendFile(uploadPath("bills", bill.document));
+}));
+
+singleBillRoutes.delete("/:billId", handler(async (req, res) => {
+  const { bill } = await billAccess(req, "member");
+  await run("DELETE FROM bills WHERE id = ?", [bill.id]);
+  await deleteDocument(bill.document);
+  res.json({ ok: true });
+}));

@@ -8,7 +8,7 @@ import { MAX_UPLOAD_BYTES, UPLOAD_DIR } from "./config.js";
 import { ApiError, requireHouse } from "./http.js";
 import type { Role } from "../shared/types.js";
 
-export type UploadPrefix = "photos" | "items" | "recipes" | "receipts";
+export type UploadPrefix = "photos" | "items" | "recipes" | "receipts" | "bills";
 
 /**
  * The only image types SVault accepts. The stored extension always comes from

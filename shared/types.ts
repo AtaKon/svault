@@ -1029,6 +1029,21 @@ export interface HouseholdReceipt {
   participantNames: string[];
 }
 
+export interface UtilityBill {
+  id: string;
+  name: string;
+  billType: "electricity" | "water" | "natural_gas" | "heating_oil" | "internet_telecom" | "rent" | "building_fees" | "municipal_fees" | "insurance" | "other";
+  category: "to_split" | "personal";
+  amount: number;
+  currency: string;
+  dueDate: string | null;
+  paidBy: string | null;
+  splitWith: string[];
+  document: string | null;
+  notes: string | null;
+  createdAt: string;
+}
+
 export interface UseItUpLot {
   id: string;
   quantity: number;
