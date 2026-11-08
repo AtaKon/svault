@@ -241,7 +241,7 @@ export async function loginSession(projectId: OffProjectId, username: string, pa
   if (res.status === 401 || res.status === 403) {
     throw new ApiError(401, "Open Food Facts rejected that username or password");
   }
-  if (!res.ok && res.status !== 302) {
+  if (!res.ok && !(res.status >= 300 && res.status < 400)) {
     throw new ApiError(503, `Open Food Facts login failed (${res.status})`);
   }
   const cookie = cookieFrom(res.headers);

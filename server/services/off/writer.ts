@@ -300,7 +300,14 @@ async function sendForm(
     throw new OffWriteError("Open Food Facts returned an unexpected response", { retryable: false });
   }
   const status = String(json?.status ?? "");
-  if (status && !/ok/i.test(status) && json?.status_code !== 0) {
+  const statusCode = json?.status_code == null ? null : Number(json.status_code);
+  if (statusCode != null && statusCode !== 0) {
+    throw new OffWriteError(
+      json?.debug || json?.error || status || `Open Food Facts status ${statusCode}`,
+      { retryable: false, remoteStatus: status || String(statusCode) },
+    );
+  }
+  if (status && (!/ok/i.test(status) || /fail|error/i.test(status))) {
     throw new OffWriteError(
       json?.debug || json?.error || status,
       { retryable: false, remoteStatus: status },

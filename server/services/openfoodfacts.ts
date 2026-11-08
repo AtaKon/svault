@@ -245,7 +245,7 @@ async function saveOffProduct(
   );
   // Keep the scanned spelling as an alias so a future scan hits the cache even
   // when OpenFoodFacts canonicalises the code (for example by adding a zero).
-  if (code !== requestedCode) {
+  if (code !== requestedCode && aliasProject === summary.project) {
     await run(
       `INSERT INTO catalog_products
          (project, code, name, brand, quantity, image, categories, summary, payload, source, fetched_at, updated_at)

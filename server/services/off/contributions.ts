@@ -276,8 +276,8 @@ export async function processContribution(id: string): Promise<void> {
   const claimed = await run(
     `UPDATE off_contributions
      SET status = 'sending', attempts = attempts + 1, last_attempt_at = ?, updated_at = ?
-     WHERE id = ? AND status IN ('queued', 'retry')`,
-    [now(), now(), id],
+     WHERE id = ? AND (status IN ('queued', 'retry') OR (status = 'sending' AND last_attempt_at IS NOT NULL AND last_attempt_at < ?))`,
+    [now(), now(), id, new Date(Date.now() - 10 * 60_000).toISOString()],
   );
   if (!claimed.changes) return;
   const row = await get<ContributionRow>("SELECT * FROM off_contributions WHERE id = ?", [id]);
@@ -358,9 +358,10 @@ export async function processDueContributions(limit = 5): Promise<number> {
   if (!offWritesEnabled() && !offDryRun()) return 0;
   const rows = await all<{ id: string }>(
     `SELECT id FROM off_contributions
-     WHERE status IN ('queued', 'retry') AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+     WHERE (status IN ('queued', 'retry') AND (next_attempt_at IS NULL OR next_attempt_at <= ?))
+        OR (status = 'sending' AND last_attempt_at IS NOT NULL AND last_attempt_at < ?)
      ORDER BY created_at LIMIT ?`,
-    [now(), Math.min(Math.max(limit, 1), 25)],
+    [now(), new Date(Date.now() - 10 * 60_000).toISOString(), Math.min(Math.max(limit, 1), 25)],
   );
   for (const row of rows) await processContribution(row.id);
   return rows.length;

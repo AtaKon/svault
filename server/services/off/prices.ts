@@ -62,7 +62,7 @@ export async function priceCandidates(houseId: string, limit = 20): Promise<OffC
       .map((value) => String(value ?? "").replace(/\D/g, ""))
       .find((value) => isValidGtin(value));
     if (!code || !receiptImagePath(row.image ?? "")) continue;
-    const key = `${code}:${row.receipt_id}`;
+    const key = `${code}:${row.receipt_line_id}`;
     if (seen.has(key)) continue;
     seen.add(key);
     const quantity = Number(row.quantity ?? 1) || 1;
