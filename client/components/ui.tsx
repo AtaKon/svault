@@ -120,8 +120,8 @@ export function Spinner({ size = 18, className, label }: { size?: number; classN
 export function LoadingBlock({ label = "Loading" }: { label?: string }) {
   return (
     <div className="flex flex-col items-center justify-center gap-3 py-16 text-muted">
-      <Spinner size={26} />
-      <span className="text-sm">{label}</span>
+      <Spinner size={26} label={label} />
+      <span className="text-sm" aria-hidden="true">{label}</span>
     </div>
   );
 }

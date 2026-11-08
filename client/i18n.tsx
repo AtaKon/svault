@@ -2088,6 +2088,7 @@ const EL: Record<string, string> = {
   "AI ideas failed, showing local suggestions. {detail}": "Η δημιουργία ιδεών με AI απέτυχε· εμφανίζονται τοπικές προτάσεις. {detail}",
   "No AI provider configured — these suggestions come from your inventory and saved recipes.": "Δεν έχει ρυθμιστεί πάροχος AI — αυτές οι προτάσεις προέρχονται από το απόθεμά σου και τις αποθηκευμένες συνταγές.",
   "Nothing found on OpenFoodFacts. Check the name or paste a barcode.": "Δεν βρέθηκαν αποτελέσματα στο OpenFoodFacts. Έλεγξε το όνομα ή κάνε επικόλληση γραμμωτού κώδικα.",
+  "OpenFoodFacts search returned a warning": "Η αναζήτηση OpenFoodFacts επέστρεψε μια προειδοποίηση.",
   "Name is required": "Το όνομα είναι υποχρεωτικό.",
   "Unknown unit \"{unit}\"": "Άγνωστη μονάδα «{unit}».",
   "Quantity cannot be negative": "Η ποσότητα δεν μπορεί να είναι αρνητική.",

@@ -1,5 +1,5 @@
 import { useId } from "react";
-import { money } from "@/format";
+import { money, qty } from "@/format";
 import { useI18n } from "@/i18n";
 
 export function PriceChart({
@@ -89,7 +89,7 @@ export function PriceChart({
       <div className="mt-1 flex justify-between text-[10px] text-muted">
         <span>{new Date(points[0].at).toLocaleDateString(locale)}</span>
         <span>
-          {t(points.length === 1 ? "{count} purchase" : "{count} purchases", { count: points.length })}
+          {t(points.length === 1 ? "{count} purchase" : "{count} purchases", { count: qty(points.length) })}
         </span>
         <span>{new Date(points[points.length - 1].at).toLocaleDateString(locale)}</span>
       </div>
