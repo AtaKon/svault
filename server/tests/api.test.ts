@@ -113,7 +113,7 @@ const { LIDL_TEMPLATE_RULES, SKLAVENITIS_TEMPLATE_RULES } = await import("../../
 const { convert, pricePerUnit } = await import("../units.js");
 const { parseOffNutrition } = await import("../services/nutrition.js");
 const { createPosoKaneiClient, PosoKaneiUnavailableError } = await import("../services/posokanei.js");
-const { RateLimitError } = await import("../rate-limit.js");
+const { RateLimitError, limiters } = await import("../rate-limit.js");
 const { createShoppingOffersHandler, posoKaneiUnavailableApiError } = await import("../routes/insights.js");
 const { parseCsv, parseCsvNumber } = await import("../services/csv.js");
 const { totpCode, verifyTotp, generateTotpSecret, generateBackupCodes } = await import("../services/totp.js");
@@ -4661,6 +4661,9 @@ describe("insights, household split and admin console", () => {
       400,
       "a house member may request offers when the lookup is enabled",
     );
+    await run("UPDATE house_members SET role = 'viewer' WHERE house_id = ? AND user_id = ?", [insightHouse, secondUserId]);
+    assert.equal((await request(path, { auth: secondUserCookie })).status, 403, "viewers cannot request offers");
+    await run("UPDATE house_members SET role = 'member' WHERE house_id = ? AND user_id = ?", [insightHouse, secondUserId]);
     assert.equal(
       (await request(`/api/houses/${insightHouse}`, {
         method: "PATCH",
@@ -5244,6 +5247,21 @@ describe("PosoKanei price lookup client", () => {
     assert.equal(globalSlots, 0);
   });
 
+  it("uses the short shared cooldown after a malformed successful response", async () => {
+    let calls = 0;
+    const client = createPosoKaneiClient(async () => {
+      calls++;
+      return new Response(JSON.stringify({ malformed: true }), { headers: { "content-type": "application/json" } });
+    }, () => {});
+    await assert.rejects(client.lookupPosoKaneiBarcode("12345701", userId), PosoKaneiUnavailableError);
+    await assert.rejects(
+      client.lookupPosoKaneiBarcode("12345702", "another-user"),
+      (error: unknown) => error instanceof PosoKaneiUnavailableError &&
+        Number(error.retryAfterSeconds) > 0 && Number(error.retryAfterSeconds) <= 15,
+    );
+    assert.equal(calls, 1, "malformed data pauses requests across barcodes and users for only 15 seconds");
+  });
+
   it("charges the 429 attempt and shares its cooldown across barcodes and users", async () => {
     let userReservations = 0;
     let globalReservations = 0;
@@ -5349,6 +5367,32 @@ describe("PosoKanei price lookup client", () => {
       client.lookupPosoKaneiBarcode("12345687", userId),
       (error: unknown) => error instanceof RateLimitError && error.status === 429 && error.retryAfter === 60,
     );
+  });
+
+  it("namespaces PosoKanei user keys like the rest of the app", async () => {
+    const previousRateLimit = process.env.SV_RATE_LIMIT;
+    const id = "posokanei-key-namespace-test";
+    const userKey = `user:${id}`;
+    process.env.SV_RATE_LIMIT = "on";
+    limiters.posokanei.reset(id);
+    limiters.posokanei.reset(userKey);
+    limiters.posokaneiGlobal.reset("all");
+    try {
+      limiters.posokanei.hit(id);
+      const client = createPosoKaneiClient(async () => new Response(null, { status: 404 }));
+      await client.lookupPosoKaneiBarcode("12345711", id);
+      await client.lookupPosoKaneiBarcode("12345712", id);
+      await assert.rejects(
+        client.lookupPosoKaneiBarcode("12345713", id),
+        (error: unknown) => error instanceof RateLimitError && error.status === 429,
+      );
+    } finally {
+      limiters.posokanei.reset(id);
+      limiters.posokanei.reset(userKey);
+      limiters.posokaneiGlobal.reset("all");
+      if (previousRateLimit === undefined) delete process.env.SV_RATE_LIMIT;
+      else process.env.SV_RATE_LIMIT = previousRateLimit;
+    }
   });
 
   it("keeps the lookup cache bounded, including unknown barcodes", async () => {
@@ -5464,13 +5508,15 @@ describe("PosoKanei price lookup client", () => {
       globalRateLimitCalls++;
     });
     const first = client.lookupPosoKaneiBarcode("12345684", userId);
-    const second = client.lookupPosoKaneiBarcode("12345684", "another-user");
+    const sameUserJoin = client.lookupPosoKaneiBarcode("12345684", userId);
+    const otherUserJoin = client.lookupPosoKaneiBarcode("12345684", "another-user");
     resolveResponse(new Response(JSON.stringify(product), { headers: { "content-type": "application/json" } }));
-    const [one, two] = await Promise.all([first, second]);
+    const [one, two, three] = await Promise.all([first, sameUserJoin, otherUserJoin]);
     assert.equal(calls, 1);
     assert.equal(rateLimitCalls, 1, "joining an in-flight upstream request does not consume a user slot");
     assert.equal(globalRateLimitCalls, 1, "the shared upstream request consumes one global slot");
     assert.deepEqual(one, two);
+    assert.deepEqual(one, three);
   });
 
   it("charges only the initiating user when a shared in-flight request gets a 429", async () => {

@@ -129,11 +129,12 @@ type ConsumeRateLimit = (userId: string) => ReleaseRateLimit;
 type ConsumeGlobalRateLimit = () => ReleaseRateLimit;
 
 function consumeDefaultRateLimit(userId: string) {
-  const userWait = limiters.posokanei.hit(userId);
+  const key = `user:${userId}`;
+  const userWait = limiters.posokanei.hit(key);
   if (userWait) {
     throw new RateLimitError(userWait, "Price lookup limit reached. Try again later.");
   }
-  return () => limiters.posokanei.refund(userId);
+  return () => limiters.posokanei.refund(key);
 }
 
 function consumeDefaultGlobalRateLimit() {
@@ -182,17 +183,16 @@ export function createPosoKaneiClient(
     const existing = inFlight.get(code);
     if (existing) return existing;
 
-    const releaseUserLimit = consumeRateLimit(userId);
+    const request = Promise.resolve().then(async () => {
+      const releaseUserLimit = consumeRateLimit(userId);
+      let releaseGlobalLimit: ReleaseRateLimit;
+      try {
+        releaseGlobalLimit = consumeGlobalRateLimit();
+      } catch (error) {
+        releaseUserLimit?.();
+        throw error;
+      }
 
-    let releaseGlobalLimit: ReleaseRateLimit;
-    try {
-      releaseGlobalLimit = consumeGlobalRateLimit();
-    } catch (error) {
-      releaseUserLimit?.();
-      throw error;
-    }
-
-    const request = (async () => {
       try {
         const url = new URL(`/products/barcode/${encodeURIComponent(code)}`, API_BASE);
         url.searchParams.set("countries", "GR");
@@ -250,7 +250,7 @@ export function createPosoKaneiClient(
         }
         throw normalizedError;
       }
-    })().finally(() => inFlight.delete(code));
+    }).finally(() => inFlight.delete(code));
     inFlight.set(code, request);
     return request;
   }
