@@ -114,6 +114,7 @@ const { convert, pricePerUnit } = await import("../units.js");
 const { parseOffNutrition } = await import("../services/nutrition.js");
 const { createPosoKaneiClient, PosoKaneiUnavailableError } = await import("../services/posokanei.js");
 const { RateLimitError } = await import("../rate-limit.js");
+const { createShoppingOffersHandler, posoKaneiUnavailableApiError } = await import("../routes/insights.js");
 const { parseCsv, parseCsvNumber } = await import("../services/csv.js");
 const { totpCode, verifyTotp, generateTotpSecret, generateBackupCodes } = await import("../services/totp.js");
 const { backupForTest, validateBackup } = await import("../services/backup.js");
@@ -4673,6 +4674,67 @@ describe("insights, household split and admin console", () => {
     assert.equal((await request(path)).status, 404, "checked lines cannot trigger lookups");
   });
 
+  it("returns the queried barcode and propagates upstream Retry-After from the route", async () => {
+    const code = "5201234500099";
+    await run(
+      "INSERT INTO item_barcodes (id, item_id, house_id, code, format, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+      ["bar_posokanei_route", milkId, insightHouse, code, "test", new Date().toISOString()],
+    );
+    await request(`/api/houses/${insightHouse}`, {
+      method: "PATCH",
+      body: { settings: { priceLookup: { enabled: true } } },
+    });
+    const line = await request(`/api/houses/${insightHouse}/shopping`, {
+      method: "POST",
+      body: { name: "Route lookup test", itemId: milkId, quantity: 1, unit: "l" },
+    });
+    const me = await request("/api/auth/me");
+    const makeRequest = (
+      lookup: typeof import("../services/posokanei.js").lookupPosoKaneiBarcode,
+      headers: Record<string, string>,
+      requestHouseId = insightHouse,
+    ) =>
+      new Promise<any>((resolve, reject) => {
+        const response = {
+          setHeader(name: string, value: string) { headers[name] = value; return this; },
+          json(data: unknown) { resolve(data); return this; },
+        };
+        createShoppingOffersHandler(lookup)(
+          { params: { houseId: requestHouseId, lineId: line.data.item.id }, user: { id: me.data.user.id } } as any,
+          response as any,
+          (error: unknown) => { if (error) reject(error); },
+        );
+      });
+
+    const successHeaders: Record<string, string> = {};
+    const offers = [{ source: "PosoKanei", productId: "p1", productName: "Test product", unit: null, retailer: "Shop", price: 1, unitPrice: null, currency: "EUR", discount: false, discountPercent: null, updatedAt: null, fetchedAt: new Date().toISOString() }];
+    const result = await makeRequest(async (barcode, userId) => {
+      assert.equal(barcode, code);
+      assert.equal(userId, me.data.user.id);
+      return offers as any;
+    }, successHeaders);
+    assert.deepEqual(result, { barcode: code, offers });
+
+    const retryHeaders: Record<string, string> = {};
+    await assert.rejects(
+      makeRequest(async () => { throw new PosoKaneiUnavailableError("upstream throttled", 120); }, retryHeaders),
+      (error: any) => error.status === 502 &&
+        error.message === "External price lookup is unavailable. Try again later." &&
+        error.details?.retryAfterSeconds === 120,
+    );
+    assert.equal(retryHeaders["Retry-After"], "120");
+
+    const foreignHouse = await request("/api/houses", {
+      auth: secondUserCookie,
+      method: "POST",
+      body: { name: "Offer isolation house", currency: "EUR" },
+    });
+    await assert.rejects(
+      makeRequest(async () => { throw new Error("must not reach the lookup"); }, {}, foreignHouse.data.id),
+      (error: any) => error.status === 404,
+    );
+  });
+
   it("values wasted stock", async () => {
     const bread = await request(`/api/houses/${insightHouse}/items`, {
       method: "POST",
@@ -5084,7 +5146,7 @@ describe("PosoKanei price lookup client", () => {
       client.lookupPosoKaneiBarcode("12345690", userId),
       (error: unknown) => error instanceof PosoKaneiUnavailableError && error.retryAfterSeconds != null,
     );
-    assert.equal(userSlots, 0, "requests during the shared cooldown do not consume a slot");
+    assert.equal(userSlots, 1, "the request rejected by the shared cooldown still counts against the user quota");
     assert.equal(globalSlots, 0);
   });
 
@@ -5107,14 +5169,26 @@ describe("PosoKanei price lookup client", () => {
       },
     );
     await assert.rejects(client.lookupPosoKaneiBarcode("12345691", userId), PosoKaneiUnavailableError);
-    assert.equal(userReservations, 0);
+    assert.equal(userReservations, 0, "the upstream 429 attempt refunds the failed request's user slot");
     assert.equal(globalReservations, 0);
     await assert.rejects(
       client.lookupPosoKaneiBarcode("12345692", userId),
       (error: unknown) => error instanceof PosoKaneiUnavailableError && error.retryAfterSeconds === 120,
     );
     assert.equal(fetches, 1);
-    assert.equal(userReservations, 0);
+    assert.equal(userReservations, 1, "the request rejected during upstream cooldown still counts for the user");
+  });
+
+  it("maps upstream throttling to a 502 with Retry-After metadata", async () => {
+    const headers: Record<string, string> = {};
+    const mapped = posoKaneiUnavailableApiError(
+      new PosoKaneiUnavailableError("upstream detail", 120),
+      { setHeader: (name, value) => { headers[name] = String(value); return {} as any; } },
+    );
+    assert.equal(mapped.status, 502);
+    assert.equal(mapped.message, "External price lookup is unavailable. Try again later.");
+    assert.deepEqual(mapped.details, { retryAfterSeconds: 120 });
+    assert.equal(headers["Retry-After"], "120");
   });
 
   it("enforces the per-user quota across different barcodes", async () => {
@@ -5129,6 +5203,23 @@ describe("PosoKanei price lookup client", () => {
       client.lookupPosoKaneiBarcode("12345695", userId),
       (error: unknown) => error instanceof RateLimitError && error.status === 429,
     );
+  });
+
+  it("keeps the per-user request slot when the instance-wide limit rejects the fetch", async () => {
+    let userSlots = 0;
+    const client = createPosoKaneiClient(
+      async () => { throw new Error("fetch must not run after global throttling"); },
+      () => {
+        userSlots++;
+        return () => { userSlots--; };
+      },
+      () => { throw new RateLimitError(900, "Price lookup limit reached. Try again later."); },
+    );
+    await assert.rejects(
+      client.lookupPosoKaneiBarcode("12345697", userId),
+      (error: unknown) => error instanceof RateLimitError && error.status === 429,
+    );
+    assert.equal(userSlots, 1, "the user's lookup request counts even when global capacity is exhausted");
   });
 
   it("caches valid products that have no Greek retailer offers and rejects malformed products", async () => {
@@ -5203,6 +5294,13 @@ describe("PosoKanei price lookup client", () => {
     await assert.rejects(
       nonJsonClient.lookupPosoKaneiBarcode("12345682", userId),
       PosoKaneiUnavailableError,
+    );
+
+    const invalidUtf8Client = createPosoKaneiClient(async () =>
+      new Response(new Uint8Array([0xff, 0xfe]), { headers: { "content-type": "application/json" } }), () => {}, () => {});
+    await assert.rejects(
+      invalidUtf8Client.lookupPosoKaneiBarcode("12345698", userId),
+      (error: unknown) => error instanceof PosoKaneiUnavailableError && error.message.includes("invalid response body"),
     );
 
     const announcedOversizeClient = createPosoKaneiClient(async () =>

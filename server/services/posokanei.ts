@@ -170,7 +170,6 @@ export function createPosoKaneiClient(
     const cached = cache.get(code);
     if (cached && cached.expiresAt > now) return cached.offers;
     if (upstreamBlockedUntil > now) {
-      releaseUserLimit?.();
       throw new PosoKaneiUnavailableError(
         "PosoKanei asked SVault to slow down. Try again later.",
         Math.ceil((upstreamBlockedUntil - now) / 1000),
@@ -190,7 +189,6 @@ export function createPosoKaneiClient(
     try {
       releaseGlobalLimit = consumeGlobalRateLimit();
     } catch (error) {
-      releaseUserLimit?.();
       throw error;
     }
 
@@ -233,7 +231,7 @@ export function createPosoKaneiClient(
           payload = JSON.parse(await readBoundedBody(response));
         } catch (error) {
           if (error instanceof PosoKaneiUnavailableError) throw error;
-          throw new PosoKaneiUnavailableError("PosoKanei returned invalid JSON");
+          throw new PosoKaneiUnavailableError("PosoKanei returned an invalid response body");
         }
         const fetchedAt = new Date().toISOString();
         const offers = parseOffers(payload, fetchedAt);
