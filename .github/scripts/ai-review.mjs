@@ -325,6 +325,11 @@ if (isPullRequest && fullDiff.length > MAX_DIFF_CHARS) {
       index: "size",
       text: `### Blocking\n- The diff is ${fullDiff.length} characters, above the ${MAX_TOTAL_DIFF_CHARS}-character review budget. Split the PR before merging.\n`,
     });
+  } else if (!chunks.length) {
+    parts.push({
+      index: "empty",
+      text: `### Blocking\n- The diff produced no reviewable chunks; nothing was reviewed.\n`,
+    });
   } else if (chunks.length > MAX_CHUNKS) {
     parts.push({
       index: "overflow",

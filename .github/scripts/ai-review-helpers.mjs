@@ -28,7 +28,8 @@ export function splitDiff(diff, limit) {
       flush();
       const lines = section.split("\n");
       const hunk = lines.findIndex((line) => line.startsWith("@@"));
-      const headerLines = hunk > 0 ? lines.slice(0, hunk) : hunk < 0 ? [lines[0]] : [];
+      const headerLines =
+        hunk > 0 ? lines.slice(0, hunk) : hunk < 0 ? lines.slice(0, Math.min(lines.length, 4)) : [];
       const fullHeader = headerLines.length ? `${headerLines.join("\n")}\n` : "";
       const firstLine = `${lines[0]}\n`;
       const minimumPiece = Math.max(400, Math.floor(limit / 3));
@@ -132,13 +133,15 @@ export function failureStopNote(index, limit) {
 /** Trim a comment without leaving an unclosed Markdown code fence. */
 export function clipComment(text, limit) {
   if (text.length <= limit) return text;
-  let cut = text.lastIndexOf("\n", Math.max(0, limit - 80));
-  if (cut < 1000) {
-    const space = text.lastIndexOf(" ", Math.max(0, limit - 80));
-    cut = space > 1000 ? space : Math.max(0, limit - 80);
+  const marker = "\n\n[Review comment truncated]";
+  const budget = Math.max(1, limit - marker.length - 8);
+  let cut = text.lastIndexOf("\n", budget);
+  if (cut < 0) {
+    const space = text.lastIndexOf(" ", budget);
+    cut = space >= 0 ? space : budget;
   }
   let out = text.slice(0, cut);
   const fences = (out.match(/^```/gm) || []).length;
   if (fences % 2) out += "\n```";
-  return `${out}\n\n[Review comment truncated at ${out.length} characters]`;
+  return `${out}${marker}`;
 }

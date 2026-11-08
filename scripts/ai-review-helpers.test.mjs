@@ -81,10 +81,24 @@ test("splitDiff keeps continuation lines intact", () => {
   }
 });
 
+test("splitDiff keeps header context for a diff without hunks", () => {
+  const diff = `diff --git a/img.png b/img.png\nindex 111..222 100644\n--- a/img.png\n+++ b/img.png\nBinary files differ\n${"x".repeat(2_000)}`;
+  const chunks = splitDiff(diff, 500);
+  assert.ok(chunks.length > 1);
+  for (const chunk of chunks.slice(1)) assert.match(chunk, /^diff --git a\/img\.png/);
+});
+
+test("clipComment honors the limit including its marker", () => {
+  const text = `x\n${"word ".repeat(5_000)}`;
+  const clipped = clipComment(text, 1_000);
+  assert.ok(clipped.length <= 1_000, `clipped is ${clipped.length}`);
+  assert.match(clipped, /truncated/);
+});
+
 test("clipComment handles text without a newline before the limit", () => {
   const clipped = clipComment("x".repeat(500), 100);
-  assert.match(clipped, /truncated at \d+ characters/);
-  assert.ok(clipped.length < 220);
+  assert.match(clipped, /truncated/);
+  assert.ok(clipped.length <= 100);
 });
 
 test("mergeChunkReviews says ready when every part is clean", () => {
