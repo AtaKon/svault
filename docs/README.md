@@ -19,6 +19,7 @@ guides below go deeper.
 | [Roadmap](roadmap.md) | Planned features, priorities and the reasoning behind them |
 | [Open Food Facts platform plan](openfoodfacts-platform.md) | Proposal for all four OFF databases, the read APIs, and opt-in contribution back |
 | [Open Food Facts API spike](openfoodfacts-spike.md) | Phase 0 findings: verified endpoints, auth gaps and service availability |
+| [Open Food Facts staging runbook](openfoodfacts-staging.md) | Manual, write-free validation checklist before enabling contributions |
 
 ## Other project files
 
