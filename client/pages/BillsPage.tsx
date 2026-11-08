@@ -67,7 +67,7 @@ export function BillsPage() {
       data.set("currency", house.currency || "EUR");
       data.set("dueDate", dueDate);
       data.set("paidBy", paidBy);
-      data.set("splitWith", JSON.stringify(splitWith));
+      if (category === "to_split") data.set("splitWith", JSON.stringify(splitWith));
       data.set("notes", notes);
       if (file) data.set("document", file);
       await api<UtilityBill>(`/api/houses/${house.id}/bills`, { method: "POST", body: data });
@@ -105,6 +105,7 @@ export function BillsPage() {
 
   return <div className="space-y-5">
     <PageHeader eyebrow={t("Household finances")} title={t("Bills & splitting")} subtitle={t("Track household bills, attach PDFs, and see who owes what for shared costs.")} />
+    <p className="rounded-xl border border-line bg-raised/40 px-4 py-3 text-sm text-muted">{t("Bills and purchase receipts are separate ledger entries. Record each expense in one place to avoid counting it twice.")}</p>
 
     <Card className="p-4 sm:p-5">
       <form className="space-y-4" onSubmit={(event) => void save(event)}>

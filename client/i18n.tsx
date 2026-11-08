@@ -9,6 +9,7 @@ const EL: Record<string, string> = {
   "Household finances": "Οικονομικά σπιτιού",
   "Bills & splitting": "Λογαριασμοί και μοίρασμα",
   "Track household bills, attach PDFs, and see who owes what for shared costs.": "Παρακολούθησε τους λογαριασμούς του σπιτιού, επισύναψε PDF και δες ποιος οφείλει τι για τα κοινόχρηστα έξοδα.",
+  "Bills and purchase receipts are separate ledger entries. Record each expense in one place to avoid counting it twice.": "Οι λογαριασμοί και οι αποδείξεις αγορών καταχωρίζονται ξεχωριστά. Καταχώρισε κάθε έξοδο μόνο σε ένα σημείο για να μην υπολογιστεί δύο φορές.",
   "Add a bill": "Προσθήκη λογαριασμού",
   "Bill name": "Όνομα λογαριασμού",
   "Electricity, internet, rent…": "Ρεύμα, ίντερνετ, ενοίκιο…",

@@ -41,7 +41,7 @@ const pdfUpload = multer({
     filename: (_req, _file, cb) => cb(null, `${Date.now()}-${randomBytes(8).toString("hex")}.pdf`),
   }),
   limits: { fileSize: MAX_UPLOAD_BYTES, files: 1 },
-  fileFilter: (_req, file, cb) => file.mimetype === "application/pdf"
+  fileFilter: (_req, file, cb) => file.mimetype === "application/pdf" || path.extname(file.originalname).toLowerCase() === ".pdf"
     ? cb(null, true)
     : cb(new ApiError(400, "Upload a PDF bill")),
 });
@@ -183,10 +183,13 @@ singleBillRoutes.patch("/:billId", handler(async (req, res) => {
   let splitWith = category === "to_split"
     ? (body.splitWith === undefined ? parseJson<string[]>(current.split_with, []) : splitList(body.splitWith))
     : [];
+  const memberIds = new Set((await all<{ user_id: string }>("SELECT user_id FROM house_members WHERE house_id = ?", [houseId])).map((member) => member.user_id));
+  if (body.splitWith === undefined) splitWith = splitWith.filter((id) => memberIds.has(id));
   if (category === "to_split" && splitWith.length === 0) {
-    splitWith = (await all<{ user_id: string }>("SELECT user_id FROM house_members WHERE house_id = ?", [houseId])).map((member) => member.user_id);
+    splitWith = [...memberIds];
   }
-  const paidBy = body.paidBy === undefined ? current.paid_by : body.paidBy;
+  let paidBy = body.paidBy === undefined ? current.paid_by : body.paidBy;
+  if (body.paidBy === undefined && paidBy && !memberIds.has(paidBy)) paidBy = null;
   const people = await validatePeople(houseId, paidBy, splitWith);
   await run(`UPDATE bills SET name = ?, bill_type = ?, category = ?, amount = ?, due_date = ?, paid_by = ?, split_with = ?, notes = ? WHERE id = ?`, [
     body.name ?? current.name, body.billType ?? current.bill_type ?? "other", category, body.amount ?? current.amount,
@@ -201,14 +204,17 @@ billRoutes.post("/:houseId/bills/:billId/document", requireBillDocumentMember, p
   const current = await billRow(String(req.params.billId), houseId);
   if (!current) { discardUploads(req); throw new ApiError(404, "Bill not found"); }
   if (!req.file) throw new ApiError(400, "Choose a PDF file");
+  let updated: BillRow | undefined;
   try {
     await run("UPDATE bills SET document = ? WHERE id = ?", [req.file.filename, current.id]);
+    updated = await billRow(current.id, houseId);
+    if (!updated || updated.document !== req.file.filename) throw new ApiError(404, "Bill not found");
   } catch (error) {
     discardUploads(req);
     throw error;
   }
   await deleteDocument(current.document);
-  res.json(serialize(await requireBillRow(current.id, houseId)));
+  res.json(serialize(updated));
 }));
 
 billRoutes.get("/:houseId/bills/:billId/document", handler(async (req, res) => {
@@ -218,7 +224,7 @@ billRoutes.get("/:houseId/bills/:billId/document", handler(async (req, res) => {
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
-  res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(`${bill.name}.pdf`)}`);
+  res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(`${bill.name}.pdf`)}`);
   res.sendFile(uploadPath("bills", bill.document));
 }));
 

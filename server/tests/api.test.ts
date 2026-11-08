@@ -5,6 +5,7 @@ import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { splitAmountEvenly } from "../../shared/bill-splitting.js";
+import { POSTGRES_TABLE_ORDER } from "../database/postgres-schema.js";
 
 const dataDir = mkdtempSync(path.join(tmpdir(), "svault-test-"));
 process.env.DATA_DIR = dataDir;
@@ -4584,6 +4585,7 @@ describe("insights, household split and admin console", () => {
     const documentResponse = await fetch(base + accepted.data.document, { headers: { cookie } });
     assert.equal(documentResponse.status, 200);
     assert.equal(documentResponse.headers.get("content-type"), "application/pdf");
+    assert.match(documentResponse.headers.get("content-disposition") ?? "", /^attachment;/);
     assert.equal(documentResponse.headers.get("x-content-type-options"), "nosniff");
     assert.match(documentResponse.headers.get("content-security-policy") ?? "", /sandbox/);
     assert.equal((await request(`/uploads/bills/${addedFile}`)).status, 404);
@@ -4593,8 +4595,8 @@ describe("insights, household split and admin console", () => {
     assert.equal(ledger.data.balances.find((row: any) => row.userId === ownerId).balance, 5);
     assert.equal(ledger.data.balances.find((row: any) => row.userId === secondUserId).balance, -5);
 
-    // Bills and receipts are separate ledger entries; the API docs tell users
-    // not to record the same utility expense in both places.
+    // Bills and receipts are separate ledger entries; the API docs and Bills
+    // page warn users not to record the same expense in both places.
     const matchingReceipt = await request(`/api/houses/${billHouse}/receipts`, {
       method: "POST",
       body: {
@@ -4608,8 +4610,37 @@ describe("insights, household split and admin console", () => {
     });
     assert.equal(matchingReceipt.status, 201, JSON.stringify(matchingReceipt.data));
     const doubleRecordedLedger = await request(`/api/houses/${billHouse}/insights/household`);
-    assert.equal(doubleRecordedLedger.data.balances.find((row: any) => row.userId === ownerId).balance, 10);
+    assert.equal(doubleRecordedLedger.data.balances.find((row: any) => row.userId === ownerId).balance, 10,
+      "duplicate entries count separately and are explicitly warned against in the UI and API docs");
     assert.equal(doubleRecordedLedger.data.balances.find((row: any) => row.userId === secondUserId).balance, -10);
+
+    const transientBill = await request(`/api/houses/${billHouse}/bills`, {
+      method: "POST",
+      body: { name: "Concurrent deletion fixture", amount: 1, billType: "water", category: "personal" },
+    });
+    assert.equal(transientBill.status, 201);
+    const beforeConcurrentDelete = files();
+    await run(`CREATE TRIGGER delete_bill_after_document_update AFTER UPDATE OF document ON bills
+      BEGIN DELETE FROM bills WHERE id = NEW.id; END`);
+    try {
+      const racedUpload = await request(`/api/houses/${billHouse}/bills/${transientBill.data.id}/document`, {
+        method: "POST",
+        body: form(pdf),
+      });
+      assert.equal(racedUpload.status, 404);
+      assert.deepEqual(files(), beforeConcurrentDelete, "an upload must be cleaned if its bill disappears during the update");
+    } finally {
+      await run("DROP TRIGGER delete_bill_after_document_update");
+    }
+
+    await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [billHouse, secondUserId]);
+    const afterMemberLeft = await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { notes: "Updated after a member left" },
+    });
+    assert.equal(afterMemberLeft.status, 200, "stale split participants are dropped after a member leaves");
+    const ledgerAfterMemberLeft = await request(`/api/houses/${billHouse}/insights/household`);
+    assert.equal(ledgerAfterMemberLeft.status, 200);
 
     const deleted = await request(`/api/bills/${accepted.data.id}`, { method: "DELETE" });
     assert.equal(deleted.status, 200);
@@ -4622,6 +4653,11 @@ describe("insights, household split and admin console", () => {
     assert.deepEqual(splitAmountEvenly(0, 3), [0, 0, 0]);
     assert.deepEqual(splitAmountEvenly(-1, 2), []);
     assert.deepEqual(splitAmountEvenly(1, 0), []);
+  });
+
+  it("restores bill rows only after their user and house foreign keys", () => {
+    assert.ok(POSTGRES_TABLE_ORDER.indexOf("users") < POSTGRES_TABLE_ORDER.indexOf("bills"));
+    assert.ok(POSTGRES_TABLE_ORDER.indexOf("houses") < POSTGRES_TABLE_ORDER.indexOf("bills"));
   });
 
   it("imports receipts that feed spend, price alerts and the household split", async () => {
