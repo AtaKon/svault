@@ -4749,6 +4749,20 @@ describe("insights, household split and admin console", () => {
     });
     assert.equal(splitStringPatch.status, 200);
     assert.deepEqual([...splitStringPatch.data.splitWith].sort(), [ownerId, secondUserId].sort());
+    const payerOnlyPatch = await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { paidBy: ownerId },
+    });
+    assert.equal(payerOnlyPatch.status, 200);
+    assert.equal(payerOnlyPatch.data.category, "to_split");
+    assert.equal(payerOnlyPatch.data.billType, "electricity");
+    assert.equal(Number((await get<{ ledger_confirmed: number }>("SELECT ledger_confirmed FROM bills WHERE id = ?", [accepted.data.id]))?.ledger_confirmed), 1);
+    await run("UPDATE bills SET ledger_confirmed = 0 WHERE id = ?", [accepted.data.id]);
+    const unconfirmedBillLedger = await request(`/api/houses/${billHouse}/insights/household`);
+    assert.equal(unconfirmedBillLedger.data.balances.find((row: any) => row.userId === ownerId).balance, 0);
+    assert.equal(unconfirmedBillLedger.data.balances.find((row: any) => row.userId === secondUserId).balance, 0,
+      "the ledger excludes any shared bill without persisted confirmation");
+    await run("UPDATE bills SET ledger_confirmed = 1 WHERE id = ?", [accepted.data.id]);
 
     const documentResponse = await fetch(base + accepted.data.document, { headers: { cookie } });
     assert.equal(documentResponse.status, 200);

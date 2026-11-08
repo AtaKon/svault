@@ -23,6 +23,7 @@ interface BillRow {
   name: string;
   bill_type: UtilityBill["billType"];
   category: UtilityBill["category"];
+  ledger_confirmed: number | boolean;
   amount: number;
   currency: string;
   due_date: string | null;
@@ -172,9 +173,9 @@ billRoutes.post("/:houseId/bills", requireHouseBillMember, pdfUpload.single("doc
     const paidBy = body.paidBy ?? req.user!.id;
     const people = await validatePeople(houseId, paidBy, splitWith.length ? splitWith : (body.category === "to_split" ? members.map((m) => m.user_id) : []));
     id = newId("bil");
-    await run(`INSERT INTO bills (id, house_id, name, bill_type, category, amount, currency, due_date, paid_by, split_with, document, notes, created_by, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
-      id, houseId, body.name, body.billType, body.category, body.amount, currency,
+    await run(`INSERT INTO bills (id, house_id, name, bill_type, category, ledger_confirmed, amount, currency, due_date, paid_by, split_with, document, notes, created_by, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+      id, houseId, body.name, body.billType, body.category, body.category === "to_split" && body.ledgerConfirmed === true ? 1 : 0, body.amount, currency,
       body.dueDate || null, paidBy, JSON.stringify(people), filename, body.notes || null, req.user!.id, now(),
     ]);
     created = true;
@@ -203,6 +204,9 @@ singleBillRoutes.patch("/:billId", handler(async (req, res) => {
   if (current.category !== "to_split" && category === "to_split" && body.ledgerConfirmed !== true) {
     throw new ApiError(400, "Confirm this bill is not also recorded as a purchase receipt");
   }
+  const ledgerConfirmed = category === "to_split"
+    ? (current.category === "to_split" ? Boolean(current.ledger_confirmed) : body.ledgerConfirmed === true)
+    : false;
   let splitWith = category === "to_split"
     ? (body.splitWith === undefined ? parseJson<string[]>(current.split_with, []) : splitList(body.splitWith))
     : [];
@@ -214,8 +218,8 @@ singleBillRoutes.patch("/:billId", handler(async (req, res) => {
   let paidBy = body.paidBy === undefined ? current.paid_by : body.paidBy;
   if (body.paidBy === undefined && paidBy && !memberIds.has(paidBy)) paidBy = null;
   const people = await validatePeople(houseId, paidBy, splitWith);
-  await run(`UPDATE bills SET name = ?, bill_type = ?, category = ?, amount = ?, due_date = ?, paid_by = ?, split_with = ?, notes = ? WHERE id = ?`, [
-    body.name ?? current.name, body.billType ?? current.bill_type ?? "other", category, body.amount ?? current.amount,
+  await run(`UPDATE bills SET name = ?, bill_type = ?, category = ?, ledger_confirmed = ?, amount = ?, due_date = ?, paid_by = ?, split_with = ?, notes = ? WHERE id = ?`, [
+    body.name ?? current.name, body.billType ?? current.bill_type ?? "other", category, ledgerConfirmed ? 1 : 0, body.amount ?? current.amount,
     body.dueDate === undefined ? current.due_date : body.dueDate || null, paidBy ?? null, JSON.stringify(people),
     body.notes === undefined ? current.notes : body.notes || null, current.id,
   ]);

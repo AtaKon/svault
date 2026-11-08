@@ -97,6 +97,8 @@ export class SqliteDriver implements DatabaseDriver {
     ensureColumn("receipts", "savings", "REAL");
     ensureColumn("receipts", "paid_by", "TEXT REFERENCES users(id) ON DELETE SET NULL");
     ensureColumn("receipts", "split_with", "TEXT NOT NULL DEFAULT '[]'");
+    // Preserve existing shared bills when upgrading from the earlier bills schema.
+    ensureColumn("bills", "ledger_confirmed", "INTEGER NOT NULL DEFAULT 1");
     ensureColumn("receipt_lines", "raw_description", "TEXT");
     ensureColumn("receipt_lines", "tax_rate", "REAL");
     ensureColumn("receipt_lines", "discount", "REAL");
@@ -598,6 +600,7 @@ CREATE TABLE IF NOT EXISTS bills (
   name TEXT NOT NULL,
   bill_type TEXT NOT NULL DEFAULT 'other' CHECK (bill_type IN ('electricity', 'water', 'natural_gas', 'heating_oil', 'internet_telecom', 'rent', 'building_fees', 'municipal_fees', 'insurance', 'other')),
   category TEXT NOT NULL DEFAULT 'personal',
+  ledger_confirmed INTEGER NOT NULL DEFAULT 0,
   amount REAL NOT NULL,
   currency TEXT NOT NULL,
   due_date TEXT,

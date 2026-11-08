@@ -445,7 +445,7 @@ export async function householdInsight(houseId: string): Promise<{
   // categorised as shared. Personal bills remain visible in Bills & splitting.
   const bills = await all<any>(
     `SELECT amount, paid_by, split_with FROM bills
-     WHERE house_id = ? AND category = 'to_split' ORDER BY created_at`,
+     WHERE house_id = ? AND category = 'to_split' AND ledger_confirmed = 1 ORDER BY created_at`,
     [houseId],
   );
   for (const bill of bills) {

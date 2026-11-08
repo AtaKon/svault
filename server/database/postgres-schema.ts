@@ -254,6 +254,7 @@ CREATE TABLE IF NOT EXISTS bills (
   name TEXT NOT NULL,
   bill_type TEXT NOT NULL DEFAULT 'other' CHECK (bill_type IN ('electricity', 'water', 'natural_gas', 'heating_oil', 'internet_telecom', 'rent', 'building_fees', 'municipal_fees', 'insurance', 'other')),
   category TEXT NOT NULL DEFAULT 'personal',
+  ledger_confirmed INTEGER NOT NULL DEFAULT 0,
   amount DOUBLE PRECISION NOT NULL,
   currency TEXT NOT NULL,
   due_date TEXT,
@@ -650,6 +651,7 @@ export const POSTGRES_MIGRATIONS: string[] = [
     name TEXT NOT NULL,
     bill_type TEXT NOT NULL DEFAULT 'other' CHECK (bill_type IN ('electricity', 'water', 'natural_gas', 'heating_oil', 'internet_telecom', 'rent', 'building_fees', 'municipal_fees', 'insurance', 'other')),
     category TEXT NOT NULL DEFAULT 'personal',
+    ledger_confirmed INTEGER NOT NULL DEFAULT 0,
     amount DOUBLE PRECISION NOT NULL,
     currency TEXT NOT NULL,
     due_date TEXT,
@@ -660,6 +662,7 @@ export const POSTGRES_MIGRATIONS: string[] = [
     created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
     created_at TEXT NOT NULL
   )`,
+  "ALTER TABLE bills ADD COLUMN IF NOT EXISTS ledger_confirmed INTEGER NOT NULL DEFAULT 1",
   "CREATE INDEX IF NOT EXISTS bills_house ON bills(house_id, due_date, created_at)",
 ];
 
