@@ -116,7 +116,7 @@ export function Spinner({ size = 18, className }: { size?: number; className?: s
   );
 }
 
-export function LoadingBlock({ label }: { label: string }) {
+export function LoadingBlock({ label = "Loading" }: { label?: string }) {
   return (
     <div role="status" className="flex flex-col items-center justify-center gap-3 py-16 text-muted">
       <Spinner size={26} />

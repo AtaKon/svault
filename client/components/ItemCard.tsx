@@ -168,6 +168,14 @@ const ACTIONS = [
 
 type StockAction = (typeof ACTIONS)[number]["value"];
 
+const STOCK_SUCCESS_MESSAGES = {
+  add: "Stock added",
+  set: "Stock counted",
+  remove: "Stock removed",
+  waste: "Waste recorded",
+  move: "Stock moved",
+} satisfies Record<StockAction, string>;
+
 export function StockDialog({
   open,
   onClose,
@@ -281,14 +289,7 @@ export function StockDialog({
       }
       const detail = await api<ItemDetail>(`/api/items/${item.id}/stock`, { method: "POST", body });
       onUpdated(detail);
-      const successMessage = {
-        add: "Stock added",
-        set: "Stock counted",
-        remove: "Stock removed",
-        waste: "Waste recorded",
-        move: "Stock moved",
-      } satisfies Record<StockAction, string>;
-      toast.success(t(successMessage[action]));
+      toast.success(t(STOCK_SUCCESS_MESSAGES[action]));
       onClose();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t("Could not update stock"));
