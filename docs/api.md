@@ -216,6 +216,11 @@ Attribute types: `text`, `number`, `select`, `date`, `boolean`, `url`. Built-in 
 | `GET` | `/api/items/:itemId/aliases` | viewer+ | Receipt names mapped to this item. |
 | `POST` | `/api/items/:itemId/aliases` | member+ | Add `{ "rawName": "...", "vendorId": "vnd_..." }` (vendor optional). |
 | `DELETE` | `/api/items/:itemId/aliases/:aliasId` | member+ | Forget a receipt name. |
+| `GET` | `/api/items/:itemId/espresso-shots` | viewer+ | Espresso log for a coffee item, plus its summary. |
+| `POST` | `/api/items/:itemId/espresso-shots` | member+ | Log a shot. The item must have `espresso: true`. |
+| `PATCH` | `/api/items/:itemId/espresso-shots/:shotId` | member+ | Edit a shot. The author or an admin+ can change it. |
+| `DELETE` | `/api/items/:itemId/espresso-shots/:shotId` | member+ | Delete a shot. The author or an admin+ can remove it. |
+| `GET` | `/api/houses/:houseId/espresso-shots` | viewer+ | House-wide log: `shots`, `summary` and espresso-enabled `beans`. Optional `itemId` and `limit` (1-500). |
 
 List query parameters:
 
@@ -243,6 +248,7 @@ Create item body:
   "targetStock": 2,
   "attributes": { "origin": "Messinia" },
   "tags": ["kitchen", "greek"],
+  "espresso": false,
   "nutrition": {
     "basis": "100ml",
     "energyKcal": 884,
@@ -292,6 +298,51 @@ Every successful stock action returns the complete item detail. Its `priceHistor
 per incoming purchase: `at`, normalized `price` per item unit, entered `unit`, `quantity`, `unitPrice`,
 `vendorId`, `vendorName`, `receiptId` and `note`. Clients can filter this list by shop for per-vendor
 price comparisons.
+
+### Espresso log
+
+Set `"espresso": true` on a coffee item to give it a shot log. The item page then shows ratings and
+dial-in history, and the house-wide **Espresso log** screen lists every coffee. Log a shot with:
+
+```json
+{
+  "brewedAt": "2026-11-01T08:30:00.000Z",
+  "rating": 5,
+  "roastLevel": "medium",
+  "grindSetting": "2.4",
+  "grindSeconds": 12,
+  "doseGrams": 18,
+  "yieldGrams": 36,
+  "extractionSeconds": 28,
+  "waterTempC": 93,
+  "pressureBar": 9,
+  "tdsPercent": 9.2,
+  "grinder": "Eureka Mignon",
+  "machine": "Lelit Mara X",
+  "tastingNotes": "Cocoa and orange peel",
+  "tags": ["chocolate", "citrus"],
+  "notes": "Sweeter than yesterday."
+}
+```
+
+`rating` is required and must be 1-5. `roastLevel` is one of `light`, `medium-light`, `medium`,
+`medium-dark` or `dark`. Every other field is optional, so a quick rating alone is valid. `grindSetting`
+is free text so both `2.4` and `fine` work. `tags` accepts an array or a comma-separated string; each
+tag is capped at 40 characters and the list at 20, and over-limit input is rejected rather than
+truncated. `brewedAt` must be between 2000-01-01 and one day in the future.
+
+`PATCH` leaves every omitted field unchanged, including `brewedAt`; send `null` to clear a nullable
+field. `brewedAt` is not nullable, so omitting it leaves the date alone and sending `null` is rejected.
+Logging a new shot requires the item's espresso flag, but existing shots can still be edited or deleted
+after the flag is turned off so a mistaken entry never gets stuck. The house-wide history keeps those
+shots and shows the coffee name. `beans` includes espresso-enabled items plus any item that still has
+history, with `espresso: false` on the latter; the log form only offers beans whose flag is on.
+
+A shot response adds computed `ratio` (`yieldGrams / doseGrams`) and `extractionYieldPercent`
+(`yieldGrams × tdsPercent / doseGrams`). The list endpoints return `shots` and a `summary` with `count`,
+`averageRating`, `bestRating`, `lastBrewedAt`, average dose, yield, extraction time, ratio and extraction
+yield. The house-wide response also returns `beans`: each espresso-enabled coffee with its `shotCount`
+and `averageRating`. Deleting the coffee item deletes its shots.
 
 Barcode scan response:
 
