@@ -1201,6 +1201,28 @@ describe("espresso log", () => {
     assert.equal(res.data.error, "Turn on espresso logging for this item first");
   });
 
+  it("allows logging after the flag is turned on", async () => {
+    const item = await request(`/api/houses/${houseId}/items`, {
+      method: "POST",
+      body: { name: "Toggle espresso", unit: "g" },
+    });
+    assert.equal(item.status, 201);
+    const before = await request(`/api/items/${item.data.id}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 4 },
+    });
+    assert.equal(before.status, 400);
+    const on = await request(`/api/items/${item.data.id}`, { method: "PATCH", body: { espresso: true } });
+    assert.equal(on.status, 200);
+    assert.equal(on.data.espresso, true);
+    const shot = await request(`/api/items/${item.data.id}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 4 },
+    });
+    assert.equal(shot.status, 201);
+    await request(`/api/items/${item.data.id}`, { method: "DELETE" });
+  });
+
   it("logs a shot with roast, grinder and extraction parameters", async () => {
     const res = await request(`/api/items/${coffeeId}/espresso-shots`, {
       method: "POST",
@@ -1640,7 +1662,7 @@ describe("espresso log", () => {
     assert.equal(upperDate.status, 201);
     const farFuture = await request(`/api/items/${temp.data.id}/espresso-shots`, {
       method: "POST",
-      body: { rating: 3, brewedAt: new Date(Date.now() + 864e5 + 5000).toISOString() },
+      body: { rating: 3, brewedAt: new Date(Date.now() + 864e5 + 3600000).toISOString() },
     });
     assert.equal(farFuture.status, 400);
 
@@ -1660,6 +1682,10 @@ describe("espresso log", () => {
       body: { rating: 1 },
     });
     assert.equal(wrongItem.status, 404);
+    const wrongItemDelete = await request(`/api/items/${coffeeId}/espresso-shots/${logged.data.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(wrongItemDelete.status, 404);
 
     const off = await request(`/api/items/${temp.data.id}`, { method: "PATCH", body: { espresso: false } });
     assert.equal(off.status, 200);
