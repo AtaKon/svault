@@ -180,7 +180,10 @@ export function createPosoKaneiClient(
         Math.ceil((upstreamBlockedUntil - now) / 1000),
       );
     }
-    const existing = inFlight.get(code);
+    // Share only within one user so another account cannot get a lookup result
+    // without reserving its own per-user request slot.
+    const requestKey = JSON.stringify([userId, code]);
+    const existing = inFlight.get(requestKey);
     if (existing) return existing;
 
     const request = Promise.resolve().then(async () => {
@@ -250,8 +253,8 @@ export function createPosoKaneiClient(
         }
         throw normalizedError;
       }
-    }).finally(() => inFlight.delete(code));
-    inFlight.set(code, request);
+    }).finally(() => inFlight.delete(requestKey));
+    inFlight.set(requestKey, request);
     return request;
   }
 

@@ -5515,17 +5515,16 @@ describe("PosoKanei price lookup client", () => {
     assert.ok(Number.isFinite(Date.parse(offer.fetchedAt)));
   });
 
-  it("deduplicates concurrent requests for one barcode", async () => {
+  it("deduplicates concurrent requests only within the same user", async () => {
     let calls = 0;
     let rateLimitCalls = 0;
     let globalRateLimitCalls = 0;
-    let resolveResponse!: (response: Response) => void;
-    const pending = new Promise<Response>((resolve) => {
-      resolveResponse = resolve;
-    });
+    const pendingResponses: Array<(response: Response) => void> = [];
     const client = createPosoKaneiClient(async () => {
       calls++;
-      return pending;
+      return new Promise<Response>((resolve) => {
+        pendingResponses.push(resolve);
+      });
     }, () => {
       rateLimitCalls++;
     }, () => {
@@ -5534,16 +5533,20 @@ describe("PosoKanei price lookup client", () => {
     const first = client.lookupPosoKaneiBarcode("12345684", userId);
     const sameUserJoin = client.lookupPosoKaneiBarcode("12345684", userId);
     const otherUserJoin = client.lookupPosoKaneiBarcode("12345684", "another-user");
-    resolveResponse(new Response(JSON.stringify(product), { headers: { "content-type": "application/json" } }));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(calls, 2, "a different user starts a separately limited upstream request");
+    for (const resolveResponse of pendingResponses) {
+      resolveResponse(new Response(JSON.stringify(product), { headers: { "content-type": "application/json" } }));
+    }
     const [one, two, three] = await Promise.all([first, sameUserJoin, otherUserJoin]);
-    assert.equal(calls, 1);
-    assert.equal(rateLimitCalls, 1, "joining an in-flight upstream request does not consume a user slot");
-    assert.equal(globalRateLimitCalls, 1, "the shared upstream request consumes one global slot");
+    assert.equal(calls, 2);
+    assert.equal(rateLimitCalls, 2, "each user's upstream request reserves its own user slot");
+    assert.equal(globalRateLimitCalls, 2, "each upstream request reserves a global slot");
     assert.deepEqual(one, two);
     assert.deepEqual(one, three);
   });
 
-  it("charges only the initiating user when a shared in-flight request gets a 429", async () => {
+  it("charges one slot when same-user callers share an in-flight 429", async () => {
     let userSlots = 0;
     let globalSlots = 0;
     let resolveResponse!: (response: Response) => void;
@@ -5560,11 +5563,11 @@ describe("PosoKanei price lookup client", () => {
       },
     );
     const initiating = client.lookupPosoKaneiBarcode("12345699", "initiating-user");
-    const joining = client.lookupPosoKaneiBarcode("12345699", "joining-user");
+    const joining = client.lookupPosoKaneiBarcode("12345699", "initiating-user");
     resolveResponse(new Response("{}", { status: 429, headers: { "retry-after": "120" } }));
     const settled = await Promise.allSettled([initiating, joining]);
     assert.ok(settled.every((result) => result.status === "rejected" && result.reason instanceof PosoKaneiUnavailableError));
-    assert.equal(userSlots, 1, "only the caller that issued the upstream request retains its slot");
+    assert.equal(userSlots, 1, "same-user callers share one charged upstream attempt");
     assert.equal(globalSlots, 1, "the upstream 429 consumes one global request slot");
   });
 });
