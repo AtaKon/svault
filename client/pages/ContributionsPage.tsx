@@ -27,6 +27,15 @@ const FIELD_LABELS: Record<string, string> = {
   report: "Report",
 };
 
+const STATUS_TEXT: Record<OffContribution["status"], string> = {
+  queued: "Contribution queued",
+  sending: "Contribution sending",
+  sent: "Contribution sent",
+  retry: "Contribution retry",
+  failed: "Contribution failed",
+  cancelled: "Contribution cancelled",
+};
+
 function fieldLabel(field: string): string {
   return FIELD_LABELS[field] ?? field;
 }
@@ -69,7 +78,7 @@ export function ContributionsPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const account = useMemo<OffAccountPublic | null>(
-    () => summary?.accounts.find((entry) => entry.project === "off") ?? null,
+    () => summary?.accounts.find((entry) => entry.project === "off") ?? summary?.accounts[0] ?? null,
     [summary],
   );
   const ready = candidates.filter((candidate) => candidate.ready);
@@ -77,7 +86,9 @@ export function ContributionsPage() {
   const availableProjects = (["off", "obf", "opff", "opf"] as OffProjectId[]).filter(
     (project) => !summary?.accounts.some((entry) => entry.project === project),
   );
-  const selectedProject = availableProjects.includes(accountProject) ? accountProject : availableProjects[0] ?? "off";
+  const selectedProject = availableProjects.includes(accountProject)
+    ? accountProject
+    : availableProjects[0] ?? null;
 
   const load = useCallback(async () => {
     if (!house) {
@@ -95,6 +106,9 @@ export function ContributionsPage() {
       ]);
       setSummary(accounts);
       setCandidates(candidateResult.candidates);
+      setSelectedIds((current) =>
+        current.filter((id) => candidateResult.candidates.some((candidate) => candidate.id === id && candidate.ready)),
+      );
       setContributions(history.contributions);
       setConsent(Boolean(accounts.consentAt));
       try {
@@ -145,6 +159,8 @@ export function ContributionsPage() {
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t("Could not connect the account"));
     } finally {
+      if (project === "off") setPassword("");
+      else setProjectPassword("");
       setBusy(null);
     }
   };
@@ -162,7 +178,7 @@ export function ContributionsPage() {
     }
   };
 
-  const answerQuestion = async (annotation: 1 | 0 | -1) => {
+  const answerQuestion = async (annotation: 1 | 0) => {
     if (!question) return;
     // Robotoff: 1 = yes, 0 = no, -1 = skip. The UI sends only 1/0; "Skip" is local.
     setBusy("robotoff");
@@ -216,6 +232,7 @@ export function ContributionsPage() {
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t("Could not connect Open Prices"));
     } finally {
+      setPricePassword("");
       setBusy(null);
     }
   };
@@ -245,8 +262,9 @@ export function ContributionsPage() {
         `/api/off/prices/locations?q=${encodeURIComponent(q)}`,
       );
       setLocations(result.locations);
-    } catch {
+    } catch (error) {
       setLocations([]);
+      toast.error(error instanceof Error ? error.message : t("Could not search Open Prices locations"));
     }
   };
 
@@ -270,7 +288,7 @@ export function ContributionsPage() {
 
   const bulkShare = async () => {
     if (!house) return;
-    const chosen = ready.filter((candidate) => selectedIds.includes(candidate.id));
+    const chosen = candidates.filter((candidate) => candidate.ready && selectedIds.includes(candidate.id));
     if (!chosen.length) return;
     setBusy("bulk");
     const succeeded: string[] = [];
@@ -378,7 +396,7 @@ export function ContributionsPage() {
             </p>
           </div>
           {account ? (
-            <Badge tone="brand">{t("Connected as {username}", { username: account.username })}</Badge>
+            <Badge tone="brand">{t(offProjectLabel(account.project))} · {account.username}</Badge>
           ) : summary?.instanceAccount.available ? (
             <Badge tone="outline">{t("Using the instance account")}</Badge>
           ) : (
@@ -407,7 +425,7 @@ export function ContributionsPage() {
 
         {account ? (
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            <Button size="sm" variant="secondary" loading={busy === "unlink"} onClick={() => void unlinkAccount()}>
+            <Button size="sm" variant="secondary" loading={busy === "unlink"} onClick={() => void unlinkAccount(account.project)}>
               {t("Disconnect")}
             </Button>
             {account.status !== "connected" && <span className="text-[11px] text-warn">{account.error ?? t("Session expired")}</span>}
@@ -446,13 +464,13 @@ export function ContributionsPage() {
           </>
         )}
 
-        {summary && summary.accounts.length < 4 && (
+        {summary && availableProjects.length > 0 && (
           <div className="mt-4 border-t border-line pt-3">
             <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted">{t("Connect another project")}</p>
             <div className="mt-2 grid gap-2 sm:grid-cols-3">
               <Field label={t("Project")}>
                 <Select
-                  value={selectedProject}
+                  value={selectedProject ?? ""}
                   onChange={(event) => setAccountProject(event.target.value as OffProjectId)}
                 >
                   {availableProjects.map((project) => (
@@ -483,7 +501,10 @@ export function ContributionsPage() {
                 size="sm"
                 variant="secondary"
                 loading={busy === "link"}
-                onClick={() => void linkAccount(selectedProject, projectUsername, projectPassword)}
+                disabled={!selectedProject}
+                onClick={() => {
+                  if (selectedProject) void linkAccount(selectedProject, projectUsername, projectPassword);
+                }}
               >
                 {t("Connect project")}
               </Button>
@@ -688,7 +709,7 @@ export function ContributionsPage() {
           <div className="space-y-2">
             {contributions.map((contribution) => (
               <div key={contribution.id} className="flex flex-wrap items-center gap-2 rounded-xl border border-line bg-surface px-3 py-2.5">
-                <Badge tone={statusTone(contribution.status)}>{t(contribution.status)}</Badge>
+                <Badge tone={statusTone(contribution.status)}>{t(STATUS_TEXT[contribution.status])}</Badge>
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-[13px] font-medium">{contribution.itemName ?? contribution.code}</div>
                   <div className="truncate text-[11px] text-muted">

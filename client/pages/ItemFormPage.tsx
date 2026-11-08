@@ -146,7 +146,9 @@ export function ItemFormPage() {
       const offCode = params.get("offCode");
       if (offCode && !editing) payload.offCode = offCode;
       const offProject = params.get("offProject");
-      if (offProject && !editing) payload.offProject = offProject;
+      if (offProject && ["off", "obf", "opff", "opf"].includes(offProject) && !editing) {
+        payload.offProject = offProject;
+      }
       if (params.get("image") && !editing) payload.image = params.get("image");
 
       let item: ItemDetail;

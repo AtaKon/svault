@@ -65,7 +65,7 @@ export function OffProductPicker({
           // Fall through to a name search: the code may be a shop article code.
         }
       }
-      const data = await api<OffSearchResult>(`/api/catalog/search?q=${encodeURIComponent(q)}&online=1&project=${project}`);
+      const data = await api<OffSearchResult>(`/api/catalog/search?q=${encodeURIComponent(q)}&online=1&project=${encodeURIComponent(project)}`);
       setProducts(data.products);
       const warning = data.warningCode === "NOTHING_FOUND"
         ? t("Nothing found on OpenFoodFacts. Check the name or paste a barcode.")
