@@ -1,4 +1,4 @@
-import { Router, type Request } from "express";
+import { Router, type Request, type RequestHandler } from "express";
 import multer from "multer";
 import fs from "node:fs";
 import path from "node:path";
@@ -8,7 +8,7 @@ import { all, get, newId, now, parseJson, run } from "../db.js";
 import { memberRole, roleAtLeast, requireAuth } from "../auth.js";
 import { ApiError, handler, parseBody, requireHouse } from "../http.js";
 import { MAX_UPLOAD_BYTES, UPLOAD_DIR } from "../config.js";
-import { accessGuard, uploadPath, discardUploads } from "../upload.js";
+import { uploadPath, discardUploads } from "../upload.js";
 import { BILL_TYPE_VALUES } from "../../shared/bill-types.js";
 import type { UtilityBill } from "../../shared/types.js";
 
@@ -49,9 +49,12 @@ const verifyPdf = (req: any, _res: any, next: (error?: unknown) => void) => {
   if (!req.file) return next();
   try {
     const fd = fs.openSync(req.file.path, "r");
-    const signature = Buffer.alloc(5);
-    try { fs.readSync(fd, signature, 0, 5, 0); } finally { fs.closeSync(fd); }
-    if (signature.toString("ascii") !== "%PDF-") throw new ApiError(400, "That file is not a valid PDF");
+    const prefix = Buffer.alloc(1024);
+    let bytesRead: number;
+    try { bytesRead = fs.readSync(fd, prefix, 0, prefix.length, 0); } finally { fs.closeSync(fd); }
+    if (prefix.subarray(0, bytesRead).indexOf(Buffer.from("%PDF-")) < 0) {
+      throw new ApiError(400, "That file is not a valid PDF");
+    }
   } catch (error) {
     discardUploads(req);
     return next(error instanceof ApiError ? error : new ApiError(400, "That file is not a valid PDF"));
@@ -107,6 +110,17 @@ async function requireBillRow(id: string, houseId: string): Promise<BillRow> {
   if (!row) throw new ApiError(404, "Bill not found");
   return row;
 }
+const requireHouseBillMember: RequestHandler = (req, _res, next) => {
+  // This guard runs before Multer, so unauthorized uploads never touch disk.
+  void requireHouse(req, "member").then(() => next(), next);
+};
+const requireBillDocumentMember: RequestHandler = (req, _res, next) => {
+  // Check both house membership and bill ownership before accepting the file.
+  void (async () => {
+    const { houseId } = await requireHouse(req, "member");
+    if (!await billRow(String(req.params.billId), houseId)) throw new ApiError(404, "Bill not found");
+  })().then(() => next(), next);
+};
 async function billAccess(req: Request, minRole: "viewer" | "member" = "viewer") {
   const bill = await billRow(String(req.params.billId));
   if (!bill) throw new ApiError(404, "Bill not found");
@@ -132,11 +146,11 @@ billRoutes.get("/:houseId/bills", handler(async (req, res) => {
   res.json(rows.map(serialize));
 }));
 
-billRoutes.post("/:houseId/bills", accessGuard("member"), pdfUpload.single("document"), verifyPdf, handler(async (req, res) => {
+billRoutes.post("/:houseId/bills", requireHouseBillMember, pdfUpload.single("document"), verifyPdf, handler(async (req, res) => {
   const filename = req.file?.filename ?? null;
   let created = false;
   try {
-    const { houseId } = await requireHouse(req, "member");
+    const houseId = String(req.params.houseId);
     const body = parseBody(input, req.body);
     const house = await get<any>("SELECT currency FROM houses WHERE id = ?", [houseId]);
     const splitWith = body.category === "to_split" ? splitList(body.splitWith) : [];
@@ -177,8 +191,8 @@ singleBillRoutes.patch("/:billId", handler(async (req, res) => {
   res.json(serialize(await requireBillRow(current.id, houseId)));
 }));
 
-billRoutes.post("/:houseId/bills/:billId/document", accessGuard("member"), pdfUpload.single("document"), verifyPdf, handler(async (req, res) => {
-  const { houseId } = await requireHouse(req, "member");
+billRoutes.post("/:houseId/bills/:billId/document", requireBillDocumentMember, pdfUpload.single("document"), verifyPdf, handler(async (req, res) => {
+  const houseId = String(req.params.houseId);
   const current = await billRow(String(req.params.billId), houseId);
   if (!current) { discardUploads(req); throw new ApiError(404, "Bill not found"); }
   if (!req.file) throw new ApiError(400, "Choose a PDF file");

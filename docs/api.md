@@ -770,7 +770,7 @@ addressed to that user only. Other members do not see it.
 | `POST` | `/api/houses/:houseId/bills/:billId/document` | member+ | Attach or replace a PDF. |
 | `GET` | `/api/houses/:houseId/bills/:billId/document` | viewer+ | Read the attached PDF. |
 
-`billType` is one of `electricity`, `water`, `natural_gas`, `heating_oil`, `internet_telecom`, `rent`, `building_fees`, `municipal_fees`, `insurance`, or `other`. `category` is `to_split` or `personal`. Shared bills use equal cent-exact shares; when `to_split` is selected without `splitWith`, all current house members share it. Personal bills do not affect household balances. The PDF storage path is private; use the authenticated document route.
+`billType` is one of `electricity`, `water`, `natural_gas`, `heating_oil`, `internet_telecom`, `rent`, `building_fees`, `municipal_fees`, `insurance`, or `other`. `category` is `to_split` or `personal`. Shared bills use equal cent-exact shares; when `to_split` is selected without `splitWith`, all current house members share it. Personal bills do not affect household balances. Bills are separate from purchase receipts, so avoid recording the same expense in both places. The PDF storage path is private; use the authenticated document route.
 
 ## Insights
 
