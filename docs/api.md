@@ -362,7 +362,6 @@ fields before anything is queued. SVault stores an encrypted session cookie, nev
 | `GET` | `/api/off/contributions/:id` | Status, remote message and retry/cancel flags. |
 | `POST` | `/api/off/contributions/:id/retry` | Requeue a failed/retrying contribution. |
 | `DELETE` | `/api/off/contributions/:id` | Cancel a queued/retrying contribution. |
-| `GET` | `/api/off/services/:service` | Secondary service status is included in `/api/off/accounts` (`prices`, `folksonomy`). |
 | `POST` | `/api/off/services/:service/link` | `{ username, password }`. Exchange OFF credentials for an Open Prices or Folksonomy bearer token, stored encrypted. |
 | `DELETE` | `/api/off/services/:service` | Remove a secondary service token. |
 | `GET` | `/api/off/report-reasons` | NutriPatrol reason values and labels. |
@@ -372,7 +371,7 @@ fields before anything is queued. SVault stores an encrypted session cookie, nev
 | `POST` | `/api/off/folksonomy` | Advanced: `{ project, code, key, value }` writes one Folksonomy property. |
 | `GET` | `/api/off/stats` | Instance admin: queue counts and write flags. |
 
-Price contributions upload the receipt as an Open Prices proof, then submit `{ product_code, price, currency, date, proof_id }`. NutriPatrol reports reuse the linked OFF session and send `{ barcode, type, url, user_id, source, flavor, reason, comment }`. Both are queued through the same retry/cancel history as product edits.
+Price contributions upload the receipt as an Open Prices proof, then submit `{ product_code, price, currency, date, proof_id }`. NutriPatrol reports reuse the linked OFF session and send `{ barcode, type, url, user_id, source, flavor, reason, comment }`. Both are queued through the same retry/cancel history as product edits. Secondary service connection status is returned by `GET /api/off/accounts` as `services.prices` and `services.folksonomy`.
 
 The queue retries network, `429` and `5xx` failures with exponential backoff. Validation and auth failures stop and keep the draft. A successful write refreshes the local cache immediately. With `SV_OFF_DRY_RUN=true`, the full payload is built and queued but no request is sent.
 

@@ -26,6 +26,11 @@ function loadKey(): Buffer {
   if (fs.existsSync(KEY_FILE)) {
     const key = Buffer.from(fs.readFileSync(KEY_FILE, "utf8").trim(), "base64");
     if (key.length !== 32) throw new Error("DATA_DIR/off-secret.key is invalid; delete it to generate a new key");
+    try {
+      fs.chmodSync(KEY_FILE, 0o600);
+    } catch {
+      /* best effort on filesystems without POSIX modes */
+    }
     cachedKey = key;
     return key;
   }

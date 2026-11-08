@@ -50,8 +50,10 @@ offRoutes.use(requireAuth);
 
 function projectParam(value: unknown): OffProjectId | "all" {
   const text = String(value ?? "").trim();
+  if (!text) return "all";
   if (text === "all") return "all";
-  return isOffProjectId(text) ? text : "all";
+  if (isOffProjectId(text)) return text;
+  throw new ApiError(400, "Unknown Open Food Facts project");
 }
 
 function projectId(value: unknown): OffProjectId {

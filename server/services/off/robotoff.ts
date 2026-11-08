@@ -10,6 +10,18 @@ import { OFF_PROJECTS } from "./projects.js";
 const BASE = process.env.ROBOTOFF_API_BASE ?? "https://robotoff.openfoodfacts.org";
 const USER_AGENT = `SVault/${APP_VERSION} (self-hosted household inventory; https://github.com/AtaKon/svault)`;
 
+function safeImageUrl(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:") return null;
+    if (!/(^|\.)openfoodfacts\.org$/i.test(url.hostname)) return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
 export async function robotoffQuestions(
   project: OffProjectId,
   count = 1,
@@ -36,8 +48,8 @@ export async function robotoffQuestions(
       question: String(question.question ?? ""),
       value: question.value == null ? null : String(question.value),
       valueTag: question.value_tag == null ? null : String(question.value_tag),
-      sourceImageUrl: question.source_image_url ?? null,
-      refImageUrl: question.ref_image_url ?? null,
+      sourceImageUrl: safeImageUrl(question.source_image_url),
+      refImageUrl: safeImageUrl(question.ref_image_url),
     }));
   } catch {
     return [];

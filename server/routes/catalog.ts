@@ -27,8 +27,10 @@ const ALL_PROJECTS = "all" as const;
 
 function requestedProject(value: unknown, fallback: OffProjectId | typeof ALL_PROJECTS): OffProjectId | typeof ALL_PROJECTS {
   const text = String(value ?? "").trim();
+  if (!text) return fallback;
   if (text === ALL_PROJECTS) return ALL_PROJECTS;
-  return isOffProjectId(text) ? text : fallback;
+  if (isOffProjectId(text)) return text;
+  throw new ApiError(400, "Unknown Open Food Facts project");
 }
 
 async function localProducts(query: string, limit: number, project: OffProjectId | typeof ALL_PROJECTS) {

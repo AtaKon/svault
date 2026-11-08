@@ -63,14 +63,19 @@ export function ContributionsPage() {
   const [folkCode, setFolkCode] = useState("");
   const [folkKey, setFolkKey] = useState("");
   const [folkValue, setFolkValue] = useState("");
+  const [folkProject, setFolkProject] = useState<OffProjectId>("off");
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const account = useMemo<OffAccountPublic | null>(
     () => summary?.accounts.find((entry) => entry.project === "off") ?? null,
     [summary],
   );
+  const ready = candidates.filter((candidate) => candidate.ready);
+  const blocked = candidates.filter((candidate) => !candidate.ready);
 
   const load = useCallback(async () => {
     if (!house) return;
+    setLoadError(null);
     try {
       const [accounts, candidateResult, history] = await Promise.all([
         api<OffAccountSummary>("/api/off/accounts"),
@@ -92,7 +97,9 @@ export function ContributionsPage() {
         setQuestion(null);
       }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : t("Could not load Open Food Facts contributions"));
+      const message = error instanceof Error ? error.message : t("Could not load Open Food Facts contributions");
+      setLoadError(message);
+      toast.error(message);
     } finally {
       setLoading(false);
     }
@@ -118,6 +125,7 @@ export function ContributionsPage() {
         body: { username: username.trim(), password, consent: true },
       });
       setPassword("");
+      setUsername("");
       toast.success(t("Open Food Facts account connected"));
       await load();
     } catch (error) {
@@ -142,6 +150,7 @@ export function ContributionsPage() {
 
   const answerQuestion = async (annotation: 1 | 0 | -1) => {
     if (!question) return;
+    // Robotoff: 1 = yes, 0 = no, -1 = skip. "Skip" below does not send anything.
     setBusy("robotoff");
     try {
       await api("/api/off/robotoff/answers", {
@@ -165,7 +174,7 @@ export function ContributionsPage() {
     try {
       await api("/api/off/folksonomy", {
         method: "POST",
-        body: { project: "off", code: folkCode.trim(), key: folkKey.trim(), value: folkValue.trim() },
+        body: { project: folkProject, code: folkCode.trim(), key: folkKey.trim(), value: folkValue.trim() },
       });
       setFolkValue("");
       toast.success(t("Folksonomy property saved"));
@@ -205,8 +214,8 @@ export function ContributionsPage() {
     setLocationQuery(candidate.price?.vendor ?? "");
   };
 
-  const contributionBody = (candidate: OffContributionCandidate, chosen: string[]) => ({
-    houseId: house!.id,
+  const contributionBody = (houseId: string, candidate: OffContributionCandidate, chosen: string[]) => ({
+    houseId,
     itemId: candidate.kind === "price" ? undefined : candidate.itemId,
     receiptLineId: candidate.kind === "price" ? candidate.price?.receiptLineId : undefined,
     locationId: candidate.kind === "price" ? priceLocation?.id : undefined,
@@ -233,7 +242,7 @@ export function ContributionsPage() {
     try {
       await api("/api/off/contributions", {
         method: "POST",
-        body: contributionBody(selected, fields),
+        body: contributionBody(house.id, selected, fields),
       });
       setSelected(null);
       toast.success(t("Queued for Open Food Facts"));
@@ -250,18 +259,35 @@ export function ContributionsPage() {
     const chosen = ready.filter((candidate) => selectedIds.includes(candidate.id));
     if (!chosen.length) return;
     setBusy("bulk");
+    const succeeded: string[] = [];
+    const failures: string[] = [];
     try {
       for (const candidate of chosen) {
-        await api("/api/off/contributions", {
-          method: "POST",
-          body: contributionBody(candidate, candidate.fields),
-        });
+        try {
+          await api("/api/off/contributions", {
+            method: "POST",
+            body: contributionBody(house.id, candidate, candidate.fields),
+          });
+          succeeded.push(candidate.id);
+        } catch (error) {
+          failures.push(
+            `${candidate.itemName}: ${error instanceof Error ? error.message : t("failed")}`,
+          );
+        }
       }
-      setSelectedIds([]);
-      toast.success(t("Queued {count} contributions", { count: chosen.length }));
+      setSelectedIds((current) => current.filter((id) => !succeeded.includes(id)));
+      if (failures.length) {
+        toast.error(
+          t("Queued {ok} of {total}. Failed: {details}", {
+            ok: succeeded.length,
+            total: chosen.length,
+            details: failures.slice(0, 3).join("; "),
+          }),
+        );
+      } else {
+        toast.success(t("Queued {count} contributions", { count: succeeded.length }));
+      }
       await load();
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : t("Could not queue the contributions"));
     } finally {
       setBusy(null);
     }
@@ -299,9 +325,6 @@ export function ContributionsPage() {
     );
   }
 
-  const ready = candidates.filter((candidate) => candidate.ready);
-  const blocked = candidates.filter((candidate) => !candidate.ready);
-
   return (
     <div>
       <PageHeader
@@ -318,6 +341,17 @@ export function ContributionsPage() {
       {summary?.dryRun && (
         <Card className="mb-4 border-line bg-raised p-3 text-xs text-muted">
           {t("Dry run is on: contributions are validated and queued but nothing is sent to Open Food Facts.")}
+        </Card>
+      )}
+
+      {loadError && (
+        <Card className="mb-4 border-danger/40 bg-danger-soft p-3 text-xs text-danger">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span>{loadError}</span>
+            <Button size="sm" variant="secondary" onClick={() => void load()}>
+              {t("Retry")}
+            </Button>
+          </div>
         </Card>
       )}
 
@@ -398,7 +432,7 @@ export function ContributionsPage() {
           </>
         )}
 
-        {summary && summary.accounts.length > 0 && (
+        {summary && summary.accounts.length < 4 && (
           <div className="mt-4 border-t border-line pt-3">
             <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted">{t("Connect another project")}</p>
             <div className="mt-2 grid gap-2 sm:grid-cols-3">
@@ -485,7 +519,16 @@ export function ContributionsPage() {
             {summary?.services.folksonomy ? t("Connected") : t("Advanced")}
           </Badge>
         </div>
-        <div className="mt-3 grid gap-2 sm:grid-cols-3">
+        <div className="mt-3 grid gap-2 sm:grid-cols-4">
+          <Field label={t("Project")}>
+            <Select value={folkProject} onChange={(event) => setFolkProject(event.target.value as OffProjectId)}>
+              {(["off", "obf", "opff", "opf"] as OffProjectId[]).map((project) => (
+                <option key={project} value={project}>
+                  {t(offProjectLabel(project))}
+                </option>
+              ))}
+            </Select>
+          </Field>
           <Field label={t("Product code")}>
             <Input value={folkCode} onChange={(event) => setFolkCode(event.target.value)} placeholder="3017620422003" />
           </Field>
@@ -529,6 +572,9 @@ export function ContributionsPage() {
             </Button>
             <Button size="sm" variant="secondary" loading={busy === "robotoff"} onClick={() => void answerQuestion(0)}>
               {t("No")}
+            </Button>
+            <Button size="sm" variant="ghost" loading={busy === "robotoff"} onClick={() => void answerQuestion(-1)}>
+              {t("Not sure")}
             </Button>
             <Button size="sm" variant="ghost" onClick={() => setQuestion(null)}>
               {t("Skip")}
@@ -626,7 +672,8 @@ export function ContributionsPage() {
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-[13px] font-medium">{contribution.itemName ?? contribution.code}</div>
                   <div className="truncate text-[11px] text-muted">
-                    {t(offProjectLabel(contribution.project))} · {contribution.fields.map(fieldLabel).join(", ")}
+                    {t(offProjectLabel(contribution.project))} ·{" "}
+                    {contribution.fields.length ? contribution.fields.map(fieldLabel).join(", ") : t("No fields")}
                     {contribution.remoteMessage ? ` · ${contribution.remoteMessage}` : ""}
                   </div>
                 </div>
@@ -719,7 +766,7 @@ export function ContributionsPage() {
                     onChange={(event) => setLocationQuery(event.target.value)}
                     placeholder={t("Shop name or city")}
                   />
-                  <Button type="button" variant="secondary" onClick={() => void searchLocations()}>
+                  <Button type="button" variant="secondary" disabled={locationQuery.trim().length < 2} onClick={() => void searchLocations()}>
                     {t("Find")}
                   </Button>
                 </div>

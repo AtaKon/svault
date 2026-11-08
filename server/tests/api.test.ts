@@ -1587,6 +1587,8 @@ describe("OpenFoodFacts links and shared catalogue", () => {
       assert.equal(priceBody.product_code, fetaCode);
       assert.equal(priceBody.price, 9.9);
       assert.equal(priceBody.proof_id, 99);
+      // Open Prices only requires a proof; a location is optional.
+      assert.equal(priceBody.location_id, undefined);
     } finally {
       globalThis.fetch = originalFetch;
       if (savedWrites === undefined) delete process.env.SV_OFF_WRITE_ENABLED;
@@ -1716,9 +1718,115 @@ describe("OpenFoodFacts links and shared catalogue", () => {
       assert.equal(answer.status, 200);
       assert.equal(answer.data.ok, true);
       assert.ok(answerBody.includes("annotation=1"));
+
+      // 0 is "no"; -1 is "skip". The server forwards the value unchanged.
+      await request("/api/off/robotoff/answers", {
+        method: "POST",
+        body: { insightId: "insight-1", annotation: 0 },
+      });
+      assert.ok(answerBody.includes("annotation=0"));
+      await request("/api/off/robotoff/answers", {
+        method: "POST",
+        body: { insightId: "insight-1", annotation: -1 },
+      });
+      assert.ok(answerBody.includes("annotation=-1"));
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  it("rejects unknown project names instead of silently searching elsewhere", async () => {
+    const search = await request("/api/catalog/search?q=feta&online=0&project=not-a-project");
+    assert.equal(search.status, 400);
+    const lookup = await request(`/api/off/lookup/${fetaCode}?project=not-a-project`);
+    assert.equal(lookup.status, 400);
+    const product = await request(`/api/off/product/not-a-project/${fetaCode}`);
+    assert.equal(product.status, 400);
+    const create = await request(`/api/houses/${houseId}/items`, {
+      method: "POST",
+      body: { name: "Invalid project item", unit: "pcs", offProject: "not-a-project" },
+    });
+    assert.equal(create.status, 400);
+  });
+
+  it("rejects queueing when writes are disabled and when consent is missing", async () => {
+    const savedWrites = process.env.SV_OFF_WRITE_ENABLED;
+    const savedDryRun = process.env.SV_OFF_DRY_RUN;
+    process.env.SV_OFF_WRITE_ENABLED = "false";
+    process.env.SV_OFF_DRY_RUN = "false";
+    try {
+      const disabled = await request("/api/off/contributions", {
+        method: "POST",
+        body: { houseId, itemId: "itm_missing", kind: "missing_fields" },
+      });
+      assert.equal(disabled.status, 403);
+      assert.match(String(disabled.data.error), /disabled/i);
+    } finally {
+      if (savedWrites === undefined) delete process.env.SV_OFF_WRITE_ENABLED;
+      else process.env.SV_OFF_WRITE_ENABLED = savedWrites;
+      if (savedDryRun === undefined) delete process.env.SV_OFF_DRY_RUN;
+      else process.env.SV_OFF_DRY_RUN = savedDryRun;
+    }
+
+    const consent = await get<{ user_id: string }>("SELECT user_id FROM off_consents LIMIT 1");
+    assert.ok(consent);
+    await run("DELETE FROM off_consents WHERE user_id = ?", [consent.user_id]);
+    process.env.SV_OFF_WRITE_ENABLED = "true";
+    process.env.SV_OFF_DRY_RUN = "true";
+    try {
+      const missingConsent = await request("/api/off/contributions", {
+        method: "POST",
+        body: { houseId, itemId: "itm_missing", kind: "missing_fields" },
+      });
+      assert.equal(missingConsent.status, 403);
+      assert.match(String(missingConsent.data.error), /license/i);
+    } finally {
+      await request("/api/off/consent", { method: "POST", body: { accept: true } });
+      if (savedWrites === undefined) delete process.env.SV_OFF_WRITE_ENABLED;
+      else process.env.SV_OFF_WRITE_ENABLED = savedWrites;
+      if (savedDryRun === undefined) delete process.env.SV_OFF_DRY_RUN;
+      else process.env.SV_OFF_DRY_RUN = savedDryRun;
+    }
+  });
+
+  it("rejects a duplicate project/code in the product cache", async () => {
+    const timestamp = new Date().toISOString();
+    await assert.rejects(() =>
+      run(
+        `INSERT INTO catalog_products (project, code, name, fetched_at, updated_at)
+         VALUES ('off', ?, 'Duplicate', ?, ?)`,
+        [fetaCode, timestamp, timestamp],
+      ),
+    );
+  });
+
+  it("treats a tampered stored session as disconnected instead of crashing", async () => {
+    const row = await get<any>(
+      "SELECT user_id, secret_ciphertext, secret_iv, secret_tag FROM user_off_accounts WHERE username = 'svault-test' AND project = 'off'",
+    );
+    assert.ok(row);
+    await run(
+      "UPDATE user_off_accounts SET secret_ciphertext = 'not-valid-ciphertext' WHERE username = 'svault-test' AND project = 'off'",
+    );
+    try {
+      const { contributionIdentity } = await import("../services/off/auth.js");
+      assert.equal(await contributionIdentity(row.user_id, "off"), null);
+    } finally {
+      await run(
+        "UPDATE user_off_accounts SET secret_ciphertext = ?, secret_iv = ?, secret_tag = ? WHERE username = 'svault-test' AND project = 'off'",
+        [row.secret_ciphertext, row.secret_iv, row.secret_tag],
+      );
+    }
+  });
+
+  it("exposes account verification and consent status", async () => {
+    const verify = await request("/api/off/accounts/off/verify", { method: "POST" });
+    assert.equal(verify.status, 200);
+    assert.equal(verify.data.account.username, "svault-test");
+    const consent = await request("/api/off/consent");
+    assert.equal(consent.status, 200);
+    assert.equal(consent.data.version, "2026-11-off-v1");
+    assert.ok(consent.data.consent.acceptedAt);
   });
 
   it("returns a stable code and human-readable warning for an empty online search", async () => {
