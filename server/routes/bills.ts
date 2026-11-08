@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Request } from "express";
 import multer from "multer";
 import fs from "node:fs";
 import path from "node:path";
@@ -10,11 +10,28 @@ import { ApiError, handler, parseBody, requireHouse } from "../http.js";
 import { MAX_UPLOAD_BYTES, UPLOAD_DIR } from "../config.js";
 import { accessGuard, uploadPath, discardUploads } from "../upload.js";
 import { BILL_TYPE_VALUES } from "../../shared/bill-types.js";
+import type { UtilityBill } from "../../shared/types.js";
 
 export const billRoutes = Router();
 export const singleBillRoutes = Router();
 billRoutes.use(requireAuth);
 singleBillRoutes.use(requireAuth);
+
+interface BillRow {
+  id: string;
+  house_id: string;
+  name: string;
+  bill_type: UtilityBill["billType"];
+  category: UtilityBill["category"];
+  amount: number;
+  currency: string;
+  due_date: string | null;
+  paid_by: string | null;
+  split_with: string;
+  document: string | null;
+  notes: string | null;
+  created_at: string;
+}
 
 const billDir = path.join(UPLOAD_DIR, "bills");
 fs.mkdirSync(billDir, { recursive: true });
@@ -57,7 +74,7 @@ const input = z.object({
   notes: z.string().trim().max(1000).nullable().optional(),
 });
 
-function serialize(row: any) {
+function serialize(row: BillRow): UtilityBill {
   return {
     id: row.id,
     name: row.name,
@@ -80,10 +97,15 @@ function splitList(value: string | string[] | undefined): string[] {
 }
 async function billRow(id: string, houseId?: string) {
   return houseId
-    ? get<any>("SELECT * FROM bills WHERE id = ? AND house_id = ?", [id, houseId])
-    : get<any>("SELECT * FROM bills WHERE id = ?", [id]);
+    ? get<BillRow>("SELECT * FROM bills WHERE id = ? AND house_id = ?", [id, houseId])
+    : get<BillRow>("SELECT * FROM bills WHERE id = ?", [id]);
 }
-async function billAccess(req: any, minRole: "viewer" | "member" = "viewer") {
+async function requireBillRow(id: string, houseId: string): Promise<BillRow> {
+  const row = await billRow(id, houseId);
+  if (!row) throw new ApiError(404, "Bill not found");
+  return row;
+}
+async function billAccess(req: Request, minRole: "viewer" | "member" = "viewer") {
   const bill = await billRow(String(req.params.billId));
   if (!bill) throw new ApiError(404, "Bill not found");
   const role = await memberRole(req.user!.id, bill.house_id);
@@ -91,7 +113,7 @@ async function billAccess(req: any, minRole: "viewer" | "member" = "viewer") {
   if (!roleAtLeast(role, minRole)) throw new ApiError(403, `Requires ${minRole} access`);
   return { bill, houseId: bill.house_id as string };
 }
-async function deleteDocument(filename?: string | null) {
+function deleteDocument(filename?: string | null) {
   if (filename) fs.rmSync(uploadPath("bills", filename), { force: true });
 }
 async function validatePeople(houseId: string, paidBy: string | null | undefined, splitWith: string[]) {
@@ -104,7 +126,7 @@ async function validatePeople(houseId: string, paidBy: string | null | undefined
 
 billRoutes.get("/:houseId/bills", handler(async (req, res) => {
   const { houseId } = await requireHouse(req);
-  const rows = await all<any>("SELECT * FROM bills WHERE house_id = ? ORDER BY due_date IS NULL, due_date DESC, created_at DESC", [houseId]);
+  const rows = await all<BillRow>("SELECT * FROM bills WHERE house_id = ? ORDER BY due_date IS NULL, due_date DESC, created_at DESC", [houseId]);
   res.json(rows.map(serialize));
 }));
 
@@ -126,7 +148,7 @@ billRoutes.post("/:houseId/bills", accessGuard("member"), pdfUpload.single("docu
       body.dueDate || null, paidBy, JSON.stringify(people), filename, body.notes || null, req.user!.id, now(),
     ]);
     created = true;
-    res.status(201).json(serialize(await billRow(id, houseId)));
+    res.status(201).json(serialize(await requireBillRow(id, houseId)));
   } catch (error) {
     if (!created) discardUploads(req);
     throw error;
@@ -150,7 +172,7 @@ singleBillRoutes.patch("/:billId", handler(async (req, res) => {
     body.dueDate === undefined ? current.due_date : body.dueDate || null, paidBy ?? null, JSON.stringify(people),
     body.notes === undefined ? current.notes : body.notes || null, current.id,
   ]);
-  res.json(serialize(await billRow(current.id, houseId)));
+  res.json(serialize(await requireBillRow(current.id, houseId)));
 }));
 
 billRoutes.post("/:houseId/bills/:billId/document", accessGuard("member"), pdfUpload.single("document"), verifyPdf, handler(async (req, res) => {
@@ -164,8 +186,8 @@ billRoutes.post("/:houseId/bills/:billId/document", accessGuard("member"), pdfUp
     discardUploads(req);
     throw error;
   }
-  await deleteDocument(current.document);
-  res.json(serialize(await billRow(current.id, houseId)));
+  deleteDocument(current.document);
+  res.json(serialize(await requireBillRow(current.id, houseId)));
 }));
 
 billRoutes.get("/:houseId/bills/:billId/document", handler(async (req, res) => {
@@ -177,17 +199,9 @@ billRoutes.get("/:houseId/bills/:billId/document", handler(async (req, res) => {
   res.sendFile(uploadPath("bills", bill.document));
 }));
 
-singleBillRoutes.get("/:billId/document", handler(async (req, res) => {
-  const { bill } = await billAccess(req);
-  if (!bill?.document) throw new ApiError(404, "Bill PDF not found");
-  res.setHeader("Content-Type", "application/pdf");
-  res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(`${bill.name}.pdf`)}`);
-  res.sendFile(uploadPath("bills", bill.document));
-}));
-
 singleBillRoutes.delete("/:billId", handler(async (req, res) => {
   const { bill } = await billAccess(req, "member");
   await run("DELETE FROM bills WHERE id = ?", [bill.id]);
-  await deleteDocument(bill.document);
+  deleteDocument(bill.document);
   res.json({ ok: true });
 }));

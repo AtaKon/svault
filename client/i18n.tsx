@@ -30,6 +30,7 @@ const EL: Record<string, string> = {
   "Paid by": "Πληρώθηκε από",
   "Split between": "Μοίρασμα μεταξύ",
   "Equal shares": "Ίσα μερίδια",
+  "Select at least one person to split the bill.": "Επίλεξε τουλάχιστον ένα άτομο για το μοίρασμα του λογαριασμού.",
   "Bill PDF": "PDF λογαριασμού",
   Optional: "Προαιρετικό",
   "Drop a PDF here or browse": "Σύρε εδώ ένα PDF ή επίλεξε αρχείο",

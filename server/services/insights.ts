@@ -421,12 +421,12 @@ export async function householdInsight(houseId: string): Promise<{
     const participants = (Array.isArray(parsed) ? parsed : []).filter(
       (id): id is string => typeof id === "string" && memberIds.has(id),
     );
-    const splitWith = [...new Set(participants.length ? participants : fallback)];
+    const splitWith = participants.length ? participants : fallback;
     if (payer && memberIds.has(payer)) paid.set(payer, (paid.get(payer) ?? 0) + total);
-    splitAmountEvenly(total, splitWith.length).forEach((share, index) => {
-      const id = splitWith[index];
-      if (id) owed.set(id, (owed.get(id) ?? 0) + share);
-    });
+    if (splitWith.length) {
+      const share = total / splitWith.length;
+      for (const id of splitWith) owed.set(id, (owed.get(id) ?? 0) + share);
+    }
     if (settled.length < 20) {
       settled.push({
         id: row.id,
@@ -452,9 +452,11 @@ export async function householdInsight(houseId: string): Promise<{
     const total = money(bill.amount);
     const payer = bill.paid_by && memberIds.has(bill.paid_by) ? bill.paid_by : null;
     const participants = parseJson<unknown>(bill.split_with, []);
-    const splitWith = [...new Set((Array.isArray(participants) ? participants : []).filter(
+    const selected = [...new Set((Array.isArray(participants) ? participants : []).filter(
       (id): id is string => typeof id === "string" && memberIds.has(id),
     ))];
+    const splitWith = selected.length ? selected : [...memberIds];
+    if (!splitWith.length) continue;
     if (payer) paid.set(payer, (paid.get(payer) ?? 0) + total);
     splitAmountEvenly(total, splitWith.length).forEach((share, index) => {
       const id = splitWith[index];

@@ -661,7 +661,6 @@ export const POSTGRES_MIGRATIONS: string[] = [
     created_at TEXT NOT NULL
   )`,
   "CREATE INDEX IF NOT EXISTS bills_house ON bills(house_id, due_date, created_at)",
-  "ALTER TABLE bills ADD COLUMN IF NOT EXISTS bill_type TEXT NOT NULL DEFAULT 'other'",
 ];
 
 /**
