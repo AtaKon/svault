@@ -87,7 +87,7 @@ function serialize(row: BillRow): UtilityBill {
   return {
     id: row.id,
     name: row.name,
-    billType: row.bill_type ?? "other",
+    billType: (BILL_TYPE_VALUES as readonly string[]).includes(row.bill_type) ? row.bill_type : "other",
     category: row.category,
     amount: Number(row.amount),
     currency: row.currency,

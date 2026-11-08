@@ -10,6 +10,8 @@ const EL: Record<string, string> = {
   "Bills & splitting": "Λογαριασμοί και μοίρασμα",
   "Track household bills, attach PDFs, and see who owes what for shared costs.": "Παρακολούθησε τους λογαριασμούς του σπιτιού, επισύναψε PDF και δες ποιος οφείλει τι για τα κοινόχρηστα έξοδα.",
   "Bills and purchase receipts are separate ledger entries. Record each expense in one place to avoid counting it twice.": "Οι λογαριασμοί και οι αποδείξεις αγορών καταχωρίζονται ξεχωριστά. Καταχώρισε κάθε έξοδο μόνο σε ένα σημείο για να μην υπολογιστεί δύο φορές.",
+  "Confirm this expense is not also recorded as a purchase receipt.": "Επιβεβαίωσε ότι αυτό το έξοδο δεν έχει καταχωριστεί και ως απόδειξη αγοράς.",
+  "I confirm this expense is not already recorded as a purchase receipt.": "Επιβεβαιώνω ότι αυτό το έξοδο δεν έχει ήδη καταχωριστεί ως απόδειξη αγοράς.",
   "Add a bill": "Προσθήκη λογαριασμού",
   "Bill name": "Όνομα λογαριασμού",
   "Electricity, internet, rent…": "Ρεύμα, ίντερνετ, ενοίκιο…",

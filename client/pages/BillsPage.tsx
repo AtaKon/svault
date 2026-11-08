@@ -26,6 +26,7 @@ export function BillsPage() {
   const [amount, setAmount] = useState("");
   const [billType, setBillType] = useState<UtilityBill["billType"]>("electricity");
   const [category, setCategory] = useState<UtilityBill["category"]>("to_split");
+  const [ledgerConfirmed, setLedgerConfirmed] = useState(false);
   const [dueDate, setDueDate] = useState("");
   const [paidBy, setPaidBy] = useState("");
   const [splitWith, setSplitWith] = useState<string[]>([]);
@@ -57,6 +58,10 @@ export function BillsPage() {
       toast.error(t("Enter a bill name and an amount greater than zero."));
       return;
     }
+    if (category === "to_split" && !ledgerConfirmed) {
+      toast.error(t("Confirm this expense is not also recorded as a purchase receipt."));
+      return;
+    }
     setSaving(true);
     try {
       const data = new FormData();
@@ -72,6 +77,7 @@ export function BillsPage() {
       if (file) data.set("document", file);
       await api<UtilityBill>(`/api/houses/${house.id}/bills`, { method: "POST", body: data });
       setName(""); setAmount(""); setDueDate(""); setNotes(""); setFile(null);
+      setLedgerConfirmed(false);
       toast.success(t("Bill added"));
       await load();
     } catch (err) {
@@ -114,13 +120,14 @@ export function BillsPage() {
           <Field label={t("Bill name")} required><Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("Electricity, internet, rent…")} required /></Field>
           <Field label={t("Bill type")}><Select value={billType} onChange={(e) => setBillType(e.target.value as UtilityBill["billType"])}>{BILL_TYPES.map((type) => <option key={type.value} value={type.value}>{t(type.label)}</option>)}</Select></Field>
           <Field label={t("Amount")} required><Input type="number" min="0.01" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" required /></Field>
-          <Field label={t("Category")}><Select value={category} onChange={(e) => setCategory(e.target.value as UtilityBill["category"])}><option value="to_split">{t("To be split")}</option><option value="personal">{t("Personal")}</option></Select></Field>
+          <Field label={t("Category")}><Select value={category} onChange={(e) => { setCategory(e.target.value as UtilityBill["category"]); setLedgerConfirmed(false); }}><option value="to_split">{t("To be split")}</option><option value="personal">{t("Personal")}</option></Select></Field>
           <Field label={t("Due date")}><Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} /></Field>
         </div>
         {category === "to_split" && <div className="grid gap-4 sm:grid-cols-2">
           <Field label={t("Paid by")}><Select value={paidBy} onChange={(e) => setPaidBy(e.target.value)}>{household?.members.map((member) => <option key={member.userId} value={member.userId}>{member.name}</option>)}</Select></Field>
           <Field label={t("Split between")} hint={t("Equal shares")}><div className="flex flex-wrap gap-2">{household?.members.map((member) => <label key={member.userId} className="flex cursor-pointer items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2 text-sm"><input type="checkbox" checked={splitWith.includes(member.userId)} onChange={(event) => { if (!event.target.checked && splitWith.length === 1) { toast.error(t("Select at least one person to split the bill.")); return; } setSplitWith((current) => event.target.checked ? [...current, member.userId] : current.filter((id) => id !== member.userId)); }} />{member.name}</label>)}</div></Field>
         </div>}
+        {category === "to_split" && <label className="flex items-start gap-2 text-sm text-muted"><input type="checkbox" checked={ledgerConfirmed} onChange={(event) => setLedgerConfirmed(event.target.checked)} className="mt-0.5" />{t("I confirm this expense is not already recorded as a purchase receipt.")}</label>}
         <Field label={t("Bill PDF")} hint={t("Optional")}>
           <div onDragOver={(event) => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={dropFile}
             className={`flex min-h-16 items-center gap-3 rounded-xl border border-dashed px-4 py-3 ${dragging ? "border-brand bg-brand-soft/50" : "border-line bg-raised/40"}`}>

@@ -5,6 +5,7 @@ import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { splitAmountEvenly } from "../../shared/bill-splitting.js";
+import { BILL_TYPE_LABELS, BILL_TYPE_VALUES } from "../../shared/bill-types.js";
 import { POSTGRES_TABLE_ORDER } from "../database/postgres-schema.js";
 
 const dataDir = mkdtempSync(path.join(tmpdir(), "svault-test-"));
@@ -4571,7 +4572,12 @@ describe("insights, household split and admin console", () => {
     const accepted = await request(`/api/houses/${billHouse}/bills`, { method: "POST", body: form(pdf) });
     assert.equal(accepted.status, 201, JSON.stringify(accepted.data));
     assert.equal(accepted.data.currency, "GBP");
+    assert.equal(accepted.data.billType, "electricity");
     assert.deepEqual([...accepted.data.splitWith].sort(), [ownerId, secondUserId].sort());
+    await assert.rejects(
+      run("UPDATE bills SET bill_type = 'gas_provider' WHERE id = ?", [accepted.data.id]),
+      "the database rejects bill types outside the shared enum",
+    );
     const addedFile = files().find((file) => !before.includes(file));
     assert.ok(addedFile);
     const billBackup = await backupForTest();
@@ -4598,6 +4604,8 @@ describe("insights, household split and admin console", () => {
       body: { name: "Private house bill", amount: 2, billType: "water", category: "personal" },
     });
     assert.equal(otherBill.status, 201);
+    const crossHouseRead = await fetch(base + `/api/houses/${billHouse}/bills/${otherBill.data.id}/document`, { headers: { cookie: secondUserCookie } });
+    assert.equal(crossHouseRead.status, 404);
     const beforeCrossHouseUpload = files();
     const crossHouseUpload = await request(`/api/houses/${billHouse}/bills/${otherBill.data.id}/document`, {
       auth: secondUserCookie,
@@ -4626,6 +4634,15 @@ describe("insights, household split and admin console", () => {
       body: { billType: "gas_provider" },
     });
     assert.equal(badTypePatch.status, 400, "bill type is enum-validated on PATCH");
+    assert.equal((await request(`/api/bills/${accepted.data.id}`, { method: "PATCH", body: { amount: 1.005 } })).status, 400);
+    assert.equal((await request(`/api/bills/${accepted.data.id}`, { method: "PATCH", body: { dueDate: "2024-13-40" } })).status, 400);
+    assert.equal((await request(`/api/bills/${accepted.data.id}`, { method: "PATCH", body: { paidBy: "usr_not_a_member" } })).status, 400);
+    const splitStringPatch = await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { splitWith: JSON.stringify([ownerId, secondUserId]) },
+    });
+    assert.equal(splitStringPatch.status, 200);
+    assert.deepEqual([...splitStringPatch.data.splitWith].sort(), [ownerId, secondUserId].sort());
 
     const documentResponse = await fetch(base + accepted.data.document, { headers: { cookie } });
     assert.equal(documentResponse.status, 200);
@@ -4686,6 +4703,54 @@ describe("insights, household split and admin console", () => {
       await run("DROP TRIGGER delete_bill_after_document_update");
     }
 
+    const oldDocument = (await get<{ document: string }>("SELECT document FROM bills WHERE id = ?", [accepted.data.id]))!.document;
+    const beforeMismatchedUpdate = files();
+    await run(`CREATE TRIGGER restore_old_document_after_update AFTER UPDATE OF document ON bills
+      WHEN NEW.id = '${accepted.data.id}' AND NEW.document <> OLD.document
+      BEGIN UPDATE bills SET document = OLD.document WHERE id = NEW.id; END`);
+    try {
+      const mismatchedUpload = await request(`/api/houses/${billHouse}/bills/${accepted.data.id}/document`, {
+        method: "POST",
+        body: form(pdf),
+      });
+      assert.equal(mismatchedUpload.status, 404);
+      assert.deepEqual(files(), beforeMismatchedUpdate, "a replaced row must discard the unadopted upload");
+      assert.equal((await get<{ document: string }>("SELECT document FROM bills WHERE id = ?", [accepted.data.id]))?.document, oldDocument,
+        "a failed replacement preserves the previous document reference");
+      assert.ok(files().includes(oldDocument), "a failed replacement keeps the old PDF on disk");
+    } finally {
+      await run("DROP TRIGGER restore_old_document_after_update");
+    }
+
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
+      otherHouse.data.id, secondUserId, "member", new Date().toISOString(),
+    ]);
+    const nullPayerBill = await request(`/api/houses/${otherHouse.data.id}/bills`, {
+      method: "POST",
+      body: { name: "Former payer fixture", amount: 6, billType: "water", category: "to_split", paidBy: secondUserId, splitWith: [ownerId, secondUserId] },
+    });
+    assert.equal(nullPayerBill.status, 201);
+    const payerBeforeLeaving = await request(`/api/houses/${otherHouse.data.id}/insights/household`);
+    assert.equal(payerBeforeLeaving.data.balances.find((row: any) => row.userId === ownerId).balance, -3);
+    assert.equal(payerBeforeLeaving.data.balances.find((row: any) => row.userId === secondUserId).balance, 3);
+    await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [otherHouse.data.id, secondUserId]);
+    const payerAfterLeaving = await request(`/api/houses/${otherHouse.data.id}/insights/household`);
+    assert.equal(payerAfterLeaving.data.balances.find((row: any) => row.userId === ownerId).balance, -6,
+      "a departed payer contributes nothing to paid while the remaining member still owes their share");
+
+    const allTypes: any[] = [];
+    for (const type of BILL_TYPE_VALUES) {
+      const saved = await request(`/api/houses/${billHouse}/bills`, {
+        method: "POST",
+        body: { name: `Type ${type}`, amount: 1, billType: type, category: "personal" },
+      });
+      assert.equal(saved.status, 201);
+      assert.equal(saved.data.billType, type);
+      assert.ok(BILL_TYPE_LABELS[saved.data.billType as keyof typeof BILL_TYPE_LABELS]);
+      allTypes.push(saved.data.id);
+    }
+    for (const id of allTypes) assert.equal((await request(`/api/bills/${id}`, { method: "DELETE" })).status, 200);
+
     await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [billHouse, secondUserId]);
     const afterMemberLeft = await request(`/api/bills/${accepted.data.id}`, {
       method: "PATCH",
@@ -4709,6 +4774,7 @@ describe("insights, household split and admin console", () => {
     assert.deepEqual(splitAmountEvenly(0, 3), [0, 0, 0]);
     assert.deepEqual(splitAmountEvenly(-1, 2), []);
     assert.deepEqual(splitAmountEvenly(1, 0), []);
+    assert.deepEqual(splitAmountEvenly(1, 2.5), []);
   });
 
   it("makes upload cleanup safe to repeat", async () => {
