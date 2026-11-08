@@ -22,6 +22,13 @@ const BILL_TYPES: { value: UtilityBill["billType"]; label: string }[] = [
   { value: "insurance", label: "Home insurance" },
   { value: "other", label: "Other" },
 ];
+function splitAmounts(amount: number, count: number): number[] {
+  if (!count) return [];
+  const cents = Math.round(amount * 100);
+  const baseCents = Math.floor(cents / count);
+  const remainder = cents - baseCents * count;
+  return Array.from({ length: count }, (_unused, index) => (baseCents + (index < remainder ? 1 : 0)) / 100);
+}
 
 export function BillsPage() {
   const { t } = useI18n();
@@ -146,12 +153,13 @@ export function BillsPage() {
       <div className="flex items-end justify-between gap-3"><div><div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">{t("Bill history")}</div><h2 className="mt-1 font-display text-xl">{t("Your household bills")}</h2></div><Badge>{bills.length} {t("bills")}</Badge></div>
       {loading ? <div className="space-y-3"><Skeleton className="h-28"/><Skeleton className="h-28"/></div> : bills.length === 0 ? <EmptyState icon="receipt" title={t("No bills yet")} body={t("Add a bill manually or attach a PDF to start your household ledger.")} /> : <div className="space-y-3">{bills.map((bill) => {
         const participants = bill.splitWith.map((id) => household?.members.find((member) => member.userId === id)).filter(Boolean) as Member[];
+        const shares = splitAmounts(bill.amount, participants.length);
         const payer = household?.members.find((member) => member.userId === bill.paidBy);
         return <Card key={bill.id} className="p-4 sm:p-5"><div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h3 className="truncate font-semibold">{bill.name}</h3><Badge>{t(BILL_TYPES.find((type) => type.value === bill.billType)?.label ?? "Other")}</Badge><Badge tone={bill.category === "to_split" ? "brand" : "neutral"}>{bill.category === "to_split" ? t("To be split") : t("Personal")}</Badge></div>
-            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted">{bill.dueDate && <span>{t("Due {date}", { date: shortDate(bill.dueDate) })}</span>}{payer && <span>{t("Paid by {name}", { name: payer.name })}</span>}</div>
+            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted">{bill.dueDate && <span>{t("Due {date}", { date: shortDate(bill.dueDate) })}</span>}{payer && <span>{t("Paid by {name}", { name: payer.name })}</span>}{bill.category === "to_split" && participants.length > 0 && <span>{participants.map((member, index) => `${member.name}: ${money(shares[index], bill.currency)}`).join(" · ")}</span>}</div>
             {bill.notes && <p className="mt-2 text-sm text-muted">{bill.notes}</p>}
-          </div><div className="flex items-center gap-3"><div className="text-right"><div className="font-display text-xl">{money(bill.amount, bill.currency)}</div>{bill.category === "to_split" && participants.length > 0 && <div className="text-xs text-muted">{money(bill.amount / participants.length, bill.currency)} {t("each")}</div>}</div><button onClick={() => void removeBill(bill)} className="rounded-lg p-2 text-muted hover:bg-raised hover:text-danger" aria-label={t("Delete bill")}><Icon name="trash" size={17}/></button></div>
+          </div><div className="flex items-center gap-3"><div className="text-right"><div className="font-display text-xl">{money(bill.amount, bill.currency)}</div></div><button onClick={() => void removeBill(bill)} className="rounded-lg p-2 text-muted hover:bg-raised hover:text-danger" aria-label={t("Delete bill")}><Icon name="trash" size={17}/></button></div>
           </div>
           <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-line pt-3">
             <Field label={t("Category")} className="w-44"><Select value={bill.category} onChange={(e) => void patchBill(bill, { category: e.target.value })}><option value="to_split">{t("To be split")}</option><option value="personal">{t("Personal")}</option></Select></Field>

@@ -6,6 +6,17 @@ import { setFormatLocale } from "./format";
 export type Language = "en" | "el";
 
 const EL: Record<string, string> = {
+  "Bill type": "Τύπος λογαριασμού",
+  Electricity: "Ηλεκτρικό ρεύμα",
+  Water: "Νερό",
+  "Natural gas": "Φυσικό αέριο",
+  "Heating oil": "Πετρέλαιο θέρμανσης",
+  "Internet & telecom": "Ίντερνετ και τηλεπικοινωνίες",
+  Rent: "Ενοίκιο",
+  "Building fees (common charges)": "Κοινόχρηστα",
+  "Municipal fees": "Δημοτικά τέλη",
+  "Home insurance": "Ασφάλεια κατοικίας",
+  Other: "Άλλο",
   Home: "Αρχική",
   Inventory: "Αποθήκη",
   Scan: "Σάρωση",

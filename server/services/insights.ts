@@ -363,6 +363,18 @@ export async function scanPriceAlerts(houseId: string): Promise<number> {
 
 /* ------------------------------------------------------------- household */
 
+function addSplitShares(owed: Map<string, number>, total: number, participants: string[]) {
+  const unique = [...new Set(participants)];
+  if (!unique.length) return;
+  const cents = Math.round(total * 100);
+  const baseCents = Math.floor(cents / unique.length);
+  const remainder = cents - baseCents * unique.length;
+  unique.forEach((id, index) => {
+    const share = (baseCents + (index < remainder ? 1 : 0)) / 100;
+    owed.set(id, (owed.get(id) ?? 0) + share);
+  });
+}
+
 export async function householdInsight(houseId: string): Promise<{
   currency: string;
   /** Everyone in the house, including members with no receipts yet. */
@@ -422,10 +434,7 @@ export async function householdInsight(houseId: string): Promise<{
     );
     const splitWith = participants.length ? participants : fallback;
     if (payer && memberIds.has(payer)) paid.set(payer, (paid.get(payer) ?? 0) + total);
-    if (splitWith.length) {
-      const share = total / splitWith.length;
-      for (const id of splitWith) owed.set(id, (owed.get(id) ?? 0) + share);
-    }
+    addSplitShares(owed, total, splitWith);
     if (settled.length < 20) {
       settled.push({
         id: row.id,
@@ -455,10 +464,7 @@ export async function householdInsight(houseId: string): Promise<{
       (id): id is string => typeof id === "string" && memberIds.has(id),
     );
     if (payer) paid.set(payer, (paid.get(payer) ?? 0) + total);
-    if (splitWith.length) {
-      const share = total / splitWith.length;
-      for (const id of splitWith) owed.set(id, (owed.get(id) ?? 0) + share);
-    }
+    addSplitShares(owed, total, splitWith);
   }
 
   const balances: HouseholdBalance[] = members.map((member) => {

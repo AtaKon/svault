@@ -29,12 +29,14 @@ const pdfUpload = multer({
 });
 const verifyPdf = (req: any, _res: any, next: (error?: unknown) => void) => {
   if (!req.file) return next();
-  const fd = fs.openSync(req.file.path, "r");
-  const signature = Buffer.alloc(5);
-  try { fs.readSync(fd, signature, 0, 5, 0); } finally { fs.closeSync(fd); }
-  if (signature.toString("ascii") !== "%PDF-") {
+  try {
+    const fd = fs.openSync(req.file.path, "r");
+    const signature = Buffer.alloc(5);
+    try { fs.readSync(fd, signature, 0, 5, 0); } finally { fs.closeSync(fd); }
+    if (signature.toString("ascii") !== "%PDF-") throw new ApiError(400, "That file is not a valid PDF");
+  } catch (error) {
     discardUploads(req);
-    return next(new ApiError(400, "That file is not a valid PDF"));
+    return next(error instanceof ApiError ? error : new ApiError(400, "That file is not a valid PDF"));
   }
   next();
 };
@@ -44,8 +46,11 @@ const input = z.object({
   billType: z.enum(["electricity", "water", "natural_gas", "heating_oil", "internet_telecom", "rent", "building_fees", "municipal_fees", "insurance", "other"]).default("other"),
   category: z.enum(["to_split", "personal"]).default("personal"),
   amount: z.coerce.number().finite().positive().max(1_000_000_000),
-  currency: z.string().trim().length(3).default("EUR"),
-  dueDate: z.string().trim().max(10).nullable().optional(),
+  currency: z.string().trim().regex(/^[A-Za-z]{3}$/).default("EUR"),
+  dueDate: z.preprocess((value) => value === "" ? null : value, z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).refine((date) => {
+    const parsed = new Date(`${date}T00:00:00.000Z`);
+    return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === date;
+  }, "Enter a valid due date").nullable().optional()),
   paidBy: z.string().max(60).nullable().optional(),
   splitWith: z.union([z.string(), z.array(z.string())]).optional(),
   notes: z.string().trim().max(1000).nullable().optional(),
@@ -103,23 +108,28 @@ billRoutes.get("/:houseId/bills", handler(async (req, res) => {
 }));
 
 billRoutes.post("/:houseId/bills", accessGuard("member"), pdfUpload.single("document"), verifyPdf, handler(async (req, res) => {
-  const { houseId } = await requireHouse(req, "member");
-  const body = parseBody(input, req.body);
-  const house = await get<any>("SELECT currency FROM houses WHERE id = ?", [houseId]);
-  const splitWith = body.category === "to_split" ? splitList(body.splitWith) : [];
-  const members = await all<{ user_id: string }>("SELECT user_id FROM house_members WHERE house_id = ?", [houseId]);
-  const paidBy = body.paidBy ?? req.user!.id;
-  const people = await validatePeople(houseId, paidBy, splitWith.length ? splitWith : (body.category === "to_split" ? members.map((m) => m.user_id) : []));
-  const id = newId("bil");
   const filename = req.file?.filename ?? null;
+  let created = false;
   try {
+    const { houseId } = await requireHouse(req, "member");
+    const body = parseBody(input, req.body);
+    const house = await get<any>("SELECT currency FROM houses WHERE id = ?", [houseId]);
+    const splitWith = body.category === "to_split" ? splitList(body.splitWith) : [];
+    const members = await all<{ user_id: string }>("SELECT user_id FROM house_members WHERE house_id = ?", [houseId]);
+    const paidBy = body.paidBy ?? req.user!.id;
+    const people = await validatePeople(houseId, paidBy, splitWith.length ? splitWith : (body.category === "to_split" ? members.map((m) => m.user_id) : []));
+    const id = newId("bil");
     await run(`INSERT INTO bills (id, house_id, name, bill_type, category, amount, currency, due_date, paid_by, split_with, document, notes, created_by, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
       id, houseId, body.name, body.billType, body.category, body.amount, body.currency.toUpperCase() || house?.currency || "EUR",
       body.dueDate || null, paidBy, JSON.stringify(people), filename, body.notes || null, req.user!.id, now(),
     ]);
-  } catch (error) { await deleteDocument(filename); throw error; }
-  res.status(201).json(serialize(await billRow(id, houseId)));
+    created = true;
+    res.status(201).json(serialize(await billRow(id, houseId)));
+  } catch (error) {
+    if (!created) discardUploads(req);
+    throw error;
+  }
 }));
 
 singleBillRoutes.patch("/:billId", handler(async (req, res) => {
@@ -145,7 +155,12 @@ singleBillRoutes.patch("/:billId", handler(async (req, res) => {
 singleBillRoutes.post("/:billId/document", accessGuard((req) => billAccess(req, "member")), pdfUpload.single("document"), verifyPdf, handler(async (req, res) => {
   const { houseId, bill: current } = await billAccess(req, "member");
   if (!req.file) throw new ApiError(400, "Choose a PDF file");
-  await run("UPDATE bills SET document = ? WHERE id = ?", [req.file.filename, current.id]);
+  try {
+    await run("UPDATE bills SET document = ? WHERE id = ?", [req.file.filename, current.id]);
+  } catch (error) {
+    discardUploads(req);
+    throw error;
+  }
   await deleteDocument(current.document);
   res.json(serialize(await billRow(current.id, houseId)));
 }));
@@ -154,7 +169,7 @@ singleBillRoutes.get("/:billId/document", handler(async (req, res) => {
   const { bill } = await billAccess(req);
   if (!bill?.document) throw new ApiError(404, "Bill PDF not found");
   res.setHeader("Content-Type", "application/pdf");
-  res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(bill.name)}.pdf"`);
+  res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(`${bill.name}.pdf`)}`);
   res.sendFile(uploadPath("bills", bill.document));
 }));
 
