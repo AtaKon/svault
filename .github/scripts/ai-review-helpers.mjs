@@ -28,7 +28,8 @@ export function splitDiff(diff, limit) {
       flush();
       const lines = section.split("\n");
       const hunk = lines.findIndex((line) => line.startsWith("@@"));
-      const fullHeader = `${(hunk > 0 ? lines.slice(0, hunk) : [lines[0]]).join("\n")}\n`;
+      const headerLines = hunk > 0 ? lines.slice(0, hunk) : hunk < 0 ? [lines[0]] : [];
+      const fullHeader = headerLines.length ? `${headerLines.join("\n")}\n` : "";
       const firstLine = `${lines[0]}\n`;
       const minimumPiece = Math.max(400, Math.floor(limit / 3));
       const fits = (candidate) => candidate.length + 48 + minimumPiece <= limit;
@@ -88,8 +89,8 @@ export function mergeChunkReviews(parts) {
       partBlocking.push(`- ${blockingText.slice(0, 2_000)}`);
     }
     if (!blockingText && (nonBlockingText || testsText)) {
-      nonBlocking.push(
-        `[part ${part.index}] Reviewer omitted the Blocking section; cannot confirm this part has no blockers.`,
+      partBlocking.push(
+        `- Reviewer omitted the Blocking section; cannot confirm this part has no blockers.`,
       );
     }
     if (!partNonBlocking.length && nonBlockingText && !/^none\.?$/i.test(nonBlockingText)) {
@@ -98,12 +99,14 @@ export function mergeChunkReviews(parts) {
     if (!partTests.length && testsText && !/^none\.?$/i.test(testsText)) {
       partTests.push(`- ${testsText.slice(0, 2_000)}`);
     }
+    if (!blockingText && !nonBlockingText && !testsText) {
+      partBlocking.push(
+        `- Reviewer returned an unexpected format for this part; cannot verify it is clean: ${part.text.slice(0, 500)}`,
+      );
+    }
     if (partBlocking.length) blocking.push(...partBlocking.map((line) => `[part ${part.index}] ${line}`));
     if (partNonBlocking.length) nonBlocking.push(...partNonBlocking.map((line) => `[part ${part.index}] ${line}`));
     if (partTests.length) tests.push(...partTests.map((line) => `[part ${part.index}] ${line}`));
-    if (!blockingText && !nonBlockingText && !testsText) {
-      nonBlocking.push(`[part ${part.index}] Reviewer returned an unexpected format; raw note: ${part.text.slice(0, 500)}`);
-    }
   }
   const dedupe = (lines) => [...new Set(lines)];
   const blockingLines = dedupe(blocking);

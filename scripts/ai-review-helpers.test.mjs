@@ -48,6 +48,7 @@ test("mergeChunkReviews flags a missing Blocking section", () => {
   const review = mergeChunkReviews([
     { index: 1, text: "### Non-blocking\n- some note\n### Tests\nNone." },
   ]);
+  assert.match(review, /Needs changes/);
   assert.match(review, /omitted the Blocking section/);
 });
 
@@ -113,9 +114,9 @@ test("mergeChunkReviews preserves overflow blocking notes", () => {
   assert.match(review, /only the first 20/);
 });
 
-test("mergeChunkReviews puts unexpected formats in non-blocking", () => {
+test("mergeChunkReviews treats unexpected formats as blocking", () => {
   const review = mergeChunkReviews([{ index: 2, text: "## Blocking\n- something" }]);
-  assert.match(review, /Ready for review/);
+  assert.match(review, /Needs changes/);
   assert.match(review, /unexpected format/);
 });
 
