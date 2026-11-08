@@ -342,6 +342,32 @@ product's `project`, so a pet-food or beauty product never resolves against the 
 Receipt imports accept `offCode` per line. When a line also has a printed `barcode`, the barcode wins;
 otherwise the shared catalogue resolves the raw text. Line responses expose `offCode` and `offProject`.
 
+### Contributing back
+
+Contributions are opt-in and disabled until `SV_OFF_WRITE_ENABLED=true`. A user connects an Open Food
+Facts account (or the instance account is configured), accepts the license, and reviews the exact
+fields before anything is queued. SVault stores an encrypted session cookie, never a password.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/off/accounts` | Linked accounts, instance-account availability, consent state and write flags. |
+| `POST` | `/api/off/accounts/:project/link` | `{ username, password, consent? }`. Exchanges the credentials for a session, stores it encrypted, discards the password. |
+| `POST` | `/api/off/accounts/:project/verify` | Re-check a stored session. |
+| `DELETE` | `/api/off/accounts/:project` | Remove the link and its secret. |
+| `GET` | `/api/off/consent` | Current consent version and timestamp. |
+| `POST` | `/api/off/consent` | `{ accept: true }`. Required before contributing. |
+| `GET` | `/api/off/contributions/candidates?houseId=` | Ranked eligible items with fields, preview values and blockers (`account`, `consent`, `writes_disabled`). |
+| `GET` | `/api/off/contributions` | The caller's queue/history (`status`, `limit`). |
+| `POST` | `/api/off/contributions` | `{ houseId, itemId, kind, fields }`. Re-runs eligibility and queues the write. |
+| `GET` | `/api/off/contributions/:id` | Status, remote message and retry/cancel flags. |
+| `POST` | `/api/off/contributions/:id/retry` | Requeue a failed/retrying contribution. |
+| `DELETE` | `/api/off/contributions/:id` | Cancel a queued/retrying contribution. |
+| `GET` | `/api/off/stats` | Instance admin: queue counts and write flags. |
+
+The queue retries network, `429` and `5xx` failures with exponential backoff. Validation and auth
+failures stop and keep the draft. A successful write refreshes the local cache immediately. With
+`SV_OFF_DRY_RUN=true`, the full payload is built and queued but no request is sent.
+
 ## Receipts and shops
 
 Shops (`vendors`) are per house. Receipts store the shop, date, totals, the original image and every

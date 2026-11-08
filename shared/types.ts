@@ -262,6 +262,71 @@ export interface OffSearchResult {
   warningCode: "NOTHING_FOUND" | "LIMITED_SEARCH" | null;
 }
 
+/** Something SVault can add to Open Food Facts on a user's behalf. */
+export type OffContributionKind = "new_product" | "missing_fields" | "photo";
+
+export interface OffContributionCandidate {
+  id: string;
+  kind: OffContributionKind;
+  project: OffProjectId;
+  code: string;
+  itemId: string;
+  itemName: string;
+  score: number;
+  fields: string[];
+  /** Human-readable preview values, keyed by field. */
+  values: Record<string, string | null>;
+  product: OffProduct | null;
+  image: string | null;
+  /** False when an account, consent or feature flag is missing. */
+  ready: boolean;
+  blocked: string[];
+}
+
+export type OffContributionStatus = "queued" | "sending" | "sent" | "retry" | "failed" | "cancelled";
+
+export interface OffContribution {
+  id: string;
+  project: OffProjectId;
+  code: string;
+  kind: OffContributionKind;
+  status: OffContributionStatus;
+  itemId: string | null;
+  itemName: string | null;
+  fields: string[];
+  attempts: number;
+  nextAttemptAt: string | null;
+  lastAttemptAt: string | null;
+  remoteStatus: string | null;
+  remoteMessage: string | null;
+  remoteId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  canRetry: boolean;
+  canCancel: boolean;
+}
+
+export interface OffAccountPublic {
+  project: OffProjectId;
+  username: string;
+  kind: "user" | "instance";
+  linkedAt: string | null;
+  verifiedAt: string | null;
+  expiresAt: string | null;
+  status: "connected" | "expired" | "error";
+  error: string | null;
+}
+
+export interface OffAccountSummary {
+  accounts: OffAccountPublic[];
+  instanceAccount: { available: boolean; username: string | null };
+  writesEnabled: boolean;
+  dryRun: boolean;
+  consentAt: string | null;
+  consentVersion: string | null;
+  consentRequired: boolean;
+}
+
 export interface CatalogMapping {
   id: string;
   country: string;

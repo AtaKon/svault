@@ -250,3 +250,15 @@ export function offProjectInfo(id: OffProjectId): OffProjectInfo {
 export function offProjectList(): OffProjectInfo[] {
   return OFF_PROJECT_IDS.map(offProjectInfo);
 }
+
+/**
+ * Projects whose write path has been verified for this release. Phase 2 ships
+ * food only; set SV_OFF_CONTRIB_PROJECTS after staging tests for the others.
+ */
+export function contributionProjectIds(): OffProjectId[] {
+  const configured = String(process.env.SV_OFF_CONTRIB_PROJECTS ?? "off")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  return OFF_PROJECT_IDS.filter((id) => configured.includes(id) && OFF_PROJECTS[id].capabilities.write);
+}

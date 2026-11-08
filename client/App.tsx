@@ -29,6 +29,7 @@ import { ShoppingPage } from "@/pages/ShoppingPage";
 import { PlanPage } from "@/pages/PlanPage";
 import { IntakePage } from "@/pages/IntakePage";
 import { InsightsPage } from "@/pages/InsightsPage";
+import { ContributionsPage } from "@/pages/ContributionsPage";
 import { AdminPage } from "@/pages/AdminPage";
 import { useI18n } from "@/i18n";
 
@@ -65,6 +66,7 @@ export function App() {
         <Route path="/plan" element={<PlanPage />} />
         <Route path="/intake" element={<IntakePage />} />
         <Route path="/insights" element={<InsightsPage />} />
+        <Route path="/contribute" element={<ContributionsPage />} />
         <Route path="/admin" element={<AdminPage />} />
         <Route path="/photos" element={<PhotosPage />} />
         <Route path="/notifications" element={<NotificationsPage />} />

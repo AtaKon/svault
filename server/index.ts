@@ -38,6 +38,7 @@ import { scanAllHouses } from "./services/notifications.js";
 import { seedVendorCatalog } from "./services/vendors.js";
 import { seedProductCatalog } from "./services/product-catalog.js";
 import { pruneOffProductCache } from "./services/openfoodfacts.js";
+import { startOffContributionWorker } from "./services/off/contributions.js";
 import { pruneAiCallLogs } from "./services/ai-logs.js";
 import { sweepOrphanUploads } from "./services/upload-cleanup.js";
 import { initDb, closeDb, databaseKind } from "./db.js";
@@ -48,6 +49,7 @@ await seedVendorCatalog();
 await seedProductCatalog();
 await pruneOffProductCache();
 await pruneAiCallLogs();
+startOffContributionWorker();
 
 export const app = express();
 app.disable("x-powered-by");

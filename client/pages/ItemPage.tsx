@@ -702,6 +702,8 @@ export function ItemPage() {
                       {t("Fill empty fields ")}</Button>
                     <Button size="sm" variant="ghost" icon="arrowUpRight" onClick={() => setOffPickerOpen(true)}>
                       {t("Change ")}</Button>
+                    <Button size="sm" variant="ghost" icon="sparkles" onClick={() => navigate("/contribute")}>
+                      {t("Contribute ")}</Button>
                     <Button
                       size="sm"
                       variant="ghost"

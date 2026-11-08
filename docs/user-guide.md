@@ -285,6 +285,24 @@ that place.
   **Find OpenFoodFacts** to confirm or change a line before importing; the chosen code is sent with the
   line.
 - You can also scan from an item page to attach a code to an existing item.
+- Barcode lookups cover Open Food Facts, Open Beauty Facts, Open Pet Food Facts and Open Products
+  Facts. Product cards show a Food, Beauty, Pet food or Products badge.
+
+### Contributing back to Open Food Facts
+
+- Open **Contribute** in the sidebar. SVault ranks local items whose Open Food Facts product is
+  missing a brand, category, nutrition panel or front photo, plus valid barcodes that are not in any
+  database yet.
+- Connect your own Open Food Facts account with your username (not email) and password. The password
+  is used once to obtain a session and is never stored; SVault keeps an encrypted session cookie.
+  Alternatively the administrator can configure a shared instance account.
+- Accept the license once. Data is public under the Open Database License; photos are CC-BY-SA, so
+  only upload photos you took yourself.
+- Press **Review**, untick anything you do not want to share, then **Share**. The item is queued and
+  sent in the background. The **History** section shows sent, queued and failed contributions with
+  retry or cancel when relevant.
+- Nothing is sent automatically. A successful write refreshes the local product cache. Administrators
+  can enable a dry run that validates and queues contributions without sending them.
 
 ### Low stock and expiry
 

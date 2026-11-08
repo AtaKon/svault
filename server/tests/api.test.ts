@@ -1154,6 +1154,8 @@ describe("OpenFoodFacts links and shared catalogue", () => {
   const fetaCode = "5201704054183";
   const dodoniCode = "5201168218114";
   const projectCode = "5201704054190";
+  const candidateCode = "5201704054275";
+  const retryCode = "5201704054282";
 
   async function seedProduct(code: string, name: string, brand: string, quantity: string, image: string) {
     const timestamp = new Date().toISOString();
@@ -1208,6 +1210,8 @@ describe("OpenFoodFacts links and shared catalogue", () => {
     await seedProduct(fetaCode, "Feta", "Kolios", "150 g", "https://example.test/feta.png");
     await seedProduct(dodoniCode, "Feta cheese (P.D.O.)", "Dodoni", "1 kg", "https://example.test/dodoni.png");
     await seedProduct(projectCode, "Project feta", "Kolios", "200 g", "https://example.test/project.png");
+    await seedProduct(candidateCode, "Candidate feta", "", "150 g", "https://example.test/candidate.png");
+    await seedProduct(retryCode, "Retry feta", "", "150 g", "https://example.test/retry.png");
   });
 
   it("searches the shared cache without going online", async () => {
@@ -1308,6 +1312,199 @@ describe("OpenFoodFacts links and shared catalogue", () => {
     assert.equal(linked.status, 200);
     assert.equal(linked.data.item.off.project, "off");
     assert.equal(linked.data.item.off.product.project, "off");
+  });
+
+  it("offers eligible products, records consent and queues a dry-run contribution", async () => {
+    const created = await request(`/api/houses/${houseId}/items`, {
+      method: "POST",
+      body: { name: "Candidate item", brand: "Local brand", unit: "pcs" },
+    });
+    assert.equal(created.status, 201);
+    const linked = await request(`/api/items/${created.data.id}/off/link`, {
+      method: "POST",
+      body: { code: candidateCode, project: "off" },
+    });
+    assert.equal(linked.status, 200);
+
+    const before = await request(`/api/off/contributions/candidates?houseId=${houseId}`);
+    const beforeCandidate = before.data.candidates.find((candidate: any) => candidate.itemId === created.data.id);
+    assert.ok(beforeCandidate);
+    assert.equal(beforeCandidate.kind, "missing_fields");
+    assert.ok(beforeCandidate.fields.includes("brand"));
+    assert.equal(beforeCandidate.ready, false);
+    assert.ok(beforeCandidate.blocked.includes("consent"));
+    assert.ok(beforeCandidate.blocked.includes("account"));
+
+    const originalFetch = globalThis.fetch;
+    const savedWrites = process.env.SV_OFF_WRITE_ENABLED;
+    const savedDryRun = process.env.SV_OFF_DRY_RUN;
+    process.env.SV_OFF_WRITE_ENABLED = "true";
+    process.env.SV_OFF_DRY_RUN = "true";
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes("/cgi/session.pl")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ status: "status ok" }), {
+            status: 200,
+            headers: { "content-type": "application/json", "set-cookie": "session=test-session-token; Path=/; HttpOnly" },
+          }),
+        );
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+
+    try {
+      const consent = await request("/api/off/consent", { method: "POST", body: { accept: true } });
+      assert.equal(consent.status, 200);
+      assert.ok(consent.data.consent.acceptedAt);
+
+      const link = await request("/api/off/accounts/off/link", {
+        method: "POST",
+        body: { username: "svault-test", password: "not-stored" },
+      });
+      assert.equal(link.status, 200);
+      assert.equal(link.data.account.username, "svault-test");
+      assert.equal(link.data.account.status, "connected");
+
+      const stored = await get<any>(
+        "SELECT secret_ciphertext FROM user_off_accounts WHERE username = ? AND project = 'off'",
+        ["svault-test"],
+      );
+      assert.ok(stored.secret_ciphertext);
+      assert.ok(!String(stored.secret_ciphertext).includes("test-session-token"));
+
+      const after = await request(`/api/off/contributions/candidates?houseId=${houseId}`);
+      const afterCandidate = after.data.candidates.find((candidate: any) => candidate.itemId === created.data.id);
+      assert.equal(afterCandidate.ready, true);
+      assert.deepEqual(afterCandidate.blocked, []);
+
+      const queued = await request("/api/off/contributions", {
+        method: "POST",
+        body: { houseId, itemId: created.data.id, kind: "missing_fields", fields: ["brand"] },
+      });
+      assert.equal(queued.status, 202);
+      const id = queued.data.contribution.id;
+      const duplicate = await request("/api/off/contributions", {
+        method: "POST",
+        body: { houseId, itemId: created.data.id, kind: "missing_fields", fields: ["brand"] },
+      });
+      assert.equal(duplicate.data.contribution.id, id);
+
+      let contribution = queued.data.contribution;
+      for (let attempt = 0; attempt < 40 && contribution.status !== "sent"; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        const current = await request(`/api/off/contributions/${id}`);
+        contribution = current.data.contribution;
+      }
+      assert.equal(contribution.status, "sent");
+      assert.equal(contribution.remoteStatus, "dry_run");
+
+      const payload = await get<any>("SELECT payload FROM off_contributions WHERE id = ?", [id]);
+      const form = JSON.parse(payload.payload).form;
+      assert.equal(form.add_brands, "Local brand");
+      assert.equal(form.app_name, "SVault");
+      assert.ok(form.comment.startsWith("SVault "));
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (savedWrites === undefined) delete process.env.SV_OFF_WRITE_ENABLED;
+      else process.env.SV_OFF_WRITE_ENABLED = savedWrites;
+      if (savedDryRun === undefined) delete process.env.SV_OFF_DRY_RUN;
+      else process.env.SV_OFF_DRY_RUN = savedDryRun;
+    }
+  });
+
+  it("retries a transient write failure and refreshes the cache on success", async () => {
+    const created = await request(`/api/houses/${houseId}/items`, {
+      method: "POST",
+      body: { name: "Retry item", brand: "Retry brand", unit: "pcs" },
+    });
+    const linked = await request(`/api/items/${created.data.id}/off/link`, {
+      method: "POST",
+      body: { code: retryCode, project: "off" },
+    });
+    assert.equal(linked.status, 200);
+
+    const originalFetch = globalThis.fetch;
+    const savedWrites = process.env.SV_OFF_WRITE_ENABLED;
+    const savedDryRun = process.env.SV_OFF_DRY_RUN;
+    process.env.SV_OFF_WRITE_ENABLED = "true";
+    process.env.SV_OFF_DRY_RUN = "false";
+    let writes = 0;
+    let sentForm: FormData | null = null;
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/cgi/product_jqm2.pl")) {
+        writes++;
+        sentForm = init?.body instanceof FormData ? init.body : null;
+        if (writes === 1) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ status: "status not ok", debug: "temporary" }), {
+              status: 503,
+              headers: { "content-type": "application/json" },
+            }),
+          );
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify({ status: "status ok" }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      }
+      if (url.includes(`/api/v3/product/${retryCode}`)) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              status: "success",
+              result: { id: "product_found" },
+              product: { code: retryCode, product_name: "Retry feta", brands: "Retry brand", product_type: "food" },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        );
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+
+    try {
+      const queued = await request("/api/off/contributions", {
+        method: "POST",
+        body: { houseId, itemId: created.data.id, kind: "missing_fields", fields: ["brand"] },
+      });
+      assert.equal(queued.status, 202);
+      const id = queued.data.contribution.id;
+      let contribution = queued.data.contribution;
+      for (let attempt = 0; attempt < 40 && contribution.status !== "retry"; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        contribution = (await request(`/api/off/contributions/${id}`)).data.contribution;
+      }
+      assert.equal(contribution.status, "retry");
+      assert.equal(contribution.attempts, 1);
+
+      const retried = await request(`/api/off/contributions/${id}/retry`, { method: "POST" });
+      assert.equal(retried.status, 200);
+      contribution = retried.data.contribution;
+      for (let attempt = 0; attempt < 40 && contribution.status !== "sent"; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        contribution = (await request(`/api/off/contributions/${id}`)).data.contribution;
+      }
+      assert.equal(contribution.status, "sent");
+      assert.equal(contribution.remoteStatus, "status ok");
+      assert.ok(writes >= 2);
+      const form: any = sentForm;
+      assert.equal(form?.get("app_name"), "SVault");
+      assert.ok(form?.get("app_uuid"));
+      assert.equal(form?.get("add_brands"), "Retry brand");
+
+      const cache = await get<any>("SELECT name, brand FROM catalog_products WHERE project = 'off' AND code = ?", [retryCode]);
+      assert.equal(cache.name, "Retry feta");
+      assert.equal(cache.brand, "Retry brand");
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (savedWrites === undefined) delete process.env.SV_OFF_WRITE_ENABLED;
+      else process.env.SV_OFF_WRITE_ENABLED = savedWrites;
+      if (savedDryRun === undefined) delete process.env.SV_OFF_DRY_RUN;
+      else process.env.SV_OFF_DRY_RUN = savedDryRun;
+    }
   });
 
   it("returns a stable code and human-readable warning for an empty online search", async () => {

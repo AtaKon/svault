@@ -12,6 +12,11 @@ All notable changes to SVault are documented here. The format follows
   Food Facts and Open Products Facts. A universal barcode lookup reports which project owns the
   product, the shared cache is keyed by project, and product cards show a Food/Beauty/Pet food/Products
   badge. Name search remains full-text for food; the other projects search the local cache and say so.
+- Opt-in contributions back to Open Food Facts. Signed-in users can connect an OFF account (or use an
+  instance account), review which local fields are missing from the product, and queue a safe additive
+  edit or front photo. A dedicated **Contribute** page ranks eligible items, shows blockers, and keeps
+  a history with retry/cancel. Passwords are never stored; session cookies are encrypted at rest and
+  writes are disabled unless `SV_OFF_WRITE_ENABLED=true`.
 - A new **Insights** page brings spending together: monthly budget and progress, spend by month, shop
   and category, waste value, price alerts, a use-it-up view with matching recipes, cheapest-shop hints
   for open shopping-list lines, and a household split with settle-up suggestions. Each house stores its

@@ -391,6 +391,64 @@ CREATE TABLE IF NOT EXISTS catalog_mappings (
 CREATE INDEX IF NOT EXISTS catalog_mappings_lookup ON catalog_mappings(country, vendor_key, raw_key);
 CREATE INDEX IF NOT EXISTS catalog_mappings_off ON catalog_mappings(off_code);
 
+/* Open Food Facts contribution plumbing. Accounts store only an encrypted
+   session/token; contributions keep the exact write payload for retry/audit. */
+CREATE TABLE IF NOT EXISTS user_off_accounts (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  project TEXT NOT NULL DEFAULT 'off',
+  username TEXT NOT NULL,
+  secret_kind TEXT NOT NULL DEFAULT 'cookie',
+  secret_ciphertext TEXT NOT NULL,
+  secret_iv TEXT NOT NULL,
+  secret_tag TEXT NOT NULL,
+  secret_expires_at TEXT,
+  app_uuid TEXT NOT NULL,
+  linked_at TEXT NOT NULL,
+  verified_at TEXT,
+  last_error TEXT,
+  PRIMARY KEY (user_id, project)
+);
+
+CREATE TABLE IF NOT EXISTS off_consents (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  accepted_at TEXT NOT NULL,
+  version TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS off_contributions (
+  id TEXT PRIMARY KEY,
+  idempotency_key TEXT NOT NULL UNIQUE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  house_id TEXT REFERENCES houses(id) ON DELETE SET NULL,
+  item_id TEXT REFERENCES items(id) ON DELETE SET NULL,
+  project TEXT NOT NULL,
+  code TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  payload TEXT NOT NULL DEFAULT '{}',
+  field_keys TEXT NOT NULL DEFAULT '[]',
+  image_field TEXT,
+  status TEXT NOT NULL DEFAULT 'queued',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at TEXT,
+  last_attempt_at TEXT,
+  remote_status TEXT,
+  remote_message TEXT,
+  remote_id TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS off_contributions_user ON off_contributions(user_id, created_at);
+CREATE INDEX IF NOT EXISTS off_contributions_queue ON off_contributions(status, next_attempt_at);
+
+CREATE TABLE IF NOT EXISTS off_contribution_events (
+  id TEXT PRIMARY KEY,
+  contribution_id TEXT NOT NULL REFERENCES off_contributions(id) ON DELETE CASCADE,
+  status TEXT NOT NULL,
+  detail TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS off_contribution_events_contribution ON off_contribution_events(contribution_id, created_at);
+
 CREATE TABLE IF NOT EXISTS receipt_templates (
   id TEXT PRIMARY KEY,
   house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
@@ -678,6 +736,10 @@ export const POSTGRES_TABLE_ORDER = [
   "product_aliases",
   "catalog_products",
   "catalog_mappings",
+  "user_off_accounts",
+  "off_consents",
+  "off_contributions",
+  "off_contribution_events",
   "receipt_templates",
   "notifications",
   "shopping_list_items",

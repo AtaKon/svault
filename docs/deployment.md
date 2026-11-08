@@ -102,6 +102,16 @@ Docker Compose reads `.env` next to `docker-compose.yml`.
 | `OFF_SEARCH_BASE` | `https://search.openfoodfacts.org` | Server | Name-search endpoint. |
 | `OFF_TIMEOUT_MS` | `6000` | Server | Per-request OpenFoodFacts timeout. |
 | `OFF_CACHE_DAYS` | `30` | Server | How long a product stays fresh in the shared cache. |
+| `OFF_BEAUTY_API_BASE` | `https://world.openbeautyfacts.org` | Server | Open Beauty Facts endpoint. |
+| `OFF_PETF_API_BASE` | `https://world.openpetfoodfacts.org` | Server | Open Pet Food Facts endpoint. |
+| `OFF_PRODUCTS_API_BASE` | `https://world.openproductsfacts.org` | Server | Open Products Facts endpoint. |
+| `SV_OFF_CONTACT` | empty | Server | Contact address in the Open Food Facts `User-Agent`. Required before production contributions. |
+| `SV_OFF_WRITE_ENABLED` | `false` | Server | Enable contributions. Reads work without it. |
+| `SV_OFF_DRY_RUN` | `false` | Server | Build and queue contribution payloads without sending them. |
+| `SV_OFF_CONTRIB_PROJECTS` | `off` | Server | Comma-separated projects with a verified write path (`off`, `obf`, `opff`, `opf`). |
+| `OFF_CONTRIB_USER` | empty | Server | Optional instance contribution account username. |
+| `OFF_CONTRIB_PASSWORD` | empty | Server | Instance account password (environment only; never stored). |
+| `SV_OFF_SECRET_KEY` | generated | Server | Base64 32-byte key for encrypted OFF sessions. If unset, `DATA_DIR/off-secret.key` is generated. |
 | `PORT` | `4000` | Server | Internal listen port. Keep it at 4000 inside the container. |
 | `DATA_DIR` | `./data` locally, `/data` in Docker | Server | Database and uploads directory. |
 | `SV_PRE_RESTORE_KEEP` | `3` | Server, `npm run restore` | Safety copies kept in `DATA_DIR/backups/pre-restore` (minimum 1). Add it to the compose `environment` block if you change it. |

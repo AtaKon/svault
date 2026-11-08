@@ -240,18 +240,27 @@ stock, prices, barcodes, reminders, photo labelling and authentication.
 
 ### OpenFoodFacts enrichment
 
-- `server/services/openfoodfacts.ts` normalises GTIN spellings, fetches the full product, and caches
-  the summary plus raw payload in the instance-wide `catalog_products` table for 30 days. Scans,
-  receipt imports and the item page share that cache, so repeated lookups do not hit the network.
-- Barcode scans (`GET /api/houses/:houseId/scan`) return the complete cached product. Name search uses
-  the search-a-licious endpoint and is rate-limited per process.
-- Linking an item (`POST /api/items/:itemId/off/link`) attaches the OFF code as a barcode and fills
-  only blank first-class fields: name, description, brand, image and a matching house category.
-  Existing values are never overwritten, and the response lists what was filled or skipped.
-  `off_filled` records the provenance for the UI.
+- `server/services/openfoodfacts.ts` normalises GTIN spellings, fetches v3 products, and caches the
+  summary plus raw payload in the instance-wide `catalog_products` table for 30 days. The cache is
+  keyed by `(project, code)` because the same barcode can exist in more than one Open Food Facts
+  database. A universal lookup (`product_type=all`) routes to Open Food Facts, Open Beauty Facts, Open
+  Pet Food Facts or Open Products Facts and records the owning project.
+- Barcode scans (`GET /api/houses/:houseId/scan`) return the complete cached product and its project.
+  Name search uses search-a-licious for food; the other projects search the local cache and return a
+  `LIMITED_SEARCH` warning rather than pretending to have full-text search.
+- Linking an item (`POST /api/items/:itemId/off/link`) attaches the OFF code as a barcode, stores the
+  project on the item, and fills only blank first-class fields: name, description, brand, image and a
+  matching house category. Existing values are never overwritten, and the response lists what was
+  filled or skipped. `off_filled` records the provenance for the UI.
 - Receipt imports resolve an `offCode` before the write transaction (network calls never hold the
   SQLite lock). New items are created with the receipt name and unit, then enriched from OFF. Existing
   items keep a different existing OFF link — only an explicit user action replaces it.
+- Contributions (`server/services/off/`) are opt-in and off by default. The eligibility engine ranks
+  local items whose OFF product is missing a field, or whose valid GTIN is absent everywhere. A linked
+  user's OFF session is encrypted with AES-256-GCM in `DATA_DIR/off-secret.key`; passwords are used
+  once and discarded. The durable `off_contributions` queue rebuilds an allow-listed form on the
+  server, retries transient failures with backoff, and refreshes the local cache after a success.
+  `SV_OFF_WRITE_ENABLED` gates all writes; `SV_OFF_DRY_RUN` validates without sending.
 - `server/services/product-catalog.ts` maps normalised receipt text to an OFF code. Bundled mappings
   live in `assets/catalog/off-mappings.json` and are marked `seed`; corrections learned on the
   instance are `local` and win over seed/community rows. Rows learned from a house's receipts carry
