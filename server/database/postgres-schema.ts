@@ -414,8 +414,6 @@ CREATE TABLE IF NOT EXISTS catalog_products (
   updated_at TEXT NOT NULL,
   PRIMARY KEY (project, code)
 );
-CREATE INDEX IF NOT EXISTS catalog_products_name ON catalog_products(project, name);
-CREATE INDEX IF NOT EXISTS catalog_products_brand ON catalog_products(project, brand);
 
 CREATE TABLE IF NOT EXISTS catalog_mappings (
   id TEXT PRIMARY KEY,
@@ -748,6 +746,11 @@ export const POSTGRES_MIGRATIONS: string[] = [
   "ALTER TABLE receipts ADD COLUMN IF NOT EXISTS split_with TEXT NOT NULL DEFAULT '[]'",
   // Open Food Facts projects: the shared product cache is keyed by project.
   "ALTER TABLE catalog_products ADD COLUMN IF NOT EXISTS project TEXT NOT NULL DEFAULT 'off'",
+  // Existing databases have no project column until the ALTER above runs.
+  "DROP INDEX IF EXISTS catalog_products_name",
+  "DROP INDEX IF EXISTS catalog_products_brand",
+  "CREATE INDEX IF NOT EXISTS catalog_products_project_name ON catalog_products(project, name)",
+  "CREATE INDEX IF NOT EXISTS catalog_products_project_brand ON catalog_products(project, brand)",
   `DO $$ DECLARE pk text; BEGIN
      SELECT c.conname INTO pk
      FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid
