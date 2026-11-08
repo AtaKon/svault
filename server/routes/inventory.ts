@@ -120,13 +120,13 @@ const espressoShotBody = z.object({
   notes: z.string().trim().max(2000).nullish(),
 });
 
-function espressoBrewedAt(value: string | null | undefined): string {
+export function espressoBrewedAt(value: string | null | undefined, nowMs = Date.now()): string {
   if (value === null) throw new ApiError(400, "Brew date cannot be cleared");
-  if (value === undefined) return now();
+  if (value === undefined) return new Date(nowMs).toISOString();
   const timestamp = Date.parse(value);
   if (!Number.isFinite(timestamp)) throw new ApiError(400, "Invalid brew date");
   const earliest = Date.parse("2000-01-01T00:00:00.000Z");
-  const latest = Date.now() + 864e5;
+  const latest = nowMs + 864e5;
   if (timestamp < earliest || timestamp > latest) {
     throw new ApiError(400, "Brew date is out of range");
   }
@@ -1082,7 +1082,7 @@ itemRoutes.patch(
          grinder = ?, machine = ?, tasting_notes = ?, tags = ?, notes = ?, updated_at = ? WHERE id = ? AND item_id = ? AND house_id = ?`,
       [
         body.brewedAt === undefined ? shot.brewed_at : espressoBrewedAt(body.brewedAt),
-        body.rating ?? shot.rating,
+        body.rating === undefined ? shot.rating : body.rating,
         body.roastLevel === undefined ? shot.roast_level : body.roastLevel,
         body.grindSetting === undefined ? shot.grind_setting : body.grindSetting,
         body.grindSeconds === undefined ? shot.grind_seconds : body.grindSeconds,

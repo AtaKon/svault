@@ -114,6 +114,7 @@ const { LIDL_TEMPLATE_RULES, SKLAVENITIS_TEMPLATE_RULES } = await import("../../
 const { convert, pricePerUnit } = await import("../units.js");
 const { parseOffNutrition } = await import("../services/nutrition.js");
 const { parseCsv, parseCsvNumber } = await import("../services/csv.js");
+const { espressoBrewedAt } = await import("../routes/inventory.js");
 const { totpCode, verifyTotp, generateTotpSecret, generateBackupCodes } = await import("../services/totp.js");
 const { backupForTest, validateBackup } = await import("../services/backup.js");
 const { inspectDataset, importDataset } = await import("../services/dataset-import.js");
@@ -1157,6 +1158,20 @@ describe("espresso log", () => {
   let memberShotId = "";
   let memberUserId = "";
 
+  it("validates brew dates at the exact boundaries", () => {
+    const fixed = Date.parse("2026-11-08T12:00:00.000Z");
+    assert.equal(espressoBrewedAt(undefined, fixed), "2026-11-08T12:00:00.000Z");
+    assert.equal(espressoBrewedAt("2000-01-01T00:00:00.000Z", fixed), "2000-01-01T00:00:00.000Z");
+    assert.equal(
+      espressoBrewedAt(new Date(fixed + 864e5).toISOString(), fixed),
+      new Date(fixed + 864e5).toISOString(),
+    );
+    assert.throws(() => espressoBrewedAt(null, fixed));
+    assert.throws(() => espressoBrewedAt("", fixed));
+    assert.throws(() => espressoBrewedAt("1999-12-31T23:59:59.000Z", fixed));
+    assert.throws(() => espressoBrewedAt(new Date(fixed + 864e5 + 1).toISOString(), fixed));
+  });
+
   after(async () => {
     if (memberUserId) {
       await request(`/api/houses/${houseId}/members/${memberUserId}`, { method: "DELETE" });
@@ -1579,6 +1594,11 @@ describe("espresso log", () => {
       body: { rating: 3, tags: Array.from({ length: 21 }, (_, index) => `tag${index}`) },
     });
     assert.equal(tooManyTags.status, 400);
+    const tooManyStringTags = await request(`/api/items/${temp.data.id}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 3, tags: Array.from({ length: 21 }, (_, index) => `tag${index}`).join(",") },
+    });
+    assert.equal(tooManyStringTags.status, 400);
 
     const maxTags = await request(`/api/items/${temp.data.id}/espresso-shots`, {
       method: "POST",
@@ -1727,11 +1747,13 @@ db.exec(\`
 \`);
 db.close();
 const { initDb, get, closeDb } = await import("./server/db.ts");
+const { DATABASE_KIND } = await import("./server/config.ts");
 await initDb();
 const column = await get("SELECT COUNT(*) AS n FROM pragma_table_info('items') WHERE name = 'espresso'");
 const item = await get("SELECT espresso FROM items WHERE id = 'itm_legacy'");
 const table = await get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'espresso_shots'");
 console.log(JSON.stringify({
+  kind: DATABASE_KIND,
   column: Number(column.n),
   espresso: Number(item.espresso),
   table: table?.name ?? null,
@@ -1758,6 +1780,7 @@ await closeDb();
         },
       );
       const result = JSON.parse(output.trim());
+      assert.equal(result.kind, "sqlite");
       assert.equal(result.column, 1);
       assert.equal(result.espresso, 0);
       assert.equal(result.table, "espresso_shots");
