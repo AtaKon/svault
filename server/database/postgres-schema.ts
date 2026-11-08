@@ -197,6 +197,7 @@ CREATE TABLE IF NOT EXISTS items (
   tags TEXT NOT NULL DEFAULT '[]',
   image TEXT,
   nutrition TEXT,
+  espresso INTEGER NOT NULL DEFAULT 0,
   off_code TEXT,
   off_linked_at TEXT,
   off_source TEXT,
@@ -220,6 +221,34 @@ CREATE TABLE IF NOT EXISTS item_barcodes (
   UNIQUE (house_id, code)
 );
 CREATE INDEX IF NOT EXISTS barcodes_item ON item_barcodes(item_id);
+
+CREATE TABLE IF NOT EXISTS espresso_shots (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  brewed_at TEXT NOT NULL,
+  rating INTEGER NOT NULL,
+  roast_level TEXT,
+  grind_setting TEXT,
+  grind_seconds DOUBLE PRECISION,
+  dose_grams DOUBLE PRECISION,
+  yield_grams DOUBLE PRECISION,
+  extraction_seconds DOUBLE PRECISION,
+  water_temp_c DOUBLE PRECISION,
+  pressure_bar DOUBLE PRECISION,
+  tds_percent DOUBLE PRECISION,
+  grinder TEXT,
+  machine TEXT,
+  tasting_notes TEXT,
+  tags TEXT NOT NULL DEFAULT '[]',
+  notes TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS espresso_shots_house ON espresso_shots(house_id, brewed_at);
+CREATE INDEX IF NOT EXISTS espresso_shots_item ON espresso_shots(item_id, brewed_at);
+CREATE INDEX IF NOT EXISTS espresso_shots_user ON espresso_shots(user_id, brewed_at);
 
 CREATE TABLE IF NOT EXISTS receipts (
   id TEXT PRIMARY KEY,
@@ -626,6 +655,7 @@ export const POSTGRES_MIGRATIONS: string[] = [
   "CREATE INDEX IF NOT EXISTS catalog_mappings_house ON catalog_mappings(house_id)",
   "ALTER TABLE receipts ADD COLUMN IF NOT EXISTS paid_by TEXT",
   "ALTER TABLE receipts ADD COLUMN IF NOT EXISTS split_with TEXT NOT NULL DEFAULT '[]'",
+  "ALTER TABLE items ADD COLUMN IF NOT EXISTS espresso INTEGER NOT NULL DEFAULT 0",
 ];
 
 /**
@@ -650,6 +680,7 @@ export const POSTGRES_TABLE_ORDER = [
   "vendors",
   "items",
   "item_barcodes",
+  "espresso_shots",
   "receipts",
   "stock_lots",
   "stock_movements",
