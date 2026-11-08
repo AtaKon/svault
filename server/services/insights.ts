@@ -4,6 +4,7 @@ import { createNotification } from "./notifications.js";
 import { normalizeName } from "./shopping.js";
 import { heuristicReceipt, normaliseReceiptDraft } from "./receipt-local.js";
 import { reconcileReceipt } from "../../shared/receipt-reconcile.js";
+import { splitAmountEvenly } from "../../shared/bill-splitting.js";
 import type {
   HouseBudgetSettings,
   HouseholdBalance,
@@ -363,18 +364,6 @@ export async function scanPriceAlerts(houseId: string): Promise<number> {
 
 /* ------------------------------------------------------------- household */
 
-function addSplitShares(owed: Map<string, number>, total: number, participants: string[]) {
-  const unique = [...new Set(participants)];
-  if (!unique.length) return;
-  const cents = Math.round(total * 100);
-  const baseCents = Math.floor(cents / unique.length);
-  const remainder = cents - baseCents * unique.length;
-  unique.forEach((id, index) => {
-    const share = (baseCents + (index < remainder ? 1 : 0)) / 100;
-    owed.set(id, (owed.get(id) ?? 0) + share);
-  });
-}
-
 export async function householdInsight(houseId: string): Promise<{
   currency: string;
   /** Everyone in the house, including members with no receipts yet. */
@@ -432,9 +421,12 @@ export async function householdInsight(houseId: string): Promise<{
     const participants = (Array.isArray(parsed) ? parsed : []).filter(
       (id): id is string => typeof id === "string" && memberIds.has(id),
     );
-    const splitWith = participants.length ? participants : fallback;
+    const splitWith = [...new Set(participants.length ? participants : fallback)];
     if (payer && memberIds.has(payer)) paid.set(payer, (paid.get(payer) ?? 0) + total);
-    addSplitShares(owed, total, splitWith);
+    splitAmountEvenly(total, splitWith.length).forEach((share, index) => {
+      const id = splitWith[index];
+      if (id) owed.set(id, (owed.get(id) ?? 0) + share);
+    });
     if (settled.length < 20) {
       settled.push({
         id: row.id,
@@ -460,11 +452,14 @@ export async function householdInsight(houseId: string): Promise<{
     const total = money(bill.amount);
     const payer = bill.paid_by && memberIds.has(bill.paid_by) ? bill.paid_by : null;
     const participants = parseJson<unknown>(bill.split_with, []);
-    const splitWith = (Array.isArray(participants) ? participants : []).filter(
+    const splitWith = [...new Set((Array.isArray(participants) ? participants : []).filter(
       (id): id is string => typeof id === "string" && memberIds.has(id),
-    );
+    ))];
     if (payer) paid.set(payer, (paid.get(payer) ?? 0) + total);
-    addSplitShares(owed, total, splitWith);
+    splitAmountEvenly(total, splitWith.length).forEach((share, index) => {
+      const id = splitWith[index];
+      if (id) owed.set(id, (owed.get(id) ?? 0) + share);
+    });
   }
 
   const balances: HouseholdBalance[] = members.map((member) => {

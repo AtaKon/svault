@@ -58,6 +58,7 @@ export class SqliteDriver implements DatabaseDriver {
     applyPendingSqliteRestore();
     const conn = new DatabaseSync(DB_FILE);
     conn.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
+    // Create the current tables before applying in-place column migrations below.
     conn.exec(SCHEMA);
 
     /**

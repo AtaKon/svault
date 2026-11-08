@@ -6,29 +6,13 @@ import { Icon } from "@/components/icons";
 import { useToast } from "@/components/toast";
 import { money, shortDate } from "@/format";
 import { useI18n } from "@/i18n";
+import { BILL_TYPE_LABELS, BILL_TYPE_VALUES } from "@shared/bill-types";
+import { splitAmountEvenly } from "@shared/bill-splitting";
 import type { UtilityBill } from "@shared/types";
 
 type Member = { userId: string; name: string; role: string };
 type Household = { currency: string; members: Member[] };
-const BILL_TYPES: { value: UtilityBill["billType"]; label: string }[] = [
-  { value: "electricity", label: "Electricity" },
-  { value: "water", label: "Water" },
-  { value: "natural_gas", label: "Natural gas" },
-  { value: "heating_oil", label: "Heating oil" },
-  { value: "internet_telecom", label: "Internet & telecom" },
-  { value: "rent", label: "Rent" },
-  { value: "building_fees", label: "Building fees (common charges)" },
-  { value: "municipal_fees", label: "Municipal fees" },
-  { value: "insurance", label: "Home insurance" },
-  { value: "other", label: "Other" },
-];
-function splitAmounts(amount: number, count: number): number[] {
-  if (!count) return [];
-  const cents = Math.round(amount * 100);
-  const baseCents = Math.floor(cents / count);
-  const remainder = cents - baseCents * count;
-  return Array.from({ length: count }, (_unused, index) => (baseCents + (index < remainder ? 1 : 0)) / 100);
-}
+const BILL_TYPES = BILL_TYPE_VALUES.map((value) => ({ value, label: BILL_TYPE_LABELS[value] }));
 
 export function BillsPage() {
   const { t } = useI18n();
@@ -111,7 +95,7 @@ export function BillsPage() {
       toast.error(t("Choose a PDF bill")); return;
     }
     const form = new FormData(); form.set("document", nextFile);
-    try { await api(`/api/bills/${bill.id}/document`, { method: "POST", body: form }); await load(); }
+    try { await api(`/api/houses/${house.id}/bills/${bill.id}/document`, { method: "POST", body: form }); await load(); }
     catch (err) { toast.error(err instanceof Error ? t(err.message) : t("Could not upload the PDF")); }
   };
   const dropFile = (event: DragEvent<HTMLDivElement>) => {
@@ -153,7 +137,7 @@ export function BillsPage() {
       <div className="flex items-end justify-between gap-3"><div><div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">{t("Bill history")}</div><h2 className="mt-1 font-display text-xl">{t("Your household bills")}</h2></div><Badge>{bills.length} {t("bills")}</Badge></div>
       {loading ? <div className="space-y-3"><Skeleton className="h-28"/><Skeleton className="h-28"/></div> : bills.length === 0 ? <EmptyState icon="receipt" title={t("No bills yet")} body={t("Add a bill manually or attach a PDF to start your household ledger.")} /> : <div className="space-y-3">{bills.map((bill) => {
         const participants = bill.splitWith.map((id) => household?.members.find((member) => member.userId === id)).filter(Boolean) as Member[];
-        const shares = splitAmounts(bill.amount, participants.length);
+        const shares = splitAmountEvenly(bill.amount, participants.length);
         const payer = household?.members.find((member) => member.userId === bill.paidBy);
         return <Card key={bill.id} className="p-4 sm:p-5"><div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h3 className="truncate font-semibold">{bill.name}</h3><Badge>{t(BILL_TYPES.find((type) => type.value === bill.billType)?.label ?? "Other")}</Badge><Badge tone={bill.category === "to_split" ? "brand" : "neutral"}>{bill.category === "to_split" ? t("To be split") : t("Personal")}</Badge></div>

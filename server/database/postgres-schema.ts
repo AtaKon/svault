@@ -644,6 +644,23 @@ export const POSTGRES_MIGRATIONS: string[] = [
   "CREATE INDEX IF NOT EXISTS catalog_mappings_house ON catalog_mappings(house_id)",
   "ALTER TABLE receipts ADD COLUMN IF NOT EXISTS paid_by TEXT",
   "ALTER TABLE receipts ADD COLUMN IF NOT EXISTS split_with TEXT NOT NULL DEFAULT '[]'",
+  `CREATE TABLE IF NOT EXISTS bills (
+    id TEXT PRIMARY KEY,
+    house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    bill_type TEXT NOT NULL DEFAULT 'other',
+    category TEXT NOT NULL DEFAULT 'personal',
+    amount DOUBLE PRECISION NOT NULL,
+    currency TEXT NOT NULL,
+    due_date TEXT,
+    paid_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+    split_with TEXT NOT NULL DEFAULT '[]',
+    document TEXT,
+    notes TEXT,
+    created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL
+  )`,
+  "CREATE INDEX IF NOT EXISTS bills_house ON bills(house_id, due_date, created_at)",
   "ALTER TABLE bills ADD COLUMN IF NOT EXISTS bill_type TEXT NOT NULL DEFAULT 'other'",
 ];
 
