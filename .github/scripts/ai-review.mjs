@@ -15,7 +15,7 @@
 //                       "low" asks for short thinking, "default" sends nothing.
 
 import { readFile } from "node:fs/promises";
-import { clipComment, mergeChunkReviews, splitDiff } from "./ai-review-helpers.mjs";
+import { clipComment, failureStopNote, mergeChunkReviews, splitDiff } from "./ai-review-helpers.mjs";
 
 const MARKER = "<!-- svault-ai-review -->";
 // Single-call limit stays conservative. Larger PRs are split into file-sized
@@ -333,14 +333,12 @@ if (isPullRequest && fullDiff.length > MAX_DIFF_CHARS) {
   }
   const limit = tooLarge ? 0 : Math.min(chunks.length, MAX_CHUNKS);
   let consecutiveFailures = 0;
-  let stopped = false;
   for (let index = 0; index < limit; index++) {
     if (consecutiveFailures >= 3) {
       parts.push({
         index: "stopped",
-        text: `### Blocking\n- Review stopped after 3 consecutive part failures; parts ${index + 1}-${limit} were not reviewed.\n`,
+        text: `### Blocking\n${failureStopNote(index, limit)}\n`,
       });
-      stopped = true;
       break;
     }
     const prompt = buildChunkPrompt(chunks[index], index + 1, chunks.length);
@@ -369,12 +367,6 @@ if (isPullRequest && fullDiff.length > MAX_DIFF_CHARS) {
         text: `### Blocking\n- Reviewer returned no answer for part ${index + 1}.\n`,
       });
     }
-  }
-  if (!stopped && consecutiveFailures >= 3) {
-    parts.push({
-      index: "stopped",
-      text: `### Blocking\n- Review ended with 3 consecutive part failures; the last reviewed part was ${limit} of ${chunks.length}.\n`,
-    });
   }
   review = mergeChunkReviews(parts);
 } else {

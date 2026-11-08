@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { clipComment, mergeChunkReviews, splitDiff } from "../.github/scripts/ai-review-helpers.mjs";
+import { clipComment, failureStopNote, mergeChunkReviews, splitDiff } from "../.github/scripts/ai-review-helpers.mjs";
 
 test("splitDiff keeps a small multi-file diff in one chunk", () => {
   const diff = [
@@ -57,7 +57,18 @@ test("splitDiff keeps chunks within the limit even with a long header", () => {
   const limit = 1_200;
   const chunks = splitDiff(diff, limit);
   assert.ok(chunks.length > 1);
-  for (const chunk of chunks) assert.ok(chunk.length <= limit + 60, `chunk is ${chunk.length}`);
+  for (const chunk of chunks) assert.ok(chunk.length <= limit, `chunk is ${chunk.length}`);
+});
+
+test("splitDiff hard-caps a single line with no newline", () => {
+  const diff = `diff --git a/min.js b/min.js\n@@ -1 +1 @@\n+${"x".repeat(5_000)}`;
+  const chunks = splitDiff(diff, 1_000);
+  assert.ok(chunks.length > 1);
+  for (const chunk of chunks) assert.ok(chunk.length <= 1_060, `chunk is ${chunk.length}`);
+});
+
+test("failureStopNote reports the unreviewed range", () => {
+  assert.match(failureStopNote(4, 8), /parts 5-8 were not reviewed/);
 });
 
 test("splitDiff keeps continuation lines intact", () => {

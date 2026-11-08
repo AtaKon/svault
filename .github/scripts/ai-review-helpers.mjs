@@ -5,7 +5,7 @@ function safeCut(text, limit) {
   let end = text.lastIndexOf("\n", limit);
   if (end < 1000) {
     const next = text.indexOf("\n", limit);
-    end = next >= 0 ? next : text.length;
+    end = next >= 0 ? next : limit;
   }
   if (end > 0 && end < text.length) {
     const code = text.charCodeAt(end - 1);
@@ -37,14 +37,16 @@ export function splitDiff(diff, limit) {
       const pieceLimit = Math.max(limit - reserve, 500);
       let rest = section;
       let first = true;
-      while (rest.length > limit) {
+      while (rest.length > 0) {
         const end = safeCut(rest, pieceLimit);
+        if (end <= 0) break;
         const piece = rest.slice(0, end).replace(/\n+$/, "");
-        chunks.push(`${first ? "" : header}${piece}\n\n[Diff part continues in the next chunk]\n`);
-        rest = rest.slice(end).replace(/^\n+/, "");
+        const tail = rest.slice(end).replace(/^\n+/, "");
+        const continues = tail.length > 0;
+        chunks.push(`${first ? "" : header}${piece}${continues ? "\n\n[Diff part continues in the next chunk]\n" : ""}`);
+        rest = tail;
         first = false;
       }
-      if (rest.trim()) chunks.push(`${first ? "" : header}${rest}`);
       continue;
     }
     if (current && current.length + section.length > limit) flush();
@@ -118,6 +120,10 @@ ${nonBlockingLines.length ? nonBlockingLines.join("\n") : "None."}
 
 ### Tests
 ${testLines.length ? testLines.join("\n") : "None."}`;
+}
+
+export function failureStopNote(index, limit) {
+  return `- Review stopped after 3 consecutive part failures; parts ${index + 1}-${limit} were not reviewed.`;
 }
 
 /** Trim a comment without leaving an unclosed Markdown code fence. */
