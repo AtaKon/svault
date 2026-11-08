@@ -353,6 +353,7 @@ export function ItemPage() {
                   <button
                     onClick={() => void quick("remove")}
                     disabled={quickBusy || item.quantity <= 0}
+                    aria-busy={quickBusy || undefined}
                     aria-label={t("Remove one")}
                     className="flex h-11 w-11 items-center justify-center rounded-xl border border-line bg-surface text-muted transition-colors hover:border-danger/40 hover:text-danger disabled:opacity-40"
                   >
@@ -361,6 +362,7 @@ export function ItemPage() {
                   <button
                     onClick={() => void quick("add")}
                     disabled={quickBusy}
+                    aria-busy={quickBusy || undefined}
                     aria-label={t("Add one")}
                     className="flex h-11 w-11 items-center justify-center rounded-xl bg-brand-soft text-brand transition-colors hover:brightness-95 disabled:opacity-40"
                   >
@@ -844,7 +846,7 @@ export function ItemPage() {
       <Sheet open={scanOpen} onClose={() => setScanOpen(false)} title={t("Scan a barcode")} description={t("It will be linked to this item.")}>
         <BarcodeScanner onDetected={(code, format) => void addBarcode(code, format)} />
         {barcodeBusy && (
-          <div className="mt-3 flex items-center justify-center gap-2 text-xs text-muted">
+          <div role="status" className="mt-3 flex items-center justify-center gap-2 text-xs text-muted">
             <Spinner size={14} /> {' '}{t(" Saving barcode… ")}</div>
         )}
       </Sheet>

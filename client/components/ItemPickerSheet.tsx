@@ -64,9 +64,10 @@ export function ItemPickerSheet({
             autoFocus
             className="pr-9"
             aria-label={t("Search items")}
+            aria-busy={loading || undefined}
           />
           <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted">
-            {loading ? <Spinner size={14} /> : <Icon name="search" size={14} />}
+            {loading ? <><Spinner size={14} /><span role="status" className="sr-only">{t("Loading")}</span></> : <Icon name="search" size={14} />}
           </span>
         </div>
         <button

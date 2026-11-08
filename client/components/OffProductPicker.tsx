@@ -66,9 +66,7 @@ export function OffProductPicker({
       setProducts(data.products);
       setWarning(data.warning === "NOTHING_FOUND"
         ? t("Nothing found on OpenFoodFacts. Check the name or paste a barcode.")
-        : data.warning
-          ? t("OpenFoodFacts search returned a warning")
-          : null);
+        : data.warning);
     } catch (err) {
       setWarning(err instanceof Error ? err.message : t("Could not search OpenFoodFacts"));
       setProducts([]);
@@ -106,7 +104,7 @@ export function OffProductPicker({
       {warning && <p className="mt-3 rounded-xl bg-warn-soft px-3 py-2 text-[11px] text-warn">{t(warning)}</p>}
 
       {busy && (
-        <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted">
+        <div role="status" className="flex items-center justify-center gap-2 py-8 text-sm text-muted">
           <Spinner size={16} /> {t("Looking up OpenFoodFacts…")}
         </div>
       )}

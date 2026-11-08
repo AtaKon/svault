@@ -67,6 +67,7 @@ export function Button({
         className,
       )}
       disabled={disabled || loading}
+      aria-busy={loading || undefined}
       {...rest}
     >
       {loading ? <Spinner size={size === "sm" ? 14 : 18} /> : icon ? <Icon name={icon} size={size === "sm" ? 15 : 18} /> : null}
@@ -115,7 +116,7 @@ export function Spinner({ size = 18, className }: { size?: number; className?: s
   );
 }
 
-export function LoadingBlock({ label = "Loading" }: { label?: string }) {
+export function LoadingBlock({ label }: { label: string }) {
   return (
     <div role="status" className="flex flex-col items-center justify-center gap-3 py-16 text-muted">
       <Spinner size={26} />

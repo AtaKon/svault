@@ -1391,7 +1391,7 @@ export function ReceiptScanPage() {
                       {mergeRemoved} {t("duplicate line")}{mergeRemoved === 1 ? "" : t("s")} {t("skipped")}</Badge>
                   )}
                   {ocrRunning && (
-                    <span className="flex items-center gap-1.5">
+                    <span role="status" className="flex items-center gap-1.5">
                       <Spinner size={12} /> {Math.round(ocrProgress * 100)}%
                     </span>
                   )}

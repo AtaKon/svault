@@ -266,7 +266,7 @@ export function RecipePage() {
               </div>
             </div>
             {aiBusy ? (
-              <div className="mt-3 flex items-center gap-2 rounded-xl bg-brand-soft px-3 py-2.5 text-xs text-brand">
+              <div role="status" className="mt-3 flex items-center gap-2 rounded-xl bg-brand-soft px-3 py-2.5 text-xs text-brand">
                 <Spinner size={14} /> {' '}{t(" Reading the notes, filling gaps and tidying the steps… ")}</div>
             ) : (
               <p className="mt-2 text-xs leading-relaxed text-muted">
