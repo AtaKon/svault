@@ -1861,6 +1861,67 @@ describe("OpenFoodFacts links and shared catalogue", () => {
     }
   });
 
+  it("requires consent on every account and service link", async () => {
+    const consent = await get<{ user_id: string }>("SELECT user_id FROM off_consents LIMIT 1");
+    assert.ok(consent);
+    await run("DELETE FROM off_consents WHERE user_id = ?", [consent.user_id]);
+    try {
+      const account = await request("/api/off/accounts/obf/link", {
+        method: "POST",
+        body: { username: "no-consent", password: "not-sent" },
+      });
+      assert.equal(account.status, 403);
+      const service = await request("/api/off/services/prices/link", {
+        method: "POST",
+        body: { username: "no-consent", password: "not-sent" },
+      });
+      assert.equal(service.status, 403);
+      const property = await request("/api/off/folksonomy", {
+        method: "POST",
+        body: { project: "off", code: fetaCode, key: "test", value: "test" },
+      });
+      assert.equal(property.status, 403);
+    } finally {
+      await request("/api/off/consent", { method: "POST", body: { accept: true } });
+    }
+  });
+
+  it("enforces SV_OFF_DAILY_LIMIT per user", async () => {
+    const consent = await get<{ user_id: string }>("SELECT user_id FROM off_consents LIMIT 1");
+    assert.ok(consent);
+    const item = await get<{ id: string }>(
+      "SELECT id FROM items WHERE house_id = ? AND off_code = ? LIMIT 1",
+      [houseId, candidateCode],
+    );
+    assert.ok(item);
+    await run("DELETE FROM off_contributions WHERE user_id = ?", [consent.user_id]);
+    const savedWrites = process.env.SV_OFF_WRITE_ENABLED;
+    const savedDryRun = process.env.SV_OFF_DRY_RUN;
+    const savedLimit = process.env.SV_OFF_DAILY_LIMIT;
+    process.env.SV_OFF_WRITE_ENABLED = "true";
+    process.env.SV_OFF_DRY_RUN = "true";
+    process.env.SV_OFF_DAILY_LIMIT = "1";
+    try {
+      const first = await request("/api/off/contributions", {
+        method: "POST",
+        body: { houseId, itemId: item.id, kind: "missing_fields", fields: ["brand"] },
+      });
+      assert.equal(first.status, 202);
+      const second = await request("/api/off/contributions", {
+        method: "POST",
+        body: { houseId, itemId: item.id, kind: "missing_fields", fields: ["brand"] },
+      });
+      assert.equal(second.status, 429);
+    } finally {
+      if (savedWrites === undefined) delete process.env.SV_OFF_WRITE_ENABLED;
+      else process.env.SV_OFF_WRITE_ENABLED = savedWrites;
+      if (savedDryRun === undefined) delete process.env.SV_OFF_DRY_RUN;
+      else process.env.SV_OFF_DRY_RUN = savedDryRun;
+      if (savedLimit === undefined) delete process.env.SV_OFF_DAILY_LIMIT;
+      else process.env.SV_OFF_DAILY_LIMIT = savedLimit;
+    }
+  });
+
   it("exposes account verification and consent status", async () => {
     const verify = await request("/api/off/accounts/off/verify", { method: "POST" });
     assert.equal(verify.status, 200);

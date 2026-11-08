@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/api";
 import { useHouse } from "@/state";
 import { useI18n } from "@/i18n";
@@ -67,6 +67,7 @@ export function ContributionsPage() {
   const [pricePassword, setPricePassword] = useState("");
   const [accountProject, setAccountProject] = useState<OffProjectId>("off");
   const [question, setQuestion] = useState<OffRobotoffQuestion | null>(null);
+  const dismissedQuestions = useRef<Set<string>>(new Set());
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [locationQuery, setLocationQuery] = useState("");
   const [locations, setLocations] = useState<OffPriceLocation[]>([]);
@@ -115,7 +116,7 @@ export function ContributionsPage() {
         const robotoff = await api<{ questions: OffRobotoffQuestion[] }>(
           "/api/off/robotoff/questions?project=off&count=1",
         );
-        setQuestion(robotoff.questions[0] ?? null);
+        setQuestion(robotoff.questions.find((entry) => !dismissedQuestions.current.has(entry.insightId)) ?? null);
       } catch {
         setQuestion(null);
       }
@@ -220,11 +221,15 @@ export function ContributionsPage() {
       toast.error(t("Enter your Open Food Facts username and password"));
       return;
     }
+    if (!consent) {
+      toast.error(t("Accept the license before connecting an account"));
+      return;
+    }
     setBusy("prices");
     try {
       await api("/api/off/services/prices/link", {
         method: "POST",
-        body: { username: priceUser.trim(), password: pricePassword },
+        body: { username: priceUser.trim(), password: pricePassword, consent: true },
       });
       setPricePassword("");
       toast.success(t("Open Prices connected"));
@@ -247,6 +252,7 @@ export function ContributionsPage() {
 
   const contributionBody = (houseId: string, candidate: OffContributionCandidate, chosen: string[]) => ({
     houseId,
+    // Prices are identified by receiptLineId; the server ignores itemId for them.
     itemId: candidate.kind === "price" ? undefined : candidate.itemId,
     receiptLineId: candidate.kind === "price" ? candidate.price?.receiptLineId : undefined,
     locationId: candidate.kind === "price" ? priceLocation?.id : undefined,
@@ -362,7 +368,7 @@ export function ContributionsPage() {
       <PageHeader
         eyebrow={t("Community")}
         title={t("Contribute to Open Food Facts")}
-        subtitle={t("Share a missing brand, category, nutrition panel or front photo. You always review the exact fields before anything is sent.")}
+        subtitle={t("Share a missing brand, category, nutrition panel or front photo. Review each item's fields before sending; bulk share sends the fields shown on the selected cards.")}
       />
 
       {summary && !summary.writesEnabled && !summary.dryRun && (
@@ -403,6 +409,13 @@ export function ContributionsPage() {
             <Badge tone="warn">{t("Not connected")}</Badge>
           )}
         </div>
+
+        <label className="mt-3 flex items-start gap-2 text-[11px] leading-relaxed text-muted">
+          <input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} className="mt-0.5" />
+          <span>
+            {t("I understand contributions are public, data is shared under the Open Database License and photos under CC-BY-SA. I will only upload photos I took.")}
+          </span>
+        </label>
 
         {summary && summary.accounts.length > 0 && (
           <div className="mt-3 flex flex-wrap gap-2">
@@ -449,12 +462,6 @@ export function ContributionsPage() {
                   autoComplete="current-password"
                 />
               </Field>
-              <label className="flex items-start gap-2 text-[11px] leading-relaxed text-muted sm:col-span-2">
-                <input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} className="mt-0.5" />
-                <span>
-                  {t("I understand contributions are public, data is shared under the Open Database License and photos under CC-BY-SA. I will only upload photos I took.")}
-                </span>
-              </label>
               <div className="sm:col-span-2">
                 <Button loading={busy === "link"} onClick={() => void linkAccount("off", username, password)}>
                   {t("Connect account")}
@@ -471,6 +478,7 @@ export function ContributionsPage() {
               <Field label={t("Project")}>
                 <Select
                   value={selectedProject ?? ""}
+                  disabled={!selectedProject}
                   onChange={(event) => setAccountProject(event.target.value as OffProjectId)}
                 >
                   {availableProjects.map((project) => (
@@ -508,12 +516,6 @@ export function ContributionsPage() {
               >
                 {t("Connect project")}
               </Button>
-              {!consent && (
-                <label className="flex items-center gap-1.5 text-[11px] text-muted">
-                  <input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} />
-                  {t("I accept the license")}
-                </label>
-              )}
             </div>
           </div>
         )}
@@ -617,7 +619,10 @@ export function ContributionsPage() {
             <Button size="sm" variant="secondary" loading={busy === "robotoff"} onClick={() => void answerQuestion(0)}>
               {t("No")}
             </Button>
-            <Button size="sm" variant="ghost" onClick={() => setQuestion(null)}>
+            <Button size="sm" variant="ghost" onClick={() => {
+              if (question) dismissedQuestions.current.add(question.insightId);
+              setQuestion(null);
+            }}>
               {t("Skip")}
             </Button>
           </div>

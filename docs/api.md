@@ -310,7 +310,9 @@ or null when the product has no nutrition data.
 SVault reads four Open Food Facts databases: Open Food Facts (`off`), Open Beauty Facts (`obf`), Open
 Pet Food Facts (`opff`) and Open Products Facts (`opf`). Products are cached in a shared
 `catalog_products` table keyed by `(project, code)` for `OFF_CACHE_DAYS` (default 30). A universal
-lookup asks `product_type=all` and records the project returned by the owning database.
+lookup asks `product_type=all` and records the project returned by the owning database. Existing cache
+rows from older versions are migrated to `project='off'`; the new primary key allows the same barcode
+to exist independently in more than one project.
 
 Receipt text mappings live in `catalog_mappings`: bundled seed rows ship in
 `assets/catalog/off-mappings.json`, mappings learned on the instance are `local`, and imported files

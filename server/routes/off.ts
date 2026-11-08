@@ -130,6 +130,9 @@ offRoutes.post(
       req.body,
     );
     if (body.consent) await acceptOffConsent(req.user!.id);
+    if (!body.consent && !(await offConsent(req.user!.id))) {
+      throw new ApiError(403, "Accept the Open Food Facts license before connecting an account");
+    }
     const account = await linkOffAccount({
       userId: req.user!.id,
       project,
@@ -157,9 +160,14 @@ offRoutes.post(
       z.object({
         username: z.string().trim().min(1).max(80),
         password: z.string().min(1).max(200),
+        consent: z.boolean().optional(),
       }),
       req.body,
     );
+    if (body.consent) await acceptOffConsent(req.user!.id);
+    if (!body.consent && !(await offConsent(req.user!.id))) {
+      throw new ApiError(403, "Accept the Open Food Facts license before connecting a service");
+    }
     const linked = await linkServiceToken({
       userId: req.user!.id,
       service,
@@ -378,6 +386,9 @@ offRoutes.post(
       }),
       req.body,
     );
+    if (!(await offConsent(req.user!.id))) {
+      throw new ApiError(403, "Accept the Open Food Facts license before writing a property");
+    }
     try {
       res.json(await addFolksonomyProperty({ userId: req.user!.id, ...body }));
     } catch (error) {
