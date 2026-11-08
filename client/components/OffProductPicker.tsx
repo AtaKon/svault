@@ -101,7 +101,7 @@ export function OffProductPicker({
         </Button>
       </form>
 
-      {warning && <p className="mt-3 rounded-xl bg-warn-soft px-3 py-2 text-[11px] text-warn">{t(warning)}</p>}
+      {warning && <p className="mt-3 rounded-xl bg-warn-soft px-3 py-2 text-[11px] text-warn">{warning}</p>}
 
       {busy && (
         <div role="status" className="flex items-center justify-center gap-2 py-8 text-sm text-muted">

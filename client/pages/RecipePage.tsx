@@ -267,7 +267,7 @@ export function RecipePage() {
             </div>
             {aiBusy ? (
               <div role="status" className="mt-3 flex items-center gap-2 rounded-xl bg-brand-soft px-3 py-2.5 text-xs text-brand">
-                <Spinner size={14} /> {' '}{t(" Reading the notes, filling gaps and tidying the steps… ")}</div>
+                <Spinner size={14} /> {t("Reading the notes, filling gaps and tidying the steps…")}</div>
             ) : (
               <p className="mt-2 text-xs leading-relaxed text-muted">
                 {t("Let AI fill missing quantities, add temperatures and timings, and rewrite steps so they are easy to follow. It keeps your ingredients and explains what it changed. ")}</p>

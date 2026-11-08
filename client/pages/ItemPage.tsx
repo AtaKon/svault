@@ -847,7 +847,7 @@ export function ItemPage() {
         <BarcodeScanner onDetected={(code, format) => void addBarcode(code, format)} />
         {barcodeBusy && (
           <div role="status" className="mt-3 flex items-center justify-center gap-2 text-xs text-muted">
-            <Spinner size={14} /> {' '}{t(" Saving barcode… ")}</div>
+            <Spinner size={14} /> {t("Saving barcode…")}</div>
         )}
       </Sheet>
 
