@@ -21,7 +21,7 @@ const MARKER = "<!-- svault-ai-review -->";
 // Single-call limit stays conservative. Larger PRs are split into file-sized
 // chunks so the model never receives a prompt that can exceed its context.
 const MAX_DIFF_CHARS = 60_000;
-const CHUNK_DIFF_CHARS = 45_000;
+const CHUNK_DIFF_CHARS = 60_000;
 const MAX_CHUNKS = 20;
 const MAX_TOTAL_DIFF_CHARS = 600_000;
 const RETRY_DIFF_CHARS = 30_000;
@@ -317,13 +317,18 @@ async function reviewCall(prompt, budget) {
 
 let review = "";
 if (isPullRequest && fullDiff.length > MAX_DIFF_CHARS) {
-  const chunks = splitDiff(fullDiff, CHUNK_DIFF_CHARS);
+  const { chunks, oversized } = splitDiff(fullDiff, CHUNK_DIFF_CHARS);
   const parts = [];
   const tooLarge = fullDiff.length > MAX_TOTAL_DIFF_CHARS;
   if (tooLarge) {
     parts.push({
       index: "size",
       text: `### Blocking\n- The diff is ${fullDiff.length} characters, above the ${MAX_TOTAL_DIFF_CHARS}-character review budget. Split the PR before merging.\n`,
+    });
+  } else if (oversized.length) {
+    parts.push({
+      index: "oversized",
+      text: `### Blocking\n- These files are too large to review in one chunk: ${oversized.join(", ")}. Split the PR or split the files.\n`,
     });
   } else if (!chunks.length) {
     parts.push({
@@ -336,7 +341,7 @@ if (isPullRequest && fullDiff.length > MAX_DIFF_CHARS) {
       text: `### Blocking\n- The diff needs ${chunks.length} review parts; only the first ${MAX_CHUNKS} were reviewed. The unreviewed part is not approved. Split the PR.\n`,
     });
   }
-  const limit = tooLarge ? 0 : Math.min(chunks.length, MAX_CHUNKS);
+  const limit = tooLarge || oversized.length ? 0 : Math.min(chunks.length, MAX_CHUNKS);
   let consecutiveFailures = 0;
   for (let index = 0; index < limit; index++) {
     if (consecutiveFailures >= 3) {

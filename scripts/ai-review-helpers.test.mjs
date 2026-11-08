@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { clipComment, failureStopNote, mergeChunkReviews, splitDiff } from "../.github/scripts/ai-review-helpers.mjs";
+import {
+  clipComment,
+  failureStopNote,
+  mergeChunkReviews,
+  splitDiff,
+} from "../.github/scripts/ai-review-helpers.mjs";
 
 test("splitDiff keeps a small multi-file diff in one chunk", () => {
   const diff = [
@@ -13,92 +18,29 @@ test("splitDiff keeps a small multi-file diff in one chunk", () => {
     "+++ b/b.ts",
     "+other",
   ].join("\n");
-  assert.deepEqual(splitDiff(diff, 10_000), [diff]);
+  const result = splitDiff(diff, 10_000);
+  assert.deepEqual(result, { chunks: [diff], oversized: [] });
 });
 
-test("splitDiff preserves every file header when splitting", () => {
-  const one = `diff --git a/a.ts b/a.ts\n+${"x".repeat(400)}\n`;
-  const two = `diff --git a/b.ts b/b.ts\n+${"y".repeat(400)}\n`;
-  const chunks = splitDiff(one + two, 500);
-  assert.ok(chunks.length > 1);
-  assert.equal(chunks.join("").match(/diff --git a\/a\.ts/g)?.length, 1);
-  assert.equal(chunks.join("").match(/diff --git a\/b\.ts/g)?.length, 1);
+test("splitDiff preserves file boundaries and reports oversized files", () => {
+  const small = `diff --git a/a.ts b/a.ts\n+${"x".repeat(200)}\n`;
+  const big = `diff --git a/big.ts b/big.ts\n+${"y".repeat(2_000)}\n`;
+  const result = splitDiff(small + big, 1_000);
+  assert.equal(result.chunks.length, 1);
+  assert.match(result.chunks[0], /diff --git a\/a\.ts/);
+  assert.deepEqual(result.oversized, ["big.ts"]);
 });
 
-test("splitDiff marks oversized single-file continuations and repeats file context", () => {
-  const diff = `diff --git a/big.ts b/big.ts\nindex 111..222 100644\n--- a/big.ts\n+++ b/big.ts\n@@ -1 +1 @@\n${Array.from({ length: 300 }, (_, i) => `+line ${i}`).join("\n")}`;
-  const chunks = splitDiff(diff, 1_000);
-  assert.ok(chunks.length > 1);
-  for (const chunk of chunks.slice(0, -1)) assert.match(chunk, /\[Diff part continues in the next chunk\]/);
-  for (const chunk of chunks.slice(1)) assert.match(chunk, /^diff --git a\/big\.ts/);
-});
-
-test("mergeChunkReviews keeps prose blocking findings", () => {
-  const review = mergeChunkReviews([
-    {
-      index: 1,
-      text: "### Blocking\nThis change drops rows during migration without a backup.\n### Non-blocking\nNone.\n### Tests\nNone.",
-    },
-  ]);
-  assert.match(review, /Needs changes/);
-  assert.match(review, /drops rows during migration/);
-});
-
-test("mergeChunkReviews flags a missing Blocking section", () => {
-  const review = mergeChunkReviews([
-    { index: 1, text: "### Non-blocking\n- some note\n### Tests\nNone." },
-  ]);
-  assert.match(review, /Needs changes/);
-  assert.match(review, /omitted the Blocking section/);
-});
-
-test("splitDiff keeps chunks within the limit even with a long header", () => {
-  const header = `diff --git a/very-long.ts b/very-long.ts\n${"index 111..222 100644\n".repeat(40)}`;
-  const diff = `${header}@@ -1 +1 @@\n${Array.from({ length: 300 }, (_, i) => `+line ${i}`).join("\n")}`;
-  const limit = 1_200;
-  const chunks = splitDiff(diff, limit);
-  assert.ok(chunks.length > 1);
-  for (const chunk of chunks) assert.ok(chunk.length <= limit, `chunk is ${chunk.length}`);
-});
-
-test("splitDiff hard-caps a single line with no newline", () => {
-  const diff = `diff --git a/min.js b/min.js\n@@ -1 +1 @@\n+${"x".repeat(5_000)}`;
-  const chunks = splitDiff(diff, 1_000);
-  assert.ok(chunks.length > 1);
-  for (const chunk of chunks) assert.ok(chunk.length <= 1_060, `chunk is ${chunk.length}`);
+test("splitDiff never cuts a file section", () => {
+  const one = `diff --git a/a.ts b/a.ts\n+${"x".repeat(600)}\n`;
+  const two = `diff --git a/b.ts b/b.ts\n+${"y".repeat(600)}\n`;
+  const result = splitDiff(one + two, 700);
+  assert.equal(result.chunks.length, 2);
+  for (const chunk of result.chunks) assert.equal(chunk.match(/^diff --git /gm)?.length, 1);
 });
 
 test("failureStopNote reports the unreviewed range", () => {
-  assert.match(failureStopNote(4, 8), /parts 5-8 were not reviewed/);
-});
-
-test("splitDiff keeps continuation lines intact", () => {
-  const diff = `diff --git a/lines.ts b/lines.ts\n@@ -1 +1 @@\n${Array.from({ length: 200 }, (_, i) => `+line-${i}`).join("\n")}`;
-  const chunks = splitDiff(diff, 700);
-  for (const chunk of chunks.slice(1)) {
-    const lines = chunk.split("\n").filter((line) => line.startsWith("+line-"));
-    for (const line of lines) assert.match(line, /^\+line-\d+$/);
-  }
-});
-
-test("splitDiff keeps header context for a diff without hunks", () => {
-  const diff = `diff --git a/img.png b/img.png\nindex 111..222 100644\n--- a/img.png\n+++ b/img.png\nBinary files differ\n${"x".repeat(2_000)}`;
-  const chunks = splitDiff(diff, 500);
-  assert.ok(chunks.length > 1);
-  for (const chunk of chunks.slice(1)) assert.match(chunk, /^diff --git a\/img\.png/);
-});
-
-test("clipComment honors the limit including its marker", () => {
-  const text = `x\n${"word ".repeat(5_000)}`;
-  const clipped = clipComment(text, 1_000);
-  assert.ok(clipped.length <= 1_000, `clipped is ${clipped.length}`);
-  assert.match(clipped, /truncated/);
-});
-
-test("clipComment handles text without a newline before the limit", () => {
-  const clipped = clipComment("x".repeat(500), 100);
-  assert.match(clipped, /truncated/);
-  assert.ok(clipped.length <= 100);
+  assert.match(failureStopNote(3, 8), /parts 4-8 were not reviewed/);
 });
 
 test("mergeChunkReviews says ready when every part is clean", () => {
@@ -132,6 +74,45 @@ test("mergeChunkReviews treats unexpected formats as blocking", () => {
   const review = mergeChunkReviews([{ index: 2, text: "## Blocking\n- something" }]);
   assert.match(review, /Needs changes/);
   assert.match(review, /unexpected format/);
+});
+
+test("mergeChunkReviews treats empty and whitespace-only parts as blocking", () => {
+  for (const text of ["", "   \n\n  "]) {
+    const review = mergeChunkReviews([{ index: 1, text }]);
+    assert.match(review, /Needs changes/);
+  }
+});
+
+test("mergeChunkReviews keeps prose blocking findings", () => {
+  const review = mergeChunkReviews([
+    {
+      index: 1,
+      text: "### Blocking\nThis change drops rows during migration without a backup.\n### Non-blocking\nNone.\n### Tests\nNone.",
+    },
+  ]);
+  assert.match(review, /Needs changes/);
+  assert.match(review, /drops rows during migration/);
+});
+
+test("mergeChunkReviews flags a missing Blocking section", () => {
+  const review = mergeChunkReviews([
+    { index: 1, text: "### Non-blocking\n- some note\n### Tests\nNone." },
+  ]);
+  assert.match(review, /Needs changes/);
+  assert.match(review, /omitted the Blocking section/);
+});
+
+test("clipComment honors the limit including its marker", () => {
+  const text = `x\n${"word ".repeat(5_000)}`;
+  const clipped = clipComment(text, 1_000);
+  assert.ok(clipped.length <= 1_000, `clipped is ${clipped.length}`);
+  assert.match(clipped, /truncated/);
+});
+
+test("clipComment handles text without a newline before the limit", () => {
+  const clipped = clipComment("x".repeat(500), 100);
+  assert.match(clipped, /truncated/);
+  assert.ok(clipped.length <= 100);
 });
 
 test("clipComment closes an unclosed code fence", () => {

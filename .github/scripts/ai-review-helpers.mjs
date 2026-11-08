@@ -1,22 +1,9 @@
 /** Pure helpers for the AI review bot. Kept separate so they can be unit-tested. */
 
-function safeCut(text, limit) {
-  if (text.length <= limit) return text.length;
-  let end = text.lastIndexOf("\n", limit);
-  if (end < 1000) {
-    const next = text.indexOf("\n", limit);
-    end = next >= 0 ? next : limit;
-  }
-  if (end > 0 && end < text.length) {
-    const code = text.charCodeAt(end - 1);
-    if (code >= 0xd800 && code <= 0xdbff) end -= 1;
-  }
-  return end;
-}
-
-/** Split a unified diff at file boundaries, then by lines for huge files. */
+/** Split a unified diff at file boundaries. Oversized files are reported, not cut. */
 export function splitDiff(diff, limit) {
   const chunks = [];
+  const oversized = [];
   let current = "";
   const flush = () => {
     if (current.trim()) chunks.push(current);
@@ -26,36 +13,15 @@ export function splitDiff(diff, limit) {
     if (!section.trim()) continue;
     if (section.length > limit) {
       flush();
-      const lines = section.split("\n");
-      const hunk = lines.findIndex((line) => line.startsWith("@@"));
-      const headerLines =
-        hunk > 0 ? lines.slice(0, hunk) : hunk < 0 ? lines.slice(0, Math.min(lines.length, 4)) : [];
-      const fullHeader = headerLines.length ? `${headerLines.join("\n")}\n` : "";
-      const firstLine = `${lines[0]}\n`;
-      const minimumPiece = Math.max(400, Math.floor(limit / 3));
-      const fits = (candidate) => candidate.length + 48 + minimumPiece <= limit;
-      const header = fits(fullHeader) ? fullHeader : fits(firstLine) ? firstLine : "";
-      const reserve = header.length + 48;
-      const pieceLimit = Math.max(limit - reserve, 500);
-      let rest = section;
-      let first = true;
-      while (rest.length > 0) {
-        const end = safeCut(rest, pieceLimit);
-        if (end <= 0) break;
-        const piece = rest.slice(0, end).replace(/\n+$/, "");
-        const tail = rest.slice(end).replace(/^\n+/, "");
-        const continues = tail.length > 0;
-        chunks.push(`${first ? "" : header}${piece}${continues ? "\n\n[Diff part continues in the next chunk]\n" : ""}`);
-        rest = tail;
-        first = false;
-      }
+      const firstLine = section.split("\n")[0].replace(/^diff --git a\/[^ ]+ b\//, "");
+      oversized.push(firstLine || "unknown file");
       continue;
     }
     if (current && current.length + section.length > limit) flush();
     current += section;
   }
   flush();
-  return chunks;
+  return { chunks, oversized };
 }
 
 export function section(text, heading) {
