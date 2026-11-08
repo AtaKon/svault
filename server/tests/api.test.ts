@@ -4518,6 +4518,8 @@ describe("insights, household split and admin console", () => {
       fields.set("amount", "10.00");
       fields.set("category", "to_split");
       fields.set("paidBy", ownerId);
+      fields.set("dueDate", "2025-02-01");
+      fields.set("notes", "Preserve this utility note");
       fields.append("document", pdf, "electricity.pdf");
       return fields;
     };
@@ -4568,6 +4570,27 @@ describe("insights, household split and admin console", () => {
     assert.equal(emptySplit.status, 201);
     assert.deepEqual([...emptySplit.data.splitWith].sort(), [ownerId, secondUserId].sort());
     assert.equal((await request(`/api/bills/${emptySplit.data.id}`, { method: "DELETE" })).status, 200);
+    const defaultPayerBill = await request(`/api/houses/${billHouse}/bills`, {
+      method: "POST",
+      body: { name: "Default payer", amount: 1, billType: "water", category: "to_split", splitWith: [ownerId, secondUserId] },
+    });
+    assert.equal(defaultPayerBill.status, 201);
+    assert.equal(defaultPayerBill.data.paidBy, ownerId, "an omitted payer defaults to the submitting user");
+    const explicitPayerBill = await request(`/api/houses/${billHouse}/bills`, {
+      method: "POST",
+      body: { name: "Explicit payer", amount: 1, billType: "water", category: "to_split", paidBy: secondUserId, splitWith: [ownerId, secondUserId] },
+    });
+    assert.equal(explicitPayerBill.status, 201);
+    assert.equal(explicitPayerBill.data.paidBy, secondUserId);
+    assert.equal((await request(`/api/bills/${defaultPayerBill.data.id}`, { method: "DELETE" })).status, 200);
+    assert.equal((await request(`/api/bills/${explicitPayerBill.data.id}`, { method: "DELETE" })).status, 200);
+    const defaultTypeBill = await request(`/api/houses/${billHouse}/bills`, {
+      method: "POST",
+      body: { name: "Default bill type", amount: 1, category: "personal" },
+    });
+    assert.equal(defaultTypeBill.status, 201);
+    assert.equal(defaultTypeBill.data.billType, "other");
+    assert.equal((await request(`/api/bills/${defaultTypeBill.data.id}`, { method: "DELETE" })).status, 200);
 
     const accepted = await request(`/api/houses/${billHouse}/bills`, { method: "POST", body: form(pdf) });
     assert.equal(accepted.status, 201, JSON.stringify(accepted.data));
@@ -4578,11 +4601,27 @@ describe("insights, household split and admin console", () => {
       run("UPDATE bills SET bill_type = 'gas_provider' WHERE id = ?", [accepted.data.id]),
       "the database rejects bill types outside the shared enum",
     );
+    const toPersonal = await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { category: "personal" },
+    });
+    assert.equal(toPersonal.status, 200);
+    assert.equal(toPersonal.data.notes, "Preserve this utility note");
+    assert.equal(toPersonal.data.dueDate, "2025-02-01");
+    const backToSplit = await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { category: "to_split" },
+    });
+    assert.equal(backToSplit.status, 200);
+    assert.equal(backToSplit.data.notes, "Preserve this utility note");
+    assert.equal(backToSplit.data.dueDate, "2025-02-01");
+    assert.deepEqual([...backToSplit.data.splitWith].sort(), [ownerId, secondUserId].sort());
     const addedFile = files().find((file) => !before.includes(file));
     assert.ok(addedFile);
     const billBackup = await backupForTest();
-    assert.ok(billBackup.validation.uploads.some((entry) => entry.name === `bills/${addedFile}`),
-      "house backups include bill PDFs stored under the uploads tree");
+    const archivedBillPdf = billBackup.validation.uploads.find((entry) => entry.name === `bills/${addedFile}`);
+    assert.ok(archivedBillPdf, "house backups include bill PDFs stored under the uploads tree");
+    assert.deepEqual(archivedBillPdf.data, Buffer.from("%PDF-1.7\n% bill fixture"), "the archive contains the PDF bytes");
 
     await run("UPDATE house_members SET role = 'viewer' WHERE house_id = ? AND user_id = ?", [billHouse, secondUserId]);
     const viewerPdf = await fetch(base + accepted.data.document, { headers: { cookie: secondUserCookie } });
@@ -4770,6 +4809,7 @@ describe("insights, household split and admin console", () => {
 
   it("keeps utility bill share allocation cent-exact", () => {
     assert.deepEqual(splitAmountEvenly(10, 3), [3.34, 3.33, 3.33]);
+    assert.deepEqual(splitAmountEvenly(1.005, 2), [0.51, 0.5]);
     assert.deepEqual(splitAmountEvenly(0.01, 3), [0.01, 0, 0]);
     assert.deepEqual(splitAmountEvenly(0, 3), [0, 0, 0]);
     assert.deepEqual(splitAmountEvenly(-1, 2), []);

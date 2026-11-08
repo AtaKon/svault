@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type DragEvent } from "react";
 import { api } from "@/api";
-import { useHouse } from "@/state";
+import { useAuth, useHouse } from "@/state";
 import { Badge, Button, Card, EmptyState, Field, Input, PageHeader, Select, Skeleton, Textarea } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { useToast } from "@/components/toast";
@@ -17,6 +17,7 @@ const BILL_TYPES = BILL_TYPE_VALUES.map((value) => ({ value, label: BILL_TYPE_LA
 export function BillsPage() {
   const { t } = useI18n();
   const { house } = useHouse();
+  const { user } = useAuth();
   const toast = useToast();
   const [bills, setBills] = useState<UtilityBill[]>([]);
   const [household, setHousehold] = useState<Household | null>(null);
@@ -42,12 +43,18 @@ export function BillsPage() {
       ]);
       setBills(billList);
       setHousehold(ledger);
-      setSplitWith((current) => current.length ? current : ledger.members.map((member) => member.userId));
-      setPaidBy((current) => current || ledger.members[0]?.userId || "");
+      const memberIds = new Set(ledger.members.map((member) => member.userId));
+      setSplitWith((current) => {
+        const active = current.filter((id) => memberIds.has(id));
+        return active.length ? active : ledger.members.map((member) => member.userId);
+      });
+      setPaidBy((current) => current && memberIds.has(current)
+        ? current
+        : user?.id && memberIds.has(user.id) ? user.id : ledger.members[0]?.userId || "");
     } catch (err) {
       toast.error(err instanceof Error ? t(err.message) : t("Could not load bills"));
     } finally { setLoading(false); }
-  }, [house.id, t, toast]);
+  }, [house.id, t, toast, user?.id]);
 
   useEffect(() => { void load(); }, [load]);
 
