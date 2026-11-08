@@ -101,8 +101,18 @@ export class SqliteDriver implements DatabaseDriver {
     ensureColumn("receipts", "split_with", "TEXT NOT NULL DEFAULT '[]'");
     // Fresh rows default to unconfirmed; preserve the old ledger behavior for
     // shared bills that predate the acknowledgement column.
-    if (ensureColumn("bills", "ledger_confirmed", "INTEGER NOT NULL DEFAULT 0")) {
-      runLocal("UPDATE bills SET ledger_confirmed = 1 WHERE category = 'to_split'");
+    if (!columns("bills").some((entry) => entry.name === "ledger_confirmed")) {
+      // Adding the marker and preserving the old shared-bill ledger in one
+      // transaction prevents a crash from leaving migrated rows unconfirmed.
+      conn.exec("BEGIN");
+      try {
+        conn.exec("ALTER TABLE bills ADD COLUMN ledger_confirmed INTEGER NOT NULL DEFAULT 0");
+        runLocal("UPDATE bills SET ledger_confirmed = 1 WHERE category = 'to_split'");
+        conn.exec("COMMIT");
+      } catch (error) {
+        conn.exec("ROLLBACK");
+        throw error;
+      }
     }
     ensureColumn("receipt_lines", "raw_description", "TEXT");
     ensureColumn("receipt_lines", "tax_rate", "REAL");

@@ -229,7 +229,15 @@ singleBillRoutes.patch("/:billId", handler(async (req, res) => {
 
 billRoutes.post("/:houseId/bills/:billId/document", requireBillDocumentMember, pdfUpload.single("document"), verifyPdf, handler(async (req, res) => {
   const houseId = String(req.params.houseId);
-  const current = await billRow(String(req.params.billId), houseId);
+  let current: BillRow | undefined;
+  try {
+    // The authorization middleware reads before Multer, but this second read
+    // can still fail after Multer has written the new PDF.
+    current = await billRow(String(req.params.billId), houseId);
+  } catch (error) {
+    discardUploads(req);
+    throw error;
+  }
   if (!current) { discardUploads(req); throw new ApiError(404, "Bill not found"); }
   if (!req.file) throw new ApiError(400, "Choose a PDF file");
   let updated: BillRow | undefined;

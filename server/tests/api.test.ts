@@ -5493,6 +5493,11 @@ describe("bill ledger confirmation migration", () => {
       body: { name: "Existing shared bill", amount: 12, category: "to_split", ledgerConfirmed: true },
     });
     assert.equal(oldBill.status, 201);
+    const personalBill = await request(`/api/houses/${createdHouse.data.id}/bills`, {
+      method: "POST",
+      body: { name: "Existing personal bill", amount: 4, category: "personal" },
+    });
+    assert.equal(personalBill.status, 201);
 
     await run("ALTER TABLE bills DROP COLUMN ledger_confirmed");
     await closeDb();
@@ -5502,9 +5507,18 @@ describe("bill ledger confirmation migration", () => {
     assert.equal(columnsAfter.find((column) => column.name === "ledger_confirmed")?.dflt_value, "0");
     const migrated = await get<{ ledger_confirmed: number }>("SELECT ledger_confirmed FROM bills WHERE id = ?", [oldBill.data.id]);
     assert.equal(migrated?.ledger_confirmed, 1, "existing shared bills retain their previous ledger inclusion");
+    const migratedPersonal = await get<{ ledger_confirmed: number }>("SELECT ledger_confirmed FROM bills WHERE id = ?", [personalBill.data.id]);
+    assert.equal(migratedPersonal?.ledger_confirmed, 0, "personal bills remain excluded from the household ledger");
     const ledger = await request(`/api/houses/${createdHouse.data.id}/insights/household`);
-    assert.equal(ledger.data.balances[0].paid, 12);
-    assert.equal(ledger.data.balances[0].share, 12);
-    assert.equal(ledger.data.balances[0].balance, 0);
+    const ownerBalance = ledger.data.balances.find((row: any) => row.userId === oldBill.data.paidBy);
+    assert.equal(ownerBalance.paid, 12);
+    assert.equal(ownerBalance.share, 12);
+    assert.equal(ownerBalance.balance, 0);
+
+    await run("UPDATE bills SET ledger_confirmed = 0 WHERE id = ?", [oldBill.data.id]);
+    await closeDb();
+    await initDb();
+    const secondInit = await get<{ ledger_confirmed: number }>("SELECT ledger_confirmed FROM bills WHERE id = ?", [oldBill.data.id]);
+    assert.equal(secondInit?.ledger_confirmed, 0, "a second init leaves an existing confirmation unchanged");
   });
 });
