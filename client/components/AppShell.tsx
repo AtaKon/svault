@@ -21,11 +21,13 @@ const NAV: { to: string; label: string; icon: IconName; end?: boolean }[] = [
 const EXTRA: { to: string; label: string; icon: IconName }[] = [
   { to: "/insights", label: "Insights", icon: "price" },
   { to: "/contribute", label: "Contribute", icon: "sparkles" },
+  { to: "/espresso", label: "Espresso log", icon: "cup" },
   { to: "/shopping", label: "Shopping list", icon: "list" },
   { to: "/plan", label: "Meal plan", icon: "calendar" },
   { to: "/intake", label: "Bulk intake", icon: "upload" },
   { to: "/ideas", label: "Food ideas", icon: "sparkles" },
   { to: "/receipts", label: "Purchases", icon: "receipt" },
+  { to: "/bills", label: "Bills & splitting", icon: "receipt" },
   { to: "/photos", label: "Photo library", icon: "image" },
   { to: "/notifications", label: "Reminders", icon: "bell" },
   { to: "/settings", label: "House settings", icon: "settings" },
@@ -231,7 +233,7 @@ export function AppShell() {
           {NAV.map((item) => {
             const moreActive =
               item.to === "/more" &&
-              ["/more", "/photos", "/ideas", "/shopping", "/plan", "/intake", "/receipts", "/notifications", "/settings", "/profile", "/developer", "/insights", "/contribute", "/admin"].some(
+              ["/more", "/photos", "/ideas", "/shopping", "/plan", "/intake", "/receipts", "/bills", "/notifications", "/settings", "/profile", "/developer", "/insights", "/espresso", "/contribute", "/admin"].some(
                 (path) => location.pathname === path || location.pathname.startsWith(`${path}/`),
               );
             return (

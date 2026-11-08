@@ -70,6 +70,7 @@ interface ItemSpec {
   tags?: string[];
   attributes?: Record<string, unknown>;
   barcode?: string;
+  espresso?: boolean;
   purchases: { qty: number; price: number; days: number; location: string; expiryDays?: number }[];
   keep: number;
 }
@@ -79,8 +80,8 @@ async function createItem(houseId: string, locations: Map<string, string>, categ
   const stamp = now();
   await run(
     `INSERT INTO items (id, house_id, name, description, brand, category_id, unit, reorder_point, target_stock,
-       attributes, tags, image, archived, created_by, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?, ?)`,
+       attributes, tags, image, espresso, archived, created_by, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 0, ?, ?, ?)`,
     [
       id,
       houseId,
@@ -93,6 +94,7 @@ async function createItem(houseId: string, locations: Map<string, string>, categ
       spec.target ?? null,
       JSON.stringify(spec.attributes ?? {}),
       JSON.stringify(spec.tags ?? []),
+      spec.espresso ? 1 : 0,
       userId,
       stamp,
       stamp,
@@ -249,13 +251,14 @@ await createItem(lake, lakeLocations, lakeCategories, { name: "Garlic", category
 await createItem(lake, lakeLocations, lakeCategories, { name: "Onions", category: "Produce", unit: "kg", purchases: [{ qty: 2, price: 1.6, days: 18, location: "Pantry" }], keep: 1.4 });
 await createItem(lake, lakeLocations, lakeCategories, { name: "Lemons", category: "Produce", unit: "pcs", purchases: [{ qty: 6, price: 0.55, days: 6, location: "Fridge", expiryDays: 9 }], keep: 4 });
 
-await createItem(lake, lakeLocations, lakeCategories, {
+const coffeeBeansId = await createItem(lake, lakeLocations, lakeCategories, {
   name: "Coffee beans",
   category: "Drinks",
   unit: "g",
   reorder: 250,
   brand: "Black River",
   barcode: "7350053850023",
+  espresso: true,
   purchases: [
     { qty: 1000, price: 0.024, days: 150, location: "Pantry" },
     { qty: 1000, price: 0.026, days: 80, location: "Pantry" },
@@ -263,6 +266,37 @@ await createItem(lake, lakeLocations, lakeCategories, {
   ],
   keep: 700,
 });
+
+/* A short dial-in history so the espresso log is populated in the demo. */
+for (const shot of [
+  { days: 1, rating: 4, grind: "2.4", dose: 18, yield: 36, time: 28, tds: 9.2, notes: "Cocoa and orange peel." },
+  { days: 5, rating: 5, grind: "2.2", dose: 18, yield: 38, time: 31, tds: 9.8, notes: "Sweeter, syrupy finish." },
+  { days: 12, rating: 3, grind: "2.8", dose: 17.5, yield: 32, time: 24, tds: 8.1, notes: "A little sour; grind finer." },
+]) {
+  await run(
+    `INSERT INTO espresso_shots (id, house_id, item_id, user_id, brewed_at, rating, roast_level, grind_setting,
+       grind_seconds, dose_grams, yield_grams, extraction_seconds, water_temp_c, pressure_bar, tds_percent,
+       grinder, machine, tasting_notes, tags, notes, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, 'medium', ?, 12, ?, ?, ?, 93, 9, ?, 'Eureka Mignon', 'Lelit Mara X', ?, ?, NULL, ?, ?)`,
+    [
+      newId("esp"),
+      lake,
+      coffeeBeansId,
+      demoId,
+      daysAgo(shot.days),
+      shot.rating,
+      shot.grind,
+      shot.dose,
+      shot.yield,
+      shot.time,
+      shot.tds,
+      shot.notes,
+      JSON.stringify(["chocolate", "citrus"]),
+      daysAgo(shot.days),
+      daysAgo(shot.days),
+    ],
+  );
+}
 
 await createItem(lake, lakeLocations, lakeCategories, {
   name: "Frozen peas",

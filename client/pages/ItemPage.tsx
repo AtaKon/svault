@@ -26,6 +26,7 @@ import { OffProductPicker } from "@/components/OffProductPicker";
 import { ZoomableImage } from "@/components/ZoomableImage";
 import { StockDialog } from "@/components/ItemCard";
 import { PriceChart } from "@/components/PriceChart";
+import { EspressoLogCard } from "@/components/Espresso";
 import { useToast } from "@/components/toast";
 import { daysUntil, money, qty, relativeTime, shortDate, unitPriceLabel } from "@/format";
 import { offProjectLabel } from "@/off";
@@ -504,6 +505,8 @@ export function ItemPage() {
               </div>
             )}
           </Card>
+
+          {item.espresso && <EspressoLogCard item={item} />}
 
           <Card className="p-4">
             <h2 className="mb-2 font-display text-lg">{t("History")}</h2>

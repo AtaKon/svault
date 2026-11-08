@@ -58,6 +58,7 @@ export class SqliteDriver implements DatabaseDriver {
     applyPendingSqliteRestore();
     const conn = new DatabaseSync(DB_FILE);
     conn.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
+    // Create the current tables before applying in-place column migrations below.
     conn.exec(SCHEMA);
 
     /**
@@ -66,10 +67,13 @@ export class SqliteDriver implements DatabaseDriver {
      */
     const columns = (table: string) =>
       conn.prepare(`PRAGMA table_info(${table})`).all() as unknown as { name: string }[];
+    const hasColumn = (table: string, column: string) => columns(table).some((entry) => entry.name === column);
     const ensureColumn = (table: string, column: string, definition: string) => {
-      if (!columns(table).some((entry) => entry.name === column)) {
+      if (!hasColumn(table, column)) {
         conn.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+        return true;
       }
+      return false;
     };
     const runLocal = (sql: string, params: unknown[] = []) =>
       conn.prepare(sql).run(...normaliseParams(params));
@@ -96,6 +100,21 @@ export class SqliteDriver implements DatabaseDriver {
     ensureColumn("receipts", "savings", "REAL");
     ensureColumn("receipts", "paid_by", "TEXT REFERENCES users(id) ON DELETE SET NULL");
     ensureColumn("receipts", "split_with", "TEXT NOT NULL DEFAULT '[]'");
+    // Fresh rows default to unconfirmed; preserve the old ledger behavior for
+    // shared bills that predate the acknowledgement column.
+    if (!hasColumn("bills", "ledger_confirmed")) {
+      // Adding the marker and preserving the old shared-bill ledger in one
+      // transaction prevents a crash from leaving migrated rows unconfirmed.
+      conn.exec("BEGIN");
+      try {
+        conn.exec("ALTER TABLE bills ADD COLUMN ledger_confirmed INTEGER NOT NULL DEFAULT 0");
+        runLocal("UPDATE bills SET ledger_confirmed = 1 WHERE category = 'to_split'");
+        conn.exec("COMMIT");
+      } catch (error) {
+        conn.exec("ROLLBACK");
+        throw error;
+      }
+    }
     ensureColumn("receipt_lines", "raw_description", "TEXT");
     ensureColumn("receipt_lines", "tax_rate", "REAL");
     ensureColumn("receipt_lines", "discount", "REAL");
@@ -110,6 +129,7 @@ export class SqliteDriver implements DatabaseDriver {
     ensureColumn("items", "off_project", "TEXT NOT NULL DEFAULT 'off'");
     ensureColumn("receipt_lines", "off_project", "TEXT NOT NULL DEFAULT 'off'");
     ensureColumn("catalog_mappings", "off_project", "TEXT NOT NULL DEFAULT 'off'");
+    ensureColumn("items", "espresso", "INTEGER NOT NULL DEFAULT 0");
     conn.exec("CREATE INDEX IF NOT EXISTS items_off ON items(off_code)");
 
     /* catalog_products gained a project dimension. SQLite cannot change a
@@ -521,6 +541,7 @@ CREATE TABLE IF NOT EXISTS items (
   tags TEXT NOT NULL DEFAULT '[]',
   image TEXT,
   nutrition TEXT,
+  espresso INTEGER NOT NULL DEFAULT 0,
   archived INTEGER NOT NULL DEFAULT 0,
   created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL,
@@ -538,6 +559,36 @@ CREATE TABLE IF NOT EXISTS item_barcodes (
   UNIQUE (house_id, code)
 );
 CREATE INDEX IF NOT EXISTS barcodes_item ON item_barcodes(item_id);
+
+/* Tasting and dial-in log for espresso coffee items. A shot's beans are an
+   inventory item, so deleting the coffee removes its history too. */
+CREATE TABLE IF NOT EXISTS espresso_shots (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  brewed_at TEXT NOT NULL,
+  rating INTEGER NOT NULL,
+  roast_level TEXT,
+  grind_setting TEXT,
+  grind_seconds REAL,
+  dose_grams REAL,
+  yield_grams REAL,
+  extraction_seconds REAL,
+  water_temp_c REAL,
+  pressure_bar REAL,
+  tds_percent REAL,
+  grinder TEXT,
+  machine TEXT,
+  tasting_notes TEXT,
+  tags TEXT NOT NULL DEFAULT '[]',
+  notes TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS espresso_shots_house ON espresso_shots(house_id, brewed_at);
+CREATE INDEX IF NOT EXISTS espresso_shots_item ON espresso_shots(item_id, brewed_at);
+CREATE INDEX IF NOT EXISTS espresso_shots_user ON espresso_shots(user_id, brewed_at);
 
 CREATE TABLE IF NOT EXISTS stock_lots (
   id TEXT PRIMARY KEY,
@@ -637,6 +688,25 @@ CREATE TABLE IF NOT EXISTS receipts (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS receipts_house ON receipts(house_id, created_at);
+
+CREATE TABLE IF NOT EXISTS bills (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  bill_type TEXT NOT NULL DEFAULT 'other' CHECK (bill_type IN ('electricity', 'water', 'natural_gas', 'heating_oil', 'internet_telecom', 'rent', 'building_fees', 'municipal_fees', 'insurance', 'other')),
+  category TEXT NOT NULL DEFAULT 'personal',
+  ledger_confirmed INTEGER NOT NULL DEFAULT 0,
+  amount REAL NOT NULL,
+  currency TEXT NOT NULL,
+  due_date TEXT,
+  paid_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  split_with TEXT NOT NULL DEFAULT '[]',
+  document TEXT,
+  notes TEXT,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS bills_house ON bills(house_id, due_date, created_at);
 
 CREATE TABLE IF NOT EXISTS receipt_lines (
   id TEXT PRIMARY KEY,

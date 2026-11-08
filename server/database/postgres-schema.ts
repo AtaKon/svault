@@ -197,6 +197,7 @@ CREATE TABLE IF NOT EXISTS items (
   tags TEXT NOT NULL DEFAULT '[]',
   image TEXT,
   nutrition TEXT,
+  espresso INTEGER NOT NULL DEFAULT 0,
   off_code TEXT,
   off_linked_at TEXT,
   off_source TEXT,
@@ -220,6 +221,34 @@ CREATE TABLE IF NOT EXISTS item_barcodes (
   UNIQUE (house_id, code)
 );
 CREATE INDEX IF NOT EXISTS barcodes_item ON item_barcodes(item_id);
+
+CREATE TABLE IF NOT EXISTS espresso_shots (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  brewed_at TEXT NOT NULL,
+  rating INTEGER NOT NULL,
+  roast_level TEXT,
+  grind_setting TEXT,
+  grind_seconds DOUBLE PRECISION,
+  dose_grams DOUBLE PRECISION,
+  yield_grams DOUBLE PRECISION,
+  extraction_seconds DOUBLE PRECISION,
+  water_temp_c DOUBLE PRECISION,
+  pressure_bar DOUBLE PRECISION,
+  tds_percent DOUBLE PRECISION,
+  grinder TEXT,
+  machine TEXT,
+  tasting_notes TEXT,
+  tags TEXT NOT NULL DEFAULT '[]',
+  notes TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS espresso_shots_house ON espresso_shots(house_id, brewed_at);
+CREATE INDEX IF NOT EXISTS espresso_shots_item ON espresso_shots(item_id, brewed_at);
+CREATE INDEX IF NOT EXISTS espresso_shots_user ON espresso_shots(user_id, brewed_at);
 
 CREATE TABLE IF NOT EXISTS receipts (
   id TEXT PRIMARY KEY,
@@ -247,6 +276,25 @@ CREATE TABLE IF NOT EXISTS receipts (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS receipts_house ON receipts(house_id, created_at);
+
+CREATE TABLE IF NOT EXISTS bills (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  bill_type TEXT NOT NULL DEFAULT 'other' CHECK (bill_type IN ('electricity', 'water', 'natural_gas', 'heating_oil', 'internet_telecom', 'rent', 'building_fees', 'municipal_fees', 'insurance', 'other')),
+  category TEXT NOT NULL DEFAULT 'personal',
+  ledger_confirmed INTEGER NOT NULL DEFAULT 0,
+  amount DOUBLE PRECISION NOT NULL,
+  currency TEXT NOT NULL,
+  due_date TEXT,
+  paid_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  split_with TEXT NOT NULL DEFAULT '[]',
+  document TEXT,
+  notes TEXT,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS bills_house ON bills(house_id, due_date, created_at);
 
 CREATE TABLE IF NOT EXISTS stock_lots (
   id TEXT PRIMARY KEY,
@@ -715,6 +763,29 @@ export const POSTGRES_MIGRATIONS: string[] = [
   "ALTER TABLE items ADD COLUMN IF NOT EXISTS off_project TEXT NOT NULL DEFAULT 'off'",
   "ALTER TABLE receipt_lines ADD COLUMN IF NOT EXISTS off_project TEXT NOT NULL DEFAULT 'off'",
   "ALTER TABLE catalog_mappings ADD COLUMN IF NOT EXISTS off_project TEXT NOT NULL DEFAULT 'off'",
+  "ALTER TABLE items ADD COLUMN IF NOT EXISTS espresso INTEGER NOT NULL DEFAULT 0",
+  // POSTGRES_SCHEMA creates bills on fresh installs; this atomically upgrades
+  // an existing bills table created before ledger_confirmed was introduced.
+  `DO $$
+  BEGIN
+    IF to_regclass('bills') IS NOT NULL THEN
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = current_schema() AND table_name = 'bills' AND column_name = 'ledger_confirmed'
+      ) THEN
+        -- Serialize concurrent startup migrations, then recheck in case another
+        -- process added the column while this one waited for the table lock.
+        LOCK TABLE bills IN ACCESS EXCLUSIVE MODE;
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = current_schema() AND table_name = 'bills' AND column_name = 'ledger_confirmed'
+        ) THEN
+          ALTER TABLE bills ADD COLUMN ledger_confirmed INTEGER NOT NULL DEFAULT 0;
+          UPDATE bills SET ledger_confirmed = 1 WHERE category = 'to_split';
+        END IF;
+      END IF;
+    END IF;
+  END $$`,
 ];
 
 /**
@@ -739,7 +810,9 @@ export const POSTGRES_TABLE_ORDER = [
   "vendors",
   "items",
   "item_barcodes",
+  "espresso_shots",
   "receipts",
+  "bills",
   "stock_lots",
   "stock_movements",
   "receipt_lines",

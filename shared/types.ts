@@ -1,5 +1,7 @@
 // Shared domain types used by both the API and the web client.
 
+import type { BillType } from "./bill-types.js";
+
 export type Role = "owner" | "admin" | "member" | "viewer";
 
 export interface User {
@@ -56,6 +58,9 @@ export interface NotificationChannel {
 }
 
 export interface HouseSettings {
+  priceLookup?: {
+    enabled?: boolean;
+  };
   ai?: {
     enabled?: boolean;
     baseUrl?: string;
@@ -479,6 +484,8 @@ export interface Item {
   tags: string[];
   image: string | null;
   archived: boolean;
+  /** Coffee item that keeps an espresso shot log. */
+  espresso: boolean;
   quantity: number;
   value: number;
   latestPrice?: number | null;
@@ -490,6 +497,85 @@ export interface Item {
   off?: OffLink | null;
   lots?: StockLot[];
   priceStats?: PriceStats;
+}
+
+/* ------------------------------------------------------------------ espresso */
+
+export type EspressoRoastLevel = "light" | "medium-light" | "medium" | "medium-dark" | "dark";
+
+export const ESPRESSO_ROAST_LEVELS: EspressoRoastLevel[] = [
+  "light",
+  "medium-light",
+  "medium",
+  "medium-dark",
+  "dark",
+];
+
+/** One brewed espresso, kept as a tasting and dial-in log against a coffee item. */
+export interface EspressoShot {
+  id: string;
+  houseId: string;
+  itemId: string;
+  itemName?: string | null;
+  itemBrand?: string | null;
+  userId: string | null;
+  userName?: string | null;
+  brewedAt: string;
+  /** 1-5 stars. */
+  rating: number;
+  roastLevel: EspressoRoastLevel | null;
+  /** Free text so numbers like "2.4" and words like "fine" both work. */
+  grindSetting: string | null;
+  grindSeconds: number | null;
+  doseGrams: number | null;
+  yieldGrams: number | null;
+  extractionSeconds: number | null;
+  waterTempC: number | null;
+  pressureBar: number | null;
+  /** Total dissolved solids, percent. */
+  tdsPercent: number | null;
+  /** Computed yield / dose. */
+  ratio: number | null;
+  /** Computed (TDS % x yield) / dose, percent. */
+  extractionYieldPercent: number | null;
+  grinder: string | null;
+  machine: string | null;
+  tastingNotes: string | null;
+  tags: string[];
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EspressoShotSummary {
+  count: number;
+  averageRating: number | null;
+  bestRating: number | null;
+  lastBrewedAt: string | null;
+  averageDoseGrams: number | null;
+  averageYieldGrams: number | null;
+  averageExtractionSeconds: number | null;
+  averageRatio: number | null;
+  averageExtractionYieldPercent: number | null;
+}
+
+/** An espresso-enabled coffee item with its log totals, used by the coffee picker. */
+export interface EspressoBeanSummary {
+  id: string;
+  name: string;
+  brand: string | null;
+  /** False when an item keeps historical shots after its espresso flag was turned off. */
+  espresso: boolean;
+  shotCount: number;
+  averageRating: number | null;
+  lastBrewedAt: string | null;
+}
+
+export interface EspressoShotList {
+  shots: EspressoShot[];
+  summary: EspressoShotSummary;
+  /** Present on house-wide responses. */
+  beans?: EspressoBeanSummary[];
 }
 
 export interface ItemDetail extends Item {
@@ -1179,6 +1265,21 @@ export interface HouseholdReceipt {
   participantNames: string[];
 }
 
+export interface UtilityBill {
+  id: string;
+  name: string;
+  billType: BillType;
+  category: "to_split" | "personal";
+  amount: number;
+  currency: string;
+  dueDate: string | null;
+  paidBy: string | null;
+  splitWith: string[];
+  document: string | null;
+  notes: string | null;
+  createdAt: string;
+}
+
 export interface UseItUpLot {
   id: string;
   quantity: number;
@@ -1215,6 +1316,21 @@ export interface ShoppingPriceHint {
   currency: string;
   cheapest: { vendorName: string; price: number; purchasedAt: string; unit: string | null };
   vendors: { vendorName: string; price: number; purchasedAt: string; unit: string | null }[];
+}
+
+export interface ExternalShoppingOffer {
+  source: "PosoKanei";
+  productId: string;
+  productName: string;
+  unit: string | null;
+  retailer: string;
+  price: number;
+  unitPrice: number | null;
+  currency: "EUR";
+  discount: boolean;
+  discountPercent: number | null;
+  updatedAt: string | null;
+  fetchedAt: string;
 }
 
 export interface ApiToken {

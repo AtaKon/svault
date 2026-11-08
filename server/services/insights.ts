@@ -4,6 +4,7 @@ import { createNotification } from "./notifications.js";
 import { normalizeName } from "./shopping.js";
 import { heuristicReceipt, normaliseReceiptDraft } from "./receipt-local.js";
 import { reconcileReceipt } from "../../shared/receipt-reconcile.js";
+import { splitAmountEvenly } from "../../shared/bill-splitting.js";
 import type {
   HouseBudgetSettings,
   HouseholdBalance,
@@ -438,6 +439,29 @@ export async function householdInsight(houseId: string): Promise<{
         participantNames: splitWith.map((id) => names.get(id) ?? "Former member"),
       });
     }
+  }
+
+  // Utility bills contribute to the household ledger only when explicitly
+  // categorised as shared. Personal bills remain visible in Bills & splitting.
+  const bills = await all<any>(
+    `SELECT amount, paid_by, split_with FROM bills
+     WHERE house_id = ? AND category = 'to_split' AND ledger_confirmed = 1 ORDER BY created_at`,
+    [houseId],
+  );
+  for (const bill of bills) {
+    const total = money(bill.amount);
+    const payer = bill.paid_by && memberIds.has(bill.paid_by) ? bill.paid_by : null;
+    const participants = parseJson<unknown>(bill.split_with, []);
+    const selected = [...new Set((Array.isArray(participants) ? participants : []).filter(
+      (id): id is string => typeof id === "string" && memberIds.has(id),
+    ))];
+    const splitWith = selected.length ? selected : [...memberIds];
+    if (!splitWith.length) continue;
+    if (payer) paid.set(payer, (paid.get(payer) ?? 0) + total);
+    splitAmountEvenly(total, splitWith.length).forEach((share, index) => {
+      const id = splitWith[index];
+      if (id) owed.set(id, (owed.get(id) ?? 0) + share);
+    });
   }
 
   const balances: HouseholdBalance[] = members.map((member) => {

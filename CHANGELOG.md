@@ -23,6 +23,14 @@ All notable changes to SVault are documented here. The format follows
   verification questions. Several ready items can be shared in one batch.
 - Open Prices and Folksonomy bearer tokens are stored encrypted per user; the instance account can be
   used as a fallback. A Folksonomy property endpoint is available for advanced automation.
+- **Espresso log.** Mark a bag of coffee beans as espresso and keep a tasting history with 1-5 star
+  ratings, roast level, grind setting and time, dose, yield, extraction time, water temperature,
+  pressure, TDS, grinder, machine, flavour tags and notes. SVault computes the brew ratio and extraction
+  yield, summarises averages per bean, and adds a house-wide **Espresso log** screen for comparing
+  shots. Everyone can read the log; members edit their own shots and admins can edit any.
+- House admins can enable PosoKanei price lookups on the shopping list. Members explicitly check a
+  linked item's exact barcode; SVault caches results and applies per-user and instance-wide request
+  limits. External offers remain separate from recorded purchase prices.
 - A new **Insights** page brings spending together: monthly budget and progress, spend by month, shop
   and category, waste value, price alerts, a use-it-up view with matching recipes, cheapest-shop hints
   for open shopping-list lines, and a household split with settle-up suggestions. Each house stores its

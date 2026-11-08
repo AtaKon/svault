@@ -18,6 +18,8 @@ import type {
   Receipt,
   OffLink,
   OffProduct,
+  EspressoShot,
+  EspressoShotSummary,
 } from "../shared/types.js";
 
 export const ITEM_SELECT = `
@@ -112,6 +114,7 @@ export function serializeItem(row: any, barcodes: { id: string; code: string; fo
     tags: parseJson<string[]>(row.tags, []),
     image: row.image ?? null,
     archived: bool(row.archived),
+    espresso: bool(row.espresso),
     quantity,
     value: round(Number(row.value ?? 0), 2),
     latestPrice: row.latest_price == null ? null : Number(row.latest_price),
@@ -189,6 +192,76 @@ export function serializeMovement(row: any): Movement {
     receiptId: row.receipt_id ?? null,
     balanceAfter: row.balance_after == null ? null : round(Number(row.balance_after ?? 0)),
     createdAt: row.created_at,
+  };
+}
+
+export function serializeEspressoShot(row: any): EspressoShot {
+  const number = (value: unknown) => (value == null ? null : Number(value));
+  const dose = number(row.dose_grams);
+  const yieldGrams = number(row.yield_grams);
+  const tds = number(row.tds_percent);
+  return {
+    id: row.id,
+    houseId: row.house_id,
+    itemId: row.item_id,
+    itemName: row.item_name ?? null,
+    itemBrand: row.item_brand ?? null,
+    userId: row.user_id ?? null,
+    userName: row.user_name ?? null,
+    brewedAt: row.brewed_at,
+    rating: Number(row.rating ?? 0),
+    roastLevel: row.roast_level ?? null,
+    grindSetting: row.grind_setting ?? null,
+    grindSeconds: number(row.grind_seconds),
+    doseGrams: dose,
+    yieldGrams,
+    extractionSeconds: number(row.extraction_seconds),
+    waterTempC: number(row.water_temp_c),
+    pressureBar: number(row.pressure_bar),
+    tdsPercent: tds,
+    ratio: dose != null && dose > 0 && yieldGrams != null ? round(yieldGrams / dose, 2) : null,
+    extractionYieldPercent:
+      dose != null && dose > 0 && yieldGrams != null && tds != null
+        ? round((yieldGrams * tds) / dose, 1)
+        : null,
+    grinder: row.grinder ?? null,
+    machine: row.machine ?? null,
+    tastingNotes: row.tasting_notes ?? null,
+    tags: parseJson<string[]>(row.tags, []),
+    notes: row.notes ?? null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function emptyEspressoSummary(): EspressoShotSummary {
+  return {
+    count: 0,
+    averageRating: null,
+    bestRating: null,
+    lastBrewedAt: null,
+    averageDoseGrams: null,
+    averageYieldGrams: null,
+    averageExtractionSeconds: null,
+    averageRatio: null,
+    averageExtractionYieldPercent: null,
+  };
+}
+
+export function serializeEspressoSummary(row: any): EspressoShotSummary {
+  if (!row) return emptyEspressoSummary();
+  const number = (value: unknown, decimals = 1) =>
+    value == null || !Number.isFinite(Number(value)) ? null : round(Number(value), decimals);
+  return {
+    count: Number(row.count ?? 0),
+    averageRating: number(row.average_rating),
+    bestRating: row.best_rating == null ? null : Number(row.best_rating),
+    lastBrewedAt: row.last_brewed_at ?? null,
+    averageDoseGrams: number(row.average_dose_grams),
+    averageYieldGrams: number(row.average_yield_grams),
+    averageExtractionSeconds: number(row.average_extraction_seconds),
+    averageRatio: number(row.average_ratio, 2),
+    averageExtractionYieldPercent: number(row.average_extraction_yield_percent),
   };
 }
 

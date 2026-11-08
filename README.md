@@ -21,6 +21,7 @@ dataset — all from one PWA that runs in a single Docker container.
 |---|---|
 | **Several houses, several people** | Every house has its own stock, places, categories, recipes and photos. Invite family with owner/admin/member/viewer roles, and hand ownership over explicitly when the household changes. Optional per-user TOTP two-factor, passkeys and OIDC single sign-on. |
 | **Dynamic inventory** | Items get whatever attributes *you* define per house (size, flavour, material, warranty date…). Units are handled properly (g/kg, ml/l, pcs, pairs…). |
+| **Espresso log** | Flag a bag of coffee beans as espresso and keep a tasting history: 1-5 star ratings, roast level, grind setting, dose, yield, extraction time, water temperature, pressure, grinder, machine and TDS. SVault computes the brew ratio and extraction yield, summarises averages per bean, and lets the whole house compare shots. |
 | **Stock that adds up** | Every change is a movement. Batches keep purchase price, location and expiry, so stock counts, value and FIFO consumption stay honest. |
 | **Price history that means something** | Record a unit price on every purchase and see per-unit trends, averages and highs/lows, filtered by shop or across all shops. Every individual buy is listed with its date, quantity and vendor. Prices are normalised when units differ (e.g. 500 ml at €0.80 becomes €1.60/l). |
 | **Barcode scanning** | Camera scan (ZXing) works in the browser; unknown EAN/UPC codes fall back to an OpenFoodFacts lookup and pre-fill a new item. |
@@ -28,7 +29,7 @@ dataset — all from one PWA that runs in a single Docker container.
 | **Contribute back** | Look up food, beauty, pet food and general products across all four Open Food Facts databases. A **Contribute** page ranks items whose product is missing a brand, category, nutrition panel or photo, lets a signed-in user review the exact fields, and queues a safe additive edit. Accounts are optional, passwords are never stored, and writes stay off until the administrator enables them. |
 | **Receipt intake & shops** | Photograph or upload a weekly shop: OCR reads the lines, you fix anything it missed, and the whole basket becomes stock. Built-in layout templates handle Lidl Greece, Sklavenitis Greece and My market Greece quantities, weights, barcodes and discounts; templates for other stores can be built and tested in the app. Each receipt records whether AI, a template or the local parser read it, and discount lines roll up into a **money saved** total instead of becoming products. The shop is detected automatically, with a country-based catalogue. Receipts keep net and VAT, feeding spend-by-shop, tax and category analytics. Corrections and local vector suggestions map shop shorthand to the right products. |
 | **Bulk intake** | Bring in a receipt or a queue of scanned barcodes, review every editable line against suggested matches, then commit in one transaction. Works with AI vision or text-only/local parsing. |
-| **Shopping list** | Fill it from a recipe's missing ingredients, from everything below its reorder point, or from a week of planned meals. Lines merge unit-aware, group by category, and checking one records a normal stock movement with price and expiry. |
+| **Shopping list** | Fill it from a recipe's missing ingredients, from everything below its reorder point, or from a week of planned meals. Lines merge unit-aware, group by category, and checking one records a normal stock movement with price and expiry. House admins can optionally enable cautious, exact-barcode PosoKanei price and promotion lookups. |
 | **Meal planner** | A seven-day breakfast/lunch/dinner/snack grid. Pick saved recipes or food ideas, scale servings per slot, duplicate a meal, and turn the week's missing ingredients into the shopping list. |
 | **CSV import** | Bring a spreadsheet in with automatic column mapping, a dry-run preview and per-line errors. Supports comma/semicolon, quoted fields, BOM, CRLF and decimal commas; commits create normal stock movements. |
 | **Low stock & expiry reminders** | Set a reorder point, get a reminder when it is reached. Expiring batches warn you days ahead. Checked on every stock change plus every 30 minutes. Deliver to the bell, the browser, ntfy, Apprise or a signed webhook. |
@@ -291,6 +292,8 @@ GET  /api/houses/:id/photos/export?format=yolo|coco
 GET  /api/houses/:id/notifications           POST /api/houses/:id/notifications/scan
 POST /api/houses/:id/notifications/test      GET  /api/houses/:id/reminder-deliveries
 POST /api/houses/:id/members/:userId/transfer-ownership
+GET  /api/houses/:id/espresso-shots          GET  /api/items/:id/espresso-shots
+POST /api/items/:id/espresso-shots           PATCH/DELETE /api/items/:id/espresso-shots/:shotId
 ```
 
 ## Screens
@@ -298,6 +301,7 @@ POST /api/houses/:id/members/:userId/transfer-ownership
 - **Home** – stock summary, running low, expiring, recent activity, today's plan, cooking shortcuts.
 - **Inventory** – search, category/location/low-stock/expiry filters, inline ±1, sort by value.
 - **Item** – batch list with expiry, price chart, movement history, barcodes, dynamic attributes.
+- **Espresso log** – roast, grind, dose, yield, extraction time and TDS history with ratings and averages per bean.
 - **Scan** – camera + manual entry, quick ±1, create-from-barcode.
 - **Shopping list** – grouped, unit-aware lines from recipes, low stock and the plan; check into stock.
 - **Meal plan** – seven-day grid per house with scaled servings and one-click shopping list.

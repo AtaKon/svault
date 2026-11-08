@@ -314,6 +314,25 @@ that place.
 - Nothing is sent automatically. A successful write refreshes the local product cache. Administrators
   can enable a dry run that validates and queues contributions without sending them.
 
+### Espresso log
+
+Coffee beans can keep a tasting and dial-in history. Open the item, turn on **Espresso coffee** in the
+editor (or enable **Track espresso shots** when creating it), and save. The item page then gets an
+**Espresso log** card.
+
+- Press **Log shot** and give the espresso a 1-5 star rating. Everything else is optional, so a quick
+  rating is enough.
+- Record the roast level, grind setting, grind time, grinder, machine, dose, yield, extraction time,
+  water temperature, pressure and TDS. SVault calculates the brew ratio (for example `1:2`) and the
+  extraction yield from dose, yield and TDS as you type.
+- Add tasting notes, flavour tags and free notes. Each shot keeps who brewed it and when.
+- The card shows the average rating, average ratio and average extraction time. Open **Espresso log**
+  under **More** (or the sidebar) to compare every coffee, filter by bean and see the best shots.
+- Everyone in the house can read the log. Members can edit or delete only their own shots; admins and
+  the owner can edit or delete any shot. Deleting the coffee item deletes its shots. If you turn the
+  espresso flag off later, new shots stop being accepted but the existing history stays in the
+  house-wide log until you delete it.
+
 ### Low stock and expiry
 
 - An item is low when its quantity is at or below its reorder point. Set the reorder point to `0` to

@@ -14,6 +14,7 @@ import { oidcRoutes } from "./routes/oidc.js";
 import { houseRoutes } from "./routes/houses.js";
 import { inventoryRoutes, itemRoutes } from "./routes/inventory.js";
 import { receiptRoutes, singleReceiptRoutes } from "./routes/receipts.js";
+import { billRoutes, singleBillRoutes } from "./routes/bills.js";
 import { receiptTemplateRoutes } from "./routes/receipt-templates.js";
 import { recipeRoutes, singleRecipeRoutes } from "./routes/recipes.js";
 import { ideaRoutes, singleIdeaRoutes } from "./routes/ideas.js";
@@ -45,6 +46,8 @@ import { pruneAiCallLogs } from "./services/ai-logs.js";
 import { sweepOrphanUploads } from "./services/upload-cleanup.js";
 import { initDb, closeDb, databaseKind } from "./db.js";
 
+// Apply every schema migration before creating or serving the application.
+// Insights may then safely query the bills table without a mid-migration gap.
 await initDb();
 ensureDirs();
 await seedVendorCatalog();
@@ -231,6 +234,7 @@ app.use("/api/houses", houseRoutes);
 app.use("/api/houses", aiLogRoutes);
 app.use("/api/houses", inventoryRoutes);
 app.use("/api/houses", receiptRoutes);
+app.use("/api/houses", billRoutes);
 app.use("/api/houses", receiptTemplateRoutes);
 app.use("/api/houses", recipeRoutes);
 app.use("/api/houses", ideaRoutes);
@@ -252,6 +256,7 @@ app.use("/api/off", offRoutes);
 app.use("/api/items", itemRoutes);
 app.use("/api/recipes", singleRecipeRoutes);
 app.use("/api/receipts", singleReceiptRoutes);
+app.use("/api/bills", singleBillRoutes);
 app.use("/api/ideas", singleIdeaRoutes);
 app.use("/api/photos", singlePhotoRoutes);
 
@@ -263,6 +268,9 @@ app.get("/api/health", (_req, res) => {
    down so nothing under /uploads can run script, even if a non-image slipped
    in through an older version: no sniffing, a sandboxing CSP, and anything
    that is not a known image extension is forced to download. */
+// Keep this before express.static below: bill PDFs are served by authenticated
+// API routes, never by their storage paths.
+app.use("/uploads/bills", (_req, _res, next) => next(new ApiError(404, "Not found")));
 app.use(
   "/uploads",
   express.static(UPLOAD_DIR, {
@@ -294,7 +302,7 @@ if (fs.existsSync(CLIENT_DIR)) {
   });
 }
 
-app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+export function apiErrorHandler(err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) {
   if (err instanceof RateLimitError) res.setHeader("Retry-After", String(err.retryAfter));
   if (err instanceof ApiError) {
     res.status(err.status).json({ error: err.message, details: err.details ?? undefined });
@@ -312,7 +320,9 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
   }
   console.error("Unhandled error:", err);
   res.status(500).json({ error: "Something went wrong on the server" });
-});
+}
+
+app.use(apiErrorHandler);
 
 if (process.env.NODE_ENV !== "test") {
   const server = app.listen(PORT, "0.0.0.0", async () => {

@@ -13,6 +13,7 @@ import {
   PageHeader,
   Select,
   Sheet,
+  Switch,
   Textarea,
 } from "@/components/ui";
 import { Icon } from "@/components/icons";
@@ -48,6 +49,7 @@ export function ItemFormPage() {
   const [reorderPoint, setReorderPoint] = useState("");
   const [targetStock, setTargetStock] = useState("");
   const [tags, setTags] = useState("");
+  const [espresso, setEspresso] = useState(params.get("espresso") === "1");
   const [values, setValues] = useState<Record<string, unknown>>({});
   const [nutrition, setNutrition] = useState<NutritionDraft>(emptyNutritionDraft);
   const [barcodes, setBarcodes] = useState<string[]>(params.get("barcode") ? [params.get("barcode")!] : []);
@@ -91,6 +93,7 @@ export function ItemFormPage() {
           setReorderPoint(item.reorderPoint ? String(item.reorderPoint) : "");
           setTargetStock(item.targetStock != null ? String(item.targetStock) : "");
           setTags(item.tags.join(", "));
+          setEspresso(item.espresso);
           setValues(item.attributes ?? {});
           setNutrition(nutritionDraft(item.nutrition));
           setImagePreview(item.image);
@@ -141,6 +144,7 @@ export function ItemFormPage() {
         targetStock: targetStock ? Number(targetStock) : null,
         attributes: values,
         tags,
+        espresso,
         nutrition: draftToNutrition(nutrition),
       };
       const offCode = params.get("offCode");
@@ -257,6 +261,24 @@ export function ItemFormPage() {
               </button>
             </div>
             <AttributeFields defs={visibleAttributes} values={values} onChange={setValues} />
+          </Card>
+
+          <Card className="space-y-2 p-4">
+            <div className="flex items-center gap-2">
+              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-warn-soft text-warn">
+                <Icon name="cup" size={16} />
+              </span>
+              <h2 className="font-display text-lg">{t("Espresso coffee")}</h2>
+            </div>
+            <Switch
+              checked={espresso}
+              onChange={setEspresso}
+              label={t("Track espresso shots")}
+              description={t("Adds a shot log to this item for ratings, grind, dose, yield, extraction time and roast level.")}
+            />
+            <p className="text-[11px] leading-relaxed text-muted">
+              {t("Use this for a bag of coffee beans you brew as espresso. Leave it off for milk, cups and machines.")}
+            </p>
           </Card>
 
           <NutritionFormCard draft={nutrition} onChange={setNutrition} />

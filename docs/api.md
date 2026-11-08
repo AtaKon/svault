@@ -125,7 +125,7 @@ Mounted at `/api/houses`.
 | `DELETE` | `/:houseId/invites/:inviteId` | admin+ | Revoke an invite. |
 | `POST` | `/:houseId/leave` | viewer+ | Leave the house. The sole owner cannot leave until ownership transfer exists ([#16](https://github.com/AtaKon/svault/issues/16)). |
 
-`settings` accepts a partial object and is deep-merged for `ai` and `notifications`:
+`settings` accepts a partial object and is deep-merged for `ai`, `notifications` and `priceLookup`:
 
 ```json
 {
@@ -139,7 +139,8 @@ Mounted at `/api/houses`.
       "visionModel": "",
       "apiKey": "sk-..."
     },
-    "notifications": { "lowStock": true, "expiryDays": 7 }
+    "notifications": { "lowStock": true, "expiryDays": 7 },
+    "priceLookup": { "enabled": true }
   }
 }
 ```
@@ -216,6 +217,11 @@ Attribute types: `text`, `number`, `select`, `date`, `boolean`, `url`. Built-in 
 | `GET` | `/api/items/:itemId/aliases` | viewer+ | Receipt names mapped to this item. |
 | `POST` | `/api/items/:itemId/aliases` | member+ | Add `{ "rawName": "...", "vendorId": "vnd_..." }` (vendor optional). |
 | `DELETE` | `/api/items/:itemId/aliases/:aliasId` | member+ | Forget a receipt name. |
+| `GET` | `/api/items/:itemId/espresso-shots` | viewer+ | Espresso log for a coffee item, plus its summary. |
+| `POST` | `/api/items/:itemId/espresso-shots` | member+ | Log a shot. The item must have `espresso: true`. |
+| `PATCH` | `/api/items/:itemId/espresso-shots/:shotId` | member+ | Edit a shot. The author or an admin+ can change it. |
+| `DELETE` | `/api/items/:itemId/espresso-shots/:shotId` | member+ | Delete a shot. The author or an admin+ can remove it. |
+| `GET` | `/api/houses/:houseId/espresso-shots` | viewer+ | House-wide log: `shots`, `summary` and espresso-enabled `beans`. Optional `itemId` and `limit` (1-500). |
 
 List query parameters:
 
@@ -243,6 +249,7 @@ Create item body:
   "targetStock": 2,
   "attributes": { "origin": "Messinia" },
   "tags": ["kitchen", "greek"],
+  "espresso": false,
   "nutrition": {
     "basis": "100ml",
     "energyKcal": 884,
@@ -292,6 +299,54 @@ Every successful stock action returns the complete item detail. Its `priceHistor
 per incoming purchase: `at`, normalized `price` per item unit, entered `unit`, `quantity`, `unitPrice`,
 `vendorId`, `vendorName`, `receiptId` and `note`. Clients can filter this list by shop for per-vendor
 price comparisons.
+
+### Espresso log
+
+Set `"espresso": true` on a coffee item to give it a shot log. The item page then shows ratings and
+dial-in history, and the house-wide **Espresso log** screen lists every coffee. Log a shot with:
+
+```json
+{
+  "brewedAt": "2026-11-01T08:30:00.000Z",
+  "rating": 5,
+  "roastLevel": "medium",
+  "grindSetting": "2.4",
+  "grindSeconds": 12,
+  "doseGrams": 18,
+  "yieldGrams": 36,
+  "extractionSeconds": 28,
+  "waterTempC": 93,
+  "pressureBar": 9,
+  "tdsPercent": 9.2,
+  "grinder": "Eureka Mignon",
+  "machine": "Lelit Mara X",
+  "tastingNotes": "Cocoa and orange peel",
+  "tags": ["chocolate", "citrus"],
+  "notes": "Sweeter than yesterday."
+}
+```
+
+`rating` is required and must be 1-5. `roastLevel` is one of `light`, `medium-light`, `medium`,
+`medium-dark` or `dark`. Every other field is optional, so a quick rating alone is valid. `grindSetting`
+is free text so both `2.4` and `fine` work. `tags` accepts an array or a comma-separated string; each
+tag is capped at 40 characters and the list at 20, and over-limit input is rejected rather than
+truncated. `brewedAt` must be between 2000-01-01 and one day in the future.
+
+`PATCH` leaves every omitted field unchanged, including `brewedAt`; send `null` to clear a nullable
+field. `brewedAt` is not nullable, so omitting it leaves the date alone and sending `null` is rejected.
+Logging a new shot requires the item's espresso flag, but existing shots can still be edited or deleted
+after the flag is turned off so a mistaken entry never gets stuck. The house-wide history keeps those
+shots and shows the coffee name. `beans` includes espresso-enabled items plus any item that still has
+history, with `espresso: false` on the latter; the log form only offers beans whose flag is on.
+
+A shot response adds computed `ratio` (`yieldGrams / doseGrams`) and `extractionYieldPercent`
+(`yieldGrams × tdsPercent / doseGrams`; TDS is entered as a percentage, so 36 g yield, 18 g dose and
+9% TDS gives 18). The list endpoints return `shots` and a `summary` with `count`, `averageRating`,
+`bestRating`, `lastBrewedAt`, average dose, yield, extraction time, ratio and extraction yield. Ratio
+and extraction yield averages only include shots with a positive dose (and TDS for extraction yield);
+dose and yield averages ignore zero values, while `count` still counts every shot. The house-wide
+response also returns `beans`: each espresso-enabled coffee, plus any item with history, with its
+`shotCount` and `averageRating`. Deleting the coffee item deletes its shots.
 
 Barcode scan response:
 
@@ -807,6 +862,21 @@ See the [user guide](user-guide.md#export-a-dataset) for the archive layout.
 Joining a house — by accepting an invite or being added by an admin — creates a `house` notification
 addressed to that user only. Other members do not see it.
 
+## Household bills
+
+| Method | Path | Min role | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/houses/:houseId/bills` | viewer+ | List household bills. |
+| `POST` | `/api/houses/:houseId/bills` | member+ | Create a bill; multipart form fields include `name`, `billType`, `amount`, and `category`. `currency` defaults to the house currency. Attach an optional `document` PDF. |
+| `PATCH` | `/api/bills/:billId` | member+ | Update bill fields, payer, or participants. |
+| `DELETE` | `/api/bills/:billId` | member+ | Delete a bill and its attached PDF. |
+| `POST` | `/api/houses/:houseId/bills/:billId/document` | member+ | Attach or replace a PDF. |
+| `GET` | `/api/houses/:houseId/bills/:billId/document` | viewer+ | Download the attached PDF. |
+
+`billType` is one of `electricity`, `water`, `natural_gas`, `heating_oil`, `internet_telecom`, `rent`, `building_fees`, `municipal_fees`, `insurance`, or `other`. `category` is `to_split` or `personal`. Shared bills use equal cent-exact shares; when `to_split` is selected without `splitWith` or with an empty list, all current house members share it. When a member leaves, their payer/participant references are cleared on the next bill edit if those fields are omitted; explicitly submitting a departed member is rejected. Personal bills do not affect household balances. Household balances include shared bills only while their persisted `ledgerConfirmed` flag is true. Bills and purchase receipts are separate ledger entries; creating a shared bill or changing a personal bill to shared requires `ledgerConfirmed: true`, confirming the expense is not also recorded as a purchase receipt. PATCHing an already-shared bill may set `ledgerConfirmed` to `true` or `false`; omitting it preserves the current value. Setting it to `false` is currently API-only; the Bills page confirms shared status when changing a personal bill to shared. Bill PDFs are served as downloads through the authenticated document route; the storage path is private.
+
+`splitWith` accepts an array of member IDs; multipart create forms may send it as a JSON-encoded array string. Omitting it or sending an empty array on a shared bill defaults to all current members.
+
 ## Insights
 
 Mounted at `/api/houses/:houseId/insights`. Reads need `viewer`; changing settings needs `admin`.
@@ -819,8 +889,35 @@ Mounted at `/api/houses/:houseId/insights`. Reads need `viewer`; changing settin
 | `POST` | `/price-alerts/scan` | Create in-app reminders for those alerts (one per item per month) and return `{ created, alerts }`. |
 | `GET` | `/use-it-up?days=7` | Expiring lots grouped by item plus recipes that use them. Defaults to `useItUpDays` from settings. |
 | `GET` | `/shopping-prices` | Best recent unit price and shop for each open shopping-list line. |
+| `GET` | `/shopping-offers/:lineId` | `member+`; when enabled by a house admin, looks up exact-barcode Greek retailer prices and promotions from PosoKanei. Results do not change SVault purchase history. |
 | `GET` | `/household` | Per-member `paid`, `share` and `balance`, settle-up transfers, and the recent receipts used. |
 | `PATCH` | `/settings` | Set `{ monthlyBudget, priceAlertPercent, useItUpDays }`; stored in the house settings. |
+
+Price lookup is off by default. A house admin enables it with `PATCH /api/houses/:houseId` and
+`{ "settings": { "priceLookup": { "enabled": true } } }`. `priceLookup` accepts exactly
+`{ "enabled": boolean }`. Members trigger one lookup at a time from
+the shopping list. SVault sends the oldest valid barcode attached to the linked item to the fixed
+HTTPS PosoKanei API and returns that barcode with the offers so the UI can show which code was checked.
+Successful results are cached per user in memory for 30 minutes; unknown barcodes are cached for 10 minutes.
+The cache is per process, holds at most 500 user/barcode pairs, and is cleared when the server restarts.
+Neither is written to purchase history. Successful lookups and upstream 429 attempts are limited to
+two per user and three instance-wide per 15 minutes. Concurrent requests for the same barcode from the
+same user share one upstream fetch. Different users make separately rate-limited requests. Rate-limit
+slots are charged as follows. Separately, all authenticated lookup endpoint requests, including requests
+rejected during validation and cache hits, are capped at 60 per user per 10 minutes to bound database
+reads. This request guard is separate from the upstream quota.
+
+| Lookup outcome | User slot | Instance slot |
+| --- | --- | --- |
+| Successful product or unknown barcode | Initiating caller | Consumed |
+| Upstream 429 | Initiating caller | Consumed; all barcode lookups pause for the supplied retry delay |
+| Cached or same-user shared in-flight result | None for a cache hit or same-user join | None for cache hits; one slot belongs to the shared upstream request |
+| Other upstream or malformed-product failure | Refunded | Refunded; that barcode pauses for 15 seconds |
+| Rejected by cooldown or instance quota | None | None |
+
+PosoKanei does not publish an API contract, so responses may change or be unavailable.
+Valid product responses with an empty retailer-price list return no offers; responses missing required
+product fields are treated as malformed upstream responses and return an unavailable error.
 
 Receipts accept `paidBy` and `splitWith` on import, and `PATCH /api/receipts/:receiptId` changes them
 later. An empty `splitWith` means everyone currently in the house.

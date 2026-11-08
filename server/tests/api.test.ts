@@ -1,9 +1,13 @@
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createHmac, createSign, generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { splitAmountEvenly } from "../../shared/bill-splitting.js";
+import { BILL_TYPE_LABELS, BILL_TYPE_VALUES } from "../../shared/bill-types.js";
+import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA, POSTGRES_TABLE_ORDER } from "../database/postgres-schema.js";
 
 const dataDir = mkdtempSync(path.join(tmpdir(), "svault-test-"));
 process.env.DATA_DIR = dataDir;
@@ -99,8 +103,9 @@ await new Promise<void>((resolve) => {
   });
 });
 
-const { app } = await import("../index.js");
-const { closeDb, get, run } = await import("../db.js");
+const { app, apiErrorHandler } = await import("../index.js");
+const { all, closeDb, get, initDb, run } = await import("../db.js");
+const { discardUploads } = await import("../upload.js");
 const { heuristicRecipe, parseIngredientLine, localIdeas } = await import("../services/recipe-local.js");
 const { heuristicReceipt } = await import("../services/receipt-local.js");
 const { parseLidlReceipt } = await import("../services/receipt-lidl.js");
@@ -112,7 +117,11 @@ const { parseWithTemplateRules } = await import("../services/receipt-template-en
 const { LIDL_TEMPLATE_RULES, SKLAVENITIS_TEMPLATE_RULES } = await import("../../shared/receipt-template-example.js");
 const { convert, pricePerUnit } = await import("../units.js");
 const { parseOffNutrition } = await import("../services/nutrition.js");
+const { createPosoKaneiClient, PosoKaneiUnavailableError } = await import("../services/posokanei.js");
+const { RateLimitError, RateLimiter, limiters } = await import("../rate-limit.js");
+const { createShoppingOffersHandler, posoKaneiUnavailableApiError } = await import("../routes/insights.js");
 const { parseCsv, parseCsvNumber } = await import("../services/csv.js");
+const { espressoBrewedAt } = await import("../routes/inventory.js");
 const { totpCode, verifyTotp, generateTotpSecret, generateBackupCodes } = await import("../services/totp.js");
 const { backupForTest, validateBackup } = await import("../services/backup.js");
 const { inspectDataset, importDataset } = await import("../services/dataset-import.js");
@@ -135,8 +144,12 @@ async function request(
   if (useCookie) headers.cookie = useCookie;
   let body: BodyInit | undefined;
   if (options.body !== undefined) {
-    headers["content-type"] = "application/json";
-    body = JSON.stringify(options.body);
+    if (options.body instanceof FormData) {
+      body = options.body;
+    } else {
+      headers["content-type"] = "application/json";
+      body = JSON.stringify(options.body);
+    }
   }
   const res = await fetch(base + pathname, { method: options.method ?? (body ? "POST" : "GET"), headers, body });
   const setCookie = res.headers.get("set-cookie");
@@ -1147,6 +1160,683 @@ describe("inventory and stock", () => {
     const res = await request(`/api/items/${itemId}/stock`, { method: "POST", body: { action: "add", quantity: -1 } });
     assert.equal(res.status, 400);
     assert.equal(res.data.error, "Invalid request");
+  });
+});
+
+describe("espresso log", () => {
+  let coffeeId = "";
+  let shotId = "";
+  let memberShotId = "";
+  let memberUserId = "";
+
+  it("validates brew dates at the exact boundaries", () => {
+    const fixed = Date.parse("2026-11-08T12:00:00.000Z");
+    assert.equal(espressoBrewedAt(undefined, fixed), "2026-11-08T12:00:00.000Z");
+    assert.equal(espressoBrewedAt("2000-01-01T00:00:00.000Z", fixed), "2000-01-01T00:00:00.000Z");
+    assert.equal(
+      espressoBrewedAt(new Date(fixed + 864e5).toISOString(), fixed),
+      new Date(fixed + 864e5).toISOString(),
+    );
+    assert.throws(() => espressoBrewedAt(null, fixed));
+    assert.throws(() => espressoBrewedAt("", fixed));
+    assert.throws(() => espressoBrewedAt("1999-12-31T23:59:59.000Z", fixed));
+    assert.throws(() => espressoBrewedAt(new Date(fixed + 864e5 + 1).toISOString(), fixed));
+  });
+
+  after(async () => {
+    if (memberUserId) {
+      await request(`/api/houses/${houseId}/members/${memberUserId}`, { method: "DELETE" });
+    }
+  });
+
+  it("marks a coffee item for espresso logging", async () => {
+    const res = await request(`/api/houses/${houseId}/items`, {
+      method: "POST",
+      body: { name: "Espresso beans", unit: "g", brand: "Roastery", espresso: true, initialStock: { quantity: 500 } },
+    });
+    assert.equal(res.status, 201);
+    assert.equal(res.data.espresso, true);
+    coffeeId = res.data.id;
+    const plain = await get<any>("SELECT espresso FROM items WHERE id = ?", [itemId]);
+    assert.equal(Number(plain.espresso), 0);
+    const plainDetail = await request(`/api/items/${itemId}`);
+    assert.equal(plainDetail.data.espresso, false);
+  });
+
+  it("only accepts shots for espresso-enabled items", async () => {
+    const res = await request(`/api/items/${itemId}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 4 },
+    });
+    assert.equal(res.status, 400);
+    assert.equal(res.data.error, "Turn on espresso logging for this item first");
+  });
+
+  it("allows logging after the flag is turned on", async () => {
+    const item = await request(`/api/houses/${houseId}/items`, {
+      method: "POST",
+      body: { name: "Toggle espresso", unit: "g" },
+    });
+    assert.equal(item.status, 201);
+    const before = await request(`/api/items/${item.data.id}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 4 },
+    });
+    assert.equal(before.status, 400);
+    const on = await request(`/api/items/${item.data.id}`, { method: "PATCH", body: { espresso: true } });
+    assert.equal(on.status, 200);
+    assert.equal(on.data.espresso, true);
+    const shot = await request(`/api/items/${item.data.id}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 4 },
+    });
+    assert.equal(shot.status, 201);
+    await request(`/api/items/${item.data.id}`, { method: "DELETE" });
+  });
+
+  it("logs a shot with roast, grinder and extraction parameters", async () => {
+    const res = await request(`/api/items/${coffeeId}/espresso-shots`, {
+      method: "POST",
+      body: {
+        brewedAt: "2026-11-01T08:30:00.000Z",
+        rating: 5,
+        houseId: "hse_not_the_house",
+        roastLevel: "medium",
+        grindSetting: "2.4",
+        grindSeconds: 12,
+        doseGrams: 18,
+        yieldGrams: 36,
+        extractionSeconds: 28,
+        waterTempC: 93,
+        pressureBar: 9,
+        tdsPercent: 9,
+        grinder: "Eureka Mignon",
+        machine: "Lelit Mara X",
+        tastingNotes: "Cocoa and orange peel",
+        tags: ["chocolate", "citrus"],
+        notes: "Sweeter than yesterday.",
+      },
+    });
+    assert.equal(res.status, 201);
+    assert.equal(res.data.rating, 5);
+    assert.equal(res.data.roastLevel, "medium");
+    assert.equal(res.data.ratio, 2);
+    assert.equal(res.data.extractionYieldPercent, 18);
+    assert.deepEqual(res.data.tags, ["chocolate", "citrus"]);
+    assert.equal(res.data.userName, "Test Owner");
+    assert.equal(res.data.houseId, houseId);
+    shotId = res.data.id;
+  });
+
+  it("lists shots with a summary and bean totals", async () => {
+    const itemLog = await request(`/api/items/${coffeeId}/espresso-shots`);
+    assert.equal(itemLog.status, 200);
+    assert.equal(itemLog.data.shots.length, 1);
+    assert.equal(itemLog.data.summary.count, 1);
+    assert.equal(itemLog.data.summary.averageRating, 5);
+    assert.equal(itemLog.data.summary.averageRatio, 2);
+    assert.equal(itemLog.data.summary.averageExtractionSeconds, 28);
+    assert.equal(itemLog.data.summary.averageExtractionYieldPercent, 18);
+
+    const houseLog = await request(`/api/houses/${houseId}/espresso-shots`);
+    assert.equal(houseLog.status, 200);
+    assert.equal(houseLog.data.beans.length, 1);
+    assert.equal(houseLog.data.beans[0].id, coffeeId);
+    assert.equal(houseLog.data.beans[0].espresso, true);
+    assert.equal(houseLog.data.beans[0].shotCount, 1);
+    assert.equal(houseLog.data.beans[0].averageRating, 5);
+  });
+
+  it("returns every espresso bean even when shots are filtered", async () => {
+    const second = await request(`/api/houses/${houseId}/items`, {
+      method: "POST",
+      body: { name: "Decaf beans", unit: "g", espresso: true },
+    });
+    assert.equal(second.status, 201);
+    const filtered = await request(`/api/houses/${houseId}/espresso-shots?itemId=${coffeeId}`);
+    assert.equal(filtered.status, 200);
+    assert.equal(filtered.data.shots.length, 1);
+    assert.equal(filtered.data.beans.length, 2);
+    assert.ok(filtered.data.beans.some((bean: any) => bean.id === second.data.id));
+    const archived = await request(`/api/items/${second.data.id}`, { method: "PATCH", body: { archived: true } });
+    assert.equal(archived.status, 200);
+    const afterArchive = await request(`/api/houses/${houseId}/espresso-shots`);
+    assert.ok(!afterArchive.data.beans.some((bean: any) => bean.id === second.data.id));
+    await request(`/api/items/${second.data.id}`, { method: "PATCH", body: { archived: false } });
+    const afterRestore = await request(`/api/houses/${houseId}/espresso-shots`);
+    assert.ok(afterRestore.data.beans.some((bean: any) => bean.id === second.data.id));
+    await request(`/api/items/${second.data.id}`, { method: "DELETE" });
+  });
+
+  it("updates a logged shot", async () => {
+    const res = await request(`/api/items/${coffeeId}/espresso-shots/${shotId}`, {
+      method: "PATCH",
+      body: { rating: 4, extractionSeconds: 31, tastingNotes: "Rounder" },
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.data.rating, 4);
+    assert.equal(res.data.extractionSeconds, 31);
+    assert.equal(res.data.tastingNotes, "Rounder");
+    assert.equal(res.data.doseGrams, 18);
+    assert.equal(res.data.brewedAt, "2026-11-01T08:30:00.000Z");
+    assert.equal(res.data.grindSetting, "2.4");
+    assert.equal(res.data.roastLevel, "medium");
+
+    const notesOnly = await request(`/api/items/${coffeeId}/espresso-shots/${shotId}`, {
+      method: "PATCH",
+      body: { notes: "Only the note changed" },
+    });
+    assert.equal(notesOnly.status, 200);
+    assert.equal(notesOnly.data.notes, "Only the note changed");
+    assert.equal(notesOnly.data.rating, 4);
+    assert.equal(notesOnly.data.brewedAt, "2026-11-01T08:30:00.000Z");
+
+    const ratingOnly = await request(`/api/items/${coffeeId}/espresso-shots/${shotId}`, {
+      method: "PATCH",
+      body: { rating: 3 },
+    });
+    assert.equal(ratingOnly.status, 200);
+    assert.equal(ratingOnly.data.rating, 3);
+    assert.equal(ratingOnly.data.notes, "Only the note changed");
+    assert.equal(ratingOnly.data.brewedAt, "2026-11-01T08:30:00.000Z");
+    assert.equal(ratingOnly.data.itemId, coffeeId);
+    assert.equal(ratingOnly.data.houseId, houseId);
+    assert.equal(ratingOnly.data.userId, (await request("/api/auth/me")).data.user.id);
+    assert.equal(ratingOnly.data.doseGrams, 18);
+    assert.equal(ratingOnly.data.extractionSeconds, 31);
+    assert.equal(ratingOnly.data.roastLevel, "medium");
+    assert.equal(ratingOnly.data.grindSetting, "2.4");
+
+    const nullRating = await request(`/api/items/${coffeeId}/espresso-shots/${shotId}`, {
+      method: "PATCH",
+      body: { rating: null },
+    });
+    assert.equal(nullRating.status, 400);
+    const nullTags = await request(`/api/items/${coffeeId}/espresso-shots/${shotId}`, {
+      method: "PATCH",
+      body: { tags: null },
+    });
+    assert.equal(nullTags.status, 400);
+
+    const cleared = await request(`/api/items/${coffeeId}/espresso-shots/${shotId}`, {
+      method: "PATCH",
+      body: { grindSetting: null, roastLevel: null, tastingNotes: null },
+    });
+    assert.equal(cleared.status, 200);
+    assert.equal(cleared.data.grindSetting, null);
+    assert.equal(cleared.data.roastLevel, null);
+    assert.equal(cleared.data.tastingNotes, null);
+    assert.equal(cleared.data.doseGrams, 18);
+
+    const allCleared = await request(`/api/items/${coffeeId}/espresso-shots/${shotId}`, {
+      method: "PATCH",
+      body: {
+        grindSeconds: null,
+        doseGrams: null,
+        yieldGrams: null,
+        extractionSeconds: null,
+        waterTempC: null,
+        pressureBar: null,
+        tdsPercent: null,
+        grinder: null,
+        machine: null,
+        notes: null,
+      },
+    });
+    assert.equal(allCleared.status, 200);
+    for (const field of [
+      "grindSetting",
+      "roastLevel",
+      "grindSeconds",
+      "doseGrams",
+      "yieldGrams",
+      "extractionSeconds",
+      "waterTempC",
+      "pressureBar",
+      "tdsPercent",
+      "grinder",
+      "machine",
+      "tastingNotes",
+      "notes",
+    ]) {
+      assert.equal(allCleared.data[field], null);
+    }
+    assert.equal(allCleared.data.rating, 3);
+    assert.equal(allCleared.data.brewedAt, "2026-11-01T08:30:00.000Z");
+
+    const nullDate = await request(`/api/items/${coffeeId}/espresso-shots/${shotId}`, {
+      method: "PATCH",
+      body: { brewedAt: null },
+    });
+    assert.equal(nullDate.status, 400);
+    const emptyDate = await request(`/api/items/${coffeeId}/espresso-shots/${shotId}`, {
+      method: "PATCH",
+      body: { brewedAt: "" },
+    });
+    assert.equal(emptyDate.status, 400);
+    const futureDate = await request(`/api/items/${coffeeId}/espresso-shots/${shotId}`, {
+      method: "PATCH",
+      body: { brewedAt: "9999-12-31T00:00:00.000Z" },
+    });
+    assert.equal(futureDate.status, 400);
+
+    const reassigned = await request(`/api/items/${coffeeId}/espresso-shots/${shotId}`, {
+      method: "PATCH",
+      body: { rating: 4, itemId, houseId: "hse_other_house" },
+    });
+    assert.equal(reassigned.status, 200);
+    assert.equal(reassigned.data.itemId, coffeeId);
+    assert.equal(reassigned.data.houseId, houseId);
+
+    const after = await request(`/api/items/${coffeeId}/espresso-shots`);
+    assert.equal(after.data.shots[0].brewedAt, "2026-11-01T08:30:00.000Z");
+  });
+
+  it("rejects out-of-range ratings", async () => {
+    const res = await request(`/api/items/${coffeeId}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 6 },
+    });
+    assert.equal(res.status, 400);
+    const roast = await request(`/api/items/${coffeeId}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 3, roastLevel: "extra-dark" },
+    });
+    assert.equal(roast.status, 400);
+  });
+
+  it("keeps the log inside its house", async () => {
+    const res = await request(`/api/items/${coffeeId}/espresso-shots`, { auth: secondUserCookie });
+    assert.equal(res.status, 404);
+  });
+
+  it("cannot read, edit or delete another house's shots", async () => {
+    const me = await request("/api/auth/me", { auth: secondUserCookie });
+    const theirHouseId = me.data.houses.find((house: any) => house.role === "owner").id;
+    const theirItem = await request(`/api/houses/${theirHouseId}/items`, {
+      method: "POST",
+      auth: secondUserCookie,
+      body: { name: "Their coffee", unit: "g", espresso: true },
+    });
+    assert.equal(theirItem.status, 201);
+    const crossFilter = await request(`/api/houses/${houseId}/espresso-shots?itemId=${theirItem.data.id}`);
+    assert.equal(crossFilter.status, 404);
+    const theirShot = await request(`/api/items/${theirItem.data.id}/espresso-shots`, {
+      method: "POST",
+      auth: secondUserCookie,
+      body: { rating: 4 },
+    });
+    assert.equal(theirShot.status, 201);
+    const theirLog = await request(`/api/houses/${theirHouseId}/espresso-shots`, { auth: secondUserCookie });
+    assert.ok(theirLog.data.shots.some((shot: any) => shot.id === theirShot.data.id));
+    const theirBean = theirLog.data.beans.find((bean: any) => bean.id === theirItem.data.id);
+    assert.equal(theirBean.shotCount, 1);
+    const ownerLog = await request(`/api/houses/${houseId}/espresso-shots`);
+    assert.ok(!ownerLog.data.shots.some((shot: any) => shot.id === theirShot.data.id));
+    assert.ok(!ownerLog.data.beans.some((bean: any) => bean.id === theirItem.data.id));
+
+    const read = await request(`/api/items/${theirItem.data.id}/espresso-shots`);
+    assert.equal(read.status, 404);
+    const patch = await request(`/api/items/${theirItem.data.id}/espresso-shots/${theirShot.data.id}`, {
+      method: "PATCH",
+      body: { rating: 1 },
+    });
+    assert.equal(patch.status, 404);
+    const remove = await request(`/api/items/${theirItem.data.id}/espresso-shots/${theirShot.data.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(remove.status, 404);
+  });
+
+  it("only lets the author or an admin change a shot", async () => {
+    const invite = await request(`/api/houses/${houseId}/members`, {
+      method: "POST",
+      body: { email: "stranger@example.com", role: "member" },
+    });
+    assert.equal(invite.status, 201);
+    const accepted = await request(`/api/auth/invites/${invite.data.invite.code}/accept`, {
+      method: "POST",
+      auth: secondUserCookie,
+    });
+    assert.equal(accepted.status, 200);
+    const me = await request("/api/auth/me", { auth: secondUserCookie });
+    memberUserId = me.data.user.id;
+
+    const denied = await request(`/api/items/${coffeeId}/espresso-shots/${shotId}`, {
+      method: "PATCH",
+      auth: secondUserCookie,
+      body: { rating: 1 },
+    });
+    assert.equal(denied.status, 403);
+
+    const deniedDelete = await request(`/api/items/${coffeeId}/espresso-shots/${shotId}`, {
+      method: "DELETE",
+      auth: secondUserCookie,
+    });
+    assert.equal(deniedDelete.status, 403);
+
+    const own = await request(`/api/items/${coffeeId}/espresso-shots`, {
+      method: "POST",
+      auth: secondUserCookie,
+      body: { rating: 3, doseGrams: 18, yieldGrams: 36 },
+    });
+    assert.equal(own.status, 201);
+    assert.equal(own.data.userName, "Test Stranger");
+    memberShotId = own.data.id;
+
+    const ownPatch = await request(`/api/items/${coffeeId}/espresso-shots/${memberShotId}`, {
+      method: "PATCH",
+      auth: secondUserCookie,
+      body: { rating: 4 },
+    });
+    assert.equal(ownPatch.status, 200);
+    assert.equal(ownPatch.data.rating, 4);
+
+    const adminPatch = await request(`/api/items/${coffeeId}/espresso-shots/${memberShotId}`, {
+      method: "PATCH",
+      body: { rating: 2 },
+    });
+    assert.equal(adminPatch.status, 200);
+    assert.equal(adminPatch.data.rating, 2);
+
+    const demoted = await request(`/api/houses/${houseId}/members/${memberUserId}`, {
+      method: "PATCH",
+      body: { role: "viewer" },
+    });
+    assert.equal(demoted.status, 200);
+    const viewerRead = await request(`/api/items/${coffeeId}/espresso-shots`, { auth: secondUserCookie });
+    assert.equal(viewerRead.status, 200);
+    const viewerHouseRead = await request(`/api/houses/${houseId}/espresso-shots`, { auth: secondUserCookie });
+    assert.equal(viewerHouseRead.status, 200);
+    const viewerPost = await request(`/api/items/${coffeeId}/espresso-shots`, {
+      method: "POST",
+      auth: secondUserCookie,
+      body: { rating: 5 },
+    });
+    assert.equal(viewerPost.status, 403);
+    const viewerPatch = await request(`/api/items/${coffeeId}/espresso-shots/${memberShotId}`, {
+      method: "PATCH",
+      auth: secondUserCookie,
+      body: { rating: 5 },
+    });
+    assert.equal(viewerPatch.status, 403);
+    const viewerPatchOwner = await request(`/api/items/${coffeeId}/espresso-shots/${shotId}`, {
+      method: "PATCH",
+      auth: secondUserCookie,
+      body: { rating: 5 },
+    });
+    assert.equal(viewerPatchOwner.status, 403);
+    const viewerDelete = await request(`/api/items/${coffeeId}/espresso-shots/${memberShotId}`, {
+      method: "DELETE",
+      auth: secondUserCookie,
+    });
+    assert.equal(viewerDelete.status, 403);
+    const viewerDeleteOwner = await request(`/api/items/${coffeeId}/espresso-shots/${shotId}`, {
+      method: "DELETE",
+      auth: secondUserCookie,
+    });
+    assert.equal(viewerDeleteOwner.status, 403);
+  });
+
+  it("clamps the shot list limit", async () => {
+    const one = await request(`/api/items/${coffeeId}/espresso-shots?limit=1`);
+    assert.equal(one.status, 200);
+    assert.equal(one.data.shots.length, 1);
+    const many = await request(`/api/items/${coffeeId}/espresso-shots?limit=9999`);
+    assert.equal(many.status, 200);
+    assert.equal(many.data.shots.length, 2);
+    const itemDefault = await request(`/api/items/${coffeeId}/espresso-shots?limit=0`);
+    assert.equal(itemDefault.status, 200);
+    assert.equal(itemDefault.data.shots.length, 2);
+    const houseOne = await request(`/api/houses/${houseId}/espresso-shots?itemId=${coffeeId}&limit=1`);
+    assert.equal(houseOne.status, 200);
+    assert.equal(houseOne.data.shots.length, 1);
+    const houseAll = await request(`/api/houses/${houseId}/espresso-shots?itemId=${coffeeId}&limit=0`);
+    assert.equal(houseAll.status, 200);
+    assert.equal(houseAll.data.shots.length, 2);
+  });
+
+  it("parses string tags, rejects bad dates and keeps history after the flag is turned off", async () => {
+    const temp = await request(`/api/houses/${houseId}/items`, {
+      method: "POST",
+      body: { name: "Temporary espresso", unit: "g", espresso: true },
+    });
+    assert.equal(temp.status, 201);
+
+    const badDate = await request(`/api/items/${temp.data.id}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 4, brewedAt: "not-a-date" },
+    });
+    assert.equal(badDate.status, 400);
+
+    const logged = await request(`/api/items/${temp.data.id}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 4, tags: "chocolate, citrus", doseGrams: 18, yieldGrams: 36, tdsPercent: 9 },
+    });
+    assert.equal(logged.status, 201);
+    assert.deepEqual(logged.data.tags, ["chocolate", "citrus"]);
+
+    const longTag = await request(`/api/items/${temp.data.id}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 3, tags: "x".repeat(120), doseGrams: 0, yieldGrams: 30 },
+    });
+    assert.equal(longTag.status, 400);
+
+    const tooManyTags = await request(`/api/items/${temp.data.id}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 3, tags: Array.from({ length: 21 }, (_, index) => `tag${index}`) },
+    });
+    assert.equal(tooManyTags.status, 400);
+    const tooManyStringTags = await request(`/api/items/${temp.data.id}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 3, tags: Array.from({ length: 21 }, (_, index) => `tag${index}`).join(",") },
+    });
+    assert.equal(tooManyStringTags.status, 400);
+
+    const maxTags = await request(`/api/items/${temp.data.id}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 3, tags: Array.from({ length: 20 }, (_, index) => `tag${index}`) },
+    });
+    assert.equal(maxTags.status, 201);
+    const maxTag = await request(`/api/items/${temp.data.id}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 3, tags: "y".repeat(40) },
+    });
+    assert.equal(maxTag.status, 201);
+
+    const nullTags = await request(`/api/items/${temp.data.id}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 3, tags: null },
+    });
+    assert.equal(nullTags.status, 400);
+    const clearTags = await request(`/api/items/${temp.data.id}/espresso-shots/${maxTag.data.id}`, {
+      method: "PATCH",
+      body: { tags: [] },
+    });
+    assert.equal(clearTags.status, 200);
+    assert.deepEqual(clearTags.data.tags, []);
+
+    const oldDate = await request(`/api/items/${temp.data.id}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 3, brewedAt: "1999-12-31T00:00:00.000Z" },
+    });
+    assert.equal(oldDate.status, 400);
+    const minDate = await request(`/api/items/${temp.data.id}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 3, brewedAt: "2000-01-01T00:00:00.000Z" },
+    });
+    assert.equal(minDate.status, 201);
+    const upperDate = await request(`/api/items/${temp.data.id}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 3, brewedAt: new Date(Date.now() + 864e5 - 3600000).toISOString() },
+    });
+    assert.equal(upperDate.status, 201);
+    const farFuture = await request(`/api/items/${temp.data.id}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 3, brewedAt: new Date(Date.now() + 864e5 + 3600000).toISOString() },
+    });
+    assert.equal(farFuture.status, 400);
+
+    const zeroDose = await request(`/api/items/${temp.data.id}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 3, tags: "sweet", doseGrams: 0, yieldGrams: 30 },
+    });
+    assert.equal(zeroDose.status, 201);
+
+    const summary = await request(`/api/items/${temp.data.id}/espresso-shots`);
+    assert.equal(summary.data.summary.averageRatio, 2);
+    assert.equal(summary.data.summary.averageExtractionYieldPercent, 18);
+    assert.equal(summary.data.summary.averageDoseGrams, 18);
+
+    const wrongItem = await request(`/api/items/${coffeeId}/espresso-shots/${logged.data.id}`, {
+      method: "PATCH",
+      body: { rating: 1 },
+    });
+    assert.equal(wrongItem.status, 404);
+    const wrongItemDelete = await request(`/api/items/${coffeeId}/espresso-shots/${logged.data.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(wrongItemDelete.status, 404);
+
+    const off = await request(`/api/items/${temp.data.id}`, { method: "PATCH", body: { espresso: false } });
+    assert.equal(off.status, 200);
+    assert.equal(off.data.espresso, false);
+
+    const blocked = await request(`/api/items/${temp.data.id}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 4 },
+    });
+    assert.equal(blocked.status, 400);
+
+    const stillEditable = await request(`/api/items/${temp.data.id}/espresso-shots/${logged.data.id}`, {
+      method: "PATCH",
+      body: { rating: 2 },
+    });
+    assert.equal(stillEditable.status, 200);
+    assert.equal(stillEditable.data.rating, 2);
+
+    const houseLog = await request(`/api/houses/${houseId}/espresso-shots`);
+    const tempBean = houseLog.data.beans.find((bean: any) => bean.id === temp.data.id);
+    assert.ok(tempBean);
+    assert.equal(tempBean.espresso, false);
+    assert.ok(houseLog.data.shots.some((shot: any) => shot.id === logged.data.id));
+
+    const filtered = await request(`/api/houses/${houseId}/espresso-shots?itemId=${temp.data.id}`);
+    assert.equal(filtered.data.summary.count, filtered.data.shots.length);
+    assert.equal(filtered.data.shots.length, 6);
+    assert.equal(filtered.data.summary.averageRatio, 2);
+
+    const removed = await request(`/api/items/${temp.data.id}`, { method: "DELETE" });
+    assert.equal(removed.status, 200);
+  });
+
+  it("deletes shots with their coffee item", async () => {
+    const deleted = await request(`/api/items/${coffeeId}`, { method: "DELETE" });
+    assert.equal(deleted.status, 200);
+    const row = await get<any>("SELECT COUNT(*) AS n FROM espresso_shots WHERE item_id = ?", [coffeeId]);
+    assert.equal(Number(row.n), 0);
+    const houseLog = await request(`/api/houses/${houseId}/espresso-shots`);
+    assert.equal(houseLog.data.beans.length, 0);
+    assert.equal(houseLog.data.shots.length, 0);
+  });
+});
+
+describe("espresso schema migration", () => {
+  it("adds the espresso column and table to a pre-change SQLite database", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "svault-espresso-migration-"));
+    try {
+      const script = `
+import fs from "node:fs";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+fs.mkdirSync(process.env.DATA_DIR, { recursive: true });
+const db = new DatabaseSync(path.join(process.env.DATA_DIR, "svault.db"));
+db.exec(\`
+  CREATE TABLE users (
+    id TEXT PRIMARY KEY,
+    email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    username TEXT,
+    name TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE items (
+    id TEXT PRIMARY KEY,
+    house_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT,
+    brand TEXT,
+    category_id TEXT,
+    unit TEXT NOT NULL DEFAULT 'pcs',
+    reorder_point REAL NOT NULL DEFAULT 0,
+    target_stock REAL,
+    attributes TEXT NOT NULL DEFAULT '{}',
+    tags TEXT NOT NULL DEFAULT '[]',
+    image TEXT,
+    nutrition TEXT,
+    archived INTEGER NOT NULL DEFAULT 0,
+    created_by TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  INSERT INTO items (id, house_id, name, created_at, updated_at)
+    VALUES ('itm_legacy', 'hse_legacy', 'Legacy coffee', '2026-01-01', '2026-01-01');
+\`);
+db.close();
+const { initDb, get, closeDb } = await import("./server/db.ts");
+const { DATABASE_KIND } = await import("./server/config.ts");
+await initDb();
+const column = await get("SELECT COUNT(*) AS n FROM pragma_table_info('items') WHERE name = 'espresso'");
+const item = await get("SELECT espresso FROM items WHERE id = 'itm_legacy'");
+const table = await get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'espresso_shots'");
+console.log(JSON.stringify({
+  kind: DATABASE_KIND,
+  column: Number(column.n),
+  espresso: Number(item.espresso),
+  table: table?.name ?? null,
+}));
+await closeDb();
+`;
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
+        DATA_DIR: dir,
+        NODE_ENV: "test",
+        DATABASE_URL: "",
+        SV_DATABASE_KIND: "sqlite",
+      };
+      for (const key of ["PGHOST", "PGPORT", "PGUSER", "PGDATABASE", "PGPASSWORD", "SV_DATABASE_URL"]) {
+        delete env[key];
+      }
+      const output = execFileSync(
+        process.execPath,
+        ["--import", "tsx", "--disable-warning=ExperimentalWarning", "--input-type=module", "-e", script],
+        {
+          cwd: path.resolve("."),
+          env,
+          encoding: "utf8",
+        },
+      );
+      const result = JSON.parse(output.trim());
+      assert.equal(result.kind, "sqlite");
+      assert.equal(result.column, 1);
+      assert.equal(result.espresso, 0);
+      assert.equal(result.table, "espresso_shots");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the PostgreSQL schema and restore order in sync", async () => {
+    const { POSTGRES_SCHEMA, POSTGRES_MIGRATIONS, POSTGRES_TABLE_ORDER } = await import(
+      "../database/postgres-schema.js"
+    );
+    assert.match(POSTGRES_SCHEMA, /espresso INTEGER NOT NULL DEFAULT 0/);
+    assert.match(POSTGRES_SCHEMA, /CREATE TABLE IF NOT EXISTS espresso_shots/);
+    assert.ok(POSTGRES_MIGRATIONS.includes("ALTER TABLE items ADD COLUMN IF NOT EXISTS espresso INTEGER NOT NULL DEFAULT 0"));
+    assert.ok(POSTGRES_TABLE_ORDER.indexOf("espresso_shots") > POSTGRES_TABLE_ORDER.indexOf("items"));
+    assert.ok(POSTGRES_TABLE_ORDER.indexOf("espresso_shots") > POSTGRES_TABLE_ORDER.indexOf("users"));
+    assert.ok(POSTGRES_TABLE_ORDER.indexOf("espresso_shots") > POSTGRES_TABLE_ORDER.indexOf("houses"));
+    assert.ok(POSTGRES_TABLE_ORDER.indexOf("espresso_shots") < POSTGRES_TABLE_ORDER.indexOf("receipts"));
   });
 });
 
@@ -4532,6 +5222,40 @@ describe("backup and restore", () => {
     assert.ok((validation.database?.length ?? 0) > 0 || Object.keys(validation.dump?.tables ?? {}).length > 0);
   });
 
+  it("includes espresso shots in the backup", async () => {
+    const item = await request(`/api/houses/${houseId}/items`, {
+      method: "POST",
+      body: { name: "Backup espresso", unit: "g", espresso: true },
+    });
+    assert.equal(item.status, 201);
+    const shot = await request(`/api/items/${item.data.id}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 4, doseGrams: 18, yieldGrams: 36 },
+    });
+    assert.equal(shot.status, 201);
+
+    const { validation } = await backupForTest();
+    if (validation.dump) {
+      assert.ok(validation.dump.tables.espresso_shots?.some((row: any) => row.id === shot.data.id));
+    } else {
+      assert.ok(validation.database);
+      const dir = mkdtempSync(path.join(tmpdir(), "svault-espresso-backup-"));
+      try {
+        const file = path.join(dir, "backup.db");
+        writeFileSync(file, validation.database!);
+        const { DatabaseSync } = await import("node:sqlite");
+        const db = new DatabaseSync(file);
+        const row = db.prepare("SELECT id FROM espresso_shots WHERE id = ?").get(shot.data.id);
+        db.close();
+        assert.ok(row);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+
+    await request(`/api/items/${item.data.id}`, { method: "DELETE" });
+  });
+
   it("serves the backup download to an owner", async () => {
     const res = await fetch(`${base}/api/houses/${houseId}/backup`, { headers: { cookie } });
     assert.equal(res.status, 200);
@@ -5248,6 +5972,508 @@ describe("insights, household split and admin console", () => {
     ]);
   });
 
+  it("validates, stores and securely serves shared utility bills", async () => {
+    const createdHouse = await request("/api/houses", {
+      method: "POST",
+      body: { name: "Utility Bill House", currency: "GBP" },
+    });
+    assert.equal(createdHouse.status, 201);
+    const billHouse = createdHouse.data.id;
+    const owner = await request("/api/auth/me");
+    const ownerId = owner.data.user.id;
+    const billDir = path.join(dataDir, "uploads", "bills");
+    const files = () => readdirSync(billDir).sort();
+    const before = files();
+    const form = (pdf: Blob, name = "Electricity account") => {
+      const fields = new FormData();
+      fields.set("name", name);
+      fields.set("billType", "electricity");
+      fields.set("amount", "10.00");
+      fields.set("category", "to_split");
+      fields.set("paidBy", ownerId);
+      fields.set("ledgerConfirmed", "true");
+      fields.set("dueDate", "2025-02-01");
+      fields.set("notes", "Preserve this utility note");
+      fields.append("document", pdf, "electricity.pdf");
+      return fields;
+    };
+    const pdf = new Blob(["%PDF-1.7\n% bill fixture"], { type: "application/pdf" });
+    const denied = await request(`/api/houses/${billHouse}/bills`, {
+      auth: secondUserCookie,
+      method: "POST",
+      body: form(pdf),
+    });
+    assert.equal(denied.status, 404);
+    assert.deepEqual(files(), before, "unauthorized multipart upload must not write a file");
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
+      billHouse,
+      secondUserId,
+      "member",
+      new Date().toISOString(),
+    ]);
+
+    const invalidPrefix = new Blob([`${"x".repeat(500)}%PDF-1.7`], { type: "application/pdf" });
+    const invalid = await request(`/api/houses/${billHouse}/bills`, { method: "POST", body: form(invalidPrefix) });
+    assert.equal(invalid.status, 400);
+    assert.deepEqual(files(), before, "invalid PDF signature must be removed");
+
+    const beforeFailedInsert = files();
+    await run(`CREATE TRIGGER reject_bill_insert BEFORE INSERT ON bills
+      WHEN NEW.name = 'Rejected insert cleanup fixture'
+      BEGIN SELECT RAISE(FAIL, 'forced insert failure'); END`);
+    try {
+      const failedInsert = await request(`/api/houses/${billHouse}/bills`, {
+        method: "POST",
+        body: form(pdf, "Rejected insert cleanup fixture"),
+      });
+      assert.equal(failedInsert.status, 500);
+      assert.deepEqual(files(), beforeFailedInsert, "files are removed when the bill insert fails");
+    } finally {
+      await run("DROP TRIGGER reject_bill_insert");
+    }
+
+    const invalidAmount = await request(`/api/houses/${billHouse}/bills`, {
+      method: "POST",
+      body: { name: "Bad precision", amount: 1.005, billType: "electricity", category: "to_split", ledgerConfirmed: true },
+    });
+    assert.equal(invalidAmount.status, 400);
+    for (const amount of [0, -1, 1_000_000_001]) {
+      const invalidValue = await request(`/api/houses/${billHouse}/bills`, {
+        method: "POST",
+        body: { name: "Invalid amount", amount, billType: "water" },
+      });
+      assert.equal(invalidValue.status, 400);
+    }
+    const invalidDate = await request(`/api/houses/${billHouse}/bills`, {
+      method: "POST",
+      body: { name: "Invalid due date", amount: 1, billType: "water", dueDate: "2024-02-30" },
+    });
+    assert.equal(invalidDate.status, 400);
+    const invalidType = await request(`/api/houses/${billHouse}/bills`, {
+      method: "POST",
+      body: { name: "Unknown type", amount: 1, billType: "gas_provider" },
+    });
+    assert.equal(invalidType.status, 400);
+    const invalidCurrency = await request(`/api/houses/${billHouse}/bills`, {
+      method: "POST",
+      body: { name: "Wrong currency", amount: 1, currency: "EUR", billType: "electricity" },
+    });
+    assert.equal(invalidCurrency.status, 400);
+    const invalidSplitMember = await request(`/api/houses/${billHouse}/bills`, {
+      method: "POST",
+      body: { name: "Invalid participant", amount: 1, billType: "water", category: "to_split", ledgerConfirmed: true, paidBy: ownerId, splitWith: ["usr_not_a_member"] },
+    });
+    assert.equal(invalidSplitMember.status, 400);
+    const unconfirmedSharedBill = await request(`/api/houses/${billHouse}/bills`, {
+      method: "POST",
+      body: { name: "Unconfirmed shared bill", amount: 1, billType: "water", category: "to_split" },
+    });
+    assert.equal(unconfirmedSharedBill.status, 400, "the server enforces the duplicate-entry acknowledgement");
+    const emptySplit = await request(`/api/houses/${billHouse}/bills`, {
+      method: "POST",
+      body: { name: "Empty split defaults to everyone", amount: 1, billType: "water", category: "to_split", ledgerConfirmed: true, paidBy: ownerId, splitWith: [] },
+    });
+    assert.equal(emptySplit.status, 201);
+    assert.deepEqual([...emptySplit.data.splitWith].sort(), [ownerId, secondUserId].sort());
+    assert.equal((await request(`/api/bills/${emptySplit.data.id}`, { method: "DELETE" })).status, 200);
+    const defaultPayerBill = await request(`/api/houses/${billHouse}/bills`, {
+      method: "POST",
+      body: { name: "Default payer", amount: 1, billType: "water", category: "to_split", ledgerConfirmed: true, splitWith: [ownerId, secondUserId] },
+    });
+    assert.equal(defaultPayerBill.status, 201);
+    assert.equal(defaultPayerBill.data.paidBy, ownerId, "an omitted payer defaults to the submitting user");
+    const explicitPayerBill = await request(`/api/houses/${billHouse}/bills`, {
+      method: "POST",
+      body: { name: "Explicit payer", amount: 1, billType: "water", category: "to_split", ledgerConfirmed: true, paidBy: secondUserId, splitWith: [ownerId, secondUserId] },
+    });
+    assert.equal(explicitPayerBill.status, 201);
+    assert.equal(explicitPayerBill.data.paidBy, secondUserId);
+    assert.equal((await request(`/api/bills/${defaultPayerBill.data.id}`, { method: "DELETE" })).status, 200);
+    assert.equal((await request(`/api/bills/${explicitPayerBill.data.id}`, { method: "DELETE" })).status, 200);
+    const defaultTypeBill = await request(`/api/houses/${billHouse}/bills`, {
+      method: "POST",
+      body: { name: "Default bill type", amount: 1, category: "to_split", ledgerConfirmed: true },
+    });
+    assert.equal(defaultTypeBill.status, 201);
+    assert.equal(defaultTypeBill.data.billType, "other");
+    assert.deepEqual([...defaultTypeBill.data.splitWith].sort(), [ownerId, secondUserId].sort());
+    assert.equal((await request(`/api/bills/${defaultTypeBill.data.id}`, { method: "DELETE" })).status, 200);
+    const personalWithParticipants = await request(`/api/houses/${billHouse}/bills`, {
+      method: "POST",
+      body: { name: "Personal ignores participants", amount: 1, category: "personal", splitWith: [secondUserId] },
+    });
+    assert.equal(personalWithParticipants.status, 201);
+    assert.deepEqual(personalWithParticipants.data.splitWith, []);
+    assert.equal((await request(`/api/bills/${personalWithParticipants.data.id}`, { method: "DELETE" })).status, 200);
+
+    const accepted = await request(`/api/houses/${billHouse}/bills`, { method: "POST", body: form(pdf) });
+    assert.equal(accepted.status, 201, JSON.stringify(accepted.data));
+    assert.equal(accepted.data.currency, "GBP");
+    assert.equal(accepted.data.billType, "electricity");
+    assert.deepEqual([...accepted.data.splitWith].sort(), [ownerId, secondUserId].sort());
+    await assert.rejects(
+      run("UPDATE bills SET bill_type = 'gas_provider' WHERE id = ?", [accepted.data.id]),
+      "the database rejects bill types outside the shared enum",
+    );
+    await assert.rejects(
+      run(`INSERT INTO bills (id, house_id, name, bill_type, category, amount, currency, split_with, created_by, created_at)
+        SELECT 'bil_invalid_type_insert', house_id, 'Invalid type', 'gas_provider', 'personal', 1, currency, '[]', created_by, created_at FROM bills WHERE id = ?`, [accepted.data.id]),
+      "the bill type CHECK constraint also rejects invalid inserts",
+    );
+    const toPersonal = await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { category: "personal" },
+    });
+    assert.equal(toPersonal.status, 200);
+    assert.deepEqual(toPersonal.data.splitWith, []);
+    assert.equal(toPersonal.data.notes, "Preserve this utility note");
+    assert.equal(toPersonal.data.dueDate, "2025-02-01");
+    assert.equal((await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { category: "to_split" },
+    })).status, 400, "the server requires acknowledgement when making a bill shared");
+    const backToSplit = await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { category: "to_split", ledgerConfirmed: true },
+    });
+    assert.equal(backToSplit.status, 200);
+    assert.equal(backToSplit.data.notes, "Preserve this utility note");
+    assert.equal(backToSplit.data.dueDate, "2025-02-01");
+    assert.deepEqual([...backToSplit.data.splitWith].sort(), [ownerId, secondUserId].sort());
+    const addedFile = files().find((file) => !before.includes(file));
+    assert.ok(addedFile);
+    const billBackup = await backupForTest();
+    const archivedBillPdf = billBackup.validation.uploads.find((entry) => entry.name === `bills/${addedFile}`);
+    assert.ok(archivedBillPdf, "house backups include bill PDFs stored under the uploads tree");
+    assert.deepEqual(archivedBillPdf.data, Buffer.from("%PDF-1.7\n% bill fixture"), "the archive contains the PDF bytes");
+
+    const replacement = await request(`/api/houses/${billHouse}/bills/${accepted.data.id}/document`, {
+      method: "POST",
+      body: form(new Blob(["%PDF-1.7\n% replacement fixture"], { type: "application/pdf" }), "Replacement PDF"),
+    });
+    assert.equal(replacement.status, 200);
+    const replacementDocument = (await get<{ document: string }>("SELECT document FROM bills WHERE id = ?", [accepted.data.id]))?.document;
+    assert.ok(replacementDocument);
+    assert.ok(files().includes(replacementDocument));
+    assert.ok(!files().includes(addedFile), "a successful replacement removes the previous unreferenced PDF");
+
+    const beforeConcurrentReplacement = files();
+    const concurrentDocuments = await Promise.all([
+      request(`/api/houses/${billHouse}/bills/${accepted.data.id}/document`, {
+        method: "POST", body: form(pdf, "Concurrent replacement A"),
+      }),
+      request(`/api/houses/${billHouse}/bills/${accepted.data.id}/document`, {
+        method: "POST", body: form(pdf, "Concurrent replacement B"),
+      }),
+    ]);
+    assert.ok(concurrentDocuments.every((result) => result.status === 200 || result.status === 409));
+    const finalDocument = (await get<{ document: string }>("SELECT document FROM bills WHERE id = ?", [accepted.data.id]))?.document;
+    assert.ok(finalDocument);
+    const concurrentFiles = files().filter((file) => !beforeConcurrentReplacement.includes(file));
+    assert.deepEqual(concurrentFiles, [finalDocument], "only the document referenced by the bill remains after concurrent replaces");
+    assert.ok(!files().includes(replacementDocument), "the replaced PDF is removed after concurrent updates settle");
+
+    await run("UPDATE house_members SET role = 'viewer' WHERE house_id = ? AND user_id = ?", [billHouse, secondUserId]);
+    const viewerPdf = await fetch(base + accepted.data.document, { headers: { cookie: secondUserCookie } });
+    assert.equal(viewerPdf.status, 200, "viewers can read a bill PDF");
+    const beforeViewerUpload = files();
+    const viewerUpload = await request(`/api/houses/${billHouse}/bills/${accepted.data.id}/document`, {
+      auth: secondUserCookie,
+      method: "POST",
+      body: form(pdf),
+    });
+    assert.equal(viewerUpload.status, 403, "viewers cannot upload or replace bill PDFs");
+    assert.deepEqual(files(), beforeViewerUpload);
+    await run("UPDATE house_members SET role = 'member' WHERE house_id = ? AND user_id = ?", [billHouse, secondUserId]);
+
+    const otherHouse = await request("/api/houses", { method: "POST", body: { name: "Other Utility House", currency: "GBP" } });
+    assert.equal(otherHouse.status, 201);
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
+      otherHouse.data.id, secondUserId, "member", new Date().toISOString(),
+    ]);
+    const otherBill = await request(`/api/houses/${otherHouse.data.id}/bills`, {
+      method: "POST",
+      body: { name: "Private house bill", amount: 2, billType: "water", category: "personal" },
+    });
+    assert.equal(otherBill.status, 201);
+    const crossHouseRead = await fetch(base + `/api/houses/${billHouse}/bills/${otherBill.data.id}/document`, { headers: { cookie: secondUserCookie } });
+    assert.equal(crossHouseRead.status, 404);
+    const beforeCrossHouseUpload = files();
+    const crossHouseUpload = await request(`/api/houses/${billHouse}/bills/${otherBill.data.id}/document`, {
+      auth: secondUserCookie,
+      method: "POST",
+      body: form(pdf),
+    });
+    assert.equal(crossHouseUpload.status, 404);
+    assert.deepEqual(files(), beforeCrossHouseUpload, "cross-house document attempts must not write files");
+
+    const beforeUnauthorizedAttachment = files();
+    const deniedAttachment = await request(`/api/houses/${billHouse}/bills/${accepted.data.id}/document`, {
+      auth: "",
+      method: "POST",
+      body: form(pdf),
+    });
+    assert.equal(deniedAttachment.status, 401);
+    assert.deepEqual(files(), beforeUnauthorizedAttachment, "unauthorized replacement must not write a file");
+
+    const currencyPatch = await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { currency: "EUR" },
+    });
+    assert.equal(currencyPatch.status, 400, "patches cannot change the bill currency");
+    const badTypePatch = await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { billType: "gas_provider" },
+    });
+    assert.equal(badTypePatch.status, 400, "bill type is enum-validated on PATCH");
+    assert.equal((await request(`/api/bills/${accepted.data.id}`, { method: "PATCH", body: { amount: 1.005 } })).status, 400);
+    assert.equal((await request(`/api/bills/${accepted.data.id}`, { method: "PATCH", body: { dueDate: "2024-13-40" } })).status, 400);
+    assert.equal((await request(`/api/bills/${accepted.data.id}`, { method: "PATCH", body: { paidBy: "usr_not_a_member" } })).status, 400);
+    const splitStringPatch = await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { splitWith: JSON.stringify([ownerId, secondUserId]) },
+    });
+    assert.equal(splitStringPatch.status, 200);
+    assert.deepEqual([...splitStringPatch.data.splitWith].sort(), [ownerId, secondUserId].sort());
+    assert.equal(splitStringPatch.data.category, "to_split", "split-only patches preserve the bill category");
+    assert.equal(splitStringPatch.data.billType, "electricity", "split-only patches preserve the bill type");
+    const payerOnlyPatch = await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { paidBy: ownerId },
+    });
+    assert.equal(payerOnlyPatch.status, 200);
+    assert.equal(payerOnlyPatch.data.category, "to_split");
+    assert.equal(payerOnlyPatch.data.billType, "electricity");
+    assert.equal(Number((await get<{ ledger_confirmed: number }>("SELECT ledger_confirmed FROM bills WHERE id = ?", [accepted.data.id]))?.ledger_confirmed), 1);
+    await run("UPDATE bills SET ledger_confirmed = 0 WHERE id = ?", [accepted.data.id]);
+    const unconfirmedBillLedger = await request(`/api/houses/${billHouse}/insights/household`);
+    assert.equal(unconfirmedBillLedger.data.balances.find((row: any) => row.userId === ownerId).balance, 0);
+    assert.equal(unconfirmedBillLedger.data.balances.find((row: any) => row.userId === secondUserId).balance, 0,
+      "the ledger excludes any shared bill without persisted confirmation");
+    const reconfirmed = await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { ledgerConfirmed: true },
+    });
+    assert.equal(reconfirmed.status, 200);
+    assert.equal(Number((await get<{ ledger_confirmed: number }>("SELECT ledger_confirmed FROM bills WHERE id = ?", [accepted.data.id]))?.ledger_confirmed), 1,
+      "PATCH can confirm an already-shared bill that was previously excluded from the ledger");
+    const reconfirmedLedger = await request(`/api/houses/${billHouse}/insights/household`);
+    assert.equal(reconfirmedLedger.data.balances.find((row: any) => row.userId === ownerId).balance, 5);
+    assert.equal(reconfirmedLedger.data.balances.find((row: any) => row.userId === secondUserId).balance, -5);
+    const unconfirmedAgain = await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { ledgerConfirmed: false },
+    });
+    assert.equal(unconfirmedAgain.status, 200);
+    assert.equal(Number((await get<{ ledger_confirmed: number }>("SELECT ledger_confirmed FROM bills WHERE id = ?", [accepted.data.id]))?.ledger_confirmed), 0,
+      "PATCH can explicitly remove an existing shared bill from the ledger");
+    const stillUnconfirmed = await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { paidBy: ownerId },
+    });
+    assert.equal(stillUnconfirmed.status, 200);
+    assert.equal(Number((await get<{ ledger_confirmed: number }>("SELECT ledger_confirmed FROM bills WHERE id = ?", [accepted.data.id]))?.ledger_confirmed), 0,
+      "omitting ledgerConfirmed preserves its current value");
+    await request(`/api/bills/${accepted.data.id}`, { method: "PATCH", body: { ledgerConfirmed: true } });
+
+    const documentResponse = await fetch(base + accepted.data.document, { headers: { cookie } });
+    assert.equal(documentResponse.status, 200);
+    assert.equal(documentResponse.headers.get("content-type"), "application/pdf");
+    assert.match(documentResponse.headers.get("content-disposition") ?? "", /^attachment;/);
+    assert.equal(documentResponse.headers.get("x-content-type-options"), "nosniff");
+    assert.match(documentResponse.headers.get("content-security-policy") ?? "", /sandbox/);
+    await run("UPDATE bills SET document = ? WHERE id = ?", ["../outside.pdf", accepted.data.id]);
+    const traversalDocument = await fetch(base + accepted.data.document, { headers: { cookie } });
+    assert.equal(traversalDocument.status, 404, "stored document names cannot traverse outside the bill upload directory");
+    await run("UPDATE bills SET document = ? WHERE id = ?", [finalDocument, accepted.data.id]);
+    assert.equal((await request(`/uploads/bills/${addedFile}`)).status, 404);
+
+    const ledger = await request(`/api/houses/${billHouse}/insights/household`);
+    assert.equal(ledger.status, 200);
+    assert.equal(ledger.data.balances.find((row: any) => row.userId === ownerId).balance, 5);
+    assert.equal(ledger.data.balances.find((row: any) => row.userId === secondUserId).balance, -5);
+    const payerOutsideSplit = await request(`/api/houses/${billHouse}/bills`, {
+      method: "POST",
+      body: {
+        name: "Payer outside participant list",
+        amount: 9,
+        billType: "water",
+        category: "to_split",
+        ledgerConfirmed: true,
+        paidBy: ownerId,
+        splitWith: [secondUserId],
+      },
+    });
+    assert.equal(payerOutsideSplit.status, 201);
+    const payerOutsideLedger = await request(`/api/houses/${billHouse}/insights/household`);
+    assert.equal(payerOutsideLedger.data.balances.find((row: any) => row.userId === ownerId).balance, 14);
+    assert.equal(payerOutsideLedger.data.balances.find((row: any) => row.userId === secondUserId).balance, -14);
+    assert.equal(payerOutsideLedger.data.balances.reduce((sum: number, row: any) => sum + row.balance, 0), 0,
+      "the payer may be outside splitWith while household balances still reconcile");
+    assert.equal((await request(`/api/bills/${payerOutsideSplit.data.id}`, { method: "DELETE" })).status, 200);
+    const personalBill = await request(`/api/houses/${billHouse}/bills`, {
+      method: "POST",
+      body: { name: "Personal utility bill", amount: 25, billType: "electricity", category: "personal" },
+    });
+    assert.equal(personalBill.status, 201);
+    const ledgerWithPersonalBill = await request(`/api/houses/${billHouse}/insights/household`);
+    assert.deepEqual(ledgerWithPersonalBill.data.balances, ledger.data.balances, "personal bills do not affect household balances");
+    assert.equal((await request(`/api/bills/${personalBill.data.id}`, { method: "DELETE" })).status, 200);
+
+    // Bills and receipts are separate ledger entries; the API docs and Bills
+    // page warn users not to record the same expense in both places.
+    const matchingReceipt = await request(`/api/houses/${billHouse}/receipts`, {
+      method: "POST",
+      body: {
+        vendorName: "Electric Utility",
+        purchasedAt: at(11),
+        currency: "GBP",
+        total: 10,
+        paidBy: ownerId,
+        lines: [{ description: "Electricity account", quantity: 1, lineTotal: 10 }],
+      },
+    });
+    assert.equal(matchingReceipt.status, 201, JSON.stringify(matchingReceipt.data));
+    const doubleRecordedLedger = await request(`/api/houses/${billHouse}/insights/household`);
+    assert.equal(doubleRecordedLedger.data.balances.find((row: any) => row.userId === ownerId).balance, 10,
+      "duplicate entries count separately and are explicitly warned against in the UI and API docs");
+    assert.equal(doubleRecordedLedger.data.balances.find((row: any) => row.userId === secondUserId).balance, -10);
+
+    const transientBill = await request(`/api/houses/${billHouse}/bills`, {
+      method: "POST",
+      body: { name: "Concurrent deletion fixture", amount: 1, billType: "water", category: "personal" },
+    });
+    assert.equal(transientBill.status, 201);
+    const beforeConcurrentDelete = files();
+    await run(`CREATE TRIGGER delete_bill_after_document_update AFTER UPDATE OF document ON bills
+      BEGIN DELETE FROM bills WHERE id = NEW.id; END`);
+    try {
+      const racedUpload = await request(`/api/houses/${billHouse}/bills/${transientBill.data.id}/document`, {
+        method: "POST",
+        body: form(pdf),
+      });
+      assert.equal(racedUpload.status, 409);
+      assert.deepEqual(files(), beforeConcurrentDelete, "an upload must be cleaned if its bill disappears during the update");
+    } finally {
+      await run("DROP TRIGGER delete_bill_after_document_update");
+    }
+
+    const oldDocument = (await get<{ document: string }>("SELECT document FROM bills WHERE id = ?", [accepted.data.id]))!.document;
+    const beforeMismatchedUpdate = files();
+    await run(`CREATE TRIGGER restore_old_document_after_update AFTER UPDATE OF document ON bills
+      WHEN NEW.id = '${accepted.data.id}' AND NEW.document <> OLD.document
+      BEGIN UPDATE bills SET document = OLD.document WHERE id = NEW.id; END`);
+    try {
+      const mismatchedUpload = await request(`/api/houses/${billHouse}/bills/${accepted.data.id}/document`, {
+        method: "POST",
+        body: form(pdf),
+      });
+      assert.equal(mismatchedUpload.status, 409);
+      assert.deepEqual(files(), beforeMismatchedUpdate, "a replaced row must discard the unadopted upload");
+      assert.equal((await get<{ document: string }>("SELECT document FROM bills WHERE id = ?", [accepted.data.id]))?.document, oldDocument,
+        "a failed replacement preserves the previous document reference");
+      assert.ok(files().includes(oldDocument), "a failed replacement keeps the old PDF on disk");
+    } finally {
+      await run("DROP TRIGGER restore_old_document_after_update");
+    }
+
+    const nullPayerBill = await request(`/api/houses/${otherHouse.data.id}/bills`, {
+      method: "POST",
+      body: { name: "Former payer fixture", amount: 6, billType: "water", category: "to_split", ledgerConfirmed: true, paidBy: secondUserId, splitWith: [ownerId, secondUserId] },
+    });
+    assert.equal(nullPayerBill.status, 201);
+    const payerBeforeLeaving = await request(`/api/houses/${otherHouse.data.id}/insights/household`);
+    assert.equal(payerBeforeLeaving.data.balances.find((row: any) => row.userId === ownerId).balance, -3);
+    assert.equal(payerBeforeLeaving.data.balances.find((row: any) => row.userId === secondUserId).balance, 3);
+    await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [otherHouse.data.id, secondUserId]);
+    const payerAfterLeaving = await request(`/api/houses/${otherHouse.data.id}/insights/household`);
+    assert.equal(payerAfterLeaving.data.balances.find((row: any) => row.userId === ownerId).balance, -6,
+      "a departed payer contributes nothing to paid while the remaining member still owes their share");
+    const beforeHousePdf = files();
+    const housePdfBill = await request(`/api/houses/${otherHouse.data.id}/bills`, {
+      method: "POST",
+      body: form(pdf, "House deletion cleanup fixture"),
+    });
+    assert.equal(housePdfBill.status, 201);
+    const housePdfFile = files().find((file) => !beforeHousePdf.includes(file));
+    assert.ok(housePdfFile);
+    assert.equal((await request(`/api/houses/${otherHouse.data.id}`, { method: "DELETE" })).status, 200);
+    assert.ok(!files().includes(housePdfFile), "deleting the house removes its now-unreferenced bill PDF");
+
+    const allTypes: any[] = [];
+    for (const type of BILL_TYPE_VALUES) {
+      const saved = await request(`/api/houses/${billHouse}/bills`, {
+        method: "POST",
+        body: { name: `Type ${type}`, amount: 1, billType: type, category: "personal" },
+      });
+      assert.equal(saved.status, 201);
+      assert.equal(saved.data.billType, type);
+      assert.ok(BILL_TYPE_LABELS[saved.data.billType as keyof typeof BILL_TYPE_LABELS]);
+      allTypes.push(saved.data.id);
+    }
+    for (const id of allTypes) assert.equal((await request(`/api/bills/${id}`, { method: "DELETE" })).status, 200);
+
+    await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [billHouse, secondUserId]);
+    const afterMemberLeft = await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { notes: "Updated after a member left" },
+    });
+    assert.equal(afterMemberLeft.status, 200, "stale split participants are dropped after a member leaves");
+    assert.equal(afterMemberLeft.data.billType, "electricity", "a notes-only PATCH preserves bill type defaults");
+    assert.equal(afterMemberLeft.data.category, "to_split", "a notes-only PATCH preserves category defaults");
+    assert.deepEqual(afterMemberLeft.data.splitWith, [ownerId]);
+    const ledgerAfterMemberLeft = await request(`/api/houses/${billHouse}/insights/household`);
+    assert.equal(ledgerAfterMemberLeft.status, 200);
+
+    const deleted = await request(`/api/bills/${accepted.data.id}`, { method: "DELETE" });
+    assert.equal(deleted.status, 200);
+    assert.ok(!files().includes(addedFile), "deleting a bill removes its PDF");
+    assert.equal((await request(`/api/bills/${accepted.data.id}`, { method: "DELETE" })).status, 404);
+  });
+
+  it("keeps utility bill share allocation cent-exact", () => {
+    assert.deepEqual(splitAmountEvenly(10, 3), [3.34, 3.33, 3.33]);
+    assert.deepEqual(splitAmountEvenly(999_999_999.99, 3), [333_333_333.33, 333_333_333.33, 333_333_333.33]);
+    assert.deepEqual(splitAmountEvenly(1.005, 2), [], "amounts with sub-cent precision are rejected like the bill API");
+    assert.deepEqual(splitAmountEvenly(1e15, 2), [], "unsafe cent totals are rejected");
+    assert.deepEqual(splitAmountEvenly(0.02, 5), [0.01, 0.01, 0, 0, 0]);
+    assert.deepEqual(splitAmountEvenly(0.01, 3), [0.01, 0, 0]);
+    assert.deepEqual(splitAmountEvenly(0, 3), [0, 0, 0]);
+    assert.deepEqual(splitAmountEvenly(-1, 2), []);
+    assert.deepEqual(splitAmountEvenly(1, 0), []);
+    assert.deepEqual(splitAmountEvenly(1, 2.5), []);
+  });
+
+  it("makes upload cleanup safe to repeat", async () => {
+    const uploadDirectory = path.join(dataDir, "uploads", "bills");
+    mkdirSync(uploadDirectory, { recursive: true });
+    const file = path.join(uploadDirectory, "discard-twice.pdf");
+    writeFileSync(file, "temporary upload");
+    const fakeRequest = { file: { path: file } } as any;
+    discardUploads(fakeRequest);
+    assert.equal(existsSync(file), false);
+    assert.doesNotThrow(() => discardUploads(fakeRequest));
+
+    const outsideFile = path.join(dataDir, "must-not-delete.pdf");
+    writeFileSync(outsideFile, "outside upload root");
+    discardUploads({ file: { path: outsideFile } } as any);
+    assert.equal(existsSync(outsideFile), true, "cleanup only removes files beneath UPLOAD_DIR");
+  });
+
+  it("restores bill rows only after their user and house foreign keys", () => {
+    assert.ok(POSTGRES_TABLE_ORDER.indexOf("users") < POSTGRES_TABLE_ORDER.indexOf("bills"));
+    assert.ok(POSTGRES_TABLE_ORDER.indexOf("houses") < POSTGRES_TABLE_ORDER.indexOf("bills"));
+    assert.ok(POSTGRES_TABLE_ORDER.indexOf("house_members") < POSTGRES_TABLE_ORDER.indexOf("bills"));
+  });
+
+  it("keeps PostgreSQL fresh and upgraded ledger confirmation defaults aligned", () => {
+    assert.match(POSTGRES_SCHEMA, /ledger_confirmed INTEGER NOT NULL DEFAULT 0/);
+    const migration = POSTGRES_MIGRATIONS.find((statement) => statement.includes("information_schema.columns") && statement.includes("ledger_confirmed"));
+    assert.ok(migration);
+    assert.match(migration, /ledger_confirmed INTEGER NOT NULL DEFAULT 0/);
+    assert.match(migration, /UPDATE bills SET ledger_confirmed = 1 WHERE category = 'to_split'/);
+  });
+
   it("imports receipts that feed spend, price alerts and the household split", async () => {
     const milk = await request(`/api/houses/${insightHouse}/items`, {
       method: "POST",
@@ -5389,6 +6615,246 @@ describe("insights, household split and admin console", () => {
     assert.ok(hint, JSON.stringify(hints.data));
     assert.equal(hint.cheapest.vendorName, "Price Mart");
     assert.equal(hint.cheapest.price, 1);
+  });
+
+  it("gates external offers and validates the linked shopping item", async () => {
+    const line = await request(`/api/houses/${insightHouse}/shopping`, {
+      method: "POST",
+      body: { name: "Offer lookup test", itemId: milkId, quantity: 1, unit: "l" },
+    });
+    assert.equal(line.status, 200);
+    const lineId = line.data.item.id;
+    assert.ok((await request(`/api/houses/${insightHouse}/shopping`)).data.items.some((item: any) => item.id === lineId));
+    const path = `/api/houses/${insightHouse}/insights/shopping-offers/${lineId}`;
+    assert.equal((await request(path)).status, 404, "external lookups are off by default");
+
+    const enabled = await request(`/api/houses/${insightHouse}`, {
+      method: "PATCH",
+      body: { settings: { priceLookup: { enabled: true } } },
+    });
+    assert.equal(enabled.status, 200);
+    const missingBarcode = await request(path);
+    assert.equal(missingBarcode.status, 400);
+    assert.equal(missingBarcode.data.error, "Add a valid barcode to this inventory item first");
+    assert.equal(
+      (await request(path, { auth: secondUserCookie })).status,
+      400,
+      "a house member may request offers when the lookup is enabled",
+    );
+    await run("UPDATE house_members SET role = 'viewer' WHERE house_id = ? AND user_id = ?", [insightHouse, secondUserId]);
+    assert.equal((await request(path, { auth: secondUserCookie })).status, 403, "viewers cannot request offers");
+    await run("UPDATE house_members SET role = 'member' WHERE house_id = ? AND user_id = ?", [insightHouse, secondUserId]);
+    assert.equal(
+      (await request(`/api/houses/${insightHouse}`, {
+        method: "PATCH",
+        body: { settings: { priceLookup: { enabled: true, unexpected: true } } },
+      })).status,
+      400,
+      "price lookup settings reject unknown fields",
+    );
+    for (const invalidPriceLookup of [null, { enabled: "yes" }, []]) {
+      const invalid = await request(`/api/houses/${insightHouse}`, {
+        method: "PATCH",
+        body: { settings: { priceLookup: invalidPriceLookup } },
+      });
+      assert.equal(invalid.status, 400, JSON.stringify(invalid.data));
+    }
+
+    const disabledAgain = await request(`/api/houses/${insightHouse}`, {
+      method: "PATCH",
+      body: { settings: { priceLookup: { enabled: false } } },
+    });
+    assert.equal(disabledAgain.status, 200);
+    assert.equal((await request(path)).status, 404, "turning lookups off blocks existing shopping lines immediately");
+
+    const checked = await request(`/api/houses/${insightHouse}/shopping/${line.data.item.id}/check`, {
+      method: "POST",
+      body: { addStock: false },
+    });
+    assert.equal(checked.status, 200);
+    assert.equal((await request(path)).status, 404, "checked lines cannot trigger lookups");
+  });
+
+  it("preserves AI and notification settings when price lookup settings are saved", async () => {
+    const created = await request("/api/houses", {
+      method: "POST",
+      body: { name: "Settings merge test", currency: "EUR" },
+    });
+    assert.equal(created.status, 201);
+    const houseId = created.data.id;
+    const initial = await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { enabled: false, model: "keep-model" }, notifications: { enabled: false, digestHour: 8 } } },
+    });
+    assert.equal(initial.status, 200);
+    const pricePatch = await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: {
+        settings: {
+          ai: { enabled: false, model: "keep-model" },
+          notifications: { enabled: false, digestHour: 8 },
+          priceLookup: { enabled: true },
+        },
+      },
+    });
+    assert.equal(pricePatch.status, 200);
+    const persisted = await request(`/api/houses/${houseId}`);
+    assert.equal(persisted.data.settings.ai.model, "keep-model");
+    assert.equal(persisted.data.settings.ai.enabled, false);
+    assert.equal(persisted.data.settings.notifications.digestHour, 8);
+    assert.equal(persisted.data.settings.priceLookup.enabled, true);
+    const profilePatch = await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { name: "Settings merge renamed", currency: "USD" },
+    });
+    assert.equal(profilePatch.status, 200);
+    const afterProfilePatch = await request(`/api/houses/${houseId}`);
+    assert.equal(afterProfilePatch.data.name, "Settings merge renamed");
+    assert.equal(afterProfilePatch.data.currency, "USD");
+    assert.equal(afterProfilePatch.data.settings.priceLookup.enabled, true, "top-level edits preserve price lookup settings");
+  });
+
+  it("rate-limits authenticated offer validation requests before database reads", async () => {
+    const previousEnabled = process.env.SV_RATE_LIMIT;
+    const previousRule = process.env.SV_RATE_LIMIT_POSOKANEI_REQUESTS;
+    process.env.SV_RATE_LIMIT = "on";
+    process.env.SV_RATE_LIMIT_POSOKANEI_REQUESTS = "2/900";
+    const me = await request("/api/auth/me");
+    const key = `user:${me.data.user.id}`;
+    limiters.posokaneiRequests.reset(key);
+    try {
+      await request(`/api/houses/${insightHouse}`, {
+        method: "PATCH",
+        body: { settings: { priceLookup: { enabled: true } } },
+      });
+      const line = await request(`/api/houses/${insightHouse}/shopping`, {
+        method: "POST",
+        body: { name: "Validation throttle line", itemId: milkId, quantity: 1, unit: "l" },
+      });
+      const path = `/api/houses/${insightHouse}/insights/shopping-offers/${line.data.item.id}`;
+      assert.equal((await request(path)).status, 400, "first validation runs and reports the missing barcode");
+      assert.equal((await request(path)).status, 400, "the second validation remains within the request guard");
+      assert.equal((await request(path)).status, 429, "the third validation is rejected before database reads");
+    } finally {
+      limiters.posokaneiRequests.reset(key);
+      if (previousEnabled === undefined) delete process.env.SV_RATE_LIMIT;
+      else process.env.SV_RATE_LIMIT = previousEnabled;
+      if (previousRule === undefined) delete process.env.SV_RATE_LIMIT_POSOKANEI_REQUESTS;
+      else process.env.SV_RATE_LIMIT_POSOKANEI_REQUESTS = previousRule;
+    }
+  });
+
+  it("returns the queried barcode and propagates upstream Retry-After from the route", async () => {
+    const code = "5201234500099";
+    const newerCode = "5201234500100";
+    for (const [id, barcode, createdAt] of [
+      ["bar_posokanei_route_old", code, "2020-01-01T00:00:00.000Z"],
+      ["bar_posokanei_route_new", newerCode, "2021-01-01T00:00:00.000Z"],
+    ]) {
+      await run(
+        "INSERT INTO item_barcodes (id, item_id, house_id, code, format, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        [id, milkId, insightHouse, barcode, "test", createdAt],
+      );
+    }
+    await request(`/api/houses/${insightHouse}`, {
+      method: "PATCH",
+      body: { settings: { priceLookup: { enabled: true } } },
+    });
+    const line = await request(`/api/houses/${insightHouse}/shopping`, {
+      method: "POST",
+      body: { name: "Route lookup test", itemId: milkId, quantity: 1, unit: "l" },
+    });
+    const me = await request("/api/auth/me");
+    const makeRequest = (
+      lookup: typeof import("../services/posokanei.js").lookupPosoKaneiBarcode,
+      headers: Record<string, string>,
+      requestHouseId = insightHouse,
+      requestLineId = line.data.item.id,
+      requestUserId = me.data.user.id,
+    ) =>
+      new Promise<any>((resolve, reject) => {
+        const response = {
+          setHeader(name: string, value: string) { headers[name] = value; return this; },
+          json(data: unknown) { resolve(data); return this; },
+        };
+        createShoppingOffersHandler(lookup)(
+          { params: { houseId: requestHouseId, lineId: requestLineId }, user: { id: requestUserId } } as any,
+          response as any,
+          (error: unknown) => { if (error) reject(error); },
+        );
+      });
+
+    const successHeaders: Record<string, string> = {};
+    const offers = [{ source: "PosoKanei", productId: "p1", productName: "Test product", unit: null, retailer: "Shop", price: 1, unitPrice: null, currency: "EUR", discount: false, discountPercent: null, updatedAt: null, fetchedAt: new Date().toISOString() }];
+    const result = await makeRequest(async (barcode, userId) => {
+      assert.equal(barcode, code);
+      assert.equal(userId, me.data.user.id);
+      return offers as any;
+    }, successHeaders);
+    assert.deepEqual(result, { barcode: code, offers });
+
+    const retryHeaders: Record<string, string> = {};
+    let routeError: any;
+    try {
+      await makeRequest(async () => { throw new PosoKaneiUnavailableError("upstream throttled", 120); }, retryHeaders);
+    } catch (error) {
+      routeError = error;
+    }
+    assert.equal(routeError.status, 502);
+    assert.equal(routeError.message, "External price lookup is unavailable. Try again later.");
+    assert.deepEqual(routeError.details, { retryAfterSeconds: 120 });
+    assert.equal(retryHeaders["Retry-After"], "120");
+    let errorStatus = 0;
+    let errorBody: any;
+    apiErrorHandler(routeError, {} as any, {
+      setHeader(name: string, value: string) { retryHeaders[name] = value; return this; },
+      status(code: number) { errorStatus = code; return this; },
+      json(body: unknown) { errorBody = body; return this; },
+    } as any, () => {});
+    assert.equal(errorStatus, 502);
+    assert.equal(errorBody.error, "External price lookup is unavailable. Try again later.");
+    assert.equal(retryHeaders["Retry-After"], "120", "the global error handler preserves the route's header");
+
+    await request(`/api/houses/${insightHouse}/shopping/${line.data.item.id}/check`, {
+      method: "POST",
+      body: { addStock: false },
+    });
+    await assert.rejects(
+      makeRequest(async () => { throw new Error("must not reach the lookup"); }, {}),
+      (error: any) => error.status === 404 && error.message === "Open shopping line not found",
+    );
+
+    const foreignHouse = await request("/api/houses", {
+      auth: secondUserCookie,
+      method: "POST",
+      body: { name: "Offer isolation house", currency: "EUR" },
+    });
+    const foreignItem = await request(`/api/houses/${foreignHouse.data.id}/items`, {
+      auth: secondUserCookie,
+      body: { name: "Foreign offer item", unit: "pcs" },
+    });
+    const foreignLine = await request(`/api/houses/${foreignHouse.data.id}/shopping`, {
+      auth: secondUserCookie,
+      body: { name: "Foreign offer line", itemId: foreignItem.data.id, quantity: 1, unit: "pcs" },
+    });
+    await request(`/api/houses/${foreignHouse.data.id}`, {
+      auth: secondUserCookie,
+      method: "PATCH",
+      body: { settings: { priceLookup: { enabled: true } } },
+    });
+    const otherUser = await request("/api/auth/me", { auth: secondUserCookie });
+    await assert.rejects(
+      makeRequest(async () => { throw new Error("must not reach the lookup"); }, {}, insightHouse, foreignLine.data.item.id),
+      (error: any) => error.status === 404 && error.message === "Open shopping line not found",
+    );
+    await assert.rejects(
+      makeRequest(async () => { throw new Error("must not reach the lookup"); }, {}, foreignHouse.data.id, line.data.item.id, otherUser.data.user.id),
+      (error: any) => error.status === 404 && error.message === "Open shopping line not found",
+    );
+    await assert.rejects(
+      makeRequest(async () => { throw new Error("must not reach the lookup"); }, {}, foreignHouse.data.id, foreignLine.data.item.id),
+      (error: any) => error.status === 404 && error.message === "House not found",
+    );
   });
 
   it("values wasted stock", async () => {
@@ -5726,5 +7192,556 @@ describe("insights, household split and admin console", () => {
     const revoked = await request(`/api/tokens/${created.data.id}`, { method: "DELETE" });
     assert.equal(revoked.status, 200);
     assert.equal((await request("/api/houses", { auth: "", headers: bearer })).status, 401);
+  });
+});
+
+describe("rate limiter refunds", () => {
+  it("decrements reservations, deletes empty buckets and ignores missing buckets", () => {
+    const previousEnabled = process.env.SV_RATE_LIMIT;
+    const previousRule = process.env.SV_RATE_LIMIT_REFUND_TEST;
+    const limiter = new RateLimiter("REFUND_TEST", { max: 2, windowMs: 60_000 });
+    const key = "rate-limit-refund-test";
+    process.env.SV_RATE_LIMIT = "on";
+    process.env.SV_RATE_LIMIT_REFUND_TEST = "2/60";
+    limiter.reset(key);
+    try {
+      assert.equal(limiter.hit(key), 0);
+      assert.equal(limiter.hit(key), 0);
+      limiter.refund(key);
+      assert.equal(limiter.hit(key), 0, "a refunded reservation can be used again");
+      assert.ok(limiter.hit(key) > 0, "the configured maximum still rejects the next hit");
+      limiter.refund(key);
+      limiter.refund(key);
+      limiter.refund(key);
+      assert.equal(limiter.blocked(key), 0, "refunding the remaining count removes the bucket");
+      limiter.refund("missing-key");
+      assert.equal(limiter.blocked("missing-key"), 0, "refunding a missing bucket is a no-op");
+    } finally {
+      limiter.reset(key);
+      if (previousEnabled === undefined) delete process.env.SV_RATE_LIMIT;
+      else process.env.SV_RATE_LIMIT = previousEnabled;
+      if (previousRule === undefined) delete process.env.SV_RATE_LIMIT_REFUND_TEST;
+      else process.env.SV_RATE_LIMIT_REFUND_TEST = previousRule;
+    }
+  });
+});
+
+describe("PosoKanei price lookup client", () => {
+  const userId = "posokanei-test-user";
+  const product = {
+    id: "product-1",
+    name: "Test product",
+    unit: "kg",
+    retailer_prices: [
+      { country: "GR", retailer_display_name: "Store B", price: 2, price_normalized: 2, is_discount: true, discount_percentage: 20 },
+      { country: "GR", retailer_display_name: "Store A", price: 1, price_normalized: 1, is_discount: false, discount_percentage: null },
+      { country: "DE", retailer_display_name: "Foreign store", price: 0.5, price_normalized: 0.5, is_discount: true, discount_percentage: 50 },
+      { country: "GR", retailer_display_name: "", price: 0.5, price_normalized: 0.5, is_discount: false, discount_percentage: null },
+    ],
+  };
+
+  it("uses exact barcode lookup, filters and sorts offers, and caches the result", async () => {
+    let calls = 0;
+    let rateLimitCalls = 0;
+    let requestOptions: RequestInit | undefined;
+    const client = createPosoKaneiClient(async (_input, init) => {
+      calls++;
+      requestOptions = init;
+      return new Response(JSON.stringify(product), { headers: { "content-type": "application/json" } });
+    }, () => {
+      rateLimitCalls++;
+    });
+
+    const offers = await client.lookupPosoKaneiBarcode("12345678", userId);
+    const cached = await client.lookupPosoKaneiBarcode("12345678", userId);
+    const otherUserOffers = await client.lookupPosoKaneiBarcode("12345678", "another-user");
+    assert.equal(calls, 2, "another user's lookup is not served from this user's cache");
+    assert.equal(rateLimitCalls, 2, "same-user cache hits do not consume slots, but another user makes a separately limited request");
+    assert.deepEqual(requestOptions?.redirect, "error");
+    assert.equal(offers.length, 2);
+    assert.equal(offers[0].retailer, "Store A");
+    assert.equal(offers[1].discount, true);
+    assert.equal(offers[1].discountPercent, 20);
+    assert.deepEqual(cached, offers);
+    assert.deepEqual(otherUserOffers.map(({ retailer, price }) => ({ retailer, price })),
+      offers.map(({ retailer, price }) => ({ retailer, price })));
+  });
+
+  it("negative-caches unknown barcodes", async () => {
+    let calls = 0;
+    let userSlots = 0;
+    let globalSlots = 0;
+    const client = createPosoKaneiClient(async () => {
+      calls++;
+      return new Response(null, { status: 404 });
+    }, () => {
+      userSlots++;
+      return () => { userSlots--; };
+    }, () => {
+      globalSlots++;
+      return () => { globalSlots--; };
+    });
+    assert.deepEqual(await client.lookupPosoKaneiBarcode("12345679", userId), []);
+    assert.equal(userSlots, 1, "a completed unknown-barcode lookup consumes the initiating user's slot");
+    assert.equal(globalSlots, 1, "a completed unknown-barcode lookup consumes one instance slot");
+    assert.deepEqual(await client.lookupPosoKaneiBarcode("12345679", userId), []);
+    assert.equal(calls, 1, "the unknown barcode is cached for the same user");
+    assert.equal(userSlots, 1, "same-user negative-cache hits do not consume another slot");
+    assert.equal(globalSlots, 1);
+    assert.deepEqual(await client.lookupPosoKaneiBarcode("12345679", "another-user"), []);
+    assert.equal(calls, 2, "negative cache entries are not shared across users");
+  });
+
+  it("refunds user and global slots after an upstream failure without blocking other barcodes", async () => {
+    let userSlots = 0;
+    let globalSlots = 0;
+    let calls = 0;
+    const client = createPosoKaneiClient(
+      async () => {
+        calls++;
+        if (calls === 1) throw new TypeError("network unavailable");
+        return new Response(null, { status: 404 });
+      },
+      () => {
+        userSlots++;
+        return () => { userSlots--; };
+      },
+      () => {
+        globalSlots++;
+        return () => { globalSlots--; };
+      },
+    );
+    await assert.rejects(
+      client.lookupPosoKaneiBarcode("12345689", userId),
+      (error: unknown) => error instanceof PosoKaneiUnavailableError && error.message.includes("could not be reached"),
+    );
+    assert.equal(userSlots, 0);
+    assert.equal(globalSlots, 0);
+    assert.deepEqual(await client.lookupPosoKaneiBarcode("12345690", "another-user"), []);
+    assert.equal(calls, 2, "a network failure cools down its barcode without pausing other barcodes");
+    assert.equal(userSlots, 1, "the successful unknown-barcode lookup retains its user slot");
+    assert.equal(globalSlots, 1, "the successful unknown-barcode lookup retains its global slot");
+  });
+
+  it("applies a short per-barcode cooldown after an upstream 500", async () => {
+    let calls = 0;
+    const client = createPosoKaneiClient(async () => {
+      calls++;
+      return calls === 1
+        ? new Response("upstream error", { status: 500 })
+        : new Response(null, { status: 404 });
+    }, () => {});
+    await assert.rejects(client.lookupPosoKaneiBarcode("12345672", userId), PosoKaneiUnavailableError);
+    assert.deepEqual(await client.lookupPosoKaneiBarcode("12345673", userId), []);
+    await assert.rejects(
+      client.lookupPosoKaneiBarcode("12345672", "another-user"),
+      (error: unknown) => error instanceof PosoKaneiUnavailableError &&
+        Number(error.retryAfterSeconds) > 0 && Number(error.retryAfterSeconds) <= 15,
+    );
+    assert.equal(calls, 2, "the failed barcode is cooled down without blocking different barcodes");
+  });
+
+  it("does not mistake retry metadata on a non-429 failure for an upstream 429", async () => {
+    let userSlots = 0;
+    let globalSlots = 0;
+    const client = createPosoKaneiClient(
+      async () => { throw new PosoKaneiUnavailableError("synthetic fetch failure", 120); },
+      () => {
+        userSlots++;
+        return () => { userSlots--; };
+      },
+      () => {
+        globalSlots++;
+        return () => { globalSlots--; };
+      },
+    );
+    await assert.rejects(client.lookupPosoKaneiBarcode("12345678", userId), /synthetic fetch failure/);
+    assert.equal(userSlots, 0, "non-429 failures refund the user reservation even if they carry retry metadata");
+    assert.equal(globalSlots, 0, "non-429 failures refund the global reservation even if they carry retry metadata");
+    await assert.rejects(
+      client.lookupPosoKaneiBarcode("12345678", "another-user"),
+      (error: unknown) => error instanceof PosoKaneiUnavailableError &&
+        Number(error.retryAfterSeconds) > 0 && Number(error.retryAfterSeconds) <= 15,
+    );
+  });
+
+  it("uses the short per-barcode cooldown after a malformed successful response", async () => {
+    let calls = 0;
+    const client = createPosoKaneiClient(async () => {
+      calls++;
+      return calls === 1
+        ? new Response(JSON.stringify({ malformed: true }), { headers: { "content-type": "application/json" } })
+        : new Response(null, { status: 404 });
+    }, () => {});
+    await assert.rejects(client.lookupPosoKaneiBarcode("12345701", userId), PosoKaneiUnavailableError);
+    await assert.rejects(
+      client.lookupPosoKaneiBarcode("12345701", "another-user"),
+      (error: unknown) => error instanceof PosoKaneiUnavailableError &&
+        Number(error.retryAfterSeconds) > 0 && Number(error.retryAfterSeconds) <= 15,
+    );
+    assert.deepEqual(await client.lookupPosoKaneiBarcode("12345702", "another-user"), []);
+    assert.equal(calls, 2, "malformed data pauses only its barcode for 15 seconds");
+  });
+
+  it("charges the 429 attempt and shares its cooldown across barcodes and users", async () => {
+    let userReservations = 0;
+    let globalReservations = 0;
+    let fetches = 0;
+    const client = createPosoKaneiClient(
+      async () => {
+        fetches++;
+        return new Response("{}", { status: 429, headers: { "retry-after": "120" } });
+      },
+      () => {
+        userReservations++;
+        return () => { userReservations--; };
+      },
+      () => {
+        globalReservations++;
+        return () => { globalReservations--; };
+      },
+    );
+    await assert.rejects(client.lookupPosoKaneiBarcode("12345691", userId), PosoKaneiUnavailableError);
+    assert.equal(userReservations, 1, "a request that reached the upstream consumes the user's slot");
+    assert.equal(globalReservations, 1, "a request that reached the upstream consumes the global slot");
+    await assert.rejects(
+      client.lookupPosoKaneiBarcode("12345692", "another-user"),
+      (error: unknown) => error instanceof PosoKaneiUnavailableError && error.retryAfterSeconds === 120,
+    );
+    assert.equal(fetches, 1);
+    assert.equal(userReservations, 1, "the second user's cooldown rejection refunds its reservation");
+    assert.equal(globalReservations, 1, "the cooldown rejection does not reserve another global slot");
+  });
+
+  it("maps upstream throttling to a 502 with Retry-After metadata", async () => {
+    const headers: Record<string, string> = {};
+    const mapped = posoKaneiUnavailableApiError(
+      new PosoKaneiUnavailableError("upstream detail", 120),
+      { setHeader: (name, value) => { headers[name] = String(value); return {} as any; } },
+    );
+    assert.equal(mapped.status, 502);
+    assert.equal(mapped.message, "External price lookup is unavailable. Try again later.");
+    assert.deepEqual(mapped.details, { retryAfterSeconds: 120 });
+    assert.equal(headers["Retry-After"], "120");
+  });
+
+  it("enforces the per-user quota across different barcodes", async () => {
+    let lookups = 0;
+    const client = createPosoKaneiClient(async () => new Response(null, { status: 404 }), (requestUser) => {
+      assert.equal(requestUser, userId);
+      if (++lookups > 2) throw new RateLimitError(900, "Price lookup limit reached. Try again later.");
+    }, () => {});
+    await client.lookupPosoKaneiBarcode("12345693", userId);
+    await client.lookupPosoKaneiBarcode("12345694", userId);
+    await assert.rejects(
+      client.lookupPosoKaneiBarcode("12345695", userId),
+      (error: unknown) => error instanceof RateLimitError && error.status === 429,
+    );
+  });
+
+  it("refunds the per-user request slot when the instance-wide limit rejects the fetch", async () => {
+    let userSlots = 0;
+    const client = createPosoKaneiClient(
+      async () => { throw new Error("fetch must not run after global throttling"); },
+      () => {
+        userSlots++;
+        return () => { userSlots--; };
+      },
+      () => { throw new RateLimitError(900, "Price lookup limit reached. Try again later."); },
+    );
+    await assert.rejects(
+      client.lookupPosoKaneiBarcode("12345697", userId),
+      (error: unknown) => error instanceof RateLimitError && error.status === 429,
+    );
+    assert.equal(userSlots, 0, "global throttling does not consume an individual user's quota");
+  });
+
+  it("caches valid products that have no Greek retailer offers and rejects malformed products", async () => {
+    let emptyOffersCalls = 0;
+    const noGreekOffers = {
+      ...product,
+      retailer_prices: [{ country: "DE", retailer: "Store DE", price: 1.25 }],
+    };
+    const emptyOffersClient = createPosoKaneiClient(async () => {
+      emptyOffersCalls++;
+      return new Response(JSON.stringify(noGreekOffers), { headers: { "content-type": "application/json" } });
+    }, () => {});
+    assert.deepEqual(await emptyOffersClient.lookupPosoKaneiBarcode("12345685", userId), []);
+    assert.deepEqual(await emptyOffersClient.lookupPosoKaneiBarcode("12345685", userId), []);
+    assert.equal(emptyOffersCalls, 1);
+
+    const malformedClient = createPosoKaneiClient(async () =>
+      new Response(JSON.stringify({ id: "missing-fields" }), { headers: { "content-type": "application/json" } }), () => {});
+    await assert.rejects(
+      malformedClient.lookupPosoKaneiBarcode("12345686", userId),
+      PosoKaneiUnavailableError,
+    );
+  });
+
+  it("preserves the 429 API error from the rate-limit callback", async () => {
+    const client = createPosoKaneiClient(async () => {
+      throw new Error("fetch must not run after a rate-limit rejection");
+    }, () => {
+      throw new RateLimitError(60, "Price lookup limit reached. Try again later.");
+    });
+    await assert.rejects(
+      client.lookupPosoKaneiBarcode("12345687", userId),
+      (error: unknown) => error instanceof RateLimitError && error.status === 429 && error.retryAfter === 60,
+    );
+  });
+
+  it("namespaces PosoKanei user keys like the rest of the app", async () => {
+    const previousRateLimit = process.env.SV_RATE_LIMIT;
+    const id = "posokanei-key-namespace-test";
+    const userKey = `user:${id}`;
+    process.env.SV_RATE_LIMIT = "on";
+    limiters.posokanei.reset(id);
+    limiters.posokanei.reset(userKey);
+    limiters.posokaneiGlobal.reset("all");
+    try {
+      limiters.posokanei.hit(id);
+      const client = createPosoKaneiClient(async () => new Response(null, { status: 404 }));
+      await client.lookupPosoKaneiBarcode("12345711", id);
+      await client.lookupPosoKaneiBarcode("12345712", id);
+      await assert.rejects(
+        client.lookupPosoKaneiBarcode("12345713", id),
+        (error: unknown) => error instanceof RateLimitError && error.status === 429,
+      );
+    } finally {
+      limiters.posokanei.reset(id);
+      limiters.posokanei.reset(userKey);
+      limiters.posokaneiGlobal.reset("all");
+      if (previousRateLimit === undefined) delete process.env.SV_RATE_LIMIT;
+      else process.env.SV_RATE_LIMIT = previousRateLimit;
+    }
+  });
+
+  it("keeps the lookup cache bounded, including unknown barcodes", async () => {
+    let calls = 0;
+    const client = createPosoKaneiClient(async () => {
+      calls++;
+      return new Response(null, { status: 404 });
+    }, () => {});
+    const firstCode = "22000000";
+    for (let index = 0; index < 501; index++) {
+      await client.lookupPosoKaneiBarcode(String(22_000_000 + index), userId);
+    }
+    await client.lookupPosoKaneiBarcode(firstCode, userId);
+    assert.equal(calls, 502, "the oldest non-expired cache entry is evicted at the size cap");
+  });
+
+  it("pauses after a 429 and safely handles malformed Retry-After values", async () => {
+    let calls = 0;
+    const client = createPosoKaneiClient(async () => {
+      calls++;
+      return new Response("{}", { status: 429, headers: { "retry-after": "not-a-date" } });
+    }, () => {});
+    await assert.rejects(
+      client.lookupPosoKaneiBarcode("12345680", userId),
+      (error: unknown) => error instanceof PosoKaneiUnavailableError && error.retryAfterSeconds === 900,
+    );
+    await assert.rejects(
+      client.lookupPosoKaneiBarcode("12345681", userId),
+      (error: unknown) => error instanceof PosoKaneiUnavailableError &&
+        Number.isFinite(error.retryAfterSeconds) && Number(error.retryAfterSeconds) > 0,
+    );
+    assert.equal(calls, 1);
+  });
+
+  it("parses an HTTP-date Retry-After header", async () => {
+    const retryAt = new Date(Date.now() + 120_000).toUTCString();
+    const client = createPosoKaneiClient(async () =>
+      new Response("{}", { status: 429, headers: { "retry-after": retryAt } }), () => {});
+    await assert.rejects(
+      client.lookupPosoKaneiBarcode("12345700", userId),
+      (error: unknown) => error instanceof PosoKaneiUnavailableError &&
+        Number(error.retryAfterSeconds) >= 119 && Number(error.retryAfterSeconds) <= 120,
+    );
+  });
+
+  it("rejects non-JSON and oversized streamed responses", async () => {
+    const nonJsonClient = createPosoKaneiClient(async () =>
+      new Response("<html>blocked</html>", { headers: { "content-type": "text/html" } }), () => {});
+    await assert.rejects(
+      nonJsonClient.lookupPosoKaneiBarcode("12345682", userId),
+      PosoKaneiUnavailableError,
+    );
+
+    const invalidUtf8Client = createPosoKaneiClient(async () =>
+      new Response(new Uint8Array([0xff, 0xfe]), { headers: { "content-type": "application/json" } }), () => {}, () => {});
+    await assert.rejects(
+      invalidUtf8Client.lookupPosoKaneiBarcode("12345698", userId),
+      (error: unknown) => error instanceof PosoKaneiUnavailableError && error.message.includes("invalid response body"),
+    );
+
+    const bomClient = createPosoKaneiClient(async () =>
+      new Response(`\uFEFF${JSON.stringify(product)}`, { headers: { "content-type": "application/json" } }), () => {});
+    assert.equal((await bomClient.lookupPosoKaneiBarcode("12345676", userId)).length, 2, "a UTF-8 BOM is accepted");
+
+    const announcedOversizeClient = createPosoKaneiClient(async () =>
+      new Response("{}", {
+        headers: { "content-type": "application/json", "content-length": "1000001" },
+      }), () => {});
+    await assert.rejects(
+      announcedOversizeClient.lookupPosoKaneiBarcode("12345688", userId),
+      PosoKaneiUnavailableError,
+    );
+
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(new Uint8Array(1_000_001));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const oversizedClient = createPosoKaneiClient(async () =>
+      new Response(stream, { headers: { "content-type": "application/json" } }), () => {});
+    await assert.rejects(
+      oversizedClient.lookupPosoKaneiBarcode("12345683", userId),
+      PosoKaneiUnavailableError,
+    );
+    assert.equal(cancelled, true);
+  });
+
+  it("bounds a slow response body with the request timeout", async () => {
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      pull() {
+        return new Promise<void>(() => {});
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const client = createPosoKaneiClient(
+      async () => new Response(stream, { headers: { "content-type": "application/json" } }),
+      () => {},
+      () => {},
+      20,
+    );
+    await assert.rejects(
+      client.lookupPosoKaneiBarcode("12345677", userId),
+      (error: unknown) => error instanceof PosoKaneiUnavailableError && error.message.includes("timed out"),
+    );
+    assert.equal(cancelled, true, "the stalled response body is cancelled when its timeout expires");
+  });
+
+  it("discards invalid upstream update timestamps", async () => {
+    const client = createPosoKaneiClient(async () =>
+      new Response(JSON.stringify({
+        ...product,
+        retailer_prices: [{ country: "GR", retailer: "Store A", price: 1, last_updated: "not a date" }],
+      }), { headers: { "content-type": "application/json" } }), () => {}, () => {});
+    const [offer] = await client.lookupPosoKaneiBarcode("12345696", userId);
+    assert.equal(offer.updatedAt, null);
+    assert.ok(Number.isFinite(Date.parse(offer.fetchedAt)));
+  });
+
+  it("deduplicates concurrent requests only within the same user", async () => {
+    let calls = 0;
+    let rateLimitCalls = 0;
+    let globalRateLimitCalls = 0;
+    const pendingResponses: Array<(response: Response) => void> = [];
+    const client = createPosoKaneiClient(async () => {
+      calls++;
+      return new Promise<Response>((resolve) => {
+        pendingResponses.push(resolve);
+      });
+    }, () => {
+      rateLimitCalls++;
+    }, () => {
+      globalRateLimitCalls++;
+    });
+    const first = client.lookupPosoKaneiBarcode("12345684", userId);
+    const sameUserJoin = client.lookupPosoKaneiBarcode("12345684", userId);
+    const otherUserJoin = client.lookupPosoKaneiBarcode("12345684", "another-user");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(calls, 2, "a different user starts a separately limited upstream request");
+    for (const resolveResponse of pendingResponses) {
+      resolveResponse(new Response(JSON.stringify(product), { headers: { "content-type": "application/json" } }));
+    }
+    const [one, two, three] = await Promise.all([first, sameUserJoin, otherUserJoin]);
+    assert.equal(calls, 2);
+    assert.equal(rateLimitCalls, 2, "each user's upstream request reserves its own user slot");
+    assert.equal(globalRateLimitCalls, 2, "each upstream request reserves a global slot");
+    assert.deepEqual(one, two);
+    assert.deepEqual(one, three);
+  });
+
+  it("charges one slot when same-user callers share an in-flight 429", async () => {
+    let userSlots = 0;
+    let globalSlots = 0;
+    let resolveResponse!: (response: Response) => void;
+    const pending = new Promise<Response>((resolve) => { resolveResponse = resolve; });
+    const client = createPosoKaneiClient(
+      async () => pending,
+      () => {
+        userSlots++;
+        return () => { userSlots--; };
+      },
+      () => {
+        globalSlots++;
+        return () => { globalSlots--; };
+      },
+    );
+    const initiating = client.lookupPosoKaneiBarcode("12345699", "initiating-user");
+    const joining = client.lookupPosoKaneiBarcode("12345699", "initiating-user");
+    resolveResponse(new Response("{}", { status: 429, headers: { "retry-after": "120" } }));
+    const settled = await Promise.allSettled([initiating, joining]);
+    assert.ok(settled.every((result) => result.status === "rejected" && result.reason instanceof PosoKaneiUnavailableError));
+    assert.equal(userSlots, 1, "same-user callers share one charged upstream attempt");
+    assert.equal(globalSlots, 1, "the upstream 429 consumes one global request slot");
+  });
+});
+describe("bill ledger confirmation migration", () => {
+  it("uses a false default and preserves existing shared bills when adding the column", async () => {
+    const columnsBefore = await all<{ name: string; dflt_value: string | null }>("PRAGMA table_info(bills)");
+    assert.equal(columnsBefore.find((column) => column.name === "ledger_confirmed")?.dflt_value, "0");
+
+    const createdHouse = await request("/api/houses", {
+      method: "POST",
+      body: { name: "Legacy bill migration fixture", currency: "EUR" },
+    });
+    const oldBill = await request(`/api/houses/${createdHouse.data.id}/bills`, {
+      method: "POST",
+      body: { name: "Existing shared bill", amount: 12, category: "to_split", ledgerConfirmed: true },
+    });
+    assert.equal(oldBill.status, 201);
+    const personalBill = await request(`/api/houses/${createdHouse.data.id}/bills`, {
+      method: "POST",
+      body: { name: "Existing personal bill", amount: 4, category: "personal" },
+    });
+    assert.equal(personalBill.status, 201);
+    await run("UPDATE bills SET ledger_confirmed = 1 WHERE id = ?", [personalBill.data.id]);
+
+    await run("ALTER TABLE bills DROP COLUMN ledger_confirmed");
+    try {
+      await closeDb();
+      await initDb();
+
+      const columnsAfter = await all<{ name: string; dflt_value: string | null }>("PRAGMA table_info(bills)");
+      assert.equal(columnsAfter.find((column) => column.name === "ledger_confirmed")?.dflt_value, "0");
+      const migrated = await get<{ ledger_confirmed: number }>("SELECT ledger_confirmed FROM bills WHERE id = ?", [oldBill.data.id]);
+      assert.equal(migrated?.ledger_confirmed, 1, "existing shared bills retain their previous ledger inclusion");
+      const migratedPersonal = await get<{ ledger_confirmed: number }>("SELECT ledger_confirmed FROM bills WHERE id = ?", [personalBill.data.id]);
+      assert.equal(migratedPersonal?.ledger_confirmed, 0, "personal bills remain excluded from the household ledger");
+      const ledger = await request(`/api/houses/${createdHouse.data.id}/insights/household`);
+      const ownerBalance = ledger.data.balances.find((row: any) => row.userId === oldBill.data.paidBy);
+      assert.equal(ownerBalance.paid, 12);
+      assert.equal(ownerBalance.share, 12);
+      assert.equal(ownerBalance.balance, 0);
+
+      await run("UPDATE bills SET ledger_confirmed = 0 WHERE id = ?", [oldBill.data.id]);
+      await closeDb();
+      await initDb();
+      const secondInit = await get<{ ledger_confirmed: number }>("SELECT ledger_confirmed FROM bills WHERE id = ?", [oldBill.data.id]);
+      assert.equal(secondInit?.ledger_confirmed, 0, "a second init leaves an existing confirmation unchanged");
+    } finally {
+      // Restore the shared test database even if migration assertions fail.
+      await closeDb();
+      await initDb();
+    }
   });
 });

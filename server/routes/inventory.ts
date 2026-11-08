@@ -7,9 +7,12 @@ import {
   ITEM_SELECT,
   barcodesForHouse,
   barcodesForItem,
+  emptyEspressoSummary,
   priceStats,
   serializeAttribute,
   serializeCategory,
+  serializeEspressoShot,
+  serializeEspressoSummary,
   serializeItem,
   serializeLocation,
   serializeLot,
@@ -94,6 +97,111 @@ function parseTags(value: unknown): string[] {
       .slice(0, 20);
   }
   return [];
+}
+
+/* --------------------------------------------------------------- espresso log */
+
+const espressoShotBody = z.object({
+  brewedAt: z.string().trim().min(1).max(40).nullish(),
+  rating: z.number().int().min(1).max(5),
+  roastLevel: z.enum(["light", "medium-light", "medium", "medium-dark", "dark"]).nullish(),
+  grindSetting: z.string().trim().max(40).nullish(),
+  grindSeconds: z.number().min(0).max(600).nullish(),
+  doseGrams: z.number().min(0).max(200).nullish(),
+  yieldGrams: z.number().min(0).max(500).nullish(),
+  extractionSeconds: z.number().min(0).max(600).nullish(),
+  waterTempC: z.number().min(0).max(120).nullish(),
+  pressureBar: z.number().min(0).max(20).nullish(),
+  tdsPercent: z.number().min(0).max(100).nullish(),
+  grinder: z.string().trim().max(80).nullish(),
+  machine: z.string().trim().max(80).nullish(),
+  tastingNotes: z.string().trim().max(500).nullish(),
+  tags: z.union([z.array(z.string().trim().max(40)).max(20), z.string().max(400)]).optional(),
+  notes: z.string().trim().max(2000).nullish(),
+});
+
+export function espressoBrewedAt(value: string | null | undefined, nowMs = Date.now()): string {
+  if (value === null) throw new ApiError(400, "Brew date cannot be cleared");
+  if (value === undefined) return new Date(nowMs).toISOString();
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) throw new ApiError(400, "Invalid brew date");
+  const earliest = Date.parse("2000-01-01T00:00:00.000Z");
+  const latest = nowMs + 864e5;
+  if (timestamp < earliest || timestamp > latest) {
+    throw new ApiError(400, "Brew date is out of range");
+  }
+  return new Date(timestamp).toISOString();
+}
+
+/** Reject over-limit tags instead of silently truncating or dropping them. */
+function parseEspressoTags(value: unknown): string[] {
+  let tags: string[];
+  if (Array.isArray(value)) {
+    tags = value.map((tag) => String(tag).trim()).filter(Boolean);
+  } else if (typeof value === "string") {
+    tags = value
+      .split(",")
+      .map((tag) => tag.trim())
+      .filter(Boolean);
+  } else {
+    tags = [];
+  }
+  if (tags.length > 20) throw new ApiError(400, "Use at most 20 flavour tags");
+  if (tags.some((tag) => tag.length > 40)) {
+    throw new ApiError(400, "Each flavour tag must be 40 characters or fewer");
+  }
+  return tags;
+}
+
+async function espressoSummary(houseId: string, itemId?: string) {
+  const params: unknown[] = [houseId];
+  let sql = `SELECT COUNT(*) AS count, AVG(rating) AS average_rating, MAX(rating) AS best_rating,
+      MAX(brewed_at) AS last_brewed_at, AVG(CASE WHEN dose_grams > 0 THEN dose_grams END) AS average_dose_grams,
+      AVG(CASE WHEN yield_grams > 0 THEN yield_grams END) AS average_yield_grams,
+      AVG(extraction_seconds) AS average_extraction_seconds,
+      AVG(CASE WHEN dose_grams > 0 AND yield_grams IS NOT NULL
+        THEN yield_grams / NULLIF(dose_grams, 0) END) AS average_ratio,
+      AVG(CASE WHEN dose_grams > 0 AND yield_grams IS NOT NULL AND tds_percent IS NOT NULL
+        THEN yield_grams * tds_percent / NULLIF(dose_grams, 0) END) AS average_extraction_yield_percent
+    FROM espresso_shots WHERE house_id = ?`;
+  if (itemId) {
+    sql += " AND item_id = ?";
+    params.push(itemId);
+  }
+  const row = await get<any>(sql, params);
+  if (!row || Number(row.count ?? 0) === 0) return emptyEspressoSummary();
+  return serializeEspressoSummary(row);
+}
+
+async function espressoShots(houseId: string, itemId: string | null, limit: number) {
+  const params: unknown[] = [houseId];
+  let sql = `SELECT s.*, i.name AS item_name, i.brand AS item_brand, u.name AS user_name
+    FROM espresso_shots s
+    JOIN items i ON i.id = s.item_id
+    LEFT JOIN users u ON u.id = s.user_id
+    WHERE s.house_id = ?`;
+  if (itemId) {
+    sql += " AND s.item_id = ?";
+    params.push(itemId);
+  }
+  sql += " ORDER BY s.brewed_at DESC, s.created_at DESC LIMIT ?";
+  params.push(limit);
+  return (await all<any>(sql, params)).map(serializeEspressoShot);
+}
+
+async function shotAccess(req: any, minRole: Role = "member") {
+  const { item, houseId, role } = await itemAccess(req, minRole);
+  const shot = await get<any>("SELECT * FROM espresso_shots WHERE id = ? AND item_id = ? AND house_id = ?", [
+    req.params.shotId,
+    item.id,
+    item.house_id,
+  ]);
+  if (!shot) throw new ApiError(404, "Shot not found");
+  return { shot, item, houseId, role };
+}
+
+function canChangeShot(shot: any, userId: string, role: Role) {
+  return shot.user_id === userId || roleAtLeast(role, "admin");
 }
 
 async function itemDetail(itemId: string, userId: string) {
@@ -489,6 +597,8 @@ inventoryRoutes.post(
         tags: z.union([z.array(z.string()), z.string()]).optional(),
         image: z.string().max(300).nullish(),
         nutrition: nutritionBody,
+        /** Coffee item that keeps an espresso shot log. */
+        espresso: z.boolean().optional(),
         barcodes: z.array(z.string().trim().min(1).max(80)).max(10).optional(),
         offCode: z.string().trim().max(80).nullish(),
         offProject: z.enum(["off", "obf", "opff", "opf"]).optional(),
@@ -521,8 +631,8 @@ inventoryRoutes.post(
     await tx(async () => {
       await run(
         `INSERT INTO items (id, house_id, name, description, brand, category_id, unit, reorder_point, target_stock,
-           attributes, tags, image, nutrition, archived, created_by, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
+           attributes, tags, image, nutrition, espresso, archived, created_by, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
         [
           id,
           houseId,
@@ -537,6 +647,7 @@ inventoryRoutes.post(
           JSON.stringify(parseTags(body.tags)),
           body.image ?? null,
           nutrition ? JSON.stringify(nutrition) : null,
+          body.espresso ? 1 : 0,
           req.user!.id,
           now(),
           now(),
@@ -596,6 +707,50 @@ inventoryRoutes.post(
   }),
 );
 
+/* --------------------------------------------------------------- espresso log */
+
+inventoryRoutes.get(
+  "/:houseId/espresso-shots",
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req);
+    const itemId = req.query.itemId ? String(req.query.itemId) : null;
+    if (itemId) {
+      const item = await get<any>("SELECT id FROM items WHERE id = ? AND house_id = ?", [itemId, houseId]);
+      if (!item) throw new ApiError(404, "Item not found");
+    }
+    const limit = intParam(req.query.limit, 200, 500);
+    const [shots, summary, beanRows] = await Promise.all([
+      espressoShots(houseId, itemId, limit),
+      espressoSummary(houseId, itemId ?? undefined),
+      all<any>(
+        `SELECT i.id, i.name, i.brand, i.espresso,
+           (SELECT COUNT(*) FROM espresso_shots s WHERE s.item_id = i.id AND s.house_id = i.house_id) AS shot_count,
+           (SELECT AVG(s.rating) FROM espresso_shots s WHERE s.item_id = i.id AND s.house_id = i.house_id) AS average_rating,
+           (SELECT MAX(s.brewed_at) FROM espresso_shots s WHERE s.item_id = i.id AND s.house_id = i.house_id) AS last_brewed_at
+         FROM items i
+         WHERE i.house_id = ? AND i.archived = 0
+           AND (i.espresso = 1 OR EXISTS (SELECT 1 FROM espresso_shots s WHERE s.item_id = i.id AND s.house_id = i.house_id))
+         ORDER BY lower(i.name)`,
+        [houseId],
+      ),
+    ]);
+    res.json({
+      shots,
+      summary,
+      beans: beanRows.map((row) => ({
+        id: row.id,
+        name: row.name,
+        brand: row.brand ?? null,
+        espresso: Boolean(Number(row.espresso)),
+        shotCount: Number(row.shot_count ?? 0),
+        averageRating:
+          row.average_rating == null ? null : Math.round(Number(row.average_rating) * 10) / 10,
+        lastBrewedAt: row.last_brewed_at ?? null,
+      })),
+    });
+  }),
+);
+
 /* ------------------------------------------------------------ single items */
 
 export const itemRoutes = Router();
@@ -627,6 +782,7 @@ itemRoutes.patch(
         image: z.string().max(300).nullish(),
         nutrition: nutritionBody,
         archived: z.boolean().optional(),
+        espresso: z.boolean().optional(),
         offCode: z.string().trim().max(80).nullish(),
         offProject: z.enum(["off", "obf", "opff", "opf"]).optional(),
       }),
@@ -647,7 +803,7 @@ itemRoutes.patch(
             })();
     await run(
       `UPDATE items SET name = ?, description = ?, brand = ?, category_id = ?, unit = ?, reorder_point = ?,
-         target_stock = ?, attributes = ?, tags = ?, image = ?, nutrition = ?, archived = ?, updated_at = ? WHERE id = ?`,
+         target_stock = ?, attributes = ?, tags = ?, image = ?, nutrition = ?, espresso = ?, archived = ?, updated_at = ? WHERE id = ?`,
       [
         body.name ?? item.name,
         body.description === undefined ? item.description : body.description,
@@ -660,6 +816,7 @@ itemRoutes.patch(
         JSON.stringify(body.tags === undefined ? parseJson(item.tags, []) : parseTags(body.tags)),
         body.image === undefined ? item.image : body.image,
         nutrition,
+        body.espresso === undefined ? item.espresso : body.espresso ? 1 : 0,
         body.archived === undefined ? item.archived : body.archived ? 1 : 0,
         now(),
         item.id,
@@ -842,6 +999,136 @@ itemRoutes.delete(
   handler(async (req, res) => {
     const { item } = await itemAccess(req, "member");
     await run("DELETE FROM item_barcodes WHERE id = ? AND item_id = ?", [req.params.barcodeId, item.id]);
+    res.json({ ok: true });
+  }),
+);
+
+/* ---------------------------------------------------------- espresso shots */
+
+itemRoutes.get(
+  "/:itemId/espresso-shots",
+  handler(async (req, res) => {
+    const { item } = await itemAccess(req);
+    const limit = intParam(req.query.limit, 200, 500);
+    const [shots, summary] = await Promise.all([
+      espressoShots(item.house_id, item.id, limit),
+      espressoSummary(item.house_id, item.id),
+    ]);
+    res.json({ shots, summary });
+  }),
+);
+
+itemRoutes.post(
+  "/:itemId/espresso-shots",
+  handler(async (req, res) => {
+    const { item } = await itemAccess(req, "member");
+    if (!item.espresso) {
+      throw new ApiError(400, "Turn on espresso logging for this item first");
+    }
+    const body = parseBody(espressoShotBody, req.body);
+    const id = newId("esp");
+    const stamp = now();
+    await run(
+      `INSERT INTO espresso_shots (id, house_id, item_id, user_id, brewed_at, rating, roast_level, grind_setting,
+         grind_seconds, dose_grams, yield_grams, extraction_seconds, water_temp_c, pressure_bar, tds_percent,
+         grinder, machine, tasting_notes, tags, notes, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        item.house_id,
+        item.id,
+        req.user!.id,
+        espressoBrewedAt(body.brewedAt),
+        body.rating,
+        body.roastLevel ?? null,
+        body.grindSetting ?? null,
+        body.grindSeconds ?? null,
+        body.doseGrams ?? null,
+        body.yieldGrams ?? null,
+        body.extractionSeconds ?? null,
+        body.waterTempC ?? null,
+        body.pressureBar ?? null,
+        body.tdsPercent ?? null,
+        body.grinder ?? null,
+        body.machine ?? null,
+        body.tastingNotes ?? null,
+        JSON.stringify(parseEspressoTags(body.tags)),
+        body.notes ?? null,
+        stamp,
+        stamp,
+      ],
+    );
+    const created = await get<any>(
+      `SELECT s.*, i.name AS item_name, i.brand AS item_brand, u.name AS user_name
+       FROM espresso_shots s
+       JOIN items i ON i.id = s.item_id
+       LEFT JOIN users u ON u.id = s.user_id
+       WHERE s.id = ?`,
+      [id],
+    );
+    res.status(201).json(serializeEspressoShot(created));
+  }),
+);
+
+itemRoutes.patch(
+  "/:itemId/espresso-shots/:shotId",
+  handler(async (req, res) => {
+    const { shot, role } = await shotAccess(req, "member");
+    if (!canChangeShot(shot, req.user!.id, role)) {
+      throw new ApiError(403, "You can only edit your own shots");
+    }
+    const body = parseBody(espressoShotBody.partial(), req.body);
+    await run(
+      `UPDATE espresso_shots SET brewed_at = ?, rating = ?, roast_level = ?, grind_setting = ?, grind_seconds = ?,
+         dose_grams = ?, yield_grams = ?, extraction_seconds = ?, water_temp_c = ?, pressure_bar = ?, tds_percent = ?,
+         grinder = ?, machine = ?, tasting_notes = ?, tags = ?, notes = ?, updated_at = ? WHERE id = ? AND item_id = ? AND house_id = ?`,
+      [
+        body.brewedAt === undefined ? shot.brewed_at : espressoBrewedAt(body.brewedAt),
+        body.rating === undefined ? shot.rating : body.rating,
+        body.roastLevel === undefined ? shot.roast_level : body.roastLevel,
+        body.grindSetting === undefined ? shot.grind_setting : body.grindSetting,
+        body.grindSeconds === undefined ? shot.grind_seconds : body.grindSeconds,
+        body.doseGrams === undefined ? shot.dose_grams : body.doseGrams,
+        body.yieldGrams === undefined ? shot.yield_grams : body.yieldGrams,
+        body.extractionSeconds === undefined ? shot.extraction_seconds : body.extractionSeconds,
+        body.waterTempC === undefined ? shot.water_temp_c : body.waterTempC,
+        body.pressureBar === undefined ? shot.pressure_bar : body.pressureBar,
+        body.tdsPercent === undefined ? shot.tds_percent : body.tdsPercent,
+        body.grinder === undefined ? shot.grinder : body.grinder,
+        body.machine === undefined ? shot.machine : body.machine,
+        body.tastingNotes === undefined ? shot.tasting_notes : body.tastingNotes,
+        JSON.stringify(body.tags === undefined ? parseJson(shot.tags, []) : parseEspressoTags(body.tags)),
+        body.notes === undefined ? shot.notes : body.notes,
+        now(),
+        shot.id,
+        shot.item_id,
+        shot.house_id,
+      ],
+    );
+    const updated = await get<any>(
+      `SELECT s.*, i.name AS item_name, i.brand AS item_brand, u.name AS user_name
+       FROM espresso_shots s
+       JOIN items i ON i.id = s.item_id
+       LEFT JOIN users u ON u.id = s.user_id
+       WHERE s.id = ?`,
+      [shot.id],
+    );
+    res.json(serializeEspressoShot(updated));
+  }),
+);
+
+itemRoutes.delete(
+  "/:itemId/espresso-shots/:shotId",
+  handler(async (req, res) => {
+    const { shot, role } = await shotAccess(req, "member");
+    if (!canChangeShot(shot, req.user!.id, role)) {
+      throw new ApiError(403, "You can only delete your own shots");
+    }
+    await run("DELETE FROM espresso_shots WHERE id = ? AND item_id = ? AND house_id = ?", [
+      shot.id,
+      shot.item_id,
+      shot.house_id,
+    ]);
     res.json({ ok: true });
   }),
 );
