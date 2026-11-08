@@ -222,7 +222,7 @@ export interface OffSearchResult {
   /** Human-readable text retained for API consumers that don't localize codes. */
   warning: string | null;
   /** Stable code for clients that have localized warning copy. */
-  warningCode?: "NOTHING_FOUND" | null;
+  warningCode: "NOTHING_FOUND" | null;
 }
 
 export interface CatalogMapping {
