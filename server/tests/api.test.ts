@@ -1390,6 +1390,11 @@ describe("espresso log", () => {
       body: { rating: 6 },
     });
     assert.equal(res.status, 400);
+    const roast = await request(`/api/items/${coffeeId}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 3, roastLevel: "extra-dark" },
+    });
+    assert.equal(roast.status, 400);
   });
 
   it("keeps the log inside its house", async () => {
@@ -1610,7 +1615,7 @@ describe("espresso log", () => {
     assert.equal(minDate.status, 201);
     const upperDate = await request(`/api/items/${temp.data.id}/espresso-shots`, {
       method: "POST",
-      body: { rating: 3, brewedAt: new Date(Date.now() + 864e5 - 60000).toISOString() },
+      body: { rating: 3, brewedAt: new Date(Date.now() + 864e5 - 3600000).toISOString() },
     });
     assert.equal(upperDate.status, 201);
     const farFuture = await request(`/api/items/${temp.data.id}/espresso-shots`, {
