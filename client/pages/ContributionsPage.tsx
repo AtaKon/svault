@@ -67,6 +67,7 @@ export function ContributionsPage() {
   const [pricePassword, setPricePassword] = useState("");
   const [accountProject, setAccountProject] = useState<OffProjectId>("off");
   const [question, setQuestion] = useState<OffRobotoffQuestion | null>(null);
+  const [robotoffWarning, setRobotoffWarning] = useState<string | null>(null);
   const dismissedQuestions = useRef<Set<string>>(new Set());
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [locationQuery, setLocationQuery] = useState("");
@@ -117,8 +118,10 @@ export function ContributionsPage() {
           "/api/off/robotoff/questions?project=off&count=1",
         );
         setQuestion(robotoff.questions.find((entry) => !dismissedQuestions.current.has(entry.insightId)) ?? null);
+        setRobotoffWarning(null);
       } catch {
         setQuestion(null);
+        setRobotoffWarning(t("Robotoff is unavailable right now; product contributions still work."));
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : t("Could not load Open Food Facts contributions");
@@ -135,10 +138,14 @@ export function ContributionsPage() {
 
   const linkAccount = async (project: OffProjectId, account: string, secret: string) => {
     if (!account.trim() || !secret) {
+      setPassword("");
+      setProjectPassword("");
       toast.error(t("Enter your Open Food Facts username and password"));
       return;
     }
     if (!consent) {
+      setPassword("");
+      setProjectPassword("");
       toast.error(t("Accept the license before connecting an account"));
       return;
     }
@@ -294,8 +301,17 @@ export function ContributionsPage() {
 
   const bulkShare = async () => {
     if (!house) return;
-    const chosen = candidates.filter((candidate) => candidate.ready && selectedIds.includes(candidate.id));
-    if (!chosen.length) return;
+    const chosen = candidates.filter(
+      (candidate) => candidate.ready && candidate.kind !== "price" && selectedIds.includes(candidate.id),
+    );
+    const skippedPrices = candidates.some(
+      (candidate) => candidate.kind === "price" && selectedIds.includes(candidate.id),
+    );
+    if (!chosen.length) {
+      if (skippedPrices) toast.error(t("Share prices one at a time so you can choose a location."));
+      return;
+    }
+    if (skippedPrices) toast.error(t("Prices need individual review and are not included in this bulk share."));
     setBusy("bulk");
     const succeeded: string[] = [];
     const failures: string[] = [];
@@ -393,10 +409,12 @@ export function ContributionsPage() {
         </Card>
       )}
 
+      {robotoffWarning && <p className="mb-3 text-[11px] text-muted">{robotoffWarning}</p>}
+
       <Card className="mb-5 p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h2 className="font-display text-lg">{t("Your Open Food Facts account")}</h2>
+            <h2 className="font-display text-lg">{t("Your Open Food Facts accounts")}</h2>
             <p className="mt-1 max-w-xl text-xs leading-relaxed text-muted">
               {t("Contributions appear under your Open Food Facts username. SVault stores only an encrypted session cookie, never your password.")}
             </p>

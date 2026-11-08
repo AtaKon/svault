@@ -17,5 +17,5 @@ export const OFF_PROJECT_SHORT_LABELS: Record<OffProjectId, string> = {
 
 export function offProjectLabel(project: OffProjectId | null | undefined): string {
   if (!project) return "Unknown";
-  return OFF_PROJECT_SHORT_LABELS[project] ?? String(project);
+  return OFF_PROJECT_SHORT_LABELS[project] ?? "Unknown";
 }
