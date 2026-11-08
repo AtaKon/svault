@@ -100,15 +100,16 @@ export function IconButton({
   );
 }
 
-export function Spinner({ size = 18, className }: { size?: number; className?: string }) {
+export function Spinner({ size = 18, className, label }: { size?: number; className?: string; label?: string }) {
   return (
     <svg
       width={size}
       height={size}
       viewBox="0 0 24 24"
       className={cn("animate-spin", className)}
-      aria-label="Loading"
-      role="status"
+      aria-label={label}
+      aria-hidden={label ? undefined : true}
+      role={label ? "status" : undefined}
     >
       <circle cx="12" cy="12" r="9" stroke="currentColor" strokeOpacity="0.2" strokeWidth="3" fill="none" />
       <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" fill="none" />
@@ -119,7 +120,7 @@ export function Spinner({ size = 18, className }: { size?: number; className?: s
 export function LoadingBlock({ label = "Loading" }: { label?: string }) {
   return (
     <div className="flex flex-col items-center justify-center gap-3 py-16 text-muted">
-      <Spinner size={26} />
+      <Spinner size={26} label={label} />
       <span className="text-sm">{label}</span>
     </div>
   );

@@ -46,7 +46,7 @@ catalogRoutes.get(
     const limit = intParam(req.query.limit, 8, 20);
     const cached = await localProducts(q, limit);
     let products = cached;
-    let warning: string | null = null;
+    let warning: OffSearchResult["warning"] = null;
     let usedOnline = false;
 
     if (online && q.length >= 3) {
@@ -59,7 +59,7 @@ catalogRoutes.get(
         }
         products = [...byCode.values()].slice(0, limit);
       } else if (!cached.length) {
-        warning = "Nothing found on OpenFoodFacts. Check the name or paste a barcode.";
+        warning = "NOTHING_FOUND";
       }
     }
 

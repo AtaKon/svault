@@ -219,7 +219,7 @@ export interface OffLinkResult {
 export interface OffSearchResult {
   products: OffProduct[];
   online: boolean;
-  warning: string | null;
+  warning: "NOTHING_FOUND" | null;
 }
 
 export interface CatalogMapping {
