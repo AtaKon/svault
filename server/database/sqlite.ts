@@ -126,6 +126,7 @@ export class SqliteDriver implements DatabaseDriver {
     ensureColumn("items", "off_synced_at", "TEXT");
     ensureColumn("items", "off_filled", "TEXT NOT NULL DEFAULT '[]'");
     ensureColumn("items", "nutrition", "TEXT");
+    ensureColumn("items", "espresso", "INTEGER NOT NULL DEFAULT 0");
     conn.exec("CREATE INDEX IF NOT EXISTS items_off ON items(off_code)");
     conn.exec(`UPDATE receipts SET savings = (
   SELECT ROUND(SUM(COALESCE(discount, 0)), 2) FROM receipt_lines WHERE receipt_id = receipts.id
@@ -493,6 +494,7 @@ CREATE TABLE IF NOT EXISTS items (
   tags TEXT NOT NULL DEFAULT '[]',
   image TEXT,
   nutrition TEXT,
+  espresso INTEGER NOT NULL DEFAULT 0,
   archived INTEGER NOT NULL DEFAULT 0,
   created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL,
@@ -510,6 +512,36 @@ CREATE TABLE IF NOT EXISTS item_barcodes (
   UNIQUE (house_id, code)
 );
 CREATE INDEX IF NOT EXISTS barcodes_item ON item_barcodes(item_id);
+
+/* Tasting and dial-in log for espresso coffee items. A shot's beans are an
+   inventory item, so deleting the coffee removes its history too. */
+CREATE TABLE IF NOT EXISTS espresso_shots (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  brewed_at TEXT NOT NULL,
+  rating INTEGER NOT NULL,
+  roast_level TEXT,
+  grind_setting TEXT,
+  grind_seconds REAL,
+  dose_grams REAL,
+  yield_grams REAL,
+  extraction_seconds REAL,
+  water_temp_c REAL,
+  pressure_bar REAL,
+  tds_percent REAL,
+  grinder TEXT,
+  machine TEXT,
+  tasting_notes TEXT,
+  tags TEXT NOT NULL DEFAULT '[]',
+  notes TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS espresso_shots_house ON espresso_shots(house_id, brewed_at);
+CREATE INDEX IF NOT EXISTS espresso_shots_item ON espresso_shots(item_id, brewed_at);
+CREATE INDEX IF NOT EXISTS espresso_shots_user ON espresso_shots(user_id, brewed_at);
 
 CREATE TABLE IF NOT EXISTS stock_lots (
   id TEXT PRIMARY KEY,

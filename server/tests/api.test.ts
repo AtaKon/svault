@@ -1,6 +1,7 @@
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createHmac, createSign, generateKeyPairSync } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -120,6 +121,7 @@ const { createPosoKaneiClient, PosoKaneiUnavailableError } = await import("../se
 const { RateLimitError, RateLimiter, limiters } = await import("../rate-limit.js");
 const { createShoppingOffersHandler, posoKaneiUnavailableApiError } = await import("../routes/insights.js");
 const { parseCsv, parseCsvNumber } = await import("../services/csv.js");
+const { espressoBrewedAt } = await import("../routes/inventory.js");
 const { totpCode, verifyTotp, generateTotpSecret, generateBackupCodes } = await import("../services/totp.js");
 const { backupForTest, validateBackup } = await import("../services/backup.js");
 const { inspectDataset, importDataset } = await import("../services/dataset-import.js");
@@ -1158,6 +1160,683 @@ describe("inventory and stock", () => {
     const res = await request(`/api/items/${itemId}/stock`, { method: "POST", body: { action: "add", quantity: -1 } });
     assert.equal(res.status, 400);
     assert.equal(res.data.error, "Invalid request");
+  });
+});
+
+describe("espresso log", () => {
+  let coffeeId = "";
+  let shotId = "";
+  let memberShotId = "";
+  let memberUserId = "";
+
+  it("validates brew dates at the exact boundaries", () => {
+    const fixed = Date.parse("2026-11-08T12:00:00.000Z");
+    assert.equal(espressoBrewedAt(undefined, fixed), "2026-11-08T12:00:00.000Z");
+    assert.equal(espressoBrewedAt("2000-01-01T00:00:00.000Z", fixed), "2000-01-01T00:00:00.000Z");
+    assert.equal(
+      espressoBrewedAt(new Date(fixed + 864e5).toISOString(), fixed),
+      new Date(fixed + 864e5).toISOString(),
+    );
+    assert.throws(() => espressoBrewedAt(null, fixed));
+    assert.throws(() => espressoBrewedAt("", fixed));
+    assert.throws(() => espressoBrewedAt("1999-12-31T23:59:59.000Z", fixed));
+    assert.throws(() => espressoBrewedAt(new Date(fixed + 864e5 + 1).toISOString(), fixed));
+  });
+
+  after(async () => {
+    if (memberUserId) {
+      await request(`/api/houses/${houseId}/members/${memberUserId}`, { method: "DELETE" });
+    }
+  });
+
+  it("marks a coffee item for espresso logging", async () => {
+    const res = await request(`/api/houses/${houseId}/items`, {
+      method: "POST",
+      body: { name: "Espresso beans", unit: "g", brand: "Roastery", espresso: true, initialStock: { quantity: 500 } },
+    });
+    assert.equal(res.status, 201);
+    assert.equal(res.data.espresso, true);
+    coffeeId = res.data.id;
+    const plain = await get<any>("SELECT espresso FROM items WHERE id = ?", [itemId]);
+    assert.equal(Number(plain.espresso), 0);
+    const plainDetail = await request(`/api/items/${itemId}`);
+    assert.equal(plainDetail.data.espresso, false);
+  });
+
+  it("only accepts shots for espresso-enabled items", async () => {
+    const res = await request(`/api/items/${itemId}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 4 },
+    });
+    assert.equal(res.status, 400);
+    assert.equal(res.data.error, "Turn on espresso logging for this item first");
+  });
+
+  it("allows logging after the flag is turned on", async () => {
+    const item = await request(`/api/houses/${houseId}/items`, {
+      method: "POST",
+      body: { name: "Toggle espresso", unit: "g" },
+    });
+    assert.equal(item.status, 201);
+    const before = await request(`/api/items/${item.data.id}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 4 },
+    });
+    assert.equal(before.status, 400);
+    const on = await request(`/api/items/${item.data.id}`, { method: "PATCH", body: { espresso: true } });
+    assert.equal(on.status, 200);
+    assert.equal(on.data.espresso, true);
+    const shot = await request(`/api/items/${item.data.id}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 4 },
+    });
+    assert.equal(shot.status, 201);
+    await request(`/api/items/${item.data.id}`, { method: "DELETE" });
+  });
+
+  it("logs a shot with roast, grinder and extraction parameters", async () => {
+    const res = await request(`/api/items/${coffeeId}/espresso-shots`, {
+      method: "POST",
+      body: {
+        brewedAt: "2026-11-01T08:30:00.000Z",
+        rating: 5,
+        houseId: "hse_not_the_house",
+        roastLevel: "medium",
+        grindSetting: "2.4",
+        grindSeconds: 12,
+        doseGrams: 18,
+        yieldGrams: 36,
+        extractionSeconds: 28,
+        waterTempC: 93,
+        pressureBar: 9,
+        tdsPercent: 9,
+        grinder: "Eureka Mignon",
+        machine: "Lelit Mara X",
+        tastingNotes: "Cocoa and orange peel",
+        tags: ["chocolate", "citrus"],
+        notes: "Sweeter than yesterday.",
+      },
+    });
+    assert.equal(res.status, 201);
+    assert.equal(res.data.rating, 5);
+    assert.equal(res.data.roastLevel, "medium");
+    assert.equal(res.data.ratio, 2);
+    assert.equal(res.data.extractionYieldPercent, 18);
+    assert.deepEqual(res.data.tags, ["chocolate", "citrus"]);
+    assert.equal(res.data.userName, "Test Owner");
+    assert.equal(res.data.houseId, houseId);
+    shotId = res.data.id;
+  });
+
+  it("lists shots with a summary and bean totals", async () => {
+    const itemLog = await request(`/api/items/${coffeeId}/espresso-shots`);
+    assert.equal(itemLog.status, 200);
+    assert.equal(itemLog.data.shots.length, 1);
+    assert.equal(itemLog.data.summary.count, 1);
+    assert.equal(itemLog.data.summary.averageRating, 5);
+    assert.equal(itemLog.data.summary.averageRatio, 2);
+    assert.equal(itemLog.data.summary.averageExtractionSeconds, 28);
+    assert.equal(itemLog.data.summary.averageExtractionYieldPercent, 18);
+
+    const houseLog = await request(`/api/houses/${houseId}/espresso-shots`);
+    assert.equal(houseLog.status, 200);
+    assert.equal(houseLog.data.beans.length, 1);
+    assert.equal(houseLog.data.beans[0].id, coffeeId);
+    assert.equal(houseLog.data.beans[0].espresso, true);
+    assert.equal(houseLog.data.beans[0].shotCount, 1);
+    assert.equal(houseLog.data.beans[0].averageRating, 5);
+  });
+
+  it("returns every espresso bean even when shots are filtered", async () => {
+    const second = await request(`/api/houses/${houseId}/items`, {
+      method: "POST",
+      body: { name: "Decaf beans", unit: "g", espresso: true },
+    });
+    assert.equal(second.status, 201);
+    const filtered = await request(`/api/houses/${houseId}/espresso-shots?itemId=${coffeeId}`);
+    assert.equal(filtered.status, 200);
+    assert.equal(filtered.data.shots.length, 1);
+    assert.equal(filtered.data.beans.length, 2);
+    assert.ok(filtered.data.beans.some((bean: any) => bean.id === second.data.id));
+    const archived = await request(`/api/items/${second.data.id}`, { method: "PATCH", body: { archived: true } });
+    assert.equal(archived.status, 200);
+    const afterArchive = await request(`/api/houses/${houseId}/espresso-shots`);
+    assert.ok(!afterArchive.data.beans.some((bean: any) => bean.id === second.data.id));
+    await request(`/api/items/${second.data.id}`, { method: "PATCH", body: { archived: false } });
+    const afterRestore = await request(`/api/houses/${houseId}/espresso-shots`);
+    assert.ok(afterRestore.data.beans.some((bean: any) => bean.id === second.data.id));
+    await request(`/api/items/${second.data.id}`, { method: "DELETE" });
+  });
+
+  it("updates a logged shot", async () => {
+    const res = await request(`/api/items/${coffeeId}/espresso-shots/${shotId}`, {
+      method: "PATCH",
+      body: { rating: 4, extractionSeconds: 31, tastingNotes: "Rounder" },
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.data.rating, 4);
+    assert.equal(res.data.extractionSeconds, 31);
+    assert.equal(res.data.tastingNotes, "Rounder");
+    assert.equal(res.data.doseGrams, 18);
+    assert.equal(res.data.brewedAt, "2026-11-01T08:30:00.000Z");
+    assert.equal(res.data.grindSetting, "2.4");
+    assert.equal(res.data.roastLevel, "medium");
+
+    const notesOnly = await request(`/api/items/${coffeeId}/espresso-shots/${shotId}`, {
+      method: "PATCH",
+      body: { notes: "Only the note changed" },
+    });
+    assert.equal(notesOnly.status, 200);
+    assert.equal(notesOnly.data.notes, "Only the note changed");
+    assert.equal(notesOnly.data.rating, 4);
+    assert.equal(notesOnly.data.brewedAt, "2026-11-01T08:30:00.000Z");
+
+    const ratingOnly = await request(`/api/items/${coffeeId}/espresso-shots/${shotId}`, {
+      method: "PATCH",
+      body: { rating: 3 },
+    });
+    assert.equal(ratingOnly.status, 200);
+    assert.equal(ratingOnly.data.rating, 3);
+    assert.equal(ratingOnly.data.notes, "Only the note changed");
+    assert.equal(ratingOnly.data.brewedAt, "2026-11-01T08:30:00.000Z");
+    assert.equal(ratingOnly.data.itemId, coffeeId);
+    assert.equal(ratingOnly.data.houseId, houseId);
+    assert.equal(ratingOnly.data.userId, (await request("/api/auth/me")).data.user.id);
+    assert.equal(ratingOnly.data.doseGrams, 18);
+    assert.equal(ratingOnly.data.extractionSeconds, 31);
+    assert.equal(ratingOnly.data.roastLevel, "medium");
+    assert.equal(ratingOnly.data.grindSetting, "2.4");
+
+    const nullRating = await request(`/api/items/${coffeeId}/espresso-shots/${shotId}`, {
+      method: "PATCH",
+      body: { rating: null },
+    });
+    assert.equal(nullRating.status, 400);
+    const nullTags = await request(`/api/items/${coffeeId}/espresso-shots/${shotId}`, {
+      method: "PATCH",
+      body: { tags: null },
+    });
+    assert.equal(nullTags.status, 400);
+
+    const cleared = await request(`/api/items/${coffeeId}/espresso-shots/${shotId}`, {
+      method: "PATCH",
+      body: { grindSetting: null, roastLevel: null, tastingNotes: null },
+    });
+    assert.equal(cleared.status, 200);
+    assert.equal(cleared.data.grindSetting, null);
+    assert.equal(cleared.data.roastLevel, null);
+    assert.equal(cleared.data.tastingNotes, null);
+    assert.equal(cleared.data.doseGrams, 18);
+
+    const allCleared = await request(`/api/items/${coffeeId}/espresso-shots/${shotId}`, {
+      method: "PATCH",
+      body: {
+        grindSeconds: null,
+        doseGrams: null,
+        yieldGrams: null,
+        extractionSeconds: null,
+        waterTempC: null,
+        pressureBar: null,
+        tdsPercent: null,
+        grinder: null,
+        machine: null,
+        notes: null,
+      },
+    });
+    assert.equal(allCleared.status, 200);
+    for (const field of [
+      "grindSetting",
+      "roastLevel",
+      "grindSeconds",
+      "doseGrams",
+      "yieldGrams",
+      "extractionSeconds",
+      "waterTempC",
+      "pressureBar",
+      "tdsPercent",
+      "grinder",
+      "machine",
+      "tastingNotes",
+      "notes",
+    ]) {
+      assert.equal(allCleared.data[field], null);
+    }
+    assert.equal(allCleared.data.rating, 3);
+    assert.equal(allCleared.data.brewedAt, "2026-11-01T08:30:00.000Z");
+
+    const nullDate = await request(`/api/items/${coffeeId}/espresso-shots/${shotId}`, {
+      method: "PATCH",
+      body: { brewedAt: null },
+    });
+    assert.equal(nullDate.status, 400);
+    const emptyDate = await request(`/api/items/${coffeeId}/espresso-shots/${shotId}`, {
+      method: "PATCH",
+      body: { brewedAt: "" },
+    });
+    assert.equal(emptyDate.status, 400);
+    const futureDate = await request(`/api/items/${coffeeId}/espresso-shots/${shotId}`, {
+      method: "PATCH",
+      body: { brewedAt: "9999-12-31T00:00:00.000Z" },
+    });
+    assert.equal(futureDate.status, 400);
+
+    const reassigned = await request(`/api/items/${coffeeId}/espresso-shots/${shotId}`, {
+      method: "PATCH",
+      body: { rating: 4, itemId, houseId: "hse_other_house" },
+    });
+    assert.equal(reassigned.status, 200);
+    assert.equal(reassigned.data.itemId, coffeeId);
+    assert.equal(reassigned.data.houseId, houseId);
+
+    const after = await request(`/api/items/${coffeeId}/espresso-shots`);
+    assert.equal(after.data.shots[0].brewedAt, "2026-11-01T08:30:00.000Z");
+  });
+
+  it("rejects out-of-range ratings", async () => {
+    const res = await request(`/api/items/${coffeeId}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 6 },
+    });
+    assert.equal(res.status, 400);
+    const roast = await request(`/api/items/${coffeeId}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 3, roastLevel: "extra-dark" },
+    });
+    assert.equal(roast.status, 400);
+  });
+
+  it("keeps the log inside its house", async () => {
+    const res = await request(`/api/items/${coffeeId}/espresso-shots`, { auth: secondUserCookie });
+    assert.equal(res.status, 404);
+  });
+
+  it("cannot read, edit or delete another house's shots", async () => {
+    const me = await request("/api/auth/me", { auth: secondUserCookie });
+    const theirHouseId = me.data.houses.find((house: any) => house.role === "owner").id;
+    const theirItem = await request(`/api/houses/${theirHouseId}/items`, {
+      method: "POST",
+      auth: secondUserCookie,
+      body: { name: "Their coffee", unit: "g", espresso: true },
+    });
+    assert.equal(theirItem.status, 201);
+    const crossFilter = await request(`/api/houses/${houseId}/espresso-shots?itemId=${theirItem.data.id}`);
+    assert.equal(crossFilter.status, 404);
+    const theirShot = await request(`/api/items/${theirItem.data.id}/espresso-shots`, {
+      method: "POST",
+      auth: secondUserCookie,
+      body: { rating: 4 },
+    });
+    assert.equal(theirShot.status, 201);
+    const theirLog = await request(`/api/houses/${theirHouseId}/espresso-shots`, { auth: secondUserCookie });
+    assert.ok(theirLog.data.shots.some((shot: any) => shot.id === theirShot.data.id));
+    const theirBean = theirLog.data.beans.find((bean: any) => bean.id === theirItem.data.id);
+    assert.equal(theirBean.shotCount, 1);
+    const ownerLog = await request(`/api/houses/${houseId}/espresso-shots`);
+    assert.ok(!ownerLog.data.shots.some((shot: any) => shot.id === theirShot.data.id));
+    assert.ok(!ownerLog.data.beans.some((bean: any) => bean.id === theirItem.data.id));
+
+    const read = await request(`/api/items/${theirItem.data.id}/espresso-shots`);
+    assert.equal(read.status, 404);
+    const patch = await request(`/api/items/${theirItem.data.id}/espresso-shots/${theirShot.data.id}`, {
+      method: "PATCH",
+      body: { rating: 1 },
+    });
+    assert.equal(patch.status, 404);
+    const remove = await request(`/api/items/${theirItem.data.id}/espresso-shots/${theirShot.data.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(remove.status, 404);
+  });
+
+  it("only lets the author or an admin change a shot", async () => {
+    const invite = await request(`/api/houses/${houseId}/members`, {
+      method: "POST",
+      body: { email: "stranger@example.com", role: "member" },
+    });
+    assert.equal(invite.status, 201);
+    const accepted = await request(`/api/auth/invites/${invite.data.invite.code}/accept`, {
+      method: "POST",
+      auth: secondUserCookie,
+    });
+    assert.equal(accepted.status, 200);
+    const me = await request("/api/auth/me", { auth: secondUserCookie });
+    memberUserId = me.data.user.id;
+
+    const denied = await request(`/api/items/${coffeeId}/espresso-shots/${shotId}`, {
+      method: "PATCH",
+      auth: secondUserCookie,
+      body: { rating: 1 },
+    });
+    assert.equal(denied.status, 403);
+
+    const deniedDelete = await request(`/api/items/${coffeeId}/espresso-shots/${shotId}`, {
+      method: "DELETE",
+      auth: secondUserCookie,
+    });
+    assert.equal(deniedDelete.status, 403);
+
+    const own = await request(`/api/items/${coffeeId}/espresso-shots`, {
+      method: "POST",
+      auth: secondUserCookie,
+      body: { rating: 3, doseGrams: 18, yieldGrams: 36 },
+    });
+    assert.equal(own.status, 201);
+    assert.equal(own.data.userName, "Test Stranger");
+    memberShotId = own.data.id;
+
+    const ownPatch = await request(`/api/items/${coffeeId}/espresso-shots/${memberShotId}`, {
+      method: "PATCH",
+      auth: secondUserCookie,
+      body: { rating: 4 },
+    });
+    assert.equal(ownPatch.status, 200);
+    assert.equal(ownPatch.data.rating, 4);
+
+    const adminPatch = await request(`/api/items/${coffeeId}/espresso-shots/${memberShotId}`, {
+      method: "PATCH",
+      body: { rating: 2 },
+    });
+    assert.equal(adminPatch.status, 200);
+    assert.equal(adminPatch.data.rating, 2);
+
+    const demoted = await request(`/api/houses/${houseId}/members/${memberUserId}`, {
+      method: "PATCH",
+      body: { role: "viewer" },
+    });
+    assert.equal(demoted.status, 200);
+    const viewerRead = await request(`/api/items/${coffeeId}/espresso-shots`, { auth: secondUserCookie });
+    assert.equal(viewerRead.status, 200);
+    const viewerHouseRead = await request(`/api/houses/${houseId}/espresso-shots`, { auth: secondUserCookie });
+    assert.equal(viewerHouseRead.status, 200);
+    const viewerPost = await request(`/api/items/${coffeeId}/espresso-shots`, {
+      method: "POST",
+      auth: secondUserCookie,
+      body: { rating: 5 },
+    });
+    assert.equal(viewerPost.status, 403);
+    const viewerPatch = await request(`/api/items/${coffeeId}/espresso-shots/${memberShotId}`, {
+      method: "PATCH",
+      auth: secondUserCookie,
+      body: { rating: 5 },
+    });
+    assert.equal(viewerPatch.status, 403);
+    const viewerPatchOwner = await request(`/api/items/${coffeeId}/espresso-shots/${shotId}`, {
+      method: "PATCH",
+      auth: secondUserCookie,
+      body: { rating: 5 },
+    });
+    assert.equal(viewerPatchOwner.status, 403);
+    const viewerDelete = await request(`/api/items/${coffeeId}/espresso-shots/${memberShotId}`, {
+      method: "DELETE",
+      auth: secondUserCookie,
+    });
+    assert.equal(viewerDelete.status, 403);
+    const viewerDeleteOwner = await request(`/api/items/${coffeeId}/espresso-shots/${shotId}`, {
+      method: "DELETE",
+      auth: secondUserCookie,
+    });
+    assert.equal(viewerDeleteOwner.status, 403);
+  });
+
+  it("clamps the shot list limit", async () => {
+    const one = await request(`/api/items/${coffeeId}/espresso-shots?limit=1`);
+    assert.equal(one.status, 200);
+    assert.equal(one.data.shots.length, 1);
+    const many = await request(`/api/items/${coffeeId}/espresso-shots?limit=9999`);
+    assert.equal(many.status, 200);
+    assert.equal(many.data.shots.length, 2);
+    const itemDefault = await request(`/api/items/${coffeeId}/espresso-shots?limit=0`);
+    assert.equal(itemDefault.status, 200);
+    assert.equal(itemDefault.data.shots.length, 2);
+    const houseOne = await request(`/api/houses/${houseId}/espresso-shots?itemId=${coffeeId}&limit=1`);
+    assert.equal(houseOne.status, 200);
+    assert.equal(houseOne.data.shots.length, 1);
+    const houseAll = await request(`/api/houses/${houseId}/espresso-shots?itemId=${coffeeId}&limit=0`);
+    assert.equal(houseAll.status, 200);
+    assert.equal(houseAll.data.shots.length, 2);
+  });
+
+  it("parses string tags, rejects bad dates and keeps history after the flag is turned off", async () => {
+    const temp = await request(`/api/houses/${houseId}/items`, {
+      method: "POST",
+      body: { name: "Temporary espresso", unit: "g", espresso: true },
+    });
+    assert.equal(temp.status, 201);
+
+    const badDate = await request(`/api/items/${temp.data.id}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 4, brewedAt: "not-a-date" },
+    });
+    assert.equal(badDate.status, 400);
+
+    const logged = await request(`/api/items/${temp.data.id}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 4, tags: "chocolate, citrus", doseGrams: 18, yieldGrams: 36, tdsPercent: 9 },
+    });
+    assert.equal(logged.status, 201);
+    assert.deepEqual(logged.data.tags, ["chocolate", "citrus"]);
+
+    const longTag = await request(`/api/items/${temp.data.id}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 3, tags: "x".repeat(120), doseGrams: 0, yieldGrams: 30 },
+    });
+    assert.equal(longTag.status, 400);
+
+    const tooManyTags = await request(`/api/items/${temp.data.id}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 3, tags: Array.from({ length: 21 }, (_, index) => `tag${index}`) },
+    });
+    assert.equal(tooManyTags.status, 400);
+    const tooManyStringTags = await request(`/api/items/${temp.data.id}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 3, tags: Array.from({ length: 21 }, (_, index) => `tag${index}`).join(",") },
+    });
+    assert.equal(tooManyStringTags.status, 400);
+
+    const maxTags = await request(`/api/items/${temp.data.id}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 3, tags: Array.from({ length: 20 }, (_, index) => `tag${index}`) },
+    });
+    assert.equal(maxTags.status, 201);
+    const maxTag = await request(`/api/items/${temp.data.id}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 3, tags: "y".repeat(40) },
+    });
+    assert.equal(maxTag.status, 201);
+
+    const nullTags = await request(`/api/items/${temp.data.id}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 3, tags: null },
+    });
+    assert.equal(nullTags.status, 400);
+    const clearTags = await request(`/api/items/${temp.data.id}/espresso-shots/${maxTag.data.id}`, {
+      method: "PATCH",
+      body: { tags: [] },
+    });
+    assert.equal(clearTags.status, 200);
+    assert.deepEqual(clearTags.data.tags, []);
+
+    const oldDate = await request(`/api/items/${temp.data.id}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 3, brewedAt: "1999-12-31T00:00:00.000Z" },
+    });
+    assert.equal(oldDate.status, 400);
+    const minDate = await request(`/api/items/${temp.data.id}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 3, brewedAt: "2000-01-01T00:00:00.000Z" },
+    });
+    assert.equal(minDate.status, 201);
+    const upperDate = await request(`/api/items/${temp.data.id}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 3, brewedAt: new Date(Date.now() + 864e5 - 3600000).toISOString() },
+    });
+    assert.equal(upperDate.status, 201);
+    const farFuture = await request(`/api/items/${temp.data.id}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 3, brewedAt: new Date(Date.now() + 864e5 + 3600000).toISOString() },
+    });
+    assert.equal(farFuture.status, 400);
+
+    const zeroDose = await request(`/api/items/${temp.data.id}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 3, tags: "sweet", doseGrams: 0, yieldGrams: 30 },
+    });
+    assert.equal(zeroDose.status, 201);
+
+    const summary = await request(`/api/items/${temp.data.id}/espresso-shots`);
+    assert.equal(summary.data.summary.averageRatio, 2);
+    assert.equal(summary.data.summary.averageExtractionYieldPercent, 18);
+    assert.equal(summary.data.summary.averageDoseGrams, 18);
+
+    const wrongItem = await request(`/api/items/${coffeeId}/espresso-shots/${logged.data.id}`, {
+      method: "PATCH",
+      body: { rating: 1 },
+    });
+    assert.equal(wrongItem.status, 404);
+    const wrongItemDelete = await request(`/api/items/${coffeeId}/espresso-shots/${logged.data.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(wrongItemDelete.status, 404);
+
+    const off = await request(`/api/items/${temp.data.id}`, { method: "PATCH", body: { espresso: false } });
+    assert.equal(off.status, 200);
+    assert.equal(off.data.espresso, false);
+
+    const blocked = await request(`/api/items/${temp.data.id}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 4 },
+    });
+    assert.equal(blocked.status, 400);
+
+    const stillEditable = await request(`/api/items/${temp.data.id}/espresso-shots/${logged.data.id}`, {
+      method: "PATCH",
+      body: { rating: 2 },
+    });
+    assert.equal(stillEditable.status, 200);
+    assert.equal(stillEditable.data.rating, 2);
+
+    const houseLog = await request(`/api/houses/${houseId}/espresso-shots`);
+    const tempBean = houseLog.data.beans.find((bean: any) => bean.id === temp.data.id);
+    assert.ok(tempBean);
+    assert.equal(tempBean.espresso, false);
+    assert.ok(houseLog.data.shots.some((shot: any) => shot.id === logged.data.id));
+
+    const filtered = await request(`/api/houses/${houseId}/espresso-shots?itemId=${temp.data.id}`);
+    assert.equal(filtered.data.summary.count, filtered.data.shots.length);
+    assert.equal(filtered.data.shots.length, 6);
+    assert.equal(filtered.data.summary.averageRatio, 2);
+
+    const removed = await request(`/api/items/${temp.data.id}`, { method: "DELETE" });
+    assert.equal(removed.status, 200);
+  });
+
+  it("deletes shots with their coffee item", async () => {
+    const deleted = await request(`/api/items/${coffeeId}`, { method: "DELETE" });
+    assert.equal(deleted.status, 200);
+    const row = await get<any>("SELECT COUNT(*) AS n FROM espresso_shots WHERE item_id = ?", [coffeeId]);
+    assert.equal(Number(row.n), 0);
+    const houseLog = await request(`/api/houses/${houseId}/espresso-shots`);
+    assert.equal(houseLog.data.beans.length, 0);
+    assert.equal(houseLog.data.shots.length, 0);
+  });
+});
+
+describe("espresso schema migration", () => {
+  it("adds the espresso column and table to a pre-change SQLite database", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "svault-espresso-migration-"));
+    try {
+      const script = `
+import fs from "node:fs";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+fs.mkdirSync(process.env.DATA_DIR, { recursive: true });
+const db = new DatabaseSync(path.join(process.env.DATA_DIR, "svault.db"));
+db.exec(\`
+  CREATE TABLE users (
+    id TEXT PRIMARY KEY,
+    email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    username TEXT,
+    name TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE items (
+    id TEXT PRIMARY KEY,
+    house_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT,
+    brand TEXT,
+    category_id TEXT,
+    unit TEXT NOT NULL DEFAULT 'pcs',
+    reorder_point REAL NOT NULL DEFAULT 0,
+    target_stock REAL,
+    attributes TEXT NOT NULL DEFAULT '{}',
+    tags TEXT NOT NULL DEFAULT '[]',
+    image TEXT,
+    nutrition TEXT,
+    archived INTEGER NOT NULL DEFAULT 0,
+    created_by TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  INSERT INTO items (id, house_id, name, created_at, updated_at)
+    VALUES ('itm_legacy', 'hse_legacy', 'Legacy coffee', '2026-01-01', '2026-01-01');
+\`);
+db.close();
+const { initDb, get, closeDb } = await import("./server/db.ts");
+const { DATABASE_KIND } = await import("./server/config.ts");
+await initDb();
+const column = await get("SELECT COUNT(*) AS n FROM pragma_table_info('items') WHERE name = 'espresso'");
+const item = await get("SELECT espresso FROM items WHERE id = 'itm_legacy'");
+const table = await get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'espresso_shots'");
+console.log(JSON.stringify({
+  kind: DATABASE_KIND,
+  column: Number(column.n),
+  espresso: Number(item.espresso),
+  table: table?.name ?? null,
+}));
+await closeDb();
+`;
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
+        DATA_DIR: dir,
+        NODE_ENV: "test",
+        DATABASE_URL: "",
+        SV_DATABASE_KIND: "sqlite",
+      };
+      for (const key of ["PGHOST", "PGPORT", "PGUSER", "PGDATABASE", "PGPASSWORD", "SV_DATABASE_URL"]) {
+        delete env[key];
+      }
+      const output = execFileSync(
+        process.execPath,
+        ["--import", "tsx", "--disable-warning=ExperimentalWarning", "--input-type=module", "-e", script],
+        {
+          cwd: path.resolve("."),
+          env,
+          encoding: "utf8",
+        },
+      );
+      const result = JSON.parse(output.trim());
+      assert.equal(result.kind, "sqlite");
+      assert.equal(result.column, 1);
+      assert.equal(result.espresso, 0);
+      assert.equal(result.table, "espresso_shots");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the PostgreSQL schema and restore order in sync", async () => {
+    const { POSTGRES_SCHEMA, POSTGRES_MIGRATIONS, POSTGRES_TABLE_ORDER } = await import(
+      "../database/postgres-schema.js"
+    );
+    assert.match(POSTGRES_SCHEMA, /espresso INTEGER NOT NULL DEFAULT 0/);
+    assert.match(POSTGRES_SCHEMA, /CREATE TABLE IF NOT EXISTS espresso_shots/);
+    assert.ok(POSTGRES_MIGRATIONS.includes("ALTER TABLE items ADD COLUMN IF NOT EXISTS espresso INTEGER NOT NULL DEFAULT 0"));
+    assert.ok(POSTGRES_TABLE_ORDER.indexOf("espresso_shots") > POSTGRES_TABLE_ORDER.indexOf("items"));
+    assert.ok(POSTGRES_TABLE_ORDER.indexOf("espresso_shots") > POSTGRES_TABLE_ORDER.indexOf("users"));
+    assert.ok(POSTGRES_TABLE_ORDER.indexOf("espresso_shots") > POSTGRES_TABLE_ORDER.indexOf("houses"));
+    assert.ok(POSTGRES_TABLE_ORDER.indexOf("espresso_shots") < POSTGRES_TABLE_ORDER.indexOf("receipts"));
   });
 });
 
@@ -3784,6 +4463,40 @@ describe("backup and restore", () => {
     assert.ok(validation.manifest.format === 1 || validation.manifest.format === 2);
     assert.ok(validation.manifest.checksums.database);
     assert.ok((validation.database?.length ?? 0) > 0 || Object.keys(validation.dump?.tables ?? {}).length > 0);
+  });
+
+  it("includes espresso shots in the backup", async () => {
+    const item = await request(`/api/houses/${houseId}/items`, {
+      method: "POST",
+      body: { name: "Backup espresso", unit: "g", espresso: true },
+    });
+    assert.equal(item.status, 201);
+    const shot = await request(`/api/items/${item.data.id}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 4, doseGrams: 18, yieldGrams: 36 },
+    });
+    assert.equal(shot.status, 201);
+
+    const { validation } = await backupForTest();
+    if (validation.dump) {
+      assert.ok(validation.dump.tables.espresso_shots?.some((row: any) => row.id === shot.data.id));
+    } else {
+      assert.ok(validation.database);
+      const dir = mkdtempSync(path.join(tmpdir(), "svault-espresso-backup-"));
+      try {
+        const file = path.join(dir, "backup.db");
+        writeFileSync(file, validation.database!);
+        const { DatabaseSync } = await import("node:sqlite");
+        const db = new DatabaseSync(file);
+        const row = db.prepare("SELECT id FROM espresso_shots WHERE id = ?").get(shot.data.id);
+        db.close();
+        assert.ok(row);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+
+    await request(`/api/items/${item.data.id}`, { method: "DELETE" });
   });
 
   it("serves the backup download to an owner", async () => {

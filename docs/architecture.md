@@ -95,6 +95,7 @@ exports readable. Timestamps are ISO-8601 strings; dates (`expires_at`, `purchas
 | Tenancy | `houses`, `house_members`, `house_invites` |
 | Taxonomy | `locations`, `categories`, `attribute_defs` |
 | Inventory | `items`, `item_barcodes`, `stock_lots`, `stock_movements` |
+| Coffee | `espresso_shots` (rating and dial-in history for espresso-enabled items) |
 | Purchases | `vendors`, `receipts`, `receipt_lines` |
 | Purchase learning | `product_aliases` (raw shop name → item, per vendor) |
 | Receipt layouts | `receipt_templates` (custom rules; built-in Lidl and Sklavenitis live in code) |

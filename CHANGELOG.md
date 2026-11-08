@@ -8,6 +8,11 @@ All notable changes to SVault are documented here. The format follows
 
 ### Added
 
+- **Espresso log.** Mark a bag of coffee beans as espresso and keep a tasting history with 1-5 star
+  ratings, roast level, grind setting and time, dose, yield, extraction time, water temperature,
+  pressure, TDS, grinder, machine, flavour tags and notes. SVault computes the brew ratio and extraction
+  yield, summarises averages per bean, and adds a house-wide **Espresso log** screen for comparing
+  shots. Everyone can read the log; members edit their own shots and admins can edit any.
 - House admins can enable PosoKanei price lookups on the shopping list. Members explicitly check a
   linked item's exact barcode; SVault caches results and applies per-user and instance-wide request
   limits. External offers remain separate from recorded purchase prices.

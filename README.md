@@ -21,6 +21,7 @@ dataset — all from one PWA that runs in a single Docker container.
 |---|---|
 | **Several houses, several people** | Every house has its own stock, places, categories, recipes and photos. Invite family with owner/admin/member/viewer roles, and hand ownership over explicitly when the household changes. Optional per-user TOTP two-factor, passkeys and OIDC single sign-on. |
 | **Dynamic inventory** | Items get whatever attributes *you* define per house (size, flavour, material, warranty date…). Units are handled properly (g/kg, ml/l, pcs, pairs…). |
+| **Espresso log** | Flag a bag of coffee beans as espresso and keep a tasting history: 1-5 star ratings, roast level, grind setting, dose, yield, extraction time, water temperature, pressure, grinder, machine and TDS. SVault computes the brew ratio and extraction yield, summarises averages per bean, and lets the whole house compare shots. |
 | **Stock that adds up** | Every change is a movement. Batches keep purchase price, location and expiry, so stock counts, value and FIFO consumption stay honest. |
 | **Price history that means something** | Record a unit price on every purchase and see per-unit trends, averages and highs/lows, filtered by shop or across all shops. Every individual buy is listed with its date, quantity and vendor. Prices are normalised when units differ (e.g. 500 ml at €0.80 becomes €1.60/l). |
 | **Barcode scanning** | Camera scan (ZXing) works in the browser; unknown EAN/UPC codes fall back to an OpenFoodFacts lookup and pre-fill a new item. |
@@ -290,6 +291,8 @@ GET  /api/houses/:id/photos/export?format=yolo|coco
 GET  /api/houses/:id/notifications           POST /api/houses/:id/notifications/scan
 POST /api/houses/:id/notifications/test      GET  /api/houses/:id/reminder-deliveries
 POST /api/houses/:id/members/:userId/transfer-ownership
+GET  /api/houses/:id/espresso-shots          GET  /api/items/:id/espresso-shots
+POST /api/items/:id/espresso-shots           PATCH/DELETE /api/items/:id/espresso-shots/:shotId
 ```
 
 ## Screens
@@ -297,6 +300,7 @@ POST /api/houses/:id/members/:userId/transfer-ownership
 - **Home** – stock summary, running low, expiring, recent activity, today's plan, cooking shortcuts.
 - **Inventory** – search, category/location/low-stock/expiry filters, inline ±1, sort by value.
 - **Item** – batch list with expiry, price chart, movement history, barcodes, dynamic attributes.
+- **Espresso log** – roast, grind, dose, yield, extraction time and TDS history with ratings and averages per bean.
 - **Scan** – camera + manual entry, quick ±1, create-from-barcode.
 - **Shopping list** – grouped, unit-aware lines from recipes, low stock and the plan; check into stock.
 - **Meal plan** – seven-day grid per house with scaled servings and one-click shopping list.

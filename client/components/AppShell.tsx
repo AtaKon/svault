@@ -20,6 +20,7 @@ const NAV: { to: string; label: string; icon: IconName; end?: boolean }[] = [
 
 const EXTRA: { to: string; label: string; icon: IconName }[] = [
   { to: "/insights", label: "Insights", icon: "price" },
+  { to: "/espresso", label: "Espresso log", icon: "cup" },
   { to: "/shopping", label: "Shopping list", icon: "list" },
   { to: "/plan", label: "Meal plan", icon: "calendar" },
   { to: "/intake", label: "Bulk intake", icon: "upload" },
