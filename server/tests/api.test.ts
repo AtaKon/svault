@@ -1250,6 +1250,10 @@ describe("espresso log", () => {
     assert.equal(filtered.data.shots.length, 1);
     assert.equal(filtered.data.beans.length, 2);
     assert.ok(filtered.data.beans.some((bean: any) => bean.id === second.data.id));
+    const archived = await request(`/api/items/${second.data.id}`, { method: "PATCH", body: { archived: true } });
+    assert.equal(archived.status, 200);
+    const afterArchive = await request(`/api/houses/${houseId}/espresso-shots`);
+    assert.ok(!afterArchive.data.beans.some((bean: any) => bean.id === second.data.id));
     await request(`/api/items/${second.data.id}`, { method: "DELETE" });
   });
 
@@ -1297,6 +1301,11 @@ describe("espresso log", () => {
       body: { rating: null },
     });
     assert.equal(nullRating.status, 400);
+    const nullTags = await request(`/api/items/${coffeeId}/espresso-shots/${shotId}`, {
+      method: "PATCH",
+      body: { tags: null },
+    });
+    assert.equal(nullTags.status, 400);
 
     const cleared = await request(`/api/items/${coffeeId}/espresso-shots/${shotId}`, {
       method: "PATCH",
@@ -1394,6 +1403,8 @@ describe("espresso log", () => {
       body: { name: "Their coffee", unit: "g", espresso: true },
     });
     assert.equal(theirItem.status, 201);
+    const crossFilter = await request(`/api/houses/${houseId}/espresso-shots?itemId=${theirItem.data.id}`);
+    assert.equal(crossFilter.status, 404);
     const theirShot = await request(`/api/items/${theirItem.data.id}/espresso-shots`, {
       method: "POST",
       auth: secondUserCookie,
@@ -1479,6 +1490,8 @@ describe("espresso log", () => {
     assert.equal(demoted.status, 200);
     const viewerRead = await request(`/api/items/${coffeeId}/espresso-shots`, { auth: secondUserCookie });
     assert.equal(viewerRead.status, 200);
+    const viewerHouseRead = await request(`/api/houses/${houseId}/espresso-shots`, { auth: secondUserCookie });
+    assert.equal(viewerHouseRead.status, 200);
     const viewerPost = await request(`/api/items/${coffeeId}/espresso-shots`, {
       method: "POST",
       auth: secondUserCookie,
