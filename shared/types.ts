@@ -58,6 +58,9 @@ export interface NotificationChannel {
 }
 
 export interface HouseSettings {
+  priceLookup?: {
+    enabled?: boolean;
+  };
   ai?: {
     enabled?: boolean;
     baseUrl?: string;
@@ -1082,6 +1085,21 @@ export interface ShoppingPriceHint {
   currency: string;
   cheapest: { vendorName: string; price: number; purchasedAt: string; unit: string | null };
   vendors: { vendorName: string; price: number; purchasedAt: string; unit: string | null }[];
+}
+
+export interface ExternalShoppingOffer {
+  source: "PosoKanei";
+  productId: string;
+  productName: string;
+  unit: string | null;
+  retailer: string;
+  price: number;
+  unitPrice: number | null;
+  currency: "EUR";
+  discount: boolean;
+  discountPercent: number | null;
+  updatedAt: string | null;
+  fetchedAt: string;
 }
 
 export interface ApiToken {

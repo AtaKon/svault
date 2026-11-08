@@ -8,6 +8,9 @@ All notable changes to SVault are documented here. The format follows
 
 ### Added
 
+- House admins can enable PosoKanei price lookups on the shopping list. Members explicitly check a
+  linked item's exact barcode; SVault caches results and applies per-user and instance-wide request
+  limits. External offers remain separate from recorded purchase prices.
 - A new **Insights** page brings spending together: monthly budget and progress, spend by month, shop
   and category, waste value, price alerts, a use-it-up view with matching recipes, cheapest-shop hints
   for open shopping-list lines, and a household split with settle-up suggestions. Each house stores its
