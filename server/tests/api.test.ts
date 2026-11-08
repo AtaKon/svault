@@ -1254,6 +1254,9 @@ describe("espresso log", () => {
     assert.equal(archived.status, 200);
     const afterArchive = await request(`/api/houses/${houseId}/espresso-shots`);
     assert.ok(!afterArchive.data.beans.some((bean: any) => bean.id === second.data.id));
+    await request(`/api/items/${second.data.id}`, { method: "PATCH", body: { archived: false } });
+    const afterRestore = await request(`/api/houses/${houseId}/espresso-shots`);
+    assert.ok(afterRestore.data.beans.some((bean: any) => bean.id === second.data.id));
     await request(`/api/items/${second.data.id}`, { method: "DELETE" });
   });
 
@@ -1504,11 +1507,22 @@ describe("espresso log", () => {
       body: { rating: 5 },
     });
     assert.equal(viewerPatch.status, 403);
+    const viewerPatchOwner = await request(`/api/items/${coffeeId}/espresso-shots/${shotId}`, {
+      method: "PATCH",
+      auth: secondUserCookie,
+      body: { rating: 5 },
+    });
+    assert.equal(viewerPatchOwner.status, 403);
     const viewerDelete = await request(`/api/items/${coffeeId}/espresso-shots/${memberShotId}`, {
       method: "DELETE",
       auth: secondUserCookie,
     });
     assert.equal(viewerDelete.status, 403);
+    const viewerDeleteOwner = await request(`/api/items/${coffeeId}/espresso-shots/${shotId}`, {
+      method: "DELETE",
+      auth: secondUserCookie,
+    });
+    assert.equal(viewerDeleteOwner.status, 403);
   });
 
   it("clamps the shot list limit", async () => {
@@ -1518,6 +1532,9 @@ describe("espresso log", () => {
     const many = await request(`/api/items/${coffeeId}/espresso-shots?limit=9999`);
     assert.equal(many.status, 200);
     assert.equal(many.data.shots.length, 2);
+    const itemDefault = await request(`/api/items/${coffeeId}/espresso-shots?limit=0`);
+    assert.equal(itemDefault.status, 200);
+    assert.equal(itemDefault.data.shots.length, 2);
     const houseOne = await request(`/api/houses/${houseId}/espresso-shots?itemId=${coffeeId}&limit=1`);
     assert.equal(houseOne.status, 200);
     assert.equal(houseOne.data.shots.length, 1);
@@ -1593,7 +1610,7 @@ describe("espresso log", () => {
     assert.equal(minDate.status, 201);
     const upperDate = await request(`/api/items/${temp.data.id}/espresso-shots`, {
       method: "POST",
-      body: { rating: 3, brewedAt: new Date(Date.now() + 864e5).toISOString() },
+      body: { rating: 3, brewedAt: new Date(Date.now() + 864e5 - 60000).toISOString() },
     });
     assert.equal(upperDate.status, 201);
     const farFuture = await request(`/api/items/${temp.data.id}/espresso-shots`, {
@@ -1723,8 +1740,8 @@ await closeDb();
         DATABASE_URL: "",
         SV_DATABASE_KIND: "sqlite",
       };
-      for (const key of Object.keys(env)) {
-        if (key.startsWith("PG") || key === "SV_DATABASE_URL") delete env[key];
+      for (const key of ["PGHOST", "PGPORT", "PGUSER", "PGDATABASE", "PGPASSWORD", "SV_DATABASE_URL"]) {
+        delete env[key];
       }
       const output = execFileSync(
         process.execPath,
