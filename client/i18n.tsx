@@ -342,7 +342,6 @@ const EL: Record<string, string> = {
   "Stock removed": "Το απόθεμα αφαιρέθηκε",
   "Waste recorded": "Η απώλεια καταγράφηκε",
   "Stock moved": "Το απόθεμα μεταφέρθηκε",
-  "Stock updated": "Το απόθεμα ενημερώθηκε",
   "{quantity} {unit} now in stock": "{quantity} {unit} σε απόθεμα τώρα",
   "Use": "Χρήση",
   "Count": "Καταμέτρηση",

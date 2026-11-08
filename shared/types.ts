@@ -219,7 +219,10 @@ export interface OffLinkResult {
 export interface OffSearchResult {
   products: OffProduct[];
   online: boolean;
-  warning: "NOTHING_FOUND" | null;
+  /** Human-readable text retained for API consumers that don't localize codes. */
+  warning: string | null;
+  /** Stable code for clients that have localized warning copy. */
+  warningCode?: "NOTHING_FOUND" | null;
 }
 
 export interface CatalogMapping {
