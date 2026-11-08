@@ -4652,6 +4652,11 @@ describe("insights, household split and admin console", () => {
     assert.equal(enabled.status, 200);
     assert.equal((await request(path)).status, 400, "the inventory item needs a barcode");
     assert.equal(
+      (await request(path, { auth: secondUserCookie })).status,
+      400,
+      "a house member may request offers when the lookup is enabled",
+    );
+    assert.equal(
       (await request(`/api/houses/${insightHouse}`, {
         method: "PATCH",
         body: { settings: { priceLookup: { enabled: true, unexpected: true } } },
@@ -5035,7 +5040,7 @@ describe("PosoKanei price lookup client", () => {
     const offers = await client.lookupPosoKaneiBarcode("12345678", userId);
     const cached = await client.lookupPosoKaneiBarcode("12345678", userId);
     assert.equal(calls, 1);
-    assert.equal(rateLimitCalls, 1);
+    assert.equal(rateLimitCalls, 2, "per-user lookup limits apply to cache hits too");
     assert.deepEqual(requestOptions?.redirect, "error");
     assert.equal(offers.length, 2);
     assert.equal(offers[0].retailer, "Store A");
@@ -5053,6 +5058,77 @@ describe("PosoKanei price lookup client", () => {
     assert.deepEqual(await client.lookupPosoKaneiBarcode("12345679", userId), []);
     assert.deepEqual(await client.lookupPosoKaneiBarcode("12345679", userId), []);
     assert.equal(calls, 1);
+  });
+
+  it("refunds user and global slots after an upstream failure and applies a shared cooldown", async () => {
+    let userSlots = 0;
+    let globalSlots = 0;
+    const client = createPosoKaneiClient(
+      async () => { throw new TypeError("network unavailable"); },
+      () => {
+        userSlots++;
+        return () => { userSlots--; };
+      },
+      () => {
+        globalSlots++;
+        return () => { globalSlots--; };
+      },
+    );
+    await assert.rejects(
+      client.lookupPosoKaneiBarcode("12345689", userId),
+      (error: unknown) => error instanceof PosoKaneiUnavailableError && error.message.includes("could not be reached"),
+    );
+    assert.equal(userSlots, 0);
+    assert.equal(globalSlots, 0);
+    await assert.rejects(
+      client.lookupPosoKaneiBarcode("12345690", userId),
+      (error: unknown) => error instanceof PosoKaneiUnavailableError && error.retryAfterSeconds != null,
+    );
+    assert.equal(userSlots, 0, "requests during the shared cooldown do not consume a slot");
+    assert.equal(globalSlots, 0);
+  });
+
+  it("counts a 429 attempt once, refunds it, and blocks later requests before rate limiting", async () => {
+    let userReservations = 0;
+    let globalReservations = 0;
+    let fetches = 0;
+    const client = createPosoKaneiClient(
+      async () => {
+        fetches++;
+        return new Response("{}", { status: 429, headers: { "retry-after": "120" } });
+      },
+      () => {
+        userReservations++;
+        return () => { userReservations--; };
+      },
+      () => {
+        globalReservations++;
+        return () => { globalReservations--; };
+      },
+    );
+    await assert.rejects(client.lookupPosoKaneiBarcode("12345691", userId), PosoKaneiUnavailableError);
+    assert.equal(userReservations, 0);
+    assert.equal(globalReservations, 0);
+    await assert.rejects(
+      client.lookupPosoKaneiBarcode("12345692", userId),
+      (error: unknown) => error instanceof PosoKaneiUnavailableError && error.retryAfterSeconds === 120,
+    );
+    assert.equal(fetches, 1);
+    assert.equal(userReservations, 0);
+  });
+
+  it("enforces the per-user quota across different barcodes", async () => {
+    let lookups = 0;
+    const client = createPosoKaneiClient(async () => new Response(null, { status: 404 }), (requestUser) => {
+      assert.equal(requestUser, userId);
+      if (++lookups > 2) throw new RateLimitError(900, "Price lookup limit reached. Try again later.");
+    }, () => {});
+    await client.lookupPosoKaneiBarcode("12345693", userId);
+    await client.lookupPosoKaneiBarcode("12345694", userId);
+    await assert.rejects(
+      client.lookupPosoKaneiBarcode("12345695", userId),
+      (error: unknown) => error instanceof RateLimitError && error.status === 429,
+    );
   });
 
   it("caches valid products that have no Greek retailer offers and rejects malformed products", async () => {
@@ -5156,9 +5232,21 @@ describe("PosoKanei price lookup client", () => {
     assert.equal(cancelled, true);
   });
 
+  it("discards invalid upstream update timestamps", async () => {
+    const client = createPosoKaneiClient(async () =>
+      new Response(JSON.stringify({
+        ...product,
+        retailer_prices: [{ country: "GR", retailer: "Store A", price: 1, last_updated: "not a date" }],
+      }), { headers: { "content-type": "application/json" } }), () => {}, () => {});
+    const [offer] = await client.lookupPosoKaneiBarcode("12345696", userId);
+    assert.equal(offer.updatedAt, null);
+    assert.ok(Number.isFinite(Date.parse(offer.fetchedAt)));
+  });
+
   it("deduplicates concurrent requests for one barcode", async () => {
     let calls = 0;
     let rateLimitCalls = 0;
+    let globalRateLimitCalls = 0;
     let resolveResponse!: (response: Response) => void;
     const pending = new Promise<Response>((resolve) => {
       resolveResponse = resolve;
@@ -5168,13 +5256,16 @@ describe("PosoKanei price lookup client", () => {
       return pending;
     }, () => {
       rateLimitCalls++;
+    }, () => {
+      globalRateLimitCalls++;
     });
     const first = client.lookupPosoKaneiBarcode("12345684", userId);
     const second = client.lookupPosoKaneiBarcode("12345684", "another-user");
     resolveResponse(new Response(JSON.stringify(product), { headers: { "content-type": "application/json" } }));
     const [one, two] = await Promise.all([first, second]);
     assert.equal(calls, 1);
-    assert.equal(rateLimitCalls, 1, "joining an existing upstream request does not consume another lookup slot");
+    assert.equal(rateLimitCalls, 2, "each user consumes their own lookup slot when joining a shared upstream request");
+    assert.equal(globalRateLimitCalls, 1, "the shared upstream request consumes one global slot");
     assert.deepEqual(one, two);
   });
 });

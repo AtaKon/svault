@@ -63,7 +63,7 @@ function mergeSettings(current: Record<string, any>, incoming: Record<string, an
     }
   }
   if (incoming.priceLookup && typeof incoming.priceLookup === "object") {
-    next.priceLookup = { enabled: incoming.priceLookup.enabled === true };
+    next.priceLookup = incoming.priceLookup;
   }
   return next;
 }

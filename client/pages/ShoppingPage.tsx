@@ -283,7 +283,7 @@ export function ShoppingPage() {
                                 {offer.retailer} · {offer.price.toFixed(2)} {offer.currency}
                                 {offer.unitPrice != null && offer.unit && ` · ${offer.unitPrice.toFixed(2)}/${offer.unit}`}
                                 {offer.discountPercent != null && ` · -${offer.discountPercent}%`}
-                                {index === 0 && offer.discount && ` · ${t("Promotion")}`}
+                                {offer.discount && ` · ${t("Promotion")}`}
                               </span>
                             ))}
                           </div>

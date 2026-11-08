@@ -46,7 +46,9 @@ function parseOffers(payload: unknown, fetchedAt: string): ExternalShoppingOffer
     const price = finitePositive(row.price);
     if (!retailer || price == null) continue;
     const discountPercent = row.discount_percentage == null ? null : Number(row.discount_percentage);
-    const updatedAt = safeString(row.last_updated, 40);
+    const rawUpdatedAt = safeString(row.last_updated, 40);
+    const parsedUpdatedAt = rawUpdatedAt ? Date.parse(rawUpdatedAt) : Number.NaN;
+    const updatedAt = Number.isFinite(parsedUpdatedAt) ? new Date(parsedUpdatedAt).toISOString() : null;
     offers.push({
       source: "PosoKanei",
       productId,
@@ -118,17 +120,24 @@ function retryAfter(response: Response): number {
   return Math.max(1, Math.min(60 * 60, Math.ceil(result)));
 }
 
-type ConsumeRateLimit = (userId: string) => void;
+type ReleaseRateLimit = (() => void) | void;
+type ConsumeRateLimit = (userId: string) => ReleaseRateLimit;
+type ConsumeGlobalRateLimit = () => ReleaseRateLimit;
 
 function consumeDefaultRateLimit(userId: string) {
   const userWait = limiters.posokanei.hit(userId);
   if (userWait) {
     throw new RateLimitError(userWait, "Price lookup limit reached. Try again later.");
   }
+  return () => limiters.posokanei.refund(userId);
+}
+
+function consumeDefaultGlobalRateLimit() {
   const globalWait = limiters.posokaneiGlobal.hit("all");
   if (globalWait) {
     throw new RateLimitError(globalWait, "Price lookup limit reached. Try again later.");
   }
+  return () => limiters.posokaneiGlobal.refund("all");
 }
 
 /** A factory keeps the HTTP client deterministic and lets unit tests supply a
@@ -136,6 +145,7 @@ function consumeDefaultRateLimit(userId: string) {
 export function createPosoKaneiClient(
   fetcher: typeof fetch = fetch,
   consumeRateLimit: ConsumeRateLimit = consumeDefaultRateLimit,
+  consumeGlobalRateLimit: ConsumeGlobalRateLimit = consumeDefaultGlobalRateLimit,
 ) {
   const cache = new Map<string, CachedLookup>();
   const inFlight = new Map<string, Promise<ExternalShoppingOffer[]>>();
@@ -156,62 +166,90 @@ export function createPosoKaneiClient(
     const code = barcode.trim();
     if (!/^\d{8,14}$/.test(code)) return [];
     const now = Date.now();
+    const releaseUserLimit = consumeRateLimit(userId);
     const cached = cache.get(code);
     if (cached && cached.expiresAt > now) return cached.offers;
     if (upstreamBlockedUntil > now) {
+      releaseUserLimit?.();
       throw new PosoKaneiUnavailableError(
         "PosoKanei asked SVault to slow down. Try again later.",
         Math.ceil((upstreamBlockedUntil - now) / 1000),
       );
     }
     const existing = inFlight.get(code);
-    if (existing) return existing;
-    consumeRateLimit(userId);
+    if (existing) {
+      try {
+        return await existing;
+      } catch (error) {
+        releaseUserLimit?.();
+        throw error;
+      }
+    }
+
+    let releaseGlobalLimit: ReleaseRateLimit;
+    try {
+      releaseGlobalLimit = consumeGlobalRateLimit();
+    } catch (error) {
+      releaseUserLimit?.();
+      throw error;
+    }
 
     const request = (async () => {
-      const url = new URL(`/products/barcode/${encodeURIComponent(code)}`, API_BASE);
-      url.searchParams.set("countries", "GR");
-      const response = await fetcher(url, {
-        method: "GET",
-        headers: {
-          accept: "application/json",
-          "user-agent": "SVault/1.2 (self-hosted household inventory; https://github.com/AtaKon/svault)",
-        },
-        redirect: "error",
-        signal: AbortSignal.timeout(TIMEOUT_MS),
-      });
-      if (response.status === 404) {
-        const offers: ExternalShoppingOffer[] = [];
-        await cancelBody(response);
-        cacheResult(code, { expiresAt: Date.now() + 10 * 60_000, offers });
-        return offers;
-      }
-      if (response.status === 429) {
-        const wait = retryAfter(response);
-        upstreamBlockedUntil = Date.now() + wait * 1000;
-        await cancelBody(response);
-        throw new PosoKaneiUnavailableError("PosoKanei asked SVault to slow down. Try again later.", wait);
-      }
-      if (!response.ok) {
-        await cancelBody(response);
-        throw new PosoKaneiUnavailableError(`PosoKanei returned HTTP ${response.status}`);
-      }
-      const contentType = response.headers.get("content-type") ?? "";
-      if (!contentType.toLowerCase().includes("application/json")) {
-        await cancelBody(response);
-        throw new PosoKaneiUnavailableError("PosoKanei returned a non-JSON response");
-      }
-      let payload: unknown;
       try {
-        payload = JSON.parse(await readBoundedBody(response));
+        const url = new URL(`/products/barcode/${encodeURIComponent(code)}`, API_BASE);
+        url.searchParams.set("countries", "GR");
+        const response = await fetcher(url, {
+          method: "GET",
+          headers: {
+            accept: "application/json",
+            "user-agent": "SVault/1.2 (self-hosted household inventory; https://github.com/AtaKon/svault)",
+          },
+          redirect: "error",
+          signal: AbortSignal.timeout(TIMEOUT_MS),
+        });
+        if (response.status === 404) {
+          const offers: ExternalShoppingOffer[] = [];
+          await cancelBody(response);
+          cacheResult(code, { expiresAt: Date.now() + 10 * 60_000, offers });
+          return offers;
+        }
+        if (response.status === 429) {
+          const wait = retryAfter(response);
+          upstreamBlockedUntil = Date.now() + wait * 1000;
+          await cancelBody(response);
+          throw new PosoKaneiUnavailableError("PosoKanei asked SVault to slow down. Try again later.", wait);
+        }
+        if (!response.ok) {
+          await cancelBody(response);
+          throw new PosoKaneiUnavailableError(`PosoKanei returned HTTP ${response.status}`);
+        }
+        const contentType = response.headers.get("content-type") ?? "";
+        if (!contentType.toLowerCase().includes("application/json")) {
+          await cancelBody(response);
+          throw new PosoKaneiUnavailableError("PosoKanei returned a non-JSON response");
+        }
+        let payload: unknown;
+        try {
+          payload = JSON.parse(await readBoundedBody(response));
+        } catch (error) {
+          if (error instanceof PosoKaneiUnavailableError) throw error;
+          throw new PosoKaneiUnavailableError("PosoKanei returned invalid JSON");
+        }
+        const fetchedAt = new Date().toISOString();
+        const offers = parseOffers(payload, fetchedAt);
+        cacheResult(code, { expiresAt: Date.now() + CACHE_MS, offers });
+        return offers;
       } catch (error) {
-        if (error instanceof PosoKaneiUnavailableError) throw error;
-        throw new PosoKaneiUnavailableError("PosoKanei returned invalid JSON");
+        releaseUserLimit?.();
+        releaseGlobalLimit?.();
+        const normalizedError = error instanceof PosoKaneiUnavailableError
+          ? error
+          : new PosoKaneiUnavailableError("PosoKanei could not be reached. Try again later.");
+        if (!normalizedError.retryAfterSeconds) {
+          upstreamBlockedUntil = Math.max(upstreamBlockedUntil, Date.now() + 60_000);
+        }
+        throw normalizedError;
       }
-      const fetchedAt = new Date().toISOString();
-      const offers = parseOffers(payload, fetchedAt);
-      cacheResult(code, { expiresAt: Date.now() + CACHE_MS, offers });
-      return offers;
     })().finally(() => inFlight.delete(code));
     inFlight.set(code, request);
     return request;
