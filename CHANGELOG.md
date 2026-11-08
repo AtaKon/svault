@@ -17,6 +17,12 @@ All notable changes to SVault are documented here. The format follows
   edit or front photo. A dedicated **Contribute** page ranks eligible items, shows blockers, and keeps
   a history with retry/cancel. Passwords are never stored; session cookies are encrypted at rest and
   writes are disabled unless `SV_OFF_WRITE_ENABLED=true`.
+- Contributions now cover all four product databases, with separate account links for beauty, pet food
+  and general products. The same page shares receipt prices through **Open Prices** (with the receipt
+  as proof), files wrong-project reports through **NutriPatrol**, and offers optional **Robotoff**
+  verification questions. Several ready items can be shared in one batch.
+- Open Prices and Folksonomy bearer tokens are stored encrypted per user; the instance account can be
+  used as a fallback. A Folksonomy property endpoint is available for advanced automation.
 - A new **Insights** page brings spending together: monthly budget and progress, spend by month, shop
   and category, waste value, price alerts, a use-it-up view with matching recipes, cheapest-shop hints
   for open shopping-list lines, and a household split with settle-up suggestions. Each house stores its

@@ -68,6 +68,119 @@ export function instanceAccount(): { username: string; password: string } | null
   return username && password ? { username, password } : null;
 }
 
+/* ------------------------------------------------------- secondary services */
+
+export type OffServiceId = "prices" | "folksonomy";
+
+const SERVICES: Record<OffServiceId, { base: string; authPath: string }> = {
+  prices: { base: "https://prices.openfoodfacts.org", authPath: "/api/v1/auth" },
+  folksonomy: { base: "https://api.folksonomy.openfoodfacts.org", authPath: "/auth" },
+};
+
+export function isOffServiceId(value: unknown): value is OffServiceId {
+  return value === "prices" || value === "folksonomy";
+}
+
+interface ServiceTokenRow {
+  user_id: string;
+  service: string;
+  username: string;
+  token_ciphertext: string;
+  token_iv: string;
+  token_tag: string;
+  linked_at: string;
+  last_error: string | null;
+}
+
+async function requestServiceToken(service: OffServiceId, username: string, password: string): Promise<string> {
+  const config = SERVICES[service];
+  let response: Response;
+  try {
+    response = await fetch(`${config.base}${config.authPath}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        "user-agent": USER_AGENT,
+      },
+      body: new URLSearchParams({ username, password }).toString(),
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch {
+    throw new ApiError(503, `Could not reach ${service === "prices" ? "Open Prices" : "Folksonomy"}`);
+  }
+  const json: any = await response.json().catch(() => null);
+  const token = String(json?.access_token ?? json?.token ?? "").trim();
+  if (!response.ok || !token) {
+    throw new ApiError(401, `The Open Food Facts account was not accepted by ${service === "prices" ? "Open Prices" : "Folksonomy"}`);
+  }
+  return token;
+}
+
+export async function linkServiceToken(opts: {
+  userId: string;
+  service: OffServiceId;
+  username: string;
+  password: string;
+}): Promise<{ service: OffServiceId; username: string }> {
+  const token = await requestServiceToken(opts.service, opts.username.trim(), opts.password);
+  const secret = encryptSecret(token);
+  await run(
+    `INSERT INTO off_service_tokens
+       (user_id, service, username, token_ciphertext, token_iv, token_tag, linked_at, last_error)
+     VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+     ON CONFLICT(user_id, service) DO UPDATE SET
+       username = excluded.username,
+       token_ciphertext = excluded.token_ciphertext,
+       token_iv = excluded.token_iv,
+       token_tag = excluded.token_tag,
+       linked_at = excluded.linked_at,
+       last_error = NULL`,
+    [opts.userId, opts.service, opts.username.trim(), secret.ciphertext, secret.iv, secret.tag, now()],
+  );
+  return { service: opts.service, username: opts.username.trim() };
+}
+
+export async function getServiceTokenRow(userId: string, service: OffServiceId): Promise<ServiceTokenRow | null> {
+  return (await get<ServiceTokenRow>("SELECT * FROM off_service_tokens WHERE user_id = ? AND service = ?", [
+    userId,
+    service,
+  ])) ?? null;
+}
+
+export async function serviceTokenSummary(userId: string): Promise<{ prices: boolean; folksonomy: boolean }> {
+  const rows = await all<{ service: string }>("SELECT service FROM off_service_tokens WHERE user_id = ?", [userId]);
+  const set = new Set(rows.map((row) => row.service));
+  return { prices: set.has("prices"), folksonomy: set.has("folksonomy") };
+}
+
+export async function unlinkServiceToken(userId: string, service: OffServiceId) {
+  await run("DELETE FROM off_service_tokens WHERE user_id = ? AND service = ?", [userId, service]);
+}
+
+/** Resolve a bearer token for a secondary service, if the user linked one. */
+export async function serviceBearer(userId: string, service: OffServiceId): Promise<string | null> {
+  const row = await getServiceTokenRow(userId, service);
+  if (row) {
+    try {
+      return decryptSecret({ ciphertext: row.token_ciphertext, iv: row.token_iv, tag: row.token_tag });
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/** Exchange the instance account for a token when the user has none. */
+export async function instanceServiceBearer(service: OffServiceId): Promise<string | null> {
+  const instance = instanceAccount();
+  if (!instance) return null;
+  try {
+    return await requestServiceToken(service, instance.username, instance.password);
+  } catch {
+    return null;
+  }
+}
+
 function cookieFrom(headers: Headers): string | null {
   const values =
     typeof (headers as any).getSetCookie === "function"
@@ -233,6 +346,7 @@ export async function accountSummary(userId: string) {
   return {
     accounts,
     instanceAccount: instance,
+    services: await serviceTokenSummary(userId),
     writesEnabled: offWritesEnabled(),
     dryRun: offDryRun(),
   };

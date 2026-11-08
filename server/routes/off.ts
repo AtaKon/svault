@@ -6,10 +6,15 @@ import { fetchOffProduct, getCachedOffPayload } from "../services/openfoodfacts.
 import {
   accountSummary,
   contributionIdentity,
+  instanceServiceBearer,
+  isOffServiceId,
   linkOffAccount,
+  linkServiceToken,
   offDryRun,
   offWritesEnabled,
+  serviceBearer,
   unlinkOffAccount,
+  unlinkServiceToken,
   verifyOffAccount,
 } from "../services/off/auth.js";
 import {
@@ -21,9 +26,13 @@ import {
   offConsent,
   offContributionStats,
   OFF_CONSENT_VERSION,
+  recentContributionKeys,
   retryContribution,
 } from "../services/off/contributions.js";
 import { contributionCandidates } from "../services/off/eligibility.js";
+import { addFolksonomyProperty } from "../services/off/folksonomy.js";
+import { answerRobotoff, robotoffProjectSupported, robotoffQuestions } from "../services/off/robotoff.js";
+import { REPORT_REASONS } from "../services/off/reports.js";
 import { isOffProjectId, offProjectList } from "../services/off/projects.js";
 import type { OffProjectId, Role } from "../../shared/types.js";
 
@@ -136,6 +145,38 @@ offRoutes.post(
   }),
 );
 
+offRoutes.post(
+  "/services/:service/link",
+  handler(async (req, res) => {
+    const service = String(req.params.service ?? "");
+    if (!isOffServiceId(service)) throw new ApiError(400, "Unknown Open Food Facts service");
+    const body = parseBody(
+      z.object({
+        username: z.string().trim().min(1).max(80),
+        password: z.string().min(1).max(200),
+      }),
+      req.body,
+    );
+    const linked = await linkServiceToken({
+      userId: req.user!.id,
+      service,
+      username: body.username,
+      password: body.password,
+    });
+    res.json({ service: linked.service, username: linked.username });
+  }),
+);
+
+offRoutes.delete(
+  "/services/:service",
+  handler(async (req, res) => {
+    const service = String(req.params.service ?? "");
+    if (!isOffServiceId(service)) throw new ApiError(400, "Unknown Open Food Facts service");
+    await unlinkServiceToken(req.user!.id, service);
+    res.json({ ok: true });
+  }),
+);
+
 offRoutes.delete(
   "/accounts/:project",
   handler(async (req, res) => {
@@ -171,17 +212,28 @@ offRoutes.get(
     const limit = intParam(req.query.limit, 20, 50);
     const candidates = await contributionCandidates(houseId, limit);
     const consent = await offConsent(req.user!.id);
+    const recent = await recentContributionKeys(req.user!.id);
     const blockedBase = [
       ...(!offWritesEnabled() && !offDryRun() ? ["writes_disabled"] : []),
       ...(!consent ? ["consent"] : []),
     ];
-    const identityCache = new Map<OffProjectId, boolean>();
+    const identityCache = new Map<string, boolean>();
     const withState = [];
     for (const candidate of candidates) {
-      let hasIdentity = identityCache.get(candidate.project);
-      if (hasIdentity === undefined) {
-        hasIdentity = Boolean(await contributionIdentity(req.user!.id, candidate.project));
-        identityCache.set(candidate.project, hasIdentity);
+      if (candidate.kind !== "price" && recent.has(`${candidate.project}:${candidate.code}`)) continue;
+      let hasIdentity: boolean;
+      if (candidate.kind === "price") {
+        hasIdentity = Boolean(
+          (await serviceBearer(req.user!.id, "prices")) ?? (await instanceServiceBearer("prices")),
+        );
+      } else {
+        // Reports use the OFF session even when the product lives elsewhere.
+        const project = candidate.kind === "wrong_project" || candidate.kind === "report" ? "off" : candidate.project;
+        const cached = identityCache.get(project);
+        if (cached === undefined) {
+          identityCache.set(project, Boolean(await contributionIdentity(req.user!.id, project)));
+        }
+        hasIdentity = identityCache.get(project)!;
       }
       const blocked = [...blockedBase, ...(!hasIdentity ? ["account"] : [])];
       withState.push({ ...candidate, blocked, ready: blocked.length === 0 });
@@ -208,17 +260,21 @@ offRoutes.post(
     const body = parseBody(
       z.object({
         houseId: z.string().trim().min(1).max(60),
-        itemId: z.string().trim().min(1).max(60),
-        kind: z.enum(["new_product", "missing_fields", "photo"]),
+        itemId: z.string().trim().min(1).max(60).optional(),
+        receiptLineId: z.string().trim().min(1).max(60).optional(),
+        kind: z.enum(["new_product", "missing_fields", "photo", "price", "report", "wrong_project", "folksonomy"]),
         fields: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
       }),
       req.body,
     );
+    if (body.kind === "price" && !body.receiptLineId) throw new ApiError(400, "Missing receiptLineId");
+    if (body.kind !== "price" && !body.itemId) throw new ApiError(400, "Missing itemId");
     await houseAccess(req, body.houseId, "member");
     const contribution = await createContribution({
       userId: req.user!.id,
       houseId: body.houseId,
       itemId: body.itemId,
+      receiptLineId: body.receiptLineId,
       kind: body.kind,
       fields: body.fields,
     });
@@ -258,5 +314,61 @@ offRoutes.get(
   handler(async (req, res) => {
     requireInstanceAdmin(req);
     res.json(await offContributionStats());
+  }),
+);
+
+offRoutes.get(
+  "/report-reasons",
+  handler(async (_req, res) => {
+    res.json({ reasons: REPORT_REASONS });
+  }),
+);
+
+offRoutes.get(
+  "/robotoff/questions",
+  handler(async (req, res) => {
+    const project = projectParam(req.query.project);
+    if (project === "all") throw new ApiError(400, "Choose a project for Robotoff");
+    if (!robotoffProjectSupported(project)) {
+      res.json({ questions: [], supported: false });
+      return;
+    }
+    const count = intParam(req.query.count, 1, 10);
+    const lang = String(req.query.lang ?? "en").slice(0, 5);
+    res.json({ questions: await robotoffQuestions(project, count, lang), supported: true });
+  }),
+);
+
+offRoutes.post(
+  "/robotoff/answers",
+  handler(async (req, res) => {
+    const body = parseBody(
+      z.object({
+        insightId: z.string().trim().min(1).max(80),
+        annotation: z.union([z.literal(-1), z.literal(0), z.literal(1)]),
+      }),
+      req.body,
+    );
+    res.json({ ok: await answerRobotoff(body.insightId, body.annotation) });
+  }),
+);
+
+offRoutes.post(
+  "/folksonomy",
+  handler(async (req, res) => {
+    const body = parseBody(
+      z.object({
+        project: z.enum(["off", "obf", "opff", "opf"]),
+        code: z.string().trim().min(1).max(80),
+        key: z.string().trim().min(1).max(120),
+        value: z.string().trim().min(1).max(1000),
+      }),
+      req.body,
+    );
+    try {
+      res.json(await addFolksonomyProperty({ userId: req.user!.id, ...body }));
+    } catch (error) {
+      throw new ApiError(502, error instanceof Error ? error.message : "Folksonomy write failed");
+    }
   }),
 );

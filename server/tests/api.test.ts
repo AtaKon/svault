@@ -1,7 +1,7 @@
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createHmac, createSign, generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -1504,6 +1504,220 @@ describe("OpenFoodFacts links and shared catalogue", () => {
       else process.env.SV_OFF_WRITE_ENABLED = savedWrites;
       if (savedDryRun === undefined) delete process.env.SV_OFF_DRY_RUN;
       else process.env.SV_OFF_DRY_RUN = savedDryRun;
+    }
+  });
+
+  it("shares a receipt price through Open Prices", async () => {
+    const receiptId = "rct_price_test";
+    const lineId = "rcl_price_test";
+    const imageDir = path.join(dataDir, "uploads", "receipts");
+    mkdirSync(imageDir, { recursive: true });
+    writeFileSync(path.join(imageDir, "price-test.txt"), "proof");
+    const stamp = new Date().toISOString();
+    await run(
+      `INSERT INTO receipts (id, house_id, vendor_name, purchased_at, currency, total, image, source, created_at)
+       VALUES (?, ?, 'Test Market', '2026-10-01', 'EUR', 9.9, '/uploads/receipts/price-test.txt', 'scan', ?)`,
+      [receiptId, houseId, stamp],
+    );
+    await run(
+      `INSERT INTO receipt_lines
+         (id, receipt_id, house_id, description, quantity, unit, unit_price, line_total, barcode, off_code, off_project, sort)
+       VALUES (?, ?, ?, 'Priced feta', 1, 'pcs', 9.9, 9.9, ?, ?, 'off', 0)`,
+      [lineId, receiptId, houseId, fetaCode, fetaCode],
+    );
+
+    const originalFetch = globalThis.fetch;
+    const savedWrites = process.env.SV_OFF_WRITE_ENABLED;
+    const savedDryRun = process.env.SV_OFF_DRY_RUN;
+    process.env.SV_OFF_WRITE_ENABLED = "true";
+    process.env.SV_OFF_DRY_RUN = "false";
+    let proofSeen = false;
+    let priceBody: any = null;
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/auth")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ access_token: "price-token", user_id: "svault-test" }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      }
+      if (url.endsWith("/api/v1/proofs/upload")) {
+        proofSeen = init?.body instanceof FormData;
+        return Promise.resolve(
+          new Response(JSON.stringify({ id: 99 }), { status: 200, headers: { "content-type": "application/json" } }),
+        );
+      }
+      if (url.endsWith("/api/v1/prices")) {
+        priceBody = JSON.parse(String(init?.body ?? "{}"));
+        return Promise.resolve(
+          new Response(JSON.stringify({ id: 123 }), { status: 201, headers: { "content-type": "application/json" } }),
+        );
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+
+    try {
+      const linked = await request("/api/off/services/prices/link", {
+        method: "POST",
+        body: { username: "svault-test", password: "not-stored" },
+      });
+      assert.equal(linked.status, 200);
+
+      const candidates = await request(`/api/off/contributions/candidates?houseId=${houseId}`);
+      const price = candidates.data.candidates.find((candidate: any) => candidate.kind === "price" && candidate.price?.receiptLineId === lineId);
+      assert.ok(price);
+      assert.equal(price.ready, true);
+
+      const queued = await request("/api/off/contributions", {
+        method: "POST",
+        body: { houseId, receiptLineId: lineId, kind: "price", fields: ["price"] },
+      });
+      assert.equal(queued.status, 202);
+      const id = queued.data.contribution.id;
+      let contribution = queued.data.contribution;
+      for (let attempt = 0; attempt < 40 && contribution.status !== "sent"; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        contribution = (await request(`/api/off/contributions/${id}`)).data.contribution;
+      }
+      assert.equal(contribution.status, "sent");
+      assert.equal(contribution.remoteId, "123");
+      assert.ok(proofSeen);
+      assert.equal(priceBody.product_code, fetaCode);
+      assert.equal(priceBody.price, 9.9);
+      assert.equal(priceBody.proof_id, 99);
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (savedWrites === undefined) delete process.env.SV_OFF_WRITE_ENABLED;
+      else process.env.SV_OFF_WRITE_ENABLED = savedWrites;
+      if (savedDryRun === undefined) delete process.env.SV_OFF_DRY_RUN;
+      else process.env.SV_OFF_DRY_RUN = savedDryRun;
+    }
+  });
+
+  it("offers and files a wrong-project report", async () => {
+    const beautyCode = "3560070791460";
+    const timestamp = new Date().toISOString();
+    await run(
+      `INSERT INTO catalog_products
+         (project, code, name, brand, quantity, image, categories, summary, payload, source, fetched_at, updated_at)
+       VALUES ('obf', ?, 'Dental solution', 'Carrefour', '50 ml', NULL, '[]', ?, '{}', 'openfoodfacts', ?, ?)
+       ON CONFLICT(project, code) DO UPDATE SET name = excluded.name`,
+      [
+        beautyCode,
+        JSON.stringify({
+          code: beautyCode,
+          project: "obf",
+          productType: "beauty",
+          name: "Dental solution",
+          brand: "Carrefour",
+          quantity: "50 ml",
+          categories: [],
+        }),
+        timestamp,
+        timestamp,
+      ],
+    );
+    const created = await request(`/api/houses/${houseId}/items`, {
+      method: "POST",
+      body: { name: "Dental item", brand: "Carrefour", unit: "pcs", barcodes: [beautyCode] },
+    });
+    assert.equal(created.status, 201);
+
+    const candidates = await request(`/api/off/contributions/candidates?houseId=${houseId}`);
+    const reportCandidate = candidates.data.candidates.find(
+      (candidate: any) => candidate.kind === "wrong_project" && candidate.code === beautyCode,
+    );
+    assert.ok(reportCandidate);
+    assert.equal(reportCandidate.report.flavor, "obf");
+
+    const originalFetch = globalThis.fetch;
+    const savedWrites = process.env.SV_OFF_WRITE_ENABLED;
+    const savedDryRun = process.env.SV_OFF_DRY_RUN;
+    process.env.SV_OFF_WRITE_ENABLED = "true";
+    process.env.SV_OFF_DRY_RUN = "false";
+    let flagBody: any = null;
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith("/api/v1/flags")) {
+        flagBody = JSON.parse(String(init?.body ?? "{}"));
+        return Promise.resolve(
+          new Response(JSON.stringify({ id: 7 }), { status: 200, headers: { "content-type": "application/json" } }),
+        );
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+
+    try {
+      const queued = await request("/api/off/contributions", {
+        method: "POST",
+        body: { houseId, itemId: created.data.id, kind: "wrong_project", fields: ["report"] },
+      });
+      assert.equal(queued.status, 202);
+      const id = queued.data.contribution.id;
+      let contribution = queued.data.contribution;
+      for (let attempt = 0; attempt < 40 && contribution.status !== "sent"; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        contribution = (await request(`/api/off/contributions/${id}`)).data.contribution;
+      }
+      assert.equal(contribution.status, "sent");
+      assert.equal(contribution.remoteId, "7");
+      assert.equal(flagBody.barcode, beautyCode);
+      assert.equal(flagBody.flavor, "obf");
+      assert.equal(flagBody.reason, "wrong_project");
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (savedWrites === undefined) delete process.env.SV_OFF_WRITE_ENABLED;
+      else process.env.SV_OFF_WRITE_ENABLED = savedWrites;
+      if (savedDryRun === undefined) delete process.env.SV_OFF_DRY_RUN;
+      else process.env.SV_OFF_DRY_RUN = savedDryRun;
+    }
+  });
+
+  it("fetches and answers Robotoff questions", async () => {
+    const originalFetch = globalThis.fetch;
+    let answerBody = "";
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/api/v1/questions")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              questions: [
+                {
+                  barcode: fetaCode,
+                  insight_id: "insight-1",
+                  insight_type: "label",
+                  question: "Is this organic?",
+                  value: "Organic",
+                },
+              ],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        );
+      }
+      if (url.includes("/api/v1/insights/annotate")) {
+        answerBody = String(init?.body ?? "");
+        return Promise.resolve(
+          new Response(JSON.stringify({ status: "ok" }), { status: 200, headers: { "content-type": "application/json" } }),
+        );
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+    try {
+      const questions = await request("/api/off/robotoff/questions?project=off&count=1");
+      assert.equal(questions.status, 200);
+      assert.equal(questions.data.questions[0].insightId, "insight-1");
+      const answer = await request("/api/off/robotoff/answers", {
+        method: "POST",
+        body: { insightId: "insight-1", annotation: 1 },
+      });
+      assert.equal(answer.status, 200);
+      assert.equal(answer.data.ok, true);
+      assert.ok(answerBody.includes("annotation=1"));
+    } finally {
+      globalThis.fetch = originalFetch;
     }
   });
 

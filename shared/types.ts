@@ -263,11 +263,45 @@ export interface OffSearchResult {
 }
 
 /** Something SVault can add to Open Food Facts on a user's behalf. */
-export type OffContributionKind = "new_product" | "missing_fields" | "photo";
+export type OffContributionKind = "new_product" | "missing_fields" | "photo" | "price" | "report" | "folksonomy";
+export type OffCandidateKind = OffContributionKind | "wrong_project";
+
+export interface OffPriceCandidate {
+  code: string;
+  receiptLineId: string;
+  receiptId: string;
+  amount: number;
+  currency: string;
+  date: string | null;
+  vendor: string | null;
+  productName: string;
+  receiptImage: string;
+  quantity: number;
+  unit: string | null;
+  unitPrice: number | null;
+}
+
+export interface OffReportCandidate {
+  type: "product" | "image";
+  reason: string;
+  comment: string;
+  flavor: OffProjectId;
+}
+
+export interface OffRobotoffQuestion {
+  barcode: string;
+  insightId: string;
+  insightType: string;
+  question: string;
+  value: string | null;
+  valueTag: string | null;
+  sourceImageUrl: string | null;
+  refImageUrl: string | null;
+}
 
 export interface OffContributionCandidate {
   id: string;
-  kind: OffContributionKind;
+  kind: OffCandidateKind;
   project: OffProjectId;
   code: string;
   itemId: string;
@@ -278,6 +312,8 @@ export interface OffContributionCandidate {
   values: Record<string, string | null>;
   product: OffProduct | null;
   image: string | null;
+  price?: OffPriceCandidate | null;
+  report?: OffReportCandidate | null;
   /** False when an account, consent or feature flag is missing. */
   ready: boolean;
   blocked: string[];
@@ -320,6 +356,7 @@ export interface OffAccountPublic {
 export interface OffAccountSummary {
   accounts: OffAccountPublic[];
   instanceAccount: { available: boolean; username: string | null };
+  services: { prices: boolean; folksonomy: boolean };
   writesEnabled: boolean;
   dryRun: boolean;
   consentAt: string | null;

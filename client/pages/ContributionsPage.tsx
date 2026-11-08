@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "@/api";
 import { useHouse } from "@/state";
 import { useI18n } from "@/i18n";
-import { Badge, Button, Card, EmptyState, Field, Input, PageHeader, Sheet, Spinner, cn } from "@/components/ui";
+import { Badge, Button, Card, EmptyState, Field, Input, PageHeader, Select, Sheet, Spinner, cn } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { useToast } from "@/components/toast";
 import { offProjectLabel } from "@/off";
@@ -11,6 +11,8 @@ import type {
   OffAccountSummary,
   OffContribution,
   OffContributionCandidate,
+  OffProjectId,
+  OffRobotoffQuestion,
 } from "@shared/types";
 
 const FIELD_LABELS: Record<string, string> = {
@@ -20,6 +22,8 @@ const FIELD_LABELS: Record<string, string> = {
   category: "Category",
   nutrition: "Nutrition",
   image: "Front photo",
+  price: "Price",
+  report: "Report",
 };
 
 function fieldLabel(field: string): string {
@@ -47,6 +51,11 @@ export function ContributionsPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [consent, setConsent] = useState(false);
+  const [priceUser, setPriceUser] = useState("");
+  const [pricePassword, setPricePassword] = useState("");
+  const [accountProject, setAccountProject] = useState<OffProjectId>("off");
+  const [question, setQuestion] = useState<OffRobotoffQuestion | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
   const account = useMemo<OffAccountPublic | null>(
     () => summary?.accounts.find((entry) => entry.project === "off") ?? null,
@@ -67,6 +76,14 @@ export function ContributionsPage() {
       setCandidates(candidateResult.candidates);
       setContributions(history.contributions);
       setConsent(Boolean(accounts.consentAt));
+      try {
+        const robotoff = await api<{ questions: OffRobotoffQuestion[] }>(
+          "/api/off/robotoff/questions?project=off&count=1",
+        );
+        setQuestion(robotoff.questions[0] ?? null);
+      } catch {
+        setQuestion(null);
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t("Could not load Open Food Facts contributions"));
     } finally {
@@ -78,7 +95,7 @@ export function ContributionsPage() {
     void load();
   }, [load]);
 
-  const linkAccount = async () => {
+  const linkAccount = async (project: OffProjectId = "off") => {
     if (!username.trim() || !password) {
       toast.error(t("Enter your Open Food Facts username and password"));
       return;
@@ -89,7 +106,7 @@ export function ContributionsPage() {
     }
     setBusy("link");
     try {
-      await api("/api/off/accounts/off/link", {
+      await api(`/api/off/accounts/${project}/link`, {
         method: "POST",
         body: { username: username.trim(), password, consent: true },
       });
@@ -103,14 +120,51 @@ export function ContributionsPage() {
     }
   };
 
-  const unlinkAccount = async () => {
+  const unlinkAccount = async (project: OffProjectId = "off") => {
     setBusy("unlink");
     try {
-      await api("/api/off/accounts/off", { method: "DELETE" });
+      await api(`/api/off/accounts/${project}`, { method: "DELETE" });
       toast.success(t("Open Food Facts account disconnected"));
       await load();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t("Could not disconnect the account"));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const answerQuestion = async (annotation: 1 | 0 | -1) => {
+    if (!question) return;
+    setBusy("robotoff");
+    try {
+      await api("/api/off/robotoff/answers", {
+        method: "POST",
+        body: { insightId: question.insightId, annotation },
+      });
+      setQuestion(null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("Could not send the answer"));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const linkPrices = async () => {
+    if (!priceUser.trim() || !pricePassword) {
+      toast.error(t("Enter your Open Food Facts username and password"));
+      return;
+    }
+    setBusy("prices");
+    try {
+      await api("/api/off/services/prices/link", {
+        method: "POST",
+        body: { username: priceUser.trim(), password: pricePassword },
+      });
+      setPricePassword("");
+      toast.success(t("Open Prices connected"));
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("Could not connect Open Prices"));
     } finally {
       setBusy(null);
     }
@@ -121,24 +175,49 @@ export function ContributionsPage() {
     setFields(candidate.fields);
   };
 
+  const contributionBody = (candidate: OffContributionCandidate, chosen: string[]) => ({
+    houseId: house!.id,
+    itemId: candidate.kind === "price" ? undefined : candidate.itemId,
+    receiptLineId: candidate.kind === "price" ? candidate.price?.receiptLineId : undefined,
+    kind: candidate.kind,
+    fields: chosen,
+  });
+
   const submit = async () => {
     if (!selected || !house) return;
     setBusy("submit");
     try {
       await api("/api/off/contributions", {
         method: "POST",
-        body: {
-          houseId: house.id,
-          itemId: selected.itemId,
-          kind: selected.kind,
-          fields,
-        },
+        body: contributionBody(selected, fields),
       });
       setSelected(null);
       toast.success(t("Queued for Open Food Facts"));
       await load();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t("Could not queue the contribution"));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const bulkShare = async () => {
+    if (!house) return;
+    const chosen = ready.filter((candidate) => selectedIds.includes(candidate.id));
+    if (!chosen.length) return;
+    setBusy("bulk");
+    try {
+      for (const candidate of chosen) {
+        await api("/api/off/contributions", {
+          method: "POST",
+          body: contributionBody(candidate, candidate.fields),
+        });
+      }
+      setSelectedIds([]);
+      toast.success(t("Queued {count} contributions", { count: chosen.length }));
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("Could not queue the contributions"));
     } finally {
       setBusy(null);
     }
@@ -215,6 +294,25 @@ export function ContributionsPage() {
           )}
         </div>
 
+        {summary && summary.accounts.length > 0 && (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {summary.accounts.map((entry) => (
+              <span key={entry.project} className="inline-flex items-center gap-1 rounded-full border border-line px-2 py-0.5 text-[11px]">
+                <span className="font-semibold">{t(offProjectLabel(entry.project))}</span>
+                <span className="text-muted">{entry.username}</span>
+                <button
+                  type="button"
+                  className="text-muted hover:text-danger"
+                  aria-label={t("Disconnect")}
+                  onClick={() => void unlinkAccount(entry.project)}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+
         {account ? (
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <Button size="sm" variant="secondary" loading={busy === "unlink"} onClick={() => void unlinkAccount()}>
@@ -255,12 +353,146 @@ export function ContributionsPage() {
             </div>
           </>
         )}
+
+        {summary && summary.accounts.length > 0 && (
+          <div className="mt-4 border-t border-line pt-3">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted">{t("Connect another project")}</p>
+            <div className="mt-2 grid gap-2 sm:grid-cols-3">
+              <Field label={t("Project")}>
+                <Select
+                  value={accountProject}
+                  onChange={(event) => setAccountProject(event.target.value as OffProjectId)}
+                >
+                  {(["off", "obf", "opff", "opf"] as OffProjectId[]).map((project) => (
+                    <option key={project} value={project}>
+                      {t(offProjectLabel(project))}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field label={t("Username")}>
+                <Input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" />
+              </Field>
+              <Field label={t("Password")}>
+                <Input
+                  type="password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  autoComplete="current-password"
+                />
+              </Field>
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <Button size="sm" variant="secondary" loading={busy === "link"} onClick={() => void linkAccount(accountProject)}>
+                {t("Connect project")}
+              </Button>
+              {!consent && (
+                <label className="flex items-center gap-1.5 text-[11px] text-muted">
+                  <input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} />
+                  {t("I accept the license")}
+                </label>
+              )}
+            </div>
+          </div>
+        )}
       </Card>
 
+      {summary && !summary.services.prices && !summary.instanceAccount.available && (
+        <Card className="mb-5 p-4">
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <h2 className="font-display text-lg">{t("Share receipt prices")}</h2>
+              <p className="mt-1 max-w-xl text-xs leading-relaxed text-muted">
+                {t("Open Prices is a separate Open Food Facts project. Connect it once to share a receipt line and its proof.")}
+              </p>
+            </div>
+            <Badge tone="warn">{t("Not connected")}</Badge>
+          </div>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <Field label={t("Open Food Facts username")}>
+              <Input value={priceUser} onChange={(event) => setPriceUser(event.target.value)} autoComplete="username" />
+            </Field>
+            <Field label={t("Password")}>
+              <Input
+                type="password"
+                value={pricePassword}
+                onChange={(event) => setPricePassword(event.target.value)}
+                autoComplete="current-password"
+              />
+            </Field>
+            <div className="sm:col-span-2">
+              <Button variant="secondary" loading={busy === "prices"} onClick={() => void linkPrices()}>
+                {t("Connect Open Prices")}
+              </Button>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {question && (
+        <Card className="mb-5 p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h2 className="font-display text-lg">{t("Help verify a product")}</h2>
+              <p className="mt-1 text-xs text-muted">
+                {t("Optional: confirm a fact Open Food Facts extracted from a photo.")}
+              </p>
+            </div>
+            <Badge tone="outline">{t(question.insightType)}</Badge>
+          </div>
+          <div className="mt-3 flex items-start gap-3">
+            {question.refImageUrl && (
+              <img src={question.refImageUrl} alt="" className="h-14 w-14 shrink-0 rounded-xl bg-raised object-contain" />
+            )}
+            <div className="min-w-0">
+              <p className="text-sm font-medium">{question.question}</p>
+              {question.value && <p className="mt-0.5 text-xs text-muted">{question.value}</p>}
+            </div>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button size="sm" loading={busy === "robotoff"} onClick={() => void answerQuestion(1)}>
+              {t("Yes")}
+            </Button>
+            <Button size="sm" variant="secondary" loading={busy === "robotoff"} onClick={() => void answerQuestion(0)}>
+              {t("No")}
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setQuestion(null)}>
+              {t("Skip")}
+            </Button>
+          </div>
+        </Card>
+      )}
+
       <section className="mb-5">
-        <div className="mb-2 flex items-center justify-between">
-          <h2 className="font-display text-lg">{t("Ready to share")}</h2>
-          <Badge tone="outline">{ready.length}</Badge>
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <h2 className="font-display text-lg">{t("Ready to share")}</h2>
+            <Badge tone="outline">{ready.length}</Badge>
+          </div>
+          {ready.length > 0 && (
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() =>
+                  setSelectedIds((current) =>
+                    current.length === ready.length ? [] : ready.map((candidate) => candidate.id),
+                  )
+                }
+              >
+                {selectedIds.length === ready.length ? t("Clear") : t("Select all")}
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                loading={busy === "bulk"}
+                disabled={selectedIds.length === 0}
+                onClick={() => void bulkShare()}
+              >
+                {t("Share selected ({count})", { count: selectedIds.length })}
+              </Button>
+            </div>
+          )}
         </div>
         {ready.length === 0 ? (
           <EmptyState
@@ -271,7 +503,19 @@ export function ContributionsPage() {
         ) : (
           <div className="grid gap-2 sm:grid-cols-2">
             {ready.map((candidate) => (
-              <CandidateCard key={candidate.id} candidate={candidate} onReview={() => openReview(candidate)} />
+              <CandidateCard
+                key={candidate.id}
+                candidate={candidate}
+                onReview={() => openReview(candidate)}
+                checked={selectedIds.includes(candidate.id)}
+                onToggle={() =>
+                  setSelectedIds((current) =>
+                    current.includes(candidate.id)
+                      ? current.filter((id) => id !== candidate.id)
+                      : [...current, candidate.id],
+                  )
+                }
+              />
             ))}
           </div>
         )}
@@ -400,10 +644,23 @@ export function ContributionsPage() {
   );
 }
 
-function CandidateCard({ candidate, onReview }: { candidate: OffContributionCandidate; onReview: () => void }) {
+function CandidateCard({
+  candidate,
+  onReview,
+  checked,
+  onToggle,
+}: {
+  candidate: OffContributionCandidate;
+  onReview: () => void;
+  checked?: boolean;
+  onToggle?: () => void;
+}) {
   const { t } = useI18n();
   return (
     <Card className="flex gap-3 p-3">
+      {onToggle && (
+        <input type="checkbox" checked={checked} onChange={onToggle} className="mt-1.5" aria-label={t("Select")} />
+      )}
       <span className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-raised">
         {candidate.image ? (
           <img src={candidate.image} alt="" className="h-full w-full object-contain" />
@@ -416,7 +673,14 @@ function CandidateCard({ candidate, onReview }: { candidate: OffContributionCand
           <div className="min-w-0">
             <div className="truncate text-[13px] font-medium">{candidate.itemName}</div>
             <div className="truncate text-[11px] text-muted">
-              {t(offProjectLabel(candidate.project))} · {candidate.kind === "new_product" ? t("New product") : t("Missing fields")}
+              {t(offProjectLabel(candidate.project))} ·{" "}
+              {candidate.kind === "new_product"
+                ? t("New product")
+                : candidate.kind === "price"
+                  ? t("Share price")
+                  : candidate.kind === "wrong_project"
+                    ? t("Wrong project")
+                    : t("Missing fields")}
             </div>
           </div>
           <Button size="sm" variant="secondary" onClick={onReview}>

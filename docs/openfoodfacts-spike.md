@@ -89,6 +89,9 @@ dedicated staging account. One product per database was chosen from that databas
    OFF session (or the instance account) and send the expected session token/cookie. Phase 4 should
    verify whether it accepts the `session` cookie from `/cgi/session.pl`, an `Authorization` header, or
    a query parameter. The capability is unavailable to anonymous users.
+   - Follow-up: a fake `Cookie: session=...` returns `401 Invalid session token` (not
+     `Missing session token`), so the OFF `session` cookie is the accepted transport. A bearer header
+     returns `403 Invalid bearer token`. The implementation uses the cookie.
 2. **Robotoff can be down.** The service returned `502` during the probe. The UI must treat Robotoff as
    optional and hide the card on failure, never block the rest of the feature.
 3. **v3 writes exist but are not yet proven.** Phase 2 starts with the documented legacy
@@ -96,6 +99,11 @@ dedicated staging account. One product per database was chosen from that databas
 4. **Universal redirects are reliable.** The client should not try to guess the project from the
    barcode; it should let `product_type=all` redirect and read `product_type` from the payload.
 5. **`fields=` omits absent values.** Normalization must tolerate missing keys and treat them as empty.
+6. **Open Prices requires a proof first.** `POST /api/v1/prices` requires `proof_id`; the proof comes
+   from `POST /api/v1/proofs/upload` with `file` and `type=RECEIPT`. The implementation uploads the
+   receipt, then submits the line's unit price.
+7. **Folksonomy uses its own bearer token.** `POST /auth` returns `access_token`; product properties
+   use `POST /product` with `{ product, k, v, version }`.
 
 ## Still to verify with staging credentials
 

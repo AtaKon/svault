@@ -2,13 +2,15 @@ import { createHash } from "node:crypto";
 import { all, get, newId, now, parseJson, run } from "../../db.js";
 import { ApiError } from "../../http.js";
 import type {
+  OffCandidateKind,
   OffContribution,
   OffContributionKind,
   OffContributionStatus,
   OffProjectId,
 } from "../../../shared/types.js";
-import { contributionIdentity, offDryRun, offWritesEnabled } from "./auth.js";
-import { buildContribution, OffWriteError, sendContribution, type PreparedContribution } from "./writer.js";
+import { contributionIdentity, instanceServiceBearer, offDryRun, offWritesEnabled, serviceBearer } from "./auth.js";
+import { buildContribution, sendContribution, type PreparedContribution } from "./writer.js";
+import { OffWriteError } from "./errors.js";
 
 /**
  * Durable contribution queue.
@@ -151,23 +153,48 @@ export async function getContribution(id: string, userId: string): Promise<OffCo
   return row ? serializeContribution(row, row.item_name) : null;
 }
 
+/** Products this user already queued/sent recently, so the queue does not nag. */
+export async function recentContributionKeys(userId: string): Promise<Set<string>> {
+  const rows = await all<{ project: string; code: string }>(
+    `SELECT project, code FROM off_contributions
+     WHERE user_id = ? AND kind <> 'price' AND created_at > ? AND status IN ('queued', 'sending', 'retry', 'sent')`,
+    [userId, new Date(Date.now() - 864e5).toISOString()],
+  );
+  return new Set(rows.map((row) => `${row.project}:${row.code}`));
+}
+
 export async function createContribution(opts: {
   userId: string;
   houseId: string;
-  itemId: string;
-  kind: OffContributionKind;
+  itemId?: string;
+  receiptLineId?: string;
+  kind: OffCandidateKind;
   fields?: string[];
 }): Promise<OffContribution> {
   if (!offWritesEnabled() && !offDryRun()) {
     throw new ApiError(403, "Contributions are disabled on this server");
   }
+  const dailyLimit = Math.max(1, Number(process.env.SV_OFF_DAILY_LIMIT ?? 50) || 50);
+  const today = await get<{ n: number }>(
+    "SELECT COUNT(*) AS n FROM off_contributions WHERE user_id = ? AND created_at > ?",
+    [opts.userId, new Date(Date.now() - 864e5).toISOString()],
+  );
+  if (Number(today?.n ?? 0) >= dailyLimit) {
+    throw new ApiError(429, `Daily contribution limit reached (${dailyLimit}). Try again tomorrow.`);
+  }
   if (!(await offConsent(opts.userId))) {
     throw new ApiError(403, "Accept the Open Food Facts license before contributing");
   }
   const prepared = await buildContribution(opts);
-  const identity = await contributionIdentity(opts.userId, prepared.project);
-  if (!identity) {
-    throw new ApiError(403, "Connect an Open Food Facts account to contribute");
+  if (prepared.kind === "price") {
+    const token = (await serviceBearer(opts.userId, "prices")) ?? (await instanceServiceBearer("prices"));
+    if (!token) throw new ApiError(403, "Connect Open Prices to share a price");
+  } else {
+    const identityProject = prepared.kind === "report" ? "off" : prepared.project;
+    const identity = await contributionIdentity(opts.userId, identityProject);
+    if (!identity) {
+      throw new ApiError(403, "Connect an Open Food Facts account to contribute");
+    }
   }
   const key = idempotencyKey(
     opts.userId,
@@ -207,6 +234,8 @@ export async function createContribution(opts: {
         values: prepared.values,
         imageField: prepared.imageField,
         fields: prepared.fields,
+        price: prepared.price ?? null,
+        report: prepared.report ?? null,
       }),
       JSON.stringify(prepared.fields),
       prepared.imageField,
@@ -231,6 +260,8 @@ function payloadFromRow(row: ContributionRow): PreparedContribution {
     form: stored.form ?? {},
     imageField: stored.imageField ?? null,
     values: stored.values ?? {},
+    price: stored.price ?? null,
+    report: stored.report ?? null,
   };
 }
 
@@ -253,8 +284,16 @@ export async function processContribution(id: string): Promise<void> {
   const attempts = Number(row.attempts ?? 1);
   try {
     const identity = await contributionIdentity(row.user_id, row.project as OffProjectId);
-    if (!identity) throw new OffWriteError("Connect an Open Food Facts account to contribute");
-    const result = await sendContribution(payloadFromRow(row), identity);
+    if (!identity && row.kind !== "price" && row.kind !== "report") {
+      throw new OffWriteError("Connect an Open Food Facts account to contribute");
+    }
+    const effectiveIdentity = identity ?? {
+      mode: "credentials" as const,
+      username: "",
+      password: "",
+      appUuid: "",
+    };
+    const result = await sendContribution(payloadFromRow(row), effectiveIdentity, row.user_id);
     await run(
       `UPDATE off_contributions SET status = 'sent', remote_status = ?, remote_message = ?, remote_id = ?,
          next_attempt_at = NULL, updated_at = ? WHERE id = ?`,

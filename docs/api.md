@@ -356,17 +356,24 @@ fields before anything is queued. SVault stores an encrypted session cookie, nev
 | `DELETE` | `/api/off/accounts/:project` | Remove the link and its secret. |
 | `GET` | `/api/off/consent` | Current consent version and timestamp. |
 | `POST` | `/api/off/consent` | `{ accept: true }`. Required before contributing. |
-| `GET` | `/api/off/contributions/candidates?houseId=` | Ranked eligible items with fields, preview values and blockers (`account`, `consent`, `writes_disabled`). |
+| `GET` | `/api/off/contributions/candidates?houseId=` | Ranked eligible items with fields, preview values and blockers (`account`, `consent`, `writes_disabled`). Includes missing fields, new products, Open Prices lines and wrong-project reports. |
 | `GET` | `/api/off/contributions` | The caller's queue/history (`status`, `limit`). |
-| `POST` | `/api/off/contributions` | `{ houseId, itemId, kind, fields }`. Re-runs eligibility and queues the write. |
+| `POST` | `/api/off/contributions` | `{ houseId, itemId?, receiptLineId?, kind, fields }`. Re-runs eligibility and queues the write. `kind` is `new_product`, `missing_fields`, `photo`, `price`, `report` or `wrong_project`; prices use `receiptLineId`. |
 | `GET` | `/api/off/contributions/:id` | Status, remote message and retry/cancel flags. |
 | `POST` | `/api/off/contributions/:id/retry` | Requeue a failed/retrying contribution. |
 | `DELETE` | `/api/off/contributions/:id` | Cancel a queued/retrying contribution. |
+| `GET` | `/api/off/services/:service` | Secondary service status is included in `/api/off/accounts` (`prices`, `folksonomy`). |
+| `POST` | `/api/off/services/:service/link` | `{ username, password }`. Exchange OFF credentials for an Open Prices or Folksonomy bearer token, stored encrypted. |
+| `DELETE` | `/api/off/services/:service` | Remove a secondary service token. |
+| `GET` | `/api/off/report-reasons` | NutriPatrol reason values and labels. |
+| `GET` | `/api/off/robotoff/questions?project=off&count=1` | Optional Robotoff questions. Returns `{ questions, supported }`; unavailable services return an empty list. |
+| `POST` | `/api/off/robotoff/answers` | `{ insightId, annotation: 1 \| 0 \| -1 }`. |
+| `POST` | `/api/off/folksonomy` | Advanced: `{ project, code, key, value }` writes one Folksonomy property. |
 | `GET` | `/api/off/stats` | Instance admin: queue counts and write flags. |
 
-The queue retries network, `429` and `5xx` failures with exponential backoff. Validation and auth
-failures stop and keep the draft. A successful write refreshes the local cache immediately. With
-`SV_OFF_DRY_RUN=true`, the full payload is built and queued but no request is sent.
+Price contributions upload the receipt as an Open Prices proof, then submit `{ product_code, price, currency, date, proof_id }`. NutriPatrol reports reuse the linked OFF session and send `{ barcode, type, url, user_id, source, flavor, reason, comment }`. Both are queued through the same retry/cancel history as product edits.
+
+The queue retries network, `429` and `5xx` failures with exponential backoff. Validation and auth failures stop and keep the draft. A successful write refreshes the local cache immediately. With `SV_OFF_DRY_RUN=true`, the full payload is built and queued but no request is sent.
 
 ## Receipts and shops
 

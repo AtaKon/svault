@@ -256,11 +256,14 @@ stock, prices, barcodes, reminders, photo labelling and authentication.
   SQLite lock). New items are created with the receipt name and unit, then enriched from OFF. Existing
   items keep a different existing OFF link — only an explicit user action replaces it.
 - Contributions (`server/services/off/`) are opt-in and off by default. The eligibility engine ranks
-  local items whose OFF product is missing a field, or whose valid GTIN is absent everywhere. A linked
-  user's OFF session is encrypted with AES-256-GCM in `DATA_DIR/off-secret.key`; passwords are used
-  once and discarded. The durable `off_contributions` queue rebuilds an allow-listed form on the
-  server, retries transient failures with backoff, and refreshes the local cache after a success.
-  `SV_OFF_WRITE_ENABLED` gates all writes; `SV_OFF_DRY_RUN` validates without sending.
+  local items whose OFF product is missing a field, valid GTINs absent everywhere, receipt lines that
+  can become Open Prices observations, and products cached on the wrong project. A linked user's OFF
+  session is encrypted with AES-256-GCM in `DATA_DIR/off-secret.key`; passwords are used once and
+  discarded. The durable `off_contributions` queue rebuilds an allow-listed form on the server, retries
+  transient failures with backoff, and refreshes the local cache after a success. Open Prices proofs
+  and NutriPatrol flags use their own adapters; Robotoff questions and Folksonomy properties are
+  optional, failure-tolerant extras. `SV_OFF_WRITE_ENABLED` gates all writes; `SV_OFF_DRY_RUN`
+  validates without sending.
 - `server/services/product-catalog.ts` maps normalised receipt text to an OFF code. Bundled mappings
   live in `assets/catalog/off-mappings.json` and are marked `seed`; corrections learned on the
   instance are `local` and win over seed/community rows. Rows learned from a house's receipts carry

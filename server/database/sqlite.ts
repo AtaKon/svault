@@ -732,6 +732,18 @@ CREATE TABLE IF NOT EXISTS off_consents (
   version TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS off_service_tokens (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  service TEXT NOT NULL,
+  username TEXT NOT NULL,
+  token_ciphertext TEXT NOT NULL,
+  token_iv TEXT NOT NULL,
+  token_tag TEXT NOT NULL,
+  linked_at TEXT NOT NULL,
+  last_error TEXT,
+  PRIMARY KEY (user_id, service)
+);
+
 CREATE TABLE IF NOT EXISTS off_contributions (
   id TEXT PRIMARY KEY,
   idempotency_key TEXT NOT NULL UNIQUE,

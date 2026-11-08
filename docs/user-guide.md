@@ -300,7 +300,17 @@ that place.
   only upload photos you took yourself.
 - Press **Review**, untick anything you do not want to share, then **Share**. The item is queued and
   sent in the background. The **History** section shows sent, queued and failed contributions with
-  retry or cancel when relevant.
+  retry or cancel when relevant. Select several ready cards to share them in one pass.
+- **Share receipt prices:** connect **Open Prices** with the same Open Food Facts account, then share a
+  receipt line. The receipt photo is uploaded as proof and only that line's unit price is submitted.
+  This is opt-in per line and is separate from product edits.
+- **Report a product:** when a barcode lives on the wrong project (for example a beauty product in Open
+  Food Facts), SVault offers a report instead of creating a duplicate. Reports go to the Open Food
+  Facts moderators through NutriPatrol.
+- **Help verify:** when Robotoff has a question, an optional card lets you answer yes/no/skip. It is
+  never required and disappears if the service is unavailable.
+- Connect separate accounts for Open Beauty Facts, Open Pet Food Facts and Open Products Facts if you
+  want to contribute to those databases; the account card lists each connection and lets you remove it.
 - Nothing is sent automatically. A successful write refreshes the local product cache. Administrators
   can enable a dry run that validates and queues contributions without sending them.
 

@@ -2,7 +2,8 @@ import { all } from "../../db.js";
 import type { OffContributionCandidate, OffProduct, OffProjectId } from "../../../shared/types.js";
 import { isValidGtin } from "../../lib/redact.js";
 import { getCachedOffProduct } from "../openfoodfacts.js";
-import { contributionProjectIds, isOffProjectId } from "./projects.js";
+import { contributionProjectIds, isOffProjectId, OFF_PROJECTS } from "./projects.js";
+import { priceCandidates } from "./prices.js";
 
 /**
  * Which items can be improved in Open Food Facts?
@@ -97,7 +98,6 @@ export async function contributionCandidates(
      LIMIT 250`,
     itemId ? [houseId, itemId] : [houseId],
   );
-  if (!items.length) return [];
   const barcodes = await all<{ item_id: string; code: string }>(
     "SELECT item_id, code FROM item_barcodes WHERE house_id = ? ORDER BY created_at",
     [houseId],
@@ -123,10 +123,34 @@ export async function contributionCandidates(
         .map((value) => String(value).trim())
         .find((value) => isValidGtin(value));
       if (!code) continue;
-      // Never create a duplicate because the barcode already lives in another
-      // project's cache. Linking/reporting is a separate action.
+      // A barcode already in another project is a report, not a duplicate.
       const elsewhere = await getCachedOffProduct(code, "all");
-      if (elsewhere && elsewhere.project !== project) continue;
+      if (elsewhere && elsewhere.project !== project) {
+        const report = {
+          type: "product" as const,
+          reason: "wrong_project",
+          comment: `This product looks like ${OFF_PROJECTS[elsewhere.project].label}, not ${OFF_PROJECTS[project].label}.`,
+          flavor: elsewhere.project,
+        };
+        const entry: OffContributionCandidate = {
+          id: `wrong_project:${elsewhere.project}:${code}:${item.id}`,
+          kind: "wrong_project",
+          project: elsewhere.project,
+          code,
+          itemId: item.id,
+          itemName: item.name,
+          score: 60,
+          fields: ["report"],
+          values: { report: report.comment },
+          product: elsewhere,
+          image: localImage,
+          report,
+          ready: true,
+          blocked: [],
+        };
+        if (!seen.has(entry.id)) seen.set(entry.id, entry);
+        continue;
+      }
       const fields: string[] = ["name"];
       if (item.brand) fields.push("brand");
       if (item.category_name) fields.push("category");
@@ -154,5 +178,11 @@ export async function contributionCandidates(
     if (!seen.has(key) || seen.get(key)!.score < entry.score) seen.set(key, entry);
   }
 
-  return [...seen.values()].sort((a, b) => b.score - a.score || a.itemName.localeCompare(b.itemName)).slice(0, limit);
+  const result = [...seen.values()].sort((a, b) => b.score - a.score || a.itemName.localeCompare(b.itemName));
+  const prices = await priceCandidates(houseId, limit);
+  for (const price of prices) {
+    if (result.length >= limit) break;
+    if (!result.some((entry) => entry.id === price.id)) result.push(price);
+  }
+  return result.slice(0, limit);
 }

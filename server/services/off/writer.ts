@@ -4,11 +4,21 @@ import { createHash } from "node:crypto";
 import { get } from "../../db.js";
 import { APP_VERSION, UPLOAD_DIR } from "../../config.js";
 import { ApiError } from "../../http.js";
-import type { OffContributionKind, OffProduct, OffProjectId } from "../../../shared/types.js";
+import type {
+  OffCandidateKind,
+  OffContributionKind,
+  OffPriceCandidate,
+  OffProduct,
+  OffProjectId,
+  OffReportCandidate,
+} from "../../../shared/types.js";
 import { fetchOffProduct } from "../openfoodfacts.js";
 import { contributionCandidates } from "./eligibility.js";
 import { OFF_PROJECTS } from "./projects.js";
 import { offDryRun, offWritesEnabled, type OffContributionIdentity } from "./auth.js";
+import { OffWriteError } from "./errors.js";
+import { priceCandidates, submitPrice } from "./prices.js";
+import { submitReport } from "./reports.js";
 
 /**
  * Builds the exact Open Food Facts form from local data.
@@ -31,17 +41,8 @@ export interface PreparedContribution {
   form: Record<string, string>;
   imageField: "front" | "ingredients" | "nutrition" | "packaging" | null;
   values: Record<string, string | null>;
-}
-
-export class OffWriteError extends Error {
-  retryable: boolean;
-  remoteStatus: string | null;
-  constructor(message: string, options: { retryable?: boolean; remoteStatus?: string | null } = {}) {
-    super(message);
-    this.name = "OffWriteError";
-    this.retryable = options.retryable ?? false;
-    this.remoteStatus = options.remoteStatus ?? null;
-  }
+  price?: OffPriceCandidate | null;
+  report?: OffReportCandidate | null;
 }
 
 function firstBrand(value: string | null | undefined): string {
@@ -89,20 +90,68 @@ async function localeFor(userId: string, houseId: string): Promise<{ lc: string;
 export async function buildContribution(opts: {
   userId: string;
   houseId: string;
-  itemId: string;
-  kind: OffContributionKind;
+  itemId?: string;
+  receiptLineId?: string;
+  kind: OffCandidateKind;
   code?: string;
   fields?: string[];
 }): Promise<PreparedContribution> {
+  if (opts.kind === "price") {
+    const prices = await priceCandidates(opts.houseId, 250);
+    const match = prices.find(
+      (candidate) =>
+        candidate.price &&
+        (!opts.receiptLineId || candidate.price.receiptLineId === opts.receiptLineId) &&
+        (!opts.code || candidate.code === opts.code),
+    );
+    if (!match?.price) {
+      throw new ApiError(400, "This price is no longer eligible. Refresh the list and try again.");
+    }
+    return {
+      project: match.project,
+      code: match.code,
+      kind: "price",
+      fields: ["price"],
+      form: {},
+      imageField: null,
+      values: match.values,
+      price: match.price,
+    };
+  }
+
   const candidates = await contributionCandidates(opts.houseId, 250, opts.itemId);
   const match = candidates.find(
     (candidate) =>
-      candidate.itemId === opts.itemId &&
+      (!opts.itemId || candidate.itemId === opts.itemId) &&
       candidate.kind === opts.kind &&
       (!opts.code || candidate.code === opts.code),
   );
   if (!match) {
     throw new ApiError(400, "This item is no longer eligible for that contribution. Refresh the list and try again.");
+  }
+  if (match.kind === "wrong_project" && match.report) {
+    return {
+      project: match.report.flavor,
+      code: match.code,
+      kind: "report",
+      fields: ["report"],
+      form: {},
+      imageField: null,
+      values: match.values,
+      report: match.report,
+    };
+  }
+  if (match.kind === "report" && match.report) {
+    return {
+      project: match.report.flavor,
+      code: match.code,
+      kind: "report",
+      fields: ["report"],
+      form: {},
+      imageField: null,
+      values: match.values,
+      report: match.report,
+    };
   }
 
   const requested = Array.isArray(opts.fields) ? opts.fields.map(String) : [];
@@ -168,11 +217,13 @@ export async function buildContribution(opts: {
   return {
     project: match.project,
     code: match.code,
-    kind: match.kind,
+    kind: match.kind as OffContributionKind,
     fields,
     form,
     imageField,
     values: Object.fromEntries(fields.map((field) => [field, match.values[field] ?? null])),
+    price: match.price ?? null,
+    report: match.report ?? null,
   };
 }
 
@@ -258,12 +309,22 @@ export interface WriteResult {
 export async function sendContribution(
   prepared: PreparedContribution,
   identity: OffContributionIdentity,
+  userId: string,
 ): Promise<WriteResult> {
   if (offDryRun()) {
     return { dryRun: true, remoteStatus: "dry_run", remoteMessage: "Dry run: nothing was sent", remoteId: null };
   }
   if (!offWritesEnabled()) {
     throw new OffWriteError("Contributions are disabled on this server", { retryable: false });
+  }
+
+  if (prepared.kind === "price" && prepared.price) {
+    const result = await submitPrice(userId, prepared.price);
+    return { dryRun: false, ...result };
+  }
+  if (prepared.kind === "report" && prepared.report) {
+    const result = await submitReport(userId, prepared.code, prepared.report);
+    return { dryRun: false, ...result };
   }
 
   let remoteStatus = "status ok";

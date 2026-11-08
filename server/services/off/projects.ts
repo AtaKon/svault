@@ -252,11 +252,12 @@ export function offProjectList(): OffProjectInfo[] {
 }
 
 /**
- * Projects whose write path has been verified for this release. Phase 2 ships
- * food only; set SV_OFF_CONTRIB_PROJECTS after staging tests for the others.
+ * Projects whose write path is available. All four share the same Product
+ * Opener API, but an administrator should only enable `SV_OFF_WRITE_ENABLED`
+ * after a staging write test for each project.
  */
 export function contributionProjectIds(): OffProjectId[] {
-  const configured = String(process.env.SV_OFF_CONTRIB_PROJECTS ?? "off")
+  const configured = String(process.env.SV_OFF_CONTRIB_PROJECTS ?? "off,obf,opff,opf")
     .split(",")
     .map((entry) => entry.trim())
     .filter(Boolean);
