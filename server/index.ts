@@ -259,9 +259,8 @@ app.get("/api/health", (_req, res) => {
    down so nothing under /uploads can run script, even if a non-image slipped
    in through an older version: no sniffing, a sandboxing CSP, and anything
    that is not a known image extension is forced to download. */
-// Bill PDFs are served through the authenticated /api/bills/:id/document route.
-// Block direct static paths so an uploaded household document cannot be read
-// by someone who only knows its generated filename.
+// Keep this before express.static below: bill PDFs are served by authenticated
+// API routes, never by their storage paths.
 app.use("/uploads/bills", (_req, _res, next) => next(new ApiError(404, "Not found")));
 app.use(
   "/uploads",

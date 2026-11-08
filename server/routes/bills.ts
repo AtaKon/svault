@@ -63,13 +63,15 @@ const input = z.object({
   name: z.string().trim().min(1).max(120).refine((value) => !/[\u0000-\u001f\u007f]/.test(value), "Remove control characters from the bill name"),
   billType: z.enum(BILL_TYPE_VALUES).default("other"),
   category: z.enum(["to_split", "personal"]).default("personal"),
-  amount: z.coerce.number().finite().positive().max(1_000_000_000),
+  amount: z.coerce.number().finite().positive().max(1_000_000_000)
+    .refine((value) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-7, "Enter an amount with up to two decimal places")
+    .transform((value) => Math.round(value * 100) / 100),
   currency: z.string().trim().regex(/^[A-Za-z]{3}$/).optional(),
   dueDate: z.preprocess((value) => value === "" ? null : value, z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).refine((date) => {
     const parsed = new Date(`${date}T00:00:00.000Z`);
     return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === date;
   }, "Enter a valid due date").nullable().optional()),
-  paidBy: z.string().max(60).nullable().optional(),
+  paidBy: z.preprocess((value) => value === "" ? null : value, z.string().max(60).nullable().optional()),
   splitWith: z.union([z.string(), z.array(z.string())]).optional(),
   notes: z.string().trim().max(1000).nullable().optional(),
 });
@@ -195,6 +197,8 @@ billRoutes.get("/:houseId/bills/:billId/document", handler(async (req, res) => {
   const bill = await billRow(String(req.params.billId), houseId);
   if (!bill?.document) throw new ApiError(404, "Bill PDF not found");
   res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
   res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(`${bill.name}.pdf`)}`);
   res.sendFile(uploadPath("bills", bill.document));
 }));

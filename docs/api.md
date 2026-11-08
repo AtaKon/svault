@@ -759,6 +759,19 @@ See the [user guide](user-guide.md#export-a-dataset) for the archive layout.
 Joining a house — by accepting an invite or being added by an admin — creates a `house` notification
 addressed to that user only. Other members do not see it.
 
+## Household bills
+
+| Method | Path | Min role | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/houses/:houseId/bills` | viewer+ | List household bills. |
+| `POST` | `/api/houses/:houseId/bills` | member+ | Create a bill; multipart form fields include `name`, `billType`, `amount`, and `category`. `currency` defaults to the house currency. Attach an optional `document` PDF. |
+| `PATCH` | `/api/bills/:billId` | member+ | Update bill fields, payer, or participants. |
+| `DELETE` | `/api/bills/:billId` | member+ | Delete a bill and its attached PDF. |
+| `POST` | `/api/houses/:houseId/bills/:billId/document` | member+ | Attach or replace a PDF. |
+| `GET` | `/api/houses/:houseId/bills/:billId/document` | viewer+ | Read the attached PDF. |
+
+`billType` is one of `electricity`, `water`, `natural_gas`, `heating_oil`, `internet_telecom`, `rent`, `building_fees`, `municipal_fees`, `insurance`, or `other`. `category` is `to_split` or `personal`. Shared bills use equal cent-exact shares; when `to_split` is selected without `splitWith`, all current house members share it. Personal bills do not affect household balances. The PDF storage path is private; use the authenticated document route.
+
 ## Insights
 
 Mounted at `/api/houses/:houseId/insights`. Reads need `viewer`; changing settings needs `admin`.
