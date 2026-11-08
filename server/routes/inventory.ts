@@ -721,12 +721,12 @@ inventoryRoutes.get(
       espressoSummary(houseId, itemId ?? undefined),
       all<any>(
         `SELECT i.id, i.name, i.brand, i.espresso,
-           (SELECT COUNT(*) FROM espresso_shots s WHERE s.item_id = i.id) AS shot_count,
-           (SELECT AVG(s.rating) FROM espresso_shots s WHERE s.item_id = i.id) AS average_rating,
-           (SELECT MAX(s.brewed_at) FROM espresso_shots s WHERE s.item_id = i.id) AS last_brewed_at
+           (SELECT COUNT(*) FROM espresso_shots s WHERE s.item_id = i.id AND s.house_id = i.house_id) AS shot_count,
+           (SELECT AVG(s.rating) FROM espresso_shots s WHERE s.item_id = i.id AND s.house_id = i.house_id) AS average_rating,
+           (SELECT MAX(s.brewed_at) FROM espresso_shots s WHERE s.item_id = i.id AND s.house_id = i.house_id) AS last_brewed_at
          FROM items i
          WHERE i.house_id = ? AND i.archived = 0
-           AND (i.espresso = 1 OR EXISTS (SELECT 1 FROM espresso_shots s WHERE s.item_id = i.id))
+           AND (i.espresso = 1 OR EXISTS (SELECT 1 FROM espresso_shots s WHERE s.item_id = i.id AND s.house_id = i.house_id))
          ORDER BY lower(i.name)`,
         [houseId],
       ),

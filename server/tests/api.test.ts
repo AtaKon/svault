@@ -1402,8 +1402,11 @@ describe("espresso log", () => {
     assert.equal(theirShot.status, 201);
     const theirLog = await request(`/api/houses/${theirHouseId}/espresso-shots`, { auth: secondUserCookie });
     assert.ok(theirLog.data.shots.some((shot: any) => shot.id === theirShot.data.id));
+    const theirBean = theirLog.data.beans.find((bean: any) => bean.id === theirItem.data.id);
+    assert.equal(theirBean.shotCount, 1);
     const ownerLog = await request(`/api/houses/${houseId}/espresso-shots`);
     assert.ok(!ownerLog.data.shots.some((shot: any) => shot.id === theirShot.data.id));
+    assert.ok(!ownerLog.data.beans.some((bean: any) => bean.id === theirItem.data.id));
 
     const read = await request(`/api/items/${theirItem.data.id}/espresso-shots`);
     assert.equal(read.status, 404);
