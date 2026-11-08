@@ -15,7 +15,7 @@ import type {
 import { fetchOffProduct } from "../openfoodfacts.js";
 import { contributionCandidates } from "./eligibility.js";
 import { OFF_PROJECTS } from "./projects.js";
-import { offDryRun, offWritesEnabled, type OffContributionIdentity } from "./auth.js";
+import { offDryRun, offWritesEnabled, loginSession, type OffContributionIdentity } from "./auth.js";
 import { OffWriteError } from "./errors.js";
 import { priceCandidates, submitPrice } from "./prices.js";
 import { submitReport } from "./reports.js";
@@ -98,11 +98,14 @@ export async function buildContribution(opts: {
   fields?: string[];
 }): Promise<PreparedContribution> {
   if (opts.kind === "price") {
+    if (!opts.receiptLineId) {
+      throw new ApiError(400, "Choose a receipt line before sharing a price");
+    }
     const prices = await priceCandidates(opts.houseId, 250);
     const match = prices.find(
       (candidate) =>
         candidate.price &&
-        (!opts.receiptLineId || candidate.price.receiptLineId === opts.receiptLineId) &&
+        candidate.price.receiptLineId === opts.receiptLineId &&
         (!opts.code || candidate.code === opts.code),
     );
     if (!match?.price) {
@@ -319,6 +322,19 @@ export async function sendContribution(
     throw new OffWriteError("Contributions are disabled on this server", { retryable: false });
   }
 
+  let effectiveIdentity = identity;
+  if (identity.mode === "credentials" && prepared.kind !== "price" && prepared.kind !== "report") {
+    try {
+      const cookie = await loginSession(prepared.project, identity.username, identity.password ?? "");
+      effectiveIdentity = { ...identity, mode: "session", cookie, password: undefined };
+    } catch (error) {
+      throw new OffWriteError(
+        error instanceof Error ? error.message : "Could not authenticate the instance account",
+        { retryable: false },
+      );
+    }
+  }
+
   if (prepared.kind === "price" && prepared.price) {
     const result = await submitPrice(userId, prepared.price);
     return { dryRun: false, ...result };
@@ -333,7 +349,7 @@ export async function sendContribution(
   let remoteId: string | null = null;
 
   if (prepared.fields.some((field) => field !== "image")) {
-    const json = await sendForm(prepared.project, "/cgi/product_jqm2.pl", prepared.form, identity);
+    const json = await sendForm(prepared.project, "/cgi/product_jqm2.pl", prepared.form, effectiveIdentity);
     remoteStatus = String(json?.status ?? "status ok");
     remoteMessage = json?.debug ? String(json.debug) : null;
     remoteId = json?.rev != null ? String(json.rev) : null;
@@ -347,14 +363,14 @@ export async function sendContribution(
     form.append(`imgupload_${prepared.imageField}`, new Blob([fs.readFileSync(image.file)], { type: image.mime }), image.name);
     form.append("app_name", "SVault");
     form.append("app_version", APP_VERSION);
-    form.append("app_uuid", identity.appUuid);
+    form.append("app_uuid", effectiveIdentity.appUuid);
     form.append("comment", prepared.form.comment ?? `SVault ${APP_VERSION}`);
-    if (identity.mode === "credentials") {
-      form.append("user_id", identity.username);
-      form.append("password", identity.password ?? "");
+    if (effectiveIdentity.mode === "credentials") {
+      form.append("user_id", effectiveIdentity.username);
+      form.append("password", effectiveIdentity.password ?? "");
     }
     const headers: Record<string, string> = { "user-agent": USER_AGENT };
-    if (identity.mode === "session" && identity.cookie) headers.cookie = identity.cookie;
+    if (effectiveIdentity.mode === "session" && effectiveIdentity.cookie) headers.cookie = effectiveIdentity.cookie;
     let response: Response;
     try {
       response = await fetch(`${OFF_PROJECTS[prepared.project].base}/cgi/product_image_upload.pl`, {

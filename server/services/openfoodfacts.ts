@@ -203,7 +203,12 @@ export async function getCachedOffPayload(
   return payload && Object.keys(payload).length ? payload : null;
 }
 
-async function saveOffProduct(payload: any, requestedCode: string, fallbackProject: OffProjectId): Promise<OffProduct> {
+async function saveOffProduct(
+  payload: any,
+  requestedCode: string,
+  fallbackProject: OffProjectId,
+  aliasProject: OffProjectId = fallbackProject,
+): Promise<OffProduct> {
   const summary = offSummaryFromPayload(payload, fallbackProject);
   const code = String(summary.code || requestedCode).trim();
   if (!code) return summary;
@@ -247,7 +252,7 @@ async function saveOffProduct(payload: any, requestedCode: string, fallbackProje
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}', 'catalog', ?, ?)
        ON CONFLICT(project, code) DO NOTHING`,
       [
-        summary.project,
+        aliasProject,
         requestedCode,
         summary.name,
         summary.brand,
@@ -272,8 +277,9 @@ async function fetchProductPayload(
     const res = await fetch(url, { signal: AbortSignal.timeout(OFF_TIMEOUT_MS), headers: PRODUCT_HEADERS });
     if (!res.ok) return null;
     const data: any = await res.json();
+    if (data?.status !== "success" && Number(data?.status) !== 1) return null;
     const payload = data?.product;
-    if (!payload) return null;
+    if (!payload || typeof payload !== "object" || !payload.code) return null;
     const resolved =
       offProjectForProductType(payload?.product_type) ??
       offProjectForDomain(res.url) ??
@@ -302,7 +308,7 @@ export async function fetchOffProduct(
 
   for (const candidate of candidates) {
     const result = await fetchProductPayload(candidate, project);
-    if (result) return await saveOffProduct(result.payload, candidate, result.project);
+    if (result) return await saveOffProduct(result.payload, candidate, result.project, project === "all" ? result.project : project);
   }
   return cached ? offProductFromRow(cached) : null;
 }

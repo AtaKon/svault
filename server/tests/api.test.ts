@@ -1678,6 +1678,10 @@ describe("OpenFoodFacts links and shared catalogue", () => {
 
   it("fetches and answers Robotoff questions", async () => {
     const originalFetch = globalThis.fetch;
+    const savedWrites = process.env.SV_OFF_WRITE_ENABLED;
+    const savedDryRun = process.env.SV_OFF_DRY_RUN;
+    process.env.SV_OFF_WRITE_ENABLED = "true";
+    process.env.SV_OFF_DRY_RUN = "false";
     let answerBody = "";
     globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -1732,6 +1736,34 @@ describe("OpenFoodFacts links and shared catalogue", () => {
       assert.ok(answerBody.includes("annotation=-1"));
     } finally {
       globalThis.fetch = originalFetch;
+      if (savedWrites === undefined) delete process.env.SV_OFF_WRITE_ENABLED;
+      else process.env.SV_OFF_WRITE_ENABLED = savedWrites;
+      if (savedDryRun === undefined) delete process.env.SV_OFF_DRY_RUN;
+      else process.env.SV_OFF_DRY_RUN = savedDryRun;
+    }
+  });
+
+  it("rejects a failure status instead of caching a stub product", async () => {
+    const code = "9990000000099";
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes("openfoodfacts.org") && String(input).includes(code)) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ status: "failure", product: {}, errors: [] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+    try {
+      const lookup = await request(`/api/off/lookup/${code}`);
+      assert.equal(lookup.status, 404, JSON.stringify(lookup.data));
+      const cached = await get<any>("SELECT code FROM catalog_products WHERE code = ?", [code]);
+      assert.equal(cached, undefined);
+    } finally {
+      globalThis.fetch = originalFetch;
     }
   });
 
@@ -1761,6 +1793,16 @@ describe("OpenFoodFacts links and shared catalogue", () => {
       });
       assert.equal(disabled.status, 403);
       assert.match(String(disabled.data.error), /disabled/i);
+      const robotoff = await request("/api/off/robotoff/answers", {
+        method: "POST",
+        body: { insightId: "insight-x", annotation: 1 },
+      });
+      assert.equal(robotoff.status, 403);
+      const folksonomy = await request("/api/off/folksonomy", {
+        method: "POST",
+        body: { project: "off", code: fetaCode, key: "test", value: "test" },
+      });
+      assert.equal(folksonomy.status, 403);
     } finally {
       if (savedWrites === undefined) delete process.env.SV_OFF_WRITE_ENABLED;
       else process.env.SV_OFF_WRITE_ENABLED = savedWrites;

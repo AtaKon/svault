@@ -83,7 +83,8 @@ catalogRoutes.get(
         if (remote.length) {
           const byCode = new Map<string, any>();
           for (const product of [...cached, ...remote]) {
-            if (product?.code && !byCode.has(product.code)) byCode.set(product.code, product);
+            const key = `${product?.project ?? "off"}:${product?.code ?? ""}`;
+            if (product?.code && !byCode.has(key)) byCode.set(key, product);
           }
           products = [...byCode.values()].slice(0, limit);
         } else if (!cached.length) {

@@ -84,6 +84,7 @@ export function ContributionsPage() {
     () => summary?.accounts.find((entry) => entry.project === "off") ?? summary?.accounts[0] ?? null,
     [summary],
   );
+  const offAccount = summary?.accounts.find((entry) => entry.project === "off") ?? null;
   const ready = candidates.filter((candidate) => candidate.ready);
   const blocked = candidates.filter((candidate) => !candidate.ready);
   const availableProjects = (["off", "obf", "opff", "opf"] as OffProjectId[]).filter(
@@ -150,7 +151,7 @@ export function ContributionsPage() {
       toast.error(t("Accept the license before connecting an account"));
       return;
     }
-    setBusy("link");
+    setBusy(project === "off" ? "link-off" : "link-project");
     try {
       await api(`/api/off/accounts/${project}/link`, {
         method: "POST",
@@ -258,12 +259,17 @@ export function ContributionsPage() {
     setLocationQuery(candidate.price?.vendor ?? "");
   };
 
-  const contributionBody = (houseId: string, candidate: OffContributionCandidate, chosen: string[]) => ({
+  const contributionBody = (
+    houseId: string,
+    candidate: OffContributionCandidate,
+    chosen: string[],
+    locationId?: number,
+  ) => ({
     houseId,
     // Prices are identified by receiptLineId; the server ignores itemId for them.
     itemId: candidate.kind === "price" ? undefined : candidate.itemId,
     receiptLineId: candidate.kind === "price" ? candidate.price?.receiptLineId : undefined,
-    locationId: candidate.kind === "price" ? priceLocation?.id : undefined,
+    locationId: candidate.kind === "price" ? locationId : undefined,
     kind: candidate.kind,
     fields: chosen,
   });
@@ -288,7 +294,7 @@ export function ContributionsPage() {
     try {
       await api("/api/off/contributions", {
         method: "POST",
-        body: contributionBody(house.id, selected, fields),
+        body: contributionBody(house.id, selected, fields, priceLocation?.id),
       });
       setSelected(null);
       toast.success(t("Queued for Open Food Facts"));
@@ -343,6 +349,8 @@ export function ContributionsPage() {
         toast.success(t("Queued {count} contributions", { count: succeeded.length }));
       }
       await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("Could not refresh the contributions"));
     } finally {
       setBusy(null);
     }
@@ -455,12 +463,12 @@ export function ContributionsPage() {
           </div>
         )}
 
-        {account ? (
+        {offAccount ? (
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            <Button size="sm" variant="secondary" loading={busy === "unlink"} onClick={() => void unlinkAccount(account.project)}>
+            <Button size="sm" variant="secondary" loading={busy === "unlink"} onClick={() => void unlinkAccount(offAccount.project)}>
               {t("Disconnect")}
             </Button>
-            {account.status !== "connected" && <span className="text-[11px] text-warn">{account.error ?? t("Session expired")}</span>}
+            {offAccount.status !== "connected" && <span className="text-[11px] text-warn">{offAccount.error ?? t("Session expired")}</span>}
           </div>
         ) : (
           <>
@@ -482,7 +490,7 @@ export function ContributionsPage() {
                 />
               </Field>
               <div className="sm:col-span-2">
-                <Button loading={busy === "link"} onClick={() => void linkAccount("off", username, password)}>
+                <Button loading={busy === "link-off"} onClick={() => void linkAccount("off", username, password)}>
                   {t("Connect account")}
                 </Button>
               </div>
@@ -527,7 +535,7 @@ export function ContributionsPage() {
               <Button
                 size="sm"
                 variant="secondary"
-                loading={busy === "link"}
+                loading={busy === "link-project"}
                 disabled={!selectedProject}
                 onClick={() => {
                   if (selectedProject) void linkAccount(selectedProject, projectUsername, projectPassword);
@@ -804,17 +812,15 @@ export function ContributionsPage() {
                       type="checkbox"
                       className="mt-1"
                       checked={checked}
-                      onChange={(event) =>
-                        setFields((current) => {
-                          const next = event.target.checked
-                            ? [...current, field]
-                            : current.filter((entry) => entry !== field);
-                          if (selected) {
-                            setFieldSelections((selections) => ({ ...selections, [selected.id]: next }));
-                          }
-                          return next;
-                        })
-                      }
+                      onChange={(event) => {
+                        const next = event.target.checked
+                          ? [...fields, field]
+                          : fields.filter((entry) => entry !== field);
+                        setFields(next);
+                        if (selected) {
+                          setFieldSelections((selections) => ({ ...selections, [selected.id]: next }));
+                        }
+                      }}
                     />
                     <span className="min-w-0 flex-1">
                       <span className="block text-[12px] font-semibold">{t(fieldLabel(field))}</span>

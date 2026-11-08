@@ -80,3 +80,8 @@ export function appUuidFor(userId: string): string {
 export function resetSecretKeyCache() {
   cachedKey = null;
 }
+
+/** Validate or create the key at boot so a bad key fails fast. */
+export function validateSecretKey(): void {
+  loadKey();
+}

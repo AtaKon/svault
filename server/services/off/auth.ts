@@ -221,6 +221,31 @@ export async function listOffAccounts(userId: string): Promise<OffAccountPublic[
  * Exchange an OFF username/password for a session cookie. The password is used
  * for this request only and is never stored or logged.
  */
+export async function loginSession(projectId: OffProjectId, username: string, password: string): Promise<string> {
+  const project = OFF_PROJECTS[projectId];
+  let res: Response;
+  try {
+    res = await fetch(`${project.base}/cgi/session.pl`, {
+      method: "POST",
+      redirect: "manual",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        "user-agent": USER_AGENT,
+      },
+      body: new URLSearchParams({ user_id: username, password }).toString(),
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch {
+    throw new ApiError(503, "Could not reach Open Food Facts. Try again later.");
+  }
+  if (res.status === 401 || res.status === 403) {
+    throw new ApiError(401, "Open Food Facts rejected that username or password");
+  }
+  const cookie = cookieFrom(res.headers);
+  if (!cookie) throw new ApiError(401, "Open Food Facts did not return a session. Check the username and password.");
+  return cookie;
+}
+
 export async function linkOffAccount(opts: {
   userId: string;
   project: OffProjectId;
@@ -233,26 +258,7 @@ export async function linkOffAccount(opts: {
   if (!username) throw new ApiError(400, "Enter your Open Food Facts username, not your email");
   if (!opts.password) throw new ApiError(400, "Enter your Open Food Facts password");
 
-  let res: Response;
-  try {
-    res = await fetch(`${project.base}/cgi/session.pl`, {
-      method: "POST",
-      redirect: "manual",
-      headers: {
-        "content-type": "application/x-www-form-urlencoded",
-        "user-agent": USER_AGENT,
-      },
-      body: new URLSearchParams({ user_id: username, password: opts.password }).toString(),
-      signal: AbortSignal.timeout(15_000),
-    });
-  } catch {
-    throw new ApiError(503, "Could not reach Open Food Facts. Try again later.");
-  }
-  if (res.status === 401 || res.status === 403) {
-    throw new ApiError(401, "Open Food Facts rejected that username or password");
-  }
-  const cookie = cookieFrom(res.headers);
-  if (!cookie) throw new ApiError(401, "Open Food Facts did not return a session. Check the username and password.");
+  const cookie = await loginSession(opts.project, username, opts.password);
   const secret = encryptSecret(cookie);
   const existing = await getOffAccountRow(opts.userId, opts.project);
   const timestamp = now();

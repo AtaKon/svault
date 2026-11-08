@@ -363,6 +363,7 @@ offRoutes.get(
 offRoutes.post(
   "/robotoff/answers",
   handler(async (req, res) => {
+    if (!offWritesEnabled()) throw new ApiError(403, "Contributions are disabled on this server");
     const body = parseBody(
       z.object({
         insightId: z.string().trim().min(1).max(80),
@@ -370,6 +371,10 @@ offRoutes.post(
       }),
       req.body,
     );
+    if (offDryRun()) {
+      res.json({ ok: true, dryRun: true });
+      return;
+    }
     res.json({ ok: await answerRobotoff(body.insightId, body.annotation) });
   }),
 );
@@ -388,6 +393,13 @@ offRoutes.post(
     );
     if (!(await offConsent(req.user!.id))) {
       throw new ApiError(403, "Accept the Open Food Facts license before writing a property");
+    }
+    if (!offWritesEnabled() && !offDryRun()) {
+      throw new ApiError(403, "Contributions are disabled on this server");
+    }
+    if (offDryRun()) {
+      res.json({ key: body.key, value: body.value, dryRun: true });
+      return;
     }
     try {
       res.json(await addFolksonomyProperty({ userId: req.user!.id, ...body }));

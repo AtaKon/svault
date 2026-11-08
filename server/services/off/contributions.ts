@@ -284,9 +284,13 @@ export async function processContribution(id: string): Promise<void> {
   if (!row) return;
   const attempts = Number(row.attempts ?? 1);
   try {
-    const identity = await contributionIdentity(row.user_id, row.project as OffProjectId);
-    if (!identity && row.kind !== "price" && row.kind !== "report") {
-      throw new OffWriteError("Connect an Open Food Facts account to contribute");
+    let identity = null;
+    if (row.kind !== "price") {
+      const identityProject = row.kind === "report" ? "off" : (row.project as OffProjectId);
+      identity = await contributionIdentity(row.user_id, identityProject);
+      if (!identity) {
+        throw new OffWriteError("Connect an Open Food Facts account to contribute");
+      }
     }
     const effectiveIdentity = identity ?? {
       mode: "credentials" as const,
@@ -327,7 +331,7 @@ export async function retryContribution(id: string, userId: string): Promise<Off
   if (!row) return null;
   if (!["failed", "retry"].includes(row.status)) return getContribution(id, userId);
   await run(
-    "UPDATE off_contributions SET status = 'queued', next_attempt_at = ?, updated_at = ? WHERE id = ?",
+    "UPDATE off_contributions SET status = 'queued', attempts = 0, next_attempt_at = ?, updated_at = ? WHERE id = ?",
     [now(), now(), id],
   );
   void processContribution(id).catch(() => undefined);
@@ -348,6 +352,7 @@ export async function cancelContribution(id: string, userId: string): Promise<Of
 
 /** Worker tick. Returns the number of rows it attempted. */
 export async function processDueContributions(limit = 5): Promise<number> {
+  if (!offWritesEnabled() && !offDryRun()) return 0;
   const rows = await all<{ id: string }>(
     `SELECT id FROM off_contributions
      WHERE status IN ('queued', 'retry') AND (next_attempt_at IS NULL OR next_attempt_at <= ?)

@@ -116,7 +116,8 @@ export class SqliteDriver implements DatabaseDriver {
        primary key in place, so rebuild the cache table once. Rows created
        before this change belong to Open Food Facts. */
     if (!columns("catalog_products").some((entry) => entry.name === "project")) {
-      conn.exec(`BEGIN;
+      try {
+        conn.exec(`BEGIN;
 CREATE TABLE catalog_products_project (
   project TEXT NOT NULL DEFAULT 'off',
   code TEXT NOT NULL,
@@ -139,6 +140,14 @@ FROM catalog_products;
 DROP TABLE catalog_products;
 ALTER TABLE catalog_products_project RENAME TO catalog_products;
 COMMIT;`);
+      } catch (error) {
+        try {
+          conn.exec("ROLLBACK");
+        } catch {
+          /* rollback is best effort; preserve the original error */
+        }
+        throw error;
+      }
     }
     conn.exec("DROP INDEX IF EXISTS catalog_products_name");
     conn.exec("DROP INDEX IF EXISTS catalog_products_brand");

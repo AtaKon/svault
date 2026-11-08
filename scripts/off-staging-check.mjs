@@ -43,8 +43,16 @@ async function read(url) {
   const headers = {
     "user-agent": `SVault-staging-check/1.0 (${CONTACT})`,
   };
-  // Staging protects the site with HTTP Basic off:off.
-  headers.authorization = "Basic " + Buffer.from("off:off").toString("base64");
+  // Only send the shared staging credentials to the staging host.
+  let stagingHost = "";
+  try {
+    stagingHost = new URL(STAGING).hostname.toLowerCase();
+  } catch {
+    stagingHost = "";
+  }
+  if (stagingHost === "world.openfoodfacts.net" || stagingHost.endsWith(".openfoodfacts.net")) {
+    headers.authorization = "Basic " + Buffer.from("off:off").toString("base64");
+  }
   try {
     const response = await fetch(url, { headers, signal: AbortSignal.timeout(12_000) });
     return { status: response.status, ok: response.ok };
