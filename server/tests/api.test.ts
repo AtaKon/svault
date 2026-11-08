@@ -4669,7 +4669,7 @@ describe("insights, household split and admin console", () => {
       400,
       "price lookup settings reject unknown fields",
     );
-    for (const invalidPriceLookup of [null, { enabled: "yes" }]) {
+    for (const invalidPriceLookup of [null, { enabled: "yes" }, []]) {
       const invalid = await request(`/api/houses/${insightHouse}`, {
         method: "PATCH",
         body: { settings: { priceLookup: invalidPriceLookup } },
@@ -4736,6 +4736,7 @@ describe("insights, household split and admin console", () => {
       headers: Record<string, string>,
       requestHouseId = insightHouse,
       requestLineId = line.data.item.id,
+      requestUserId = me.data.user.id,
     ) =>
       new Promise<any>((resolve, reject) => {
         const response = {
@@ -4743,7 +4744,7 @@ describe("insights, household split and admin console", () => {
           json(data: unknown) { resolve(data); return this; },
         };
         createShoppingOffersHandler(lookup)(
-          { params: { houseId: requestHouseId, lineId: requestLineId }, user: { id: me.data.user.id } } as any,
+          { params: { houseId: requestHouseId, lineId: requestLineId }, user: { id: requestUserId } } as any,
           response as any,
           (error: unknown) => { if (error) reject(error); },
         );
@@ -4793,9 +4794,23 @@ describe("insights, household split and admin console", () => {
       auth: secondUserCookie,
       body: { name: "Foreign offer line", itemId: foreignItem.data.id, quantity: 1, unit: "pcs" },
     });
+    await request(`/api/houses/${foreignHouse.data.id}`, {
+      auth: secondUserCookie,
+      method: "PATCH",
+      body: { settings: { priceLookup: { enabled: true } } },
+    });
+    const otherUser = await request("/api/auth/me", { auth: secondUserCookie });
     await assert.rejects(
       makeRequest(async () => { throw new Error("must not reach the lookup"); }, {}, insightHouse, foreignLine.data.item.id),
       (error: any) => error.status === 404 && error.message === "Open shopping line not found",
+    );
+    await assert.rejects(
+      makeRequest(async () => { throw new Error("must not reach the lookup"); }, {}, foreignHouse.data.id, line.data.item.id, otherUser.data.user.id),
+      (error: any) => error.status === 404 && error.message === "Open shopping line not found",
+    );
+    await assert.rejects(
+      makeRequest(async () => { throw new Error("must not reach the lookup"); }, {}, foreignHouse.data.id, foreignLine.data.item.id),
+      (error: any) => error.status === 404 && error.message === "House not found",
     );
   });
 
@@ -5430,5 +5445,30 @@ describe("PosoKanei price lookup client", () => {
     assert.equal(rateLimitCalls, 2, "each user consumes their own lookup slot when joining a shared upstream request");
     assert.equal(globalRateLimitCalls, 1, "the shared upstream request consumes one global slot");
     assert.deepEqual(one, two);
+  });
+
+  it("charges only the initiating user when a shared in-flight request gets a 429", async () => {
+    let userSlots = 0;
+    let globalSlots = 0;
+    let resolveResponse!: (response: Response) => void;
+    const pending = new Promise<Response>((resolve) => { resolveResponse = resolve; });
+    const client = createPosoKaneiClient(
+      async () => pending,
+      () => {
+        userSlots++;
+        return () => { userSlots--; };
+      },
+      () => {
+        globalSlots++;
+        return () => { globalSlots--; };
+      },
+    );
+    const initiating = client.lookupPosoKaneiBarcode("12345699", "initiating-user");
+    const joining = client.lookupPosoKaneiBarcode("12345699", "joining-user");
+    resolveResponse(new Response("{}", { status: 429, headers: { "retry-after": "120" } }));
+    const settled = await Promise.allSettled([initiating, joining]);
+    assert.ok(settled.every((result) => result.status === "rejected" && result.reason instanceof PosoKaneiUnavailableError));
+    assert.equal(userSlots, 1, "only the caller that issued the upstream request retains its slot");
+    assert.equal(globalSlots, 1, "the upstream 429 consumes one global request slot");
   });
 });

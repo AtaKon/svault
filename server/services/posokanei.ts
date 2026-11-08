@@ -186,6 +186,7 @@ export function createPosoKaneiClient(
       try {
         return await existing;
       } catch (error) {
+        // This caller joined someone else's upstream request and did not cause it.
         releaseUserLimit?.();
         throw error;
       }
