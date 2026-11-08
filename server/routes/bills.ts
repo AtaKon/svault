@@ -169,6 +169,7 @@ billRoutes.get("/:houseId/bills", handler(async (req, res) => {
 billRoutes.post("/:houseId/bills", requireHouseBillMember, pdfUpload.single("document"), verifyPdf, handler(async (req, res) => {
   const filename = req.file?.filename ?? null;
   const houseId = String(req.params.houseId);
+  let insertAttempted = false;
   let inserted = false;
   try {
     const body = parseBody(input, req.body);
@@ -186,6 +187,7 @@ billRoutes.post("/:houseId/bills", requireHouseBillMember, pdfUpload.single("doc
     const people = await validatePeople(houseId, paidBy, splitWith.length ? splitWith : (body.category === "to_split" ? members.map((m) => m.user_id) : []));
     const id = newId("bil");
     const createdAt = now();
+    insertAttempted = true;
     await run(`INSERT INTO bills (id, house_id, name, bill_type, category, ledger_confirmed, amount, currency, due_date, paid_by, split_with, document, notes, created_by, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
       id, houseId, body.name, body.billType, body.category, body.category === "to_split" && body.ledgerConfirmed === true ? 1 : 0, body.amount, currency,
@@ -214,7 +216,8 @@ billRoutes.post("/:houseId/bills", requireHouseBillMember, pdfUpload.single("doc
     // The insert may have committed even if the driver reported an error;
     // never clean up a file after a confirmed insert, even if response work fails.
     if (filename) {
-      if (!inserted) await deleteDocument(filename);
+      if (!insertAttempted) discardUploads(req);
+      else if (!inserted) await deleteDocument(filename);
     } else {
       discardUploads(req);
     }
@@ -276,6 +279,20 @@ billRoutes.post("/:houseId/bills/:billId/document", requireBillDocumentMember, p
     updated = await billRow(current.id, houseId);
     if (!updated || updated.document !== req.file.filename) throw new ApiError(409, "The bill document changed during upload. Try again.");
   } catch (error) {
+    if (updateApplied) {
+      // A successful UPDATE followed by a transient read error is still a
+      // successful replacement if a recovery read confirms the new reference.
+      try {
+        const recovered = await billRow(current.id, houseId);
+        if (recovered?.document === req.file.filename) {
+          await deleteDocument(current.document);
+          res.json(serialize(recovered));
+          return;
+        }
+      } catch {
+        // Preserve files conservatively below if the committed state is unclear.
+      }
+    }
     // A failed compare-and-swap belongs to another request; clean only our
     // unadopted upload. Once our update applied, the previous file is eligible
     // for removal, subject to deleteDocument's reference check.

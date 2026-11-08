@@ -649,16 +649,17 @@ export const POSTGRES_MIGRATIONS: string[] = [
   // an existing bills table created before ledger_confirmed was introduced.
   `DO $$
   BEGIN
-    LOCK TABLE bills IN ACCESS EXCLUSIVE MODE;
-    IF NOT EXISTS (
-      SELECT 1 FROM information_schema.columns
-      WHERE table_schema = current_schema() AND table_name = 'bills' AND column_name = 'ledger_confirmed'
-    ) THEN
-      ALTER TABLE bills ADD COLUMN ledger_confirmed INTEGER NOT NULL DEFAULT 0;
-      UPDATE bills SET ledger_confirmed = 1 WHERE category = 'to_split';
+    IF to_regclass('bills') IS NOT NULL THEN
+      LOCK TABLE bills IN ACCESS EXCLUSIVE MODE;
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = current_schema() AND table_name = 'bills' AND column_name = 'ledger_confirmed'
+      ) THEN
+        ALTER TABLE bills ADD COLUMN ledger_confirmed INTEGER NOT NULL DEFAULT 0;
+        UPDATE bills SET ledger_confirmed = 1 WHERE category = 'to_split';
+      END IF;
     END IF;
   END $$`,
-  "CREATE INDEX IF NOT EXISTS bills_house ON bills(house_id, due_date, created_at)",
 ];
 
 /**
