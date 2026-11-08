@@ -169,7 +169,6 @@ billRoutes.get("/:houseId/bills", handler(async (req, res) => {
 billRoutes.post("/:houseId/bills", requireHouseBillMember, pdfUpload.single("document"), verifyPdf, handler(async (req, res) => {
   const filename = req.file?.filename ?? null;
   const houseId = String(req.params.houseId);
-  let id: string | null = null;
   try {
     const body = parseBody(input, req.body);
     const house = await get<any>("SELECT currency FROM houses WHERE id = ?", [houseId]);
@@ -184,33 +183,34 @@ billRoutes.post("/:houseId/bills", requireHouseBillMember, pdfUpload.single("doc
     const members = await all<{ user_id: string }>("SELECT user_id FROM house_members WHERE house_id = ?", [houseId]);
     const paidBy = body.paidBy ?? req.user!.id;
     const people = await validatePeople(houseId, paidBy, splitWith.length ? splitWith : (body.category === "to_split" ? members.map((m) => m.user_id) : []));
-    id = newId("bil");
+    const id = newId("bil");
+    const createdAt = now();
     await run(`INSERT INTO bills (id, house_id, name, bill_type, category, ledger_confirmed, amount, currency, due_date, paid_by, split_with, document, notes, created_by, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
       id, houseId, body.name, body.billType, body.category, body.category === "to_split" && body.ledgerConfirmed === true ? 1 : 0, body.amount, currency,
-      body.dueDate || null, paidBy, JSON.stringify(people), filename, body.notes || null, req.user!.id, now(),
+      body.dueDate || null, paidBy, JSON.stringify(people), filename, body.notes || null, req.user!.id, createdAt,
     ]);
-    res.status(201).json(serialize(await requireBillRow(id, houseId)));
+    // Return the validated insert values directly; a post-insert read is both
+    // unnecessary and unsafe to compensate-delete after an ambiguous DB error.
+    res.status(201).json(serialize({
+      id,
+      house_id: houseId,
+      name: body.name,
+      bill_type: body.billType,
+      category: body.category,
+      ledger_confirmed: body.category === "to_split" && body.ledgerConfirmed === true ? 1 : 0,
+      amount: body.amount,
+      currency,
+      due_date: body.dueDate || null,
+      paid_by: paidBy,
+      split_with: JSON.stringify(people),
+      document: filename,
+      notes: body.notes || null,
+      created_at: createdAt,
+    }));
   } catch (error) {
-    if (id && !res.headersSent) {
-      // If the insert committed but its follow-up read failed transiently, turn
-      // the saved row into a successful response instead of inviting a duplicate.
-      try {
-        const persisted = await billRow(id, houseId);
-        if (persisted) {
-          res.status(201).json(serialize(persisted));
-          return;
-        }
-      } catch {
-        // Continue with conditional rollback and reference-safe file cleanup.
-      }
-      try {
-        if (filename) await run("DELETE FROM bills WHERE id = ? AND document = ?", [id, filename]);
-        else await run("DELETE FROM bills WHERE id = ?", [id]);
-      } catch {
-        // Reference-safe cleanup below keeps the file if the row still points to it.
-      }
-    }
+    // The insert may have committed even if the driver reported an error;
+    // deleteDocument removes the file only when no bill references it.
     if (filename) await deleteDocument(filename);
     else discardUploads(req);
     throw error;
@@ -260,19 +260,22 @@ billRoutes.post("/:houseId/bills/:billId/document", requireBillDocumentMember, p
   if (!current) { await deleteDocument(req.file?.filename); throw new ApiError(404, "Bill not found"); }
   if (!req.file) throw new ApiError(400, "Choose a PDF file");
   let updated: BillRow | undefined;
+  let updateApplied = false;
   try {
     const result = await run(`UPDATE bills SET document = ? WHERE id = ? AND house_id = ?
       AND (document = ? OR (document IS NULL AND ? IS NULL))`, [
       req.file.filename, current.id, houseId, current.document, current.document,
     ]);
     if (result.changes !== 1) throw new ApiError(409, "The bill document changed during upload. Try again.");
+    updateApplied = true;
     updated = await billRow(current.id, houseId);
     if (!updated || updated.document !== req.file.filename) throw new ApiError(409, "The bill document changed during upload. Try again.");
   } catch (error) {
-    // Ref-check both names: the new upload may already be committed, while the
-    // previous document may have become unreferenced after a concurrent replace.
+    // A failed compare-and-swap belongs to another request; clean only our
+    // unadopted upload. Once our update applied, the previous file is eligible
+    // for removal, subject to deleteDocument's reference check.
     await deleteDocument(req.file.filename);
-    await deleteDocument(current.document);
+    if (updateApplied) await deleteDocument(current.document);
     throw error;
   }
   await deleteDocument(current.document);

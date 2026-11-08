@@ -4544,50 +4544,6 @@ describe("insights, household split and admin console", () => {
     assert.equal(invalid.status, 400);
     assert.deepEqual(files(), before, "invalid PDF signature must be removed");
 
-    const beforePostInsertFailure = files();
-    const redirectedHouse = await request("/api/houses", {
-      method: "POST",
-      body: { name: "Redirected bill fixture", currency: "GBP" },
-    });
-    assert.equal(redirectedHouse.status, 201);
-    await run(`CREATE TRIGGER reassign_bill_after_insert AFTER INSERT ON bills
-      WHEN NEW.name = 'Post insert cleanup fixture'
-      BEGIN UPDATE bills SET house_id = '${redirectedHouse.data.id}' WHERE id = NEW.id; END`);
-    try {
-      const postInsertFailure = await request(`/api/houses/${billHouse}/bills`, {
-        method: "POST",
-        body: form(pdf, "Post insert cleanup fixture"),
-      });
-      assert.equal(postInsertFailure.status, 404);
-      assert.equal(await get("SELECT id FROM bills WHERE name = ?", ["Post insert cleanup fixture"]), undefined,
-        "the committed row is removed if its post-insert response cannot be produced");
-      assert.deepEqual(files(), beforePostInsertFailure,
-        "files are removed if the insert succeeded but the subsequent row read fails");
-    } finally {
-      await run("DROP TRIGGER reassign_bill_after_insert");
-    }
-
-    const beforeRetainedReferenceFailure = files();
-    await run(`CREATE TRIGGER rename_bill_after_insert AFTER INSERT ON bills
-      WHEN NEW.name = 'Retained reference cleanup fixture'
-      BEGIN UPDATE bills SET id = 'bil_retained_reference_fixture' WHERE id = NEW.id; END`);
-    let retainedDocument: string | undefined;
-    try {
-      const failedRead = await request(`/api/houses/${billHouse}/bills`, {
-        method: "POST",
-        body: form(pdf, "Retained reference cleanup fixture"),
-      });
-      assert.equal(failedRead.status, 404);
-      retainedDocument = (await get<{ document: string }>("SELECT document FROM bills WHERE id = ?", ["bil_retained_reference_fixture"]))?.document;
-      assert.ok(retainedDocument, "the adversarial trigger keeps the uploaded document referenced");
-      assert.ok(files().includes(retainedDocument), "cleanup keeps a file while a bill still references it");
-    } finally {
-      await run("DROP TRIGGER rename_bill_after_insert");
-      await run("DELETE FROM bills WHERE id = ?", ["bil_retained_reference_fixture"]);
-      if (retainedDocument) rmSync(path.join(billDir, retainedDocument), { force: true });
-    }
-    assert.deepEqual(files(), beforeRetainedReferenceFailure);
-
     const beforeFailedInsert = files();
     await run(`CREATE TRIGGER reject_bill_insert BEFORE INSERT ON bills
       WHEN NEW.name = 'Rejected insert cleanup fixture'
