@@ -125,15 +125,15 @@ select, date, boolean and URL.
    and straightened automatically — the table around it is trimmed and perspective is corrected — and
    OCR runs on each page separately in the browser. For a long receipt, photograph it in overlapping
    shots: the duplicate lines where two shots overlap are dropped, and the pages are stitched into one
-   image for the stored scan. Each page photo is also sent on its own to an AI vision model when one is
-   configured. Reorder or remove a page from the thumbnail strip, then correct any lines it misread
+   image for the stored scan. Each page photo can also be sent to an AI vision model when you request an
+   AI re-read. Reorder or remove a page from the thumbnail strip, then correct any lines it misread
    before pressing **Read receipt**.
 3. The shop printed on the receipt is detected automatically and matched to your existing shops. Known
-   layouts are parsed with a shop-specific template — Lidl Greece and Sklavenitis Greece are built in,
+   layouts are parsed with a shop-specific template — Lidl Greece, Sklavenitis Greece and My market Greece are built in,
    including weights, quantity lines, barcodes and store discounts. The receipt header shows whether it
-   was read by **AI**, a **template** or the **local** parser. When a template is unsure or its lines do
-   not add up to the printed total and AI is configured, AI reads the receipt too and the version that
-   adds up better is kept; a note says which. Check the shop, purchase date, total,
+   was read by **AI**, a **template** or the **local** parser. Alternative OCR passes are compared using
+   template arithmetic when the OCR text has not been edited. AI is used only when you select **Re-read with AI**.
+   A matching total does not guarantee every name or price is correct. Check the shop, purchase date, total,
    **net**, **tax/VAT** and **money saved**. When the receipt prints VAT rates they are read as a split;
    you can correct the total, net and tax before importing. Every product line can be excluded, renamed,
    given a quantity, unit and price, or pinned to an existing item with the search under each line.

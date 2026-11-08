@@ -20,6 +20,8 @@ import {
   normalizeVendorName,
 } from "../services/vendors.js";
 import { selectReceiptTemplate } from "../services/receipt-templates.js";
+import { lidlExcludedCharges } from "../services/receipt-lidl.js";
+import { hasOcrNumericDisagreement, selectOcrCandidate } from "../services/receipt-candidates.js";
 import { learnProductAlias } from "../services/product-aliases.js";
 import { suggestProductMatches } from "../services/product-match.js";
 import { fetchOffProduct, getCachedOffProduct, linkItemToOff } from "../services/openfoodfacts.js";
@@ -39,7 +41,7 @@ import {
   skippedImagesWarning,
   uploadBelongsTo,
 } from "../services/receipt-scans.js";
-import { reconcileReceipt, reconciliationGap } from "../../shared/receipt-reconcile.js";
+import { reconcileReceipt } from "../../shared/receipt-reconcile.js";
 import { parseEReceipt, receiptHouseCurrency, scanPriceAlerts } from "../services/insights.js";
 import type {
   ReceiptDeleteResult,
@@ -398,8 +400,6 @@ receiptRoutes.delete(
   }),
 );
 
-/** Below this a template's own parse is double-checked by AI when one is configured. */
-const TEMPLATE_CONFIDENCE_THRESHOLD = 0.75;
 
 /**
  * Turn the text of an e-receipt (email body, copied PDF text, or e-invoice
@@ -441,6 +441,7 @@ receiptRoutes.post(
     const body = parseBody(
       z.object({
         text: z.string().max(50000).optional(),
+        candidates: z.array(z.string().max(50000)).max(2).optional(),
         /** Stitched image kept with the receipt (older clients send only this). */
         image: receiptImage.optional(),
         /** Each page photo, in order, for the vision model. */
@@ -450,7 +451,7 @@ receiptRoutes.post(
       }),
       req.body,
     );
-    const rawText = (body.text ?? "").trim();
+    let rawText = (body.text ?? "").trim();
     const visionPaths = body.images?.length ? body.images : body.image ? [body.image] : [];
     if (!rawText && !visionPaths.length) throw new ApiError(400, "Provide receipt text or a scan image");
 
@@ -490,8 +491,17 @@ receiptRoutes.post(
     };
 
     let templateDraft: ReceiptDraft | null = null;
+    let candidateSelected = false;
     if (template) {
-      const templated = template.parse(rawText, currency);
+      const selected = selectOcrCandidate(rawText, body.candidates ?? [], template, currency);
+      const templated = selected.draft;
+      if (selected.changed) {
+        candidateSelected = true;
+        rawText = selected.text;
+        warnings.push("A different OCR reading matched the receipt arithmetic better. Check product names and prices against the photo.");
+      } else if (hasOcrNumericDisagreement(templated, body.candidates ?? [], template, currency)) {
+        warnings.push("OCR readings disagree on some quantities, prices or barcodes. Check them against the photo.");
+      }
       if (templated.lines.length) {
         templated.templateId = template.id;
         templated.templateConfidence = template.confidence;
@@ -504,57 +514,58 @@ receiptRoutes.post(
     }
 
     if (templateDraft && template) {
-      // A template is fast and free, but only trusted on its own when it is
-      // confident and its lines add up to the printed total.
       const templateCheck = draftReconciliation(templateDraft);
-      const lowConfidence = template.confidence < TEMPLATE_CONFIDENCE_THRESHOLD;
-      const mismatch = templateCheck.difference != null && !templateCheck.ok;
-      if (canUseAi && (body.preferAi || lowConfidence || mismatch)) {
-        const reason = body.preferAi
-          ? "AI re-read requested"
-          : lowConfidence
-            ? `the ${template.name} template only matched with ${Math.round(template.confidence * 100)}% confidence`
-            : `the ${template.name} template's lines are ${moneyText(Math.abs(templateCheck.difference!), templateDraft.currency)} off the printed total`;
+      const excludedCharges = template.id === "lidl-gr" ? lidlExcludedCharges(rawText) : 0;
+      // Only explain a discrepancy using amounts actually printed as excluded
+      // charges. Keep the normal reconciliation visible to the user.
+      const chargesExplainDifference = excludedCharges > 0 && templateCheck.difference != null &&
+        Math.abs(templateCheck.difference - excludedCharges) <= 0.02;
+      const mismatch = templateCheck.difference != null && !templateCheck.ok && !chargesExplainDifference;
+      if (chargesExplainDifference && !body.preferAi) {
+        warnings.push(`The product total excludes ${moneyText(excludedCharges, templateDraft.currency)} in printed bag or other non-product charges.`);
+      }
+      if (mismatch && !body.preferAi) warnings.push("The product lines do not match the printed total. Check the receipt or re-read with AI.");
+      if (body.preferAi && canUseAi) {
         try {
-          const ai = await readWithAi(body.preferAi ? "requested" : lowConfidence ? "low-confidence-template" : "template-mismatch");
-          const aiCheck = draftReconciliation(ai.draft);
-          const aiWins =
-            ai.draft.lines.length > 0 &&
-            (body.preferAi || (!templateCheck.ok && reconciliationGap(aiCheck) < reconciliationGap(templateCheck)));
-          if (aiWins) {
+          const ai = await readWithAi("requested");
+          if (ai.draft.lines.length > 0) {
             draft = ai.draft;
             provider = "ai";
-            if (!body.preferAi) warnings.push(`AI read this receipt because ${reason}; the AI lines match the total better.`);
             if (ai.imageWarning) warnings.push(ai.imageWarning);
           } else {
-            warnings.push(
-              body.preferAi
-                ? "AI did not find any product lines, so the template result was kept."
-                : `AI double-checked this receipt because ${reason}, but did not match the total better — kept the template result.`,
-            );
+            warnings.push("AI did not find any product lines, so the template result was kept.");
           }
         } catch (err) {
-          warnings.push(
-            `AI re-read failed (${reason}), kept the template result. ${err instanceof Error ? err.message : ""}`.trim(),
-          );
+          warnings.push(`AI re-read failed, kept the template result. ${err instanceof Error ? err.message : ""}`.trim());
         }
       }
-    } else if (canUseAi) {
+    } else if (body.preferAi && canUseAi) {
       try {
-        const ai = await readWithAi("no-template");
+        const ai = await readWithAi("requested");
         draft = ai.draft;
         provider = "ai";
         if (ai.imageWarning) warnings.push(ai.imageWarning);
       } catch (err) {
         warnings.push(`AI cleanup failed, kept the locally parsed version. ${err instanceof Error ? err.message : ""}`.trim());
       }
-    } else if (cfg.enabled) {
+    } else if (cfg.enabled && !rawText) {
       warnings.push(
         "No text was recognised in the scan. Add a vision-capable model in Settings → AI to let AI read the photo, or correct the text before importing.",
       );
-    } else {
+    } else if (!cfg.enabled) {
       warnings.push("No AI provider configured — parsed locally. Check the lines before adding them to your inventory.");
+    } else if (!templateDraft) {
+      warnings.push("Parsed locally. Check the lines, or choose Re-read with AI.");
     }
+
+    if (draft.lines.some((line) => line.lineTotal == null && line.unitPrice == null)) {
+      warnings.push("Some product lines have no price. Check them against the receipt.");
+    }
+    if (draft.lines.some((line) => line.lineTotal != null && line.unitPrice != null && line.quantity > 0 &&
+      Math.abs(line.quantity * line.unitPrice - line.lineTotal) > 0.03)) {
+      warnings.push("Some quantities and prices do not match their line totals. Check them against the receipt.");
+    }
+    if (draft.lines.length && draft.total == null) warnings.push("The receipt total was not recognised. Check the printed total.");
 
     // Resolve the merchant against the shop catalogue so receipt variants such
     // as "LIDL HELLAS" or "ΣΚΛΑΒΕΝΙΤΗΣ" become the same familiar shop.
@@ -623,6 +634,7 @@ receiptRoutes.post(
       scanId: scan.id,
       aiAvailable: cfg.enabled,
       reconciliation: draftReconciliation(draft),
+      ...(candidateSelected ? { selectedText: rawText } : {}),
       draft,
     };
     res.json(response);

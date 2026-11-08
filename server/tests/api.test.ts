@@ -591,6 +591,11 @@ describe("receipt text parsing", () => {
 });
 
 describe("Lidl receipt template", () => {
+  it("recognises the legal name when OCR reads its initial lambda as delta", async () => {
+    const template = await selectReceiptTemplate("ΔΙΝΤΑ ΕΛΛΑΣ\nΦΟΡΟΛΟΓΙΚΗ ΑΠΟΔΕΙΞΗ\nΓΑΛΑ 2,00 13%\nΣΥΝΟΛΟ 2,00", "");
+    assert.equal(template?.id, "lidl-gr");
+  });
+
   it("detects the template and parses quantities, weights and discounts", async () => {
     const template = await selectReceiptTemplate(LIDL_SAMPLE, "");
     assert.equal(template?.id, "lidl-gr");
@@ -686,6 +691,58 @@ describe("Lidl receipt template", () => {
     assert.equal(draft.lines[0].description, "ΚΑΦΕΣ");
     assert.equal(draft.lines[0].lineTotal, 10);
     assert.equal(draft.lines[0].taxRate, null);
+  });
+});
+
+describe("receipt OCR product crop", () => {
+  it("includes the first product name and barcode before a priced row", async () => {
+    const { detectProductRegion, spliceProductText } = await import("../../client/ocr.js");
+    const line = (text: string, y: number) => ({ text, bbox: { x0: 0, x1: 200, y0: y, y1: y + 10 } });
+    const page = { text: "", blocks: [{ paragraphs: [{ lines: [
+      line("ΑΠΟΔΕΙΞΗ ΛΙΑΝΙΚΗΣ ΠΩΛΗΣΗΣ", 10), line("5208046287576", 30),
+      line("ΓΑΛΑ", 50), line("1 x 2,00 2,00 13%", 70), line("ΣΥΝΟΛΟ 2,00", 100),
+    ] }] }] };
+    assert.equal(detectProductRegion(page, 200, 120)?.top, 22);
+    const full = "ΑΠΟΔΕΙΞΗ ΛΙΑΝΙΚΗΣ ΠΩΛΗΣΗΣ\n5208046287576\nΓΑΛΑ\n1 x 2,00 2,00 13%\nΣΥΝΟΛΟ 2,00";
+    const result = spliceProductText(full, "5208046287576\nΓΑΛΑ\n1 x 2,00 2,00 13%");
+    assert.equal(result, full);
+  });
+});
+
+describe("My market receipt template", () => {
+  it("reads the two-line basket, weighted products and total from the photographed layout", async () => {
+    const text = [
+      "ΜΕΤΡΟ ΑΕΒΕ - ΣΟΥΠΕΡ ΜΑΡΚΕΤ",
+      "ΑΠΟΔΕΙΞΗ ΛΙΑΝΙΚΗΣ ΠΩΛΗΣΗΣ 5893/534084",
+      "COCA COLA ZERO 1,5L 3/(2ΤΕΜ)", "1 x 3,70 3,70 13%",
+      'ΤΣΑΝΤΑ ΤΑΜΕΙΟΥ ΒΙΟ "MY MARKET" 35X60CM', "1 x 0,17 0,17 24%",
+      "ΜΠΡΟΚΟΛΟ ΕΓΧΩΡΙΟ (ΤΙΜΗ ΚΙΛ.)", "1,226 x 2,99 3,67 13%",
+      "ALPILAND COTTAGE ΜΕ ΓΛΥΚΟ ΤΣΙΛΙ 200GR", "4 x 2,58 10,32 13%",
+      "ΑΒΟΚΑΝΤΟ ΩΡΙΜΑΣΜΕΝΟ ΕΙΣΑΓ. (ΤΙΜΗ ΚΙΛΟΥ)", "0,686 x 8,49 5,82 13%",
+      "BABYCARE 99% WAT.ΜΩΡ/ΛΑ TRIPLE 8/(3X72T)", "1 x 2,35 2,35 6%",
+      "MENTOS PURE FRESH ROCK.BOTTLE LEMONADE", "1 x 1,49 1,49 13%",
+      "ΣΥΝΟΛΟ ΕΥΡΩ 27,52", "ΠΙΣΤΩΤΙΚΗ ΚΑΡΤΑ 27,52", "ΗΜΕΡ: 04/11/2026",
+    ].join("\n");
+    const template = await selectReceiptTemplate(text, "");
+    assert.equal(template?.id, "my-market-gr");
+    const draft = template!.parse(text, "EUR");
+    assert.equal(draft.vendorName, "My market");
+    assert.equal(draft.purchasedAt, "2026-11-04");
+    assert.equal(draft.total, 27.52);
+    assert.equal(draft.lines.length, 7);
+    assert.equal(draft.lines[1].lineTotal, 0.17);
+    assert.equal(draft.lines[2].quantity, 1.226);
+    assert.equal(draft.lines[2].unit, "kg");
+    assert.equal(draft.lines[2].unitPrice, 2.99);
+    assert.equal(draft.lines[3].quantity, 4);
+    assert.equal(draft.lines[3].lineTotal, 10.32);
+    assert.equal(draft.lines[5].taxRate, 6);
+    assert.equal(Math.round(draft.lines.reduce((sum, line) => sum + (line.lineTotal ?? 0), 0) * 100), 2752);
+  });
+
+  it("does not identify a product mentioning My market as the merchant", async () => {
+    const template = await selectReceiptTemplate('ΑΠΟΔΕΙΞΗ ΛΙΑΝΙΚΗΣ ΠΩΛΗΣΗΣ\nΤΣΑΝΤΑ "MY MARKET" 0,17\nΣΥΝΟΛΟ 0,17', "");
+    assert.notEqual(template?.id, "my-market-gr");
   });
 });
 
@@ -1978,7 +2035,7 @@ describe("ai integration", () => {
     aiRequests.length = 0;
     const res = await request(`/api/houses/${houseId}/receipts/scan`, {
       method: "POST",
-      body: { text: "MOCK MART\nMilk 2 x 1.20\nTOTAL 2.40" },
+      body: { text: "MOCK MART\nMilk 2 x 1.20\nTOTAL 2.40", preferAi: true },
     });
     assert.equal(res.status, 200);
     assert.equal(res.data.provider, "ai");
@@ -2831,7 +2888,7 @@ describe("security hardening", () => {
     const scan = await request(`/api/houses/${strangerHouseId}/receipts/scan`, {
       method: "POST",
       auth: secondUserCookie,
-      body: { text: "MOCK MART\nMilk 2 x 1.20\nLOYALTY 9876543210123456\nTOTAL 2.40" },
+      body: { text: "MOCK MART\nMilk 2 x 1.20\nLOYALTY 9876543210123456\nTOTAL 2.40", preferAi: true },
     });
     assert.equal(scan.status, 200);
     const { all } = await import("../db.js");
@@ -3906,7 +3963,7 @@ describe("receipt scan fixes", () => {
     assert.equal(lidl.data.reconciliation.savings, 1.04);
   });
 
-  it("double-checks a low-confidence template with AI but keeps it when it already adds up", async () => {
+  it("keeps a lower-confidence template without AI when its lines add up", async () => {
     fixAiRequests.length = 0;
     fixReceiptPayload = {
       vendorName: "Lidl",
@@ -3917,16 +3974,61 @@ describe("receipt scan fixes", () => {
     const text = ["LIDL", "ΦΟΡΟΛΟΓΙΚΗ ΑΠΟΔΕΙΞΗ", "ΓΑΛΑ 1,50 13,00%", "ΨΩΜΙ 2,00 13,00%", "ΣΥΝΟΛΟ 3,50"].join("\n");
     const res = await request(`/api/houses/${aiHouse}/receipts/scan`, { method: "POST", body: { text } });
     assert.equal(res.status, 200);
-    assert.equal(fixAiRequests.length, 1);
+    assert.equal(fixAiRequests.length, 0);
     assert.equal(res.data.provider, "template");
     assert.equal(res.data.draft.templateId, "lidl-gr");
     assert.equal(res.data.draft.lines.length, 2);
-    assert.equal(res.data.aiCost, 0.004);
-    assert.match(res.data.warning, /confidence/);
-    assert.match(res.data.warning, /kept the template result/);
+    assert.equal(res.data.aiCost, null);
   });
 
-  it("falls back to the AI draft when the template lines do not add up", async () => {
+  it("recognises excluded Lidl charges before deciding to call AI", async () => {
+    fixAiRequests.length = 0;
+    const text = ["ΛΙΝΤΑ ΕΛΛΑΣ", "ΦΟΡΟΛΟΓΙΚΗ ΑΠΟΔΕΙΞΗ ΕΝΑΡΞΗ",
+      "ΤΣ.Π.ΧΡ.ΜΕΓ.38Λ.1ΤΕΜ 0,80 24.00%", "ΠΕΡΙΒΑΝ.ΤΕΛΟΣ 0,09 24.00%",
+      "ΓΙΑΟΥΡΤΙ 2,55 13.00%", "ΣΥΝΟΛΟ 3,44"].join("\n");
+    const result = await request(`/api/houses/${aiHouse}/receipts/scan`, { method: "POST", body: { text } });
+    assert.equal(result.data.provider, "template");
+    assert.equal(fixAiRequests.length, 0);
+    assert.equal(result.data.reconciliation.difference, 0.89);
+    assert.match(result.data.warning, /0\.89/);
+    const incomplete = await request(`/api/houses/${aiHouse}/receipts/scan`, {
+      method: "POST", body: { text: text.replace("3,44", "5,44") },
+    });
+    assert.equal(fixAiRequests.length, 0);
+    assert.equal(incomplete.status, 200);
+    assert.match(incomplete.data.warning, /do not match/);
+  });
+
+  it("selects a better OCR candidate locally without discarding products or barcodes", async () => {
+    fixAiRequests.length = 0;
+    const baseline = ["ΕΛΛΗΝΙΚΕΣ ΥΠΕΡΑΓΟΡΕΣ", "ΣΚΛΑΒΕΝΙΤΗΣ", "ΑΠΟΔΕΙΞΗ ΛΙΑΝΙΚΗΣ ΠΩΛΗΣΗΣ",
+      "5208046287576", "ΓΑΛΑ 2,00 13%", "ΨΩΜΙ 4,00 13%", "ΣΥΝΟΛΟ 5,00"].join("\n");
+    const incomplete = baseline.replace("5208046287576\nΓΑΛΑ 2,00 13%\n", "").replace("4,00", "5,00");
+    const better = baseline.replace("ΨΩΜΙ 4,00", "ΨΩΜΙ 3,00");
+    const res = await request(`/api/houses/${aiHouse}/receipts/scan`, {
+      method: "POST", body: { text: baseline, candidates: [incomplete, better] },
+    });
+    assert.equal(res.data.provider, "template");
+    assert.equal(res.data.selectedText, better);
+    assert.equal(res.data.reconciliation.difference, 0);
+    assert.equal(res.data.draft.lines.length, 2);
+    assert.equal(res.data.draft.lines[0].barcode, "5208046287576");
+    assert.equal(fixAiRequests.length, 0);
+    assert.match(res.data.warning, /different OCR reading/);
+    const rejected = await request(`/api/houses/${aiHouse}/receipts/scan`, {
+      method: "POST", body: { text: baseline, candidates: [incomplete, better.replace("ΣΥΝΟΛΟ 5,00", "ΣΥΝΟΛΟ 6,00")] },
+    });
+    assert.equal(rejected.data.selectedText, undefined);
+    assert.equal(rejected.data.reconciliation.difference, -1);
+    assert.match(rejected.data.warning, /OCR readings disagree/);
+    const noTotal = await request(`/api/houses/${aiHouse}/receipts/scan`, {
+      method: "POST", body: { text: baseline.replace("ΣΥΝΟΛΟ 5,00", ""), candidates: [better] },
+    });
+    assert.equal(noTotal.data.selectedText, undefined);
+    assert.match(noTotal.data.warning, /total was not recognised/);
+  });
+
+  it("uses AI only when a re-read is requested", async () => {
     fixAiRequests.length = 0;
     fixReceiptPayload = {
       vendorName: "Lidl",
@@ -3941,18 +4043,9 @@ describe("receipt scan fixes", () => {
     const text = LIDL_SAMPLE.replaceAll("10,73", "15,73");
     const res = await request(`/api/houses/${aiHouse}/receipts/scan`, { method: "POST", body: { text } });
     assert.equal(res.status, 200);
-    assert.equal(fixAiRequests.length, 1);
-    assert.equal(res.data.provider, "ai");
-    assert.equal(res.data.draft.templateId, null);
-    assert.equal(res.data.draft.lines.length, 2);
-    assert.equal(res.data.reconciliation.ok, true);
-    assert.match(res.data.warning, /match the total better/);
-
-    // When the AI draft is no closer, the template stays.
-    fixReceiptPayload = { total: 15.73, lines: [{ description: "Apples", quantity: 1, lineTotal: 1 }] };
-    const kept = await request(`/api/houses/${aiHouse}/receipts/scan`, { method: "POST", body: { text } });
-    assert.equal(kept.data.provider, "template");
-    assert.equal(kept.data.reconciliation.ok, false);
+    assert.equal(fixAiRequests.length, 0);
+    assert.equal(res.data.provider, "template");
+    assert.equal(res.data.reconciliation.ok, false);
 
     // "Re-read with AI" bypasses a confident template on request.
     fixReceiptPayload = { total: 10.73, lines: [{ description: "Everything", quantity: 1, lineTotal: 10.73 }] };
@@ -3964,6 +4057,19 @@ describe("receipt scan fixes", () => {
     assert.equal(forced.data.draft.lines[0].description, "Everything");
   });
 
+  it("keeps bulk receipt intake local until AI is requested", async () => {
+    fixAiRequests.length = 0;
+    fixReceiptPayload = { vendorName: "Corner Market", total: 2, lines: [{ description: "Tea", quantity: 1, lineTotal: 2 }] };
+    const text = "CORNER MARKET\nTea 2.00\nTOTAL 2.00";
+    const local = await request(`/api/houses/${aiHouse}/intake/parse`, { method: "POST", body: { text } });
+    assert.equal(local.data.provider, "local");
+    assert.equal(local.data.aiAvailable, true);
+    assert.equal(fixAiRequests.length, 0);
+    const ai = await request(`/api/houses/${aiHouse}/intake/parse`, { method: "POST", body: { text, preferAi: true } });
+    assert.equal(ai.data.provider, "ai");
+    assert.equal(fixAiRequests.length, 1);
+  });
+
   it("sends every page photo to the vision model with its real mime type", async () => {
     await request(`/api/houses/${aiHouse}`, { method: "PATCH", body: { settings: { ai: { visionModel: "fix-vision" } } } });
     const first = await uploadReceiptPng(aiHouse);
@@ -3972,7 +4078,7 @@ describe("receipt scan fixes", () => {
     fixAiRequests.length = 0;
     const res = await request(`/api/houses/${aiHouse}/receipts/scan`, {
       method: "POST",
-      body: { text: "", images: [first, second, "/uploads/receipts/missing-page.jpg"] },
+      body: { text: "", images: [first, second, "/uploads/receipts/missing-page.jpg"], preferAi: true },
     });
     assert.equal(res.status, 200, JSON.stringify(res.data));
     assert.equal(res.data.provider, "ai");
@@ -3999,7 +4105,7 @@ describe("receipt scan fixes", () => {
     };
     const scan = await request(`/api/houses/${aiHouse}/receipts/scan`, {
       method: "POST",
-      body: { text: "PROVENANCE MART\nTea 4.00\nTOTAL 4.00" },
+      body: { text: "PROVENANCE MART\nTea 4.00\nTOTAL 4.00", preferAi: true },
     });
     assert.equal(scan.data.provider, "ai");
     const body = {

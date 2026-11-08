@@ -18,6 +18,8 @@ export function IntakePage() {
   const navigate = useNavigate();
   const fileRef = useRef<HTMLInputElement>(null);
   const [text, setText] = useState("");
+  const [ocrCandidates, setOcrCandidates] = useState<string[]>([]);
+  const [ocrText, setOcrText] = useState("");
   const [barcodes, setBarcodes] = useState<string[]>([]);
   const [barcodeEntry, setBarcodeEntry] = useState("");
   const [scanOpen, setScanOpen] = useState(false);
@@ -50,20 +52,25 @@ export function IntakePage() {
     setReading(true);
     setOcrRunning(true);
     setOcrProgress(0);
+    setOcrCandidates([]);
+    setOcrText("");
     try {
-      const prepared = await prepareImage(file, { maxSize: 2400, quality: 0.9 });
+      const prepared = await prepareImage(file, { maxSize: 4000, quality: 0.92 });
       const form = new FormData();
       form.append("image", prepared);
       const uploaded = await api<{ path: string }>(`/api/houses/${house.id}/intake/upload`, { method: "POST", body: form });
       setUploadedPath(uploaded.path);
+      let candidates: string[] = [];
       const recognized = await ocrImage(
         prepared,
         (progress) => {
           setOcrProgress(Math.round(progress * 100));
         },
-        { mode: "receipt" },
+        { mode: "receipt", onCandidates: (values) => { candidates = values; } },
       );
       setText(recognized);
+      setOcrText(recognized);
+      setOcrCandidates(candidates.filter((candidate) => candidate !== recognized).slice(0, 2));
       toast.success(t("Photo read — check the text before parsing"));
     } catch (err) {
       toast.error(err instanceof Error ? t(err.message) : t("Could not read the photo"));
@@ -74,7 +81,7 @@ export function IntakePage() {
     }
   };
 
-  const parse = async () => {
+  const parse = async (preferAi = false) => {
     setParsing(true);
     try {
       if (mode === "barcodes" && !barcodes.length) throw new Error("Add or scan at least one barcode");
@@ -84,8 +91,11 @@ export function IntakePage() {
         body:
           mode === "barcodes"
             ? { barcodes }
-            : { text: text.trim() || undefined, image: uploadedPath ?? undefined },
+            : { text: text.trim() || undefined, image: uploadedPath ?? undefined,
+                ...(text === ocrText && ocrCandidates.length ? { candidates: ocrCandidates } : {}),
+                ...(preferAi ? { preferAi: true } : {}) },
       });
+      if (data.selectedText != null) setText(data.selectedText);
       setResult(data);
       setRows(data.rows);
       if (!data.rows.length) toast.push(t(data.warning ?? "No product lines were found"));
@@ -191,6 +201,8 @@ export function IntakePage() {
               {uploadedPath && <Badge tone="brand">{t("photo attached")}</Badge>}
               <Button onClick={() => void parse()} loading={parsing} icon="sparkles">
                 {t("Parse lines ")}</Button>
+              {result?.aiAvailable && <Button variant="secondary" onClick={() => void parse(true)} loading={parsing} icon="sparkles">
+                {t("Re-read with AI")}</Button>}
             </div>
           </>
         ) : (

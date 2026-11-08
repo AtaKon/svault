@@ -22,7 +22,7 @@ const BARCODE_LINE = /^\d{6,14}$/;
 const COMPACT_PRODUCT =
   /^(?!ΕΚΠΤΩΣΗ)(?<name>[\p{L}].*?)\s+(?<total>-?\d{1,4}[.,]\d{2})\s*(?:€|EUR)?(?:\s+(?<rate>\d{1,2}(?:[.,]\d+)?)\s*%)?(?:\s*[A-ZΑ-Ω])?\s*$/iu;
 
-const PRODUCT_NAME_ONLY = /^(?!ΕΚΠΤΩΣΗ)(?<name>[\p{L}][\p{L}\p{N} .,%/&+*()'\-–]*?)\s*$/iu;
+const PRODUCT_NAME_ONLY = /^(?!ΕΚΠΤΩΣΗ)(?<name>[\p{L}][\p{L}\p{N} .,%/&+*()'"“”\-–]*?)\s*$/iu;
 
 const TOTAL_RATE_ONLY =
   /^(?<total>-?\d{1,4}[.,]\d{2})\s*(?:€|EUR)?(?:\s+(?<rate>\d{1,2}(?:[.,]\d+)?)\s*%)?\s*$/iu;

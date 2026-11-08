@@ -60,6 +60,7 @@ export function unitPriceLabel(price: number | null | undefined, unit: string, c
 const RECEIPT_TEMPLATE_LABELS: Record<string, string> = {
   "lidl-gr": "Lidl template",
   "sklavenitis-gr": "Sklavenitis template",
+  "my-market-gr": "My market template",
 };
 
 export function receiptTemplateLabel(templateId: string | null | undefined): string | null {

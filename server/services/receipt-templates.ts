@@ -1,6 +1,6 @@
 import { all, parseJson } from "../db.js";
 import type { ReceiptDraft, ReceiptTemplate, ReceiptTemplateRules } from "../../shared/types.js";
-import { LIDL_TEMPLATE_RULES, SKLAVENITIS_TEMPLATE_RULES } from "../../shared/receipt-template-example.js";
+import { LIDL_TEMPLATE_RULES, MY_MARKET_TEMPLATE_RULES, SKLAVENITIS_TEMPLATE_RULES } from "../../shared/receipt-template-example.js";
 import { lidlConfidence, parseLidlReceipt } from "./receipt-lidl.js";
 import { parseSklavenitisReceipt, sklavenitisConfidence } from "./receipt-sklavenitis.js";
 import { parseWithTemplateRules, templateDetectionScore, validateTemplateRules } from "./receipt-template-engine.js";
@@ -54,6 +54,17 @@ export function builtInTemplates(): ReceiptTemplate[] {
       rules: SKLAVENITIS_TEMPLATE_RULES,
       updatedAt: new Date(0).toISOString(),
     },
+    {
+      id: "my-market-gr",
+      name: "My market Greece",
+      country: "GR",
+      vendorName: "My market",
+      active: true,
+      builtIn: true,
+      version: 1,
+      rules: MY_MARKET_TEMPLATE_RULES,
+      updatedAt: new Date(0).toISOString(),
+    },
   ];
 }
 
@@ -91,6 +102,23 @@ export async function selectReceiptTemplate(rawText: string, houseId: string): P
         }),
       });
     }
+  }
+
+  const myMarket = builtIns.find((template) => template.id === "my-market-gr");
+  // Require the legal entity in the header: "MY MARKET" can occur in a
+  // product name on an unrelated receipt.
+  if (myMarket && /ΜΕΤΡΟ\s+Α\.?Ε\.?Β\.?Ε\.?/i.test(rawText) && /ΑΠΟΔΕΙΞΗ\s+ΛΙΑΝΙΚΗΣ\s+ΠΩΛΗΣΗΣ/i.test(rawText)) {
+    const confidence = 0.9;
+    candidates.push({
+      ...myMarket,
+      confidence,
+      parse: (text, currency) => ({
+        ...parseSklavenitisReceipt(text, currency),
+        vendorName: "My market",
+        templateId: "my-market-gr",
+        templateConfidence: confidence,
+      }),
+    });
   }
 
   for (const template of await listCustomTemplates(houseId)) {

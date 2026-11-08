@@ -377,6 +377,7 @@ Scan body:
 ```json
 {
   "text": "OCR text from the browser",
+  "candidates": ["alternative OCR text from the browser"],
   "image": "/uploads/receipts/stitched.jpg",
   "images": ["/uploads/receipts/page-1.jpg", "/uploads/receipts/page-2.jpg"],
   "preferAi": false
@@ -389,11 +390,12 @@ clients). Every path must match `/uploads/receipts/<file>`, otherwise the reques
 The mime type sent to the model comes from the file extension. A photo that is missing or larger than
 8 MB is skipped and named in `warning`.
 
-Parsing order: a recognised template wins when it is confident (≥ 0.75) and its lines reconcile with the
-printed total. When the template's confidence is lower or its lines do not add up, and AI is configured,
-the receipt is also read by AI and the AI draft is used only if it reconciles better; `warning` explains
-which one was kept. `preferAi: true` (the "Re-read with AI" button) uses the AI draft whenever it finds
-lines. Without a template the AI/local fallback is the same as for recipe scans.
+Parsing is local by default. Up to two `candidates` can be supplied when the original text has not been
+edited. A matched template compares them against the original total and keeps an alternative only if
+its arithmetic improves without reducing line or priced-line counts or losing recognized barcodes. When chosen, `selectedText`
+contains the text used. `warning` calls out uncertainties; matching arithmetic does not verify names.
+`preferAi: true` (the "Re-read with AI" button) explicitly requests AI and uses its draft when it finds
+lines. This also applies to bulk receipt intake.
 
 Response:
 
@@ -872,7 +874,7 @@ subtracts stock once per ingredient, and uses the plan week as the idempotency k
 | Method | Path | Min role | Purpose |
 | --- | --- | --- | --- |
 | `POST` | `/api/houses/:houseId/intake/upload` | member+ | Upload a receipt image (`field: image`), returns `{ path }`. |
-| `POST` | `/api/houses/:houseId/intake/parse` | member+ | Parse `{ text?, image?, barcodes? }` and return review rows. Never writes. |
+| `POST` | `/api/houses/:houseId/intake/parse` | member+ | Parse `{ text?, image?, candidates?, preferAi?, barcodes? }` and return review rows. AI is used only when requested. Never writes. |
 | `POST` | `/api/houses/:houseId/intake/commit` | member+ | Validate and apply reviewed rows atomically. |
 
 `parse` returns `provider` (`ai`, `local`, `template`, `barcode`), a warning and rows. Each row contains

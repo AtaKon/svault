@@ -7,6 +7,7 @@ import { ApiError, handler, parseBody, requireHouse } from "../http.js";
 import { aiParseReceipt, resolveAi } from "../ai.js";
 import { heuristicReceipt, normaliseReceiptDraft } from "../services/receipt-local.js";
 import { selectReceiptTemplate } from "../services/receipt-templates.js";
+import { hasOcrNumericDisagreement, selectOcrCandidate } from "../services/receipt-candidates.js";
 import { suggestProductMatches } from "../services/product-match.js";
 import { fetchOffProduct, getCachedOffProduct } from "../services/openfoodfacts.js";
 import { canonicalVendor, detectCatalogVendor } from "../services/vendors.js";
@@ -123,6 +124,8 @@ intakeRoutes.post(
     const body = parseBody(
       z.object({
         text: z.string().max(50000).optional(),
+        candidates: z.array(z.string().max(50000)).max(2).optional(),
+        preferAi: z.boolean().optional(),
         image: z.string().max(300).optional(),
         barcodes: z.array(z.string().trim().min(1).max(80)).max(100).optional(),
       }),
@@ -133,7 +136,7 @@ intakeRoutes.post(
       return;
     }
 
-    const rawText = (body.text ?? "").trim();
+    let rawText = (body.text ?? "").trim();
     if (!rawText && !body.image) throw new ApiError(400, "Provide receipt text, an image or barcodes");
     const house = (await get<any>("SELECT * FROM houses WHERE id = ?", [houseId]))!;
     const settings = parseJson<Record<string, any>>(house.settings, {});
@@ -144,9 +147,18 @@ intakeRoutes.post(
     let draft = heuristicReceipt(rawText, house.currency ?? null);
     let provider: "ai" | "local" | "template" = "local";
     let warning: string | null = null;
+    let candidateSelected = false;
 
     if (template) {
-      const templated = template.parse(rawText, house.currency ?? null);
+      const selected = selectOcrCandidate(rawText, body.candidates ?? [], template, house.currency ?? null);
+      const templated = selected.draft;
+      if (selected.changed) {
+        rawText = selected.text;
+        candidateSelected = true;
+        warning = "A different OCR reading matched the receipt arithmetic better. Check product names and prices against the photo.";
+      } else if (hasOcrNumericDisagreement(templated, body.candidates ?? [], template, house.currency ?? null)) {
+        warning = "OCR readings disagree on some quantities, prices or barcodes. Check them against the photo.";
+      }
       if (templated.lines.length) {
         draft = templated;
         provider = "template";
@@ -155,7 +167,7 @@ intakeRoutes.post(
       }
     }
 
-    if (provider !== "template") {
+    if (body.preferAi) {
       if (cfg.enabled && (rawText || (body.image && hasVisionModel))) {
         try {
           const vision = body.image && hasVisionModel ? await loadVisionImages([body.image]) : { images: [], skipped: 0 };
@@ -172,9 +184,12 @@ intakeRoutes.post(
               lineCount: draft.lines.length,
             },
           });
-          draft = normaliseReceiptDraft(aiDraft.data, house.currency ?? null);
-          provider = "ai";
-          warning = imageWarning;
+          const aiResult = normaliseReceiptDraft(aiDraft.data, house.currency ?? null);
+          if (aiResult.lines.length) {
+            draft = aiResult;
+            provider = "ai";
+            warning = imageWarning;
+          } else warning = "AI did not find any product lines, so the local result was kept.";
         } catch (err) {
           warning = `AI cleanup failed, kept the locally parsed version. ${err instanceof Error ? err.message : ""}`.trim();
         }
@@ -183,6 +198,9 @@ intakeRoutes.post(
       } else {
         warning = "No AI provider configured — parsed locally. Check the rows before adding them to your inventory.";
       }
+    } else if (provider !== "template") {
+      warning = cfg.enabled ? "Parsed locally. Check the rows, or choose Re-read with AI." :
+        "No AI provider configured — parsed locally. Check the rows before adding them to your inventory.";
     }
 
     const country = await purchaseCountry(houseId);
@@ -223,6 +241,8 @@ intakeRoutes.post(
 
     res.json({
       provider,
+      aiAvailable: cfg.enabled,
+      ...(candidateSelected ? { selectedText: rawText } : {}),
       warning,
       vendorName: draft.vendorName ?? null,
       purchasedAt: draft.purchasedAt ?? null,
