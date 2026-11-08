@@ -5504,25 +5504,31 @@ describe("bill ledger confirmation migration", () => {
     await run("UPDATE bills SET ledger_confirmed = 1 WHERE id = ?", [personalBill.data.id]);
 
     await run("ALTER TABLE bills DROP COLUMN ledger_confirmed");
-    await closeDb();
-    await initDb();
+    try {
+      await closeDb();
+      await initDb();
 
-    const columnsAfter = await all<{ name: string; dflt_value: string | null }>("PRAGMA table_info(bills)");
-    assert.equal(columnsAfter.find((column) => column.name === "ledger_confirmed")?.dflt_value, "0");
-    const migrated = await get<{ ledger_confirmed: number }>("SELECT ledger_confirmed FROM bills WHERE id = ?", [oldBill.data.id]);
-    assert.equal(migrated?.ledger_confirmed, 1, "existing shared bills retain their previous ledger inclusion");
-    const migratedPersonal = await get<{ ledger_confirmed: number }>("SELECT ledger_confirmed FROM bills WHERE id = ?", [personalBill.data.id]);
-    assert.equal(migratedPersonal?.ledger_confirmed, 0, "personal bills remain excluded from the household ledger");
-    const ledger = await request(`/api/houses/${createdHouse.data.id}/insights/household`);
-    const ownerBalance = ledger.data.balances.find((row: any) => row.userId === oldBill.data.paidBy);
-    assert.equal(ownerBalance.paid, 12);
-    assert.equal(ownerBalance.share, 12);
-    assert.equal(ownerBalance.balance, 0);
+      const columnsAfter = await all<{ name: string; dflt_value: string | null }>("PRAGMA table_info(bills)");
+      assert.equal(columnsAfter.find((column) => column.name === "ledger_confirmed")?.dflt_value, "0");
+      const migrated = await get<{ ledger_confirmed: number }>("SELECT ledger_confirmed FROM bills WHERE id = ?", [oldBill.data.id]);
+      assert.equal(migrated?.ledger_confirmed, 1, "existing shared bills retain their previous ledger inclusion");
+      const migratedPersonal = await get<{ ledger_confirmed: number }>("SELECT ledger_confirmed FROM bills WHERE id = ?", [personalBill.data.id]);
+      assert.equal(migratedPersonal?.ledger_confirmed, 0, "personal bills remain excluded from the household ledger");
+      const ledger = await request(`/api/houses/${createdHouse.data.id}/insights/household`);
+      const ownerBalance = ledger.data.balances.find((row: any) => row.userId === oldBill.data.paidBy);
+      assert.equal(ownerBalance.paid, 12);
+      assert.equal(ownerBalance.share, 12);
+      assert.equal(ownerBalance.balance, 0);
 
-    await run("UPDATE bills SET ledger_confirmed = 0 WHERE id = ?", [oldBill.data.id]);
-    await closeDb();
-    await initDb();
-    const secondInit = await get<{ ledger_confirmed: number }>("SELECT ledger_confirmed FROM bills WHERE id = ?", [oldBill.data.id]);
-    assert.equal(secondInit?.ledger_confirmed, 0, "a second init leaves an existing confirmation unchanged");
+      await run("UPDATE bills SET ledger_confirmed = 0 WHERE id = ?", [oldBill.data.id]);
+      await closeDb();
+      await initDb();
+      const secondInit = await get<{ ledger_confirmed: number }>("SELECT ledger_confirmed FROM bills WHERE id = ?", [oldBill.data.id]);
+      assert.equal(secondInit?.ledger_confirmed, 0, "a second init leaves an existing confirmation unchanged");
+    } finally {
+      // Restore the shared test database even if migration assertions fail.
+      await closeDb();
+      await initDb();
+    }
   });
 });

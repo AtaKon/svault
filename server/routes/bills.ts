@@ -169,8 +169,7 @@ billRoutes.get("/:houseId/bills", handler(async (req, res) => {
 billRoutes.post("/:houseId/bills", requireHouseBillMember, pdfUpload.single("document"), verifyPdf, handler(async (req, res) => {
   const filename = req.file?.filename ?? null;
   const houseId = String(req.params.houseId);
-  let insertAttempted = false;
-  let inserted = false;
+  let created: BillRow;
   try {
     const body = parseBody(input, req.body);
     const house = await get<any>("SELECT currency FROM houses WHERE id = ?", [houseId]);
@@ -185,19 +184,8 @@ billRoutes.post("/:houseId/bills", requireHouseBillMember, pdfUpload.single("doc
     const members = await all<{ user_id: string }>("SELECT user_id FROM house_members WHERE house_id = ?", [houseId]);
     const paidBy = body.paidBy ?? req.user!.id;
     const people = await validatePeople(houseId, paidBy, splitWith.length ? splitWith : (body.category === "to_split" ? members.map((m) => m.user_id) : []));
-    const id = newId("bil");
-    const createdAt = now();
-    insertAttempted = true;
-    await run(`INSERT INTO bills (id, house_id, name, bill_type, category, ledger_confirmed, amount, currency, due_date, paid_by, split_with, document, notes, created_by, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
-      id, houseId, body.name, body.billType, body.category, body.category === "to_split" && body.ledgerConfirmed === true ? 1 : 0, body.amount, currency,
-      body.dueDate || null, paidBy, JSON.stringify(people), filename, body.notes || null, req.user!.id, createdAt,
-    ]);
-    inserted = true;
-    // Return the validated insert values directly; a post-insert read is both
-    // unnecessary and unsafe to compensate-delete after an ambiguous DB error.
-    res.status(201).json(serialize({
-      id,
+    created = {
+      id: newId("bil"),
       house_id: houseId,
       name: body.name,
       bill_type: body.billType,
@@ -210,19 +198,30 @@ billRoutes.post("/:houseId/bills", requireHouseBillMember, pdfUpload.single("doc
       split_with: JSON.stringify(people),
       document: filename,
       notes: body.notes || null,
-      created_at: createdAt,
-    }));
+      created_at: now(),
+    };
   } catch (error) {
-    // The insert may have committed even if the driver reported an error;
-    // never clean up a file after a confirmed insert, even if response work fails.
-    if (filename) {
-      if (!insertAttempted) discardUploads(req);
-      else if (!inserted) await deleteDocument(filename);
-    } else {
-      discardUploads(req);
-    }
+    // Validation and pre-insert reads cannot have committed a bill, so remove
+    // the Multer file directly even if the database is unavailable.
+    discardUploads(req);
     throw error;
   }
+
+  try {
+    await run(`INSERT INTO bills (id, house_id, name, bill_type, category, ledger_confirmed, amount, currency, due_date, paid_by, split_with, document, notes, created_by, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+      created.id, created.house_id, created.name, created.bill_type, created.category, created.ledger_confirmed, created.amount, created.currency,
+      created.due_date, created.paid_by, created.split_with, created.document, created.notes, req.user!.id, created.created_at,
+    ]);
+  } catch (error) {
+    // The insert may have committed despite a driver error; remove the upload
+    // only if a follow-up query confirms that no row references it.
+    if (filename) await deleteDocument(filename);
+    throw error;
+  }
+  // Return the validated insert values directly; a post-insert read is both
+  // unnecessary and unsafe to compensate-delete after an ambiguous DB error.
+  res.status(201).json(serialize(created));
 }));
 
 singleBillRoutes.patch("/:billId", handler(async (req, res) => {
@@ -279,11 +278,13 @@ billRoutes.post("/:houseId/bills/:billId/document", requireBillDocumentMember, p
     updated = await billRow(current.id, houseId);
     if (!updated || updated.document !== req.file.filename) throw new ApiError(409, "The bill document changed during upload. Try again.");
   } catch (error) {
+    let recoveryReadSucceeded = false;
     if (updateApplied) {
       // A successful UPDATE followed by a transient read error is still a
       // successful replacement if a recovery read confirms the new reference.
       try {
         const recovered = await billRow(current.id, houseId);
+        recoveryReadSucceeded = true;
         if (recovered?.document === req.file.filename) {
           await deleteDocument(current.document);
           res.json(serialize(recovered));
@@ -294,9 +295,11 @@ billRoutes.post("/:houseId/bills/:billId/document", requireBillDocumentMember, p
       }
     }
     // A failed compare-and-swap belongs to another request; clean only our
-    // unadopted upload. Once our update applied, the previous file is eligible
-    // for removal, subject to deleteDocument's reference check.
-    await deleteDocument(req.file.filename);
+    // unadopted upload. If the update applied but recovery couldn't read the
+    // row, preserve the new file because the database reference is uncertain.
+    // A successful recovery read showing no adoption can safely use the
+    // reference-checking cleanup helper.
+    if (!updateApplied || recoveryReadSucceeded) await deleteDocument(req.file.filename);
     if (updateApplied) await deleteDocument(current.document);
     throw error;
   }
