@@ -279,6 +279,15 @@ export interface OffPriceCandidate {
   quantity: number;
   unit: string | null;
   unitPrice: number | null;
+  locationId?: number | null;
+  locationName?: string | null;
+}
+
+export interface OffPriceLocation {
+  id: number;
+  name: string;
+  city: string | null;
+  country: string | null;
 }
 
 export interface OffReportCandidate {

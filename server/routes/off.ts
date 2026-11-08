@@ -30,6 +30,7 @@ import {
   retryContribution,
 } from "../services/off/contributions.js";
 import { contributionCandidates } from "../services/off/eligibility.js";
+import { searchPriceLocations } from "../services/off/prices.js";
 import { addFolksonomyProperty } from "../services/off/folksonomy.js";
 import { answerRobotoff, robotoffProjectSupported, robotoffQuestions } from "../services/off/robotoff.js";
 import { REPORT_REASONS } from "../services/off/reports.js";
@@ -262,6 +263,7 @@ offRoutes.post(
         houseId: z.string().trim().min(1).max(60),
         itemId: z.string().trim().min(1).max(60).optional(),
         receiptLineId: z.string().trim().min(1).max(60).optional(),
+        locationId: z.number().int().positive().optional(),
         kind: z.enum(["new_product", "missing_fields", "photo", "price", "report", "wrong_project", "folksonomy"]),
         fields: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
       }),
@@ -275,6 +277,7 @@ offRoutes.post(
       houseId: body.houseId,
       itemId: body.itemId,
       receiptLineId: body.receiptLineId,
+      locationId: body.locationId,
       kind: body.kind,
       fields: body.fields,
     });
@@ -321,6 +324,14 @@ offRoutes.get(
   "/report-reasons",
   handler(async (_req, res) => {
     res.json({ reasons: REPORT_REASONS });
+  }),
+);
+
+offRoutes.get(
+  "/prices/locations",
+  handler(async (req, res) => {
+    const q = String(req.query.q ?? "").trim();
+    res.json({ locations: await searchPriceLocations(q) });
   }),
 );
 

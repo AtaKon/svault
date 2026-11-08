@@ -11,6 +11,7 @@ import type {
   OffAccountSummary,
   OffContribution,
   OffContributionCandidate,
+  OffPriceLocation,
   OffProjectId,
   OffRobotoffQuestion,
 } from "@shared/types";
@@ -56,6 +57,12 @@ export function ContributionsPage() {
   const [accountProject, setAccountProject] = useState<OffProjectId>("off");
   const [question, setQuestion] = useState<OffRobotoffQuestion | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [locationQuery, setLocationQuery] = useState("");
+  const [locations, setLocations] = useState<OffPriceLocation[]>([]);
+  const [priceLocation, setPriceLocation] = useState<OffPriceLocation | null>(null);
+  const [folkCode, setFolkCode] = useState("");
+  const [folkKey, setFolkKey] = useState("");
+  const [folkValue, setFolkValue] = useState("");
 
   const account = useMemo<OffAccountPublic | null>(
     () => summary?.accounts.find((entry) => entry.project === "off") ?? null,
@@ -149,6 +156,26 @@ export function ContributionsPage() {
     }
   };
 
+  const saveFolksonomy = async () => {
+    if (!folkCode.trim() || !folkKey.trim() || !folkValue.trim()) {
+      toast.error(t("Fill the product code, property and value"));
+      return;
+    }
+    setBusy("folksonomy");
+    try {
+      await api("/api/off/folksonomy", {
+        method: "POST",
+        body: { project: "off", code: folkCode.trim(), key: folkKey.trim(), value: folkValue.trim() },
+      });
+      setFolkValue("");
+      toast.success(t("Folksonomy property saved"));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("Could not save the property"));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const linkPrices = async () => {
     if (!priceUser.trim() || !pricePassword) {
       toast.error(t("Enter your Open Food Facts username and password"));
@@ -173,15 +200,32 @@ export function ContributionsPage() {
   const openReview = (candidate: OffContributionCandidate) => {
     setSelected(candidate);
     setFields(candidate.fields);
+    setPriceLocation(null);
+    setLocations([]);
+    setLocationQuery(candidate.price?.vendor ?? "");
   };
 
   const contributionBody = (candidate: OffContributionCandidate, chosen: string[]) => ({
     houseId: house!.id,
     itemId: candidate.kind === "price" ? undefined : candidate.itemId,
     receiptLineId: candidate.kind === "price" ? candidate.price?.receiptLineId : undefined,
+    locationId: candidate.kind === "price" ? priceLocation?.id : undefined,
     kind: candidate.kind,
     fields: chosen,
   });
+
+  const searchLocations = async () => {
+    const q = locationQuery.trim();
+    if (q.length < 2) return;
+    try {
+      const result = await api<{ locations: OffPriceLocation[] }>(
+        `/api/off/prices/locations?q=${encodeURIComponent(q)}`,
+      );
+      setLocations(result.locations);
+    } catch {
+      setLocations([]);
+    }
+  };
 
   const submit = async () => {
     if (!selected || !house) return;
@@ -429,6 +473,36 @@ export function ContributionsPage() {
         </Card>
       )}
 
+      <Card className="mb-5 p-4">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <h2 className="font-display text-lg">{t("Advanced: Folksonomy property")}</h2>
+            <p className="mt-1 max-w-xl text-xs leading-relaxed text-muted">
+              {t("Add an experimental key/value property to a product. This is separate from the normal product fields and is not needed for most contributions.")}
+            </p>
+          </div>
+          <Badge tone={summary?.services.folksonomy ? "brand" : "outline"}>
+            {summary?.services.folksonomy ? t("Connected") : t("Advanced")}
+          </Badge>
+        </div>
+        <div className="mt-3 grid gap-2 sm:grid-cols-3">
+          <Field label={t("Product code")}>
+            <Input value={folkCode} onChange={(event) => setFolkCode(event.target.value)} placeholder="3017620422003" />
+          </Field>
+          <Field label={t("Property")}>
+            <Input value={folkKey} onChange={(event) => setFolkKey(event.target.value)} placeholder="my-property" />
+          </Field>
+          <Field label={t("Value")}>
+            <Input value={folkValue} onChange={(event) => setFolkValue(event.target.value)} />
+          </Field>
+        </div>
+        <div className="mt-2">
+          <Button size="sm" variant="secondary" loading={busy === "folksonomy"} onClick={() => void saveFolksonomy()}>
+            {t("Save property")}
+          </Button>
+        </div>
+      </Card>
+
       {question && (
         <Card className="mb-5 p-4">
           <div className="flex items-start justify-between gap-3">
@@ -634,6 +708,46 @@ export function ContributionsPage() {
                 );
               })}
             </div>
+            {selected.kind === "price" && (
+              <div className="rounded-xl border border-line p-3">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted">
+                  {t("Open Prices location")}
+                </p>
+                <div className="mt-2 flex gap-2">
+                  <Input
+                    value={locationQuery}
+                    onChange={(event) => setLocationQuery(event.target.value)}
+                    placeholder={t("Shop name or city")}
+                  />
+                  <Button type="button" variant="secondary" onClick={() => void searchLocations()}>
+                    {t("Find")}
+                  </Button>
+                </div>
+                {locations.length > 0 && (
+                  <div className="mt-2 space-y-1">
+                    {locations.map((location) => (
+                      <button
+                        key={location.id}
+                        type="button"
+                        onClick={() => setPriceLocation(location)}
+                        className={cn(
+                          "flex w-full items-center justify-between gap-2 rounded-lg border px-2 py-1.5 text-left text-[11px]",
+                          priceLocation?.id === location.id ? "border-brand/40 bg-brand-soft/40" : "border-line",
+                        )}
+                      >
+                        <span className="truncate">{location.name}</span>
+                        <span className="truncate text-muted">{[location.city, location.country].filter(Boolean).join(", ")}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <p className="mt-2 text-[10px] text-muted">
+                  {priceLocation
+                    ? t("Using {name}", { name: priceLocation.name })
+                    : t("Optional, but a location makes the price more useful.")}
+                </p>
+              </div>
+            )}
             <p className="rounded-xl bg-raised px-3 py-2 text-[11px] leading-relaxed text-muted">
               {t("This becomes public on Open Food Facts and may be reused by anyone under its open licenses.")}
             </p>

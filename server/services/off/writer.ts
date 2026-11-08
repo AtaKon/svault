@@ -92,6 +92,7 @@ export async function buildContribution(opts: {
   houseId: string;
   itemId?: string;
   receiptLineId?: string;
+  locationId?: number;
   kind: OffCandidateKind;
   code?: string;
   fields?: string[];
@@ -115,7 +116,7 @@ export async function buildContribution(opts: {
       form: {},
       imageField: null,
       values: match.values,
-      price: match.price,
+      price: opts.locationId != null ? { ...match.price, locationId: opts.locationId } : match.price,
     };
   }
 

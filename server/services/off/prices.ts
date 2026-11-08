@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { all } from "../../db.js";
 import { APP_VERSION, UPLOAD_DIR } from "../../config.js";
-import type { OffContributionCandidate, OffPriceCandidate } from "../../../shared/types.js";
+import type { OffContributionCandidate, OffPriceCandidate, OffPriceLocation } from "../../../shared/types.js";
 import { isValidGtin } from "../../lib/redact.js";
 import { instanceServiceBearer, serviceBearer } from "./auth.js";
 import { OffWriteError } from "./errors.js";
@@ -81,6 +81,8 @@ export async function priceCandidates(houseId: string, limit = 20): Promise<OffC
       quantity,
       unit: row.unit,
       unitPrice: row.unit_price == null ? null : Number(row.unit_price),
+      locationId: null,
+      locationName: null,
     };
     candidates.push({
       id: `price:off:${code}:${row.receipt_line_id}`,
@@ -109,6 +111,28 @@ async function bearerFor(userId: string): Promise<string | null> {
   return (await serviceBearer(userId, "prices")) ?? (await instanceServiceBearer("prices"));
 }
 
+export async function searchPriceLocations(query: string): Promise<OffPriceLocation[]> {
+  const q = String(query ?? "").trim();
+  if (q.length < 2) return [];
+  try {
+    const response = await fetch(
+      `${BASE}/api/v1/locations?osm_name__like=${encodeURIComponent(q)}&size=10&order_by=-price_count`,
+      { headers: { "user-agent": USER_AGENT }, signal: AbortSignal.timeout(10_000) },
+    );
+    if (!response.ok) return [];
+    const json: any = await response.json();
+    const items = Array.isArray(json?.items) ? json.items : [];
+    return items.map((item: any) => ({
+      id: Number(item.id),
+      name: String(item.osm_name ?? item.osm_display_name ?? "Shop"),
+      city: item.osm_address_city ?? null,
+      country: item.osm_address_country ?? null,
+    }));
+  } catch {
+    return [];
+  }
+}
+
 export async function submitPrice(
   userId: string,
   price: OffPriceCandidate,
@@ -123,6 +147,7 @@ export async function submitPrice(
   proof.append("type", "RECEIPT");
   if (price.date) proof.append("date", price.date);
   if (price.currency) proof.append("currency", price.currency);
+  if (price.locationId != null) proof.append("location_id", String(price.locationId));
   let proofResponse: Response;
   try {
     proofResponse = await fetch(`${BASE}/api/v1/proofs/upload`, {
@@ -157,6 +182,7 @@ export async function submitPrice(
   };
   if (price.currency) body.currency = price.currency;
   if (price.date) body.date = price.date;
+  if (price.locationId != null) body.location_id = price.locationId;
   let response: Response;
   try {
     response = await fetch(`${BASE}/api/v1/prices`, {

@@ -366,6 +366,7 @@ fields before anything is queued. SVault stores an encrypted session cookie, nev
 | `POST` | `/api/off/services/:service/link` | `{ username, password }`. Exchange OFF credentials for an Open Prices or Folksonomy bearer token, stored encrypted. |
 | `DELETE` | `/api/off/services/:service` | Remove a secondary service token. |
 | `GET` | `/api/off/report-reasons` | NutriPatrol reason values and labels. |
+| `GET` | `/api/off/prices/locations?q=` | Search Open Prices locations when sharing a receipt price. |
 | `GET` | `/api/off/robotoff/questions?project=off&count=1` | Optional Robotoff questions. Returns `{ questions, supported }`; unavailable services return an empty list. |
 | `POST` | `/api/off/robotoff/answers` | `{ insightId, annotation: 1 \| 0 \| -1 }`. |
 | `POST` | `/api/off/folksonomy` | Advanced: `{ project, code, key, value }` writes one Folksonomy property. |

@@ -168,6 +168,7 @@ export async function createContribution(opts: {
   houseId: string;
   itemId?: string;
   receiptLineId?: string;
+  locationId?: number;
   kind: OffCandidateKind;
   fields?: string[];
 }): Promise<OffContribution> {
