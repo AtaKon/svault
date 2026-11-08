@@ -393,7 +393,8 @@ The mime type sent to the model comes from the file extension. A photo that is m
 Parsing is local by default. Up to two `candidates` can be supplied when the original text has not been
 edited. A matched template compares them against the original total and keeps an alternative only if
 its arithmetic improves without reducing line or priced-line counts or losing recognized barcodes. When chosen, `selectedText`
-contains the text used. `warning` calls out uncertainties; matching arithmetic does not verify names.
+contains the text used. The original total anchors the comparison, so a different total in an alternative
+is not selected automatically. `warning` calls out uncertainties; matching arithmetic does not verify names.
 `preferAi: true` (the "Re-read with AI" button) explicitly requests AI and uses its draft when it finds
 lines. This also applies to bulk receipt intake.
 
@@ -406,6 +407,7 @@ Response:
   "aiCost": null,
   "scanId": "scn_...",
   "aiAvailable": true,
+  "selectedText": "OCR text selected from an alternative pass",
   "reconciliation": { "linesTotal": 10.63, "savings": 1.04, "printedTotal": 10.73, "difference": 0.1, "ok": true },
   "draft": {
     "vendorName": "Lidl",

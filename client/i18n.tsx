@@ -1480,6 +1480,7 @@ const EL: Record<string, string> = {
   "Products total · no receipt total to check against": "Σύνολο προϊόντων · δεν υπάρχει σύνολο απόδειξης για σύγκριση",
   "Put everything in": "Προσθήκη όλων",
   "Re-read with AI": "Νέα ανάγνωση με AI",
+  "Re-reading replaces the current receipt details and line edits.": "Η νέα ανάγνωση αντικαθιστά τα τρέχοντα στοιχεία της απόδειξης και τις αλλαγές στις γραμμές.",
   "A different OCR reading matched the receipt arithmetic better. Check product names and prices against the photo.": "Μια διαφορετική ανάγνωση OCR ταίριαξε καλύτερα με τα ποσά της απόδειξης. Έλεγξε τα ονόματα και τις τιμές στη φωτογραφία.",
   "OCR readings disagree on some quantities, prices or barcodes. Check them against the photo.": "Οι αναγνώσεις OCR διαφέρουν σε ορισμένες ποσότητες, τιμές ή barcode. Έλεγξέ τες στη φωτογραφία.",
   "Price not recognised — check this line.": "Η τιμή δεν αναγνωρίστηκε — έλεγξε αυτή τη γραμμή.",

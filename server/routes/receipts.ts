@@ -521,10 +521,6 @@ receiptRoutes.post(
       const chargesExplainDifference = excludedCharges > 0 && templateCheck.difference != null &&
         Math.abs(templateCheck.difference - excludedCharges) <= 0.02;
       const mismatch = templateCheck.difference != null && !templateCheck.ok && !chargesExplainDifference;
-      if (chargesExplainDifference && !body.preferAi) {
-        warnings.push(`The product total excludes ${moneyText(excludedCharges, templateDraft.currency)} in printed bag or other non-product charges.`);
-      }
-      if (mismatch && !body.preferAi) warnings.push("The product lines do not match the printed total. Check the receipt or re-read with AI.");
       if (body.preferAi && canUseAi) {
         try {
           const ai = await readWithAi("requested");
@@ -538,6 +534,14 @@ receiptRoutes.post(
         } catch (err) {
           warnings.push(`AI re-read failed, kept the template result. ${err instanceof Error ? err.message : ""}`.trim());
         }
+      }
+      // If AI was unavailable, failed or returned no lines, explain the
+      // retained template result rather than dropping its reconciliation note.
+      if (provider === "template") {
+        if (chargesExplainDifference) {
+          warnings.push(`The product total excludes ${moneyText(excludedCharges, templateDraft.currency)} in printed bag or other non-product charges.`);
+        }
+        if (mismatch) warnings.push("The product lines do not match the printed total. Check the receipt or re-read with AI.");
       }
     } else if (body.preferAi && canUseAi) {
       try {

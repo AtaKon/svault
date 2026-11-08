@@ -4009,6 +4009,14 @@ describe("receipt scan fixes", () => {
     assert.equal(fixAiRequests.length, 0);
     assert.equal(result.data.reconciliation.difference, 0.89);
     assert.match(result.data.warning, /0\.89/);
+    fixReceiptPayload = { lines: [] };
+    const reread = await request(`/api/houses/${aiHouse}/receipts/scan`, {
+      method: "POST", body: { text, preferAi: true },
+    });
+    assert.equal(reread.data.provider, "template");
+    assert.match(reread.data.warning, /0\.89/);
+    assert.match(reread.data.warning, /AI did not find any product lines/);
+    fixAiRequests.length = 0;
     const incomplete = await request(`/api/houses/${aiHouse}/receipts/scan`, {
       method: "POST", body: { text: text.replace("3,44", "5,44") },
     });

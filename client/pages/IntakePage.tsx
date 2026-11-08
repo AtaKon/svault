@@ -203,6 +203,7 @@ export function IntakePage() {
                 {t("Parse lines ")}</Button>
               {result?.aiAvailable && <Button variant="secondary" onClick={() => void parse(true)} loading={parsing} icon="sparkles">
                 {t("Re-read with AI")}</Button>}
+              {result?.aiAvailable && <span className="text-[11px] text-muted">{t("Re-reading replaces the current receipt details and line edits.")}</span>}
             </div>
           </>
         ) : (

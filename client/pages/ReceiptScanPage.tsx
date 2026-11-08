@@ -1460,9 +1460,12 @@ export function ReceiptScanPage() {
               </div>
               {warning && <p className="rounded-xl bg-raised px-3 py-2 text-[11px] leading-relaxed text-muted">{t(warning)}</p>}
               {provider && aiAvailable && (
-                <Button type="button" size="sm" variant="secondary" icon="sparkles" loading={busy} onClick={() => void readReceipt(true)}>
-                  {t("Re-read with AI")}
-                </Button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button type="button" size="sm" variant="secondary" icon="sparkles" loading={busy} onClick={() => void readReceipt(true)}>
+                    {t("Re-read with AI")}
+                  </Button>
+                  <span className="text-[11px] text-muted">{t("Re-reading replaces the current receipt details and line edits.")}</span>
+                </div>
               )}
               <Field label={t("Shop")} hint={t("starts a new shop if unknown")}>
                 <Input
@@ -1979,8 +1982,11 @@ function ReconciliationBar({
               {t("Gap")} {money(Math.abs(difference), currency)}
               {savings > 0 ? t(" after {amount} savings", { amount: money(savings, currency) }) : ""} {t("— check for missing or misread lines.")}</span>
             {canReRead && (
-              <Button size="sm" variant="secondary" icon="sparkles" loading={rereading} onClick={onReRead}>
-                {t("Re-read with AI")}</Button>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button size="sm" variant="secondary" icon="sparkles" loading={rereading} onClick={onReRead}>
+                  {t("Re-read with AI")}</Button>
+                <span>{t("Re-reading replaces the current receipt details and line edits.")}</span>
+              </div>
             )}
           </div>
         )}
