@@ -113,6 +113,7 @@ const { LIDL_TEMPLATE_RULES, SKLAVENITIS_TEMPLATE_RULES } = await import("../../
 const { convert, pricePerUnit } = await import("../units.js");
 const { parseOffNutrition } = await import("../services/nutrition.js");
 const { createPosoKaneiClient, PosoKaneiUnavailableError } = await import("../services/posokanei.js");
+const { RateLimitError } = await import("../rate-limit.js");
 const { parseCsv, parseCsvNumber } = await import("../services/csv.js");
 const { totpCode, verifyTotp, generateTotpSecret, generateBackupCodes } = await import("../services/totp.js");
 const { backupForTest, validateBackup } = await import("../services/backup.js");
@@ -5054,6 +5055,40 @@ describe("PosoKanei price lookup client", () => {
     assert.equal(calls, 1);
   });
 
+  it("caches valid products that have no Greek retailer offers and rejects malformed products", async () => {
+    let emptyOffersCalls = 0;
+    const noGreekOffers = {
+      ...product,
+      retailer_prices: [{ country: "DE", retailer: "Store DE", price: 1.25 }],
+    };
+    const emptyOffersClient = createPosoKaneiClient(async () => {
+      emptyOffersCalls++;
+      return new Response(JSON.stringify(noGreekOffers), { headers: { "content-type": "application/json" } });
+    }, () => {});
+    assert.deepEqual(await emptyOffersClient.lookupPosoKaneiBarcode("12345685", userId), []);
+    assert.deepEqual(await emptyOffersClient.lookupPosoKaneiBarcode("12345685", userId), []);
+    assert.equal(emptyOffersCalls, 1);
+
+    const malformedClient = createPosoKaneiClient(async () =>
+      new Response(JSON.stringify({ id: "missing-fields" }), { headers: { "content-type": "application/json" } }), () => {});
+    await assert.rejects(
+      malformedClient.lookupPosoKaneiBarcode("12345686", userId),
+      PosoKaneiUnavailableError,
+    );
+  });
+
+  it("preserves the 429 API error from the rate-limit callback", async () => {
+    const client = createPosoKaneiClient(async () => {
+      throw new Error("fetch must not run after a rate-limit rejection");
+    }, () => {
+      throw new RateLimitError(60, "Price lookup limit reached. Try again later.");
+    });
+    await assert.rejects(
+      client.lookupPosoKaneiBarcode("12345687", userId),
+      (error: unknown) => error instanceof RateLimitError && error.status === 429 && error.retryAfter === 60,
+    );
+  });
+
   it("keeps the lookup cache bounded, including unknown barcodes", async () => {
     let calls = 0;
     const client = createPosoKaneiClient(async () => {
@@ -5091,6 +5126,15 @@ describe("PosoKanei price lookup client", () => {
       new Response("<html>blocked</html>", { headers: { "content-type": "text/html" } }), () => {});
     await assert.rejects(
       nonJsonClient.lookupPosoKaneiBarcode("12345682", userId),
+      PosoKaneiUnavailableError,
+    );
+
+    const announcedOversizeClient = createPosoKaneiClient(async () =>
+      new Response("{}", {
+        headers: { "content-type": "application/json", "content-length": "1000001" },
+      }), () => {});
+    await assert.rejects(
+      announcedOversizeClient.lookupPosoKaneiBarcode("12345688", userId),
       PosoKaneiUnavailableError,
     );
 

@@ -274,7 +274,7 @@ export function ShoppingPage() {
                           <div className="flex flex-wrap gap-1.5">
                             {externalOffers[item.id].slice(0, 3).map((offer, index) => (
                               <span
-                                key={`${offer.productId}-${offer.retailer}`}
+                                key={`${offer.productId}-${offer.retailer}-${index}`}
                                 className={cn(
                                   "rounded-md border px-1.5 py-0.5 text-[10px]",
                                   offer.discount ? "border-brand/30 bg-brand-soft text-brand" : "border-line text-muted",

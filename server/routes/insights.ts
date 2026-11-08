@@ -105,7 +105,11 @@ insightRoutes.get(
     } catch (error) {
       if (error instanceof PosoKaneiUnavailableError) {
         if (error.retryAfterSeconds) res.setHeader("Retry-After", String(error.retryAfterSeconds));
-        throw new ApiError(502, error.message, error.retryAfterSeconds ? { retryAfterSeconds: error.retryAfterSeconds } : undefined);
+        throw new ApiError(
+          502,
+          "External price lookup is unavailable. Try again later.",
+          error.retryAfterSeconds ? { retryAfterSeconds: error.retryAfterSeconds } : undefined,
+        );
       }
       throw error;
     }

@@ -142,6 +142,7 @@ export function createPosoKaneiClient(
   let upstreamBlockedUntil = 0;
 
   const cacheResult = (code: string, entry: CachedLookup) => {
+    cache.delete(code);
     cache.set(code, entry);
     if (cache.size <= 500) return;
     const now = Date.now();
@@ -149,72 +150,72 @@ export function createPosoKaneiClient(
     while (cache.size > 500) cache.delete(cache.keys().next().value!);
   };
 
-/** Fetch a product only by an exact barcode. The destination is a fixed,
- * HTTPS-only upstream; callers cannot provide URLs, query strings or headers. */
-async function lookupPosoKaneiBarcode(barcode: string, userId: string): Promise<ExternalShoppingOffer[]> {
-  const code = barcode.trim();
-  if (!/^\d{8,14}$/.test(code)) return [];
-  const now = Date.now();
-  const cached = cache.get(code);
-  if (cached && cached.expiresAt > now) return cached.offers;
-  if (upstreamBlockedUntil > now) {
-    throw new PosoKaneiUnavailableError(
-      "PosoKanei asked SVault to slow down. Try again later.",
-      Math.ceil((upstreamBlockedUntil - now) / 1000),
-    );
-  }
-  const existing = inFlight.get(code);
-  if (existing) return existing;
-  consumeRateLimit(userId);
+  /** Fetch a product only by an exact barcode. The destination is a fixed,
+   * HTTPS-only upstream; callers cannot provide URLs, query strings or headers. */
+  async function lookupPosoKaneiBarcode(barcode: string, userId: string): Promise<ExternalShoppingOffer[]> {
+    const code = barcode.trim();
+    if (!/^\d{8,14}$/.test(code)) return [];
+    const now = Date.now();
+    const cached = cache.get(code);
+    if (cached && cached.expiresAt > now) return cached.offers;
+    if (upstreamBlockedUntil > now) {
+      throw new PosoKaneiUnavailableError(
+        "PosoKanei asked SVault to slow down. Try again later.",
+        Math.ceil((upstreamBlockedUntil - now) / 1000),
+      );
+    }
+    const existing = inFlight.get(code);
+    if (existing) return existing;
+    consumeRateLimit(userId);
 
-  const request = (async () => {
-    const url = new URL(`/products/barcode/${encodeURIComponent(code)}`, API_BASE);
-    url.searchParams.set("countries", "GR");
-    const response = await fetcher(url, {
-      method: "GET",
-      headers: {
-        accept: "application/json",
-        "user-agent": "SVault/1.2 (self-hosted household inventory; https://github.com/AtaKon/svault)",
-      },
-      redirect: "error",
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-    if (response.status === 404) {
-      const offers: ExternalShoppingOffer[] = [];
-      await cancelBody(response);
-      cacheResult(code, { expiresAt: Date.now() + 10 * 60_000, offers });
+    const request = (async () => {
+      const url = new URL(`/products/barcode/${encodeURIComponent(code)}`, API_BASE);
+      url.searchParams.set("countries", "GR");
+      const response = await fetcher(url, {
+        method: "GET",
+        headers: {
+          accept: "application/json",
+          "user-agent": "SVault/1.2 (self-hosted household inventory; https://github.com/AtaKon/svault)",
+        },
+        redirect: "error",
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      });
+      if (response.status === 404) {
+        const offers: ExternalShoppingOffer[] = [];
+        await cancelBody(response);
+        cacheResult(code, { expiresAt: Date.now() + 10 * 60_000, offers });
+        return offers;
+      }
+      if (response.status === 429) {
+        const wait = retryAfter(response);
+        upstreamBlockedUntil = Date.now() + wait * 1000;
+        await cancelBody(response);
+        throw new PosoKaneiUnavailableError("PosoKanei asked SVault to slow down. Try again later.", wait);
+      }
+      if (!response.ok) {
+        await cancelBody(response);
+        throw new PosoKaneiUnavailableError(`PosoKanei returned HTTP ${response.status}`);
+      }
+      const contentType = response.headers.get("content-type") ?? "";
+      if (!contentType.toLowerCase().includes("application/json")) {
+        await cancelBody(response);
+        throw new PosoKaneiUnavailableError("PosoKanei returned a non-JSON response");
+      }
+      let payload: unknown;
+      try {
+        payload = JSON.parse(await readBoundedBody(response));
+      } catch (error) {
+        if (error instanceof PosoKaneiUnavailableError) throw error;
+        throw new PosoKaneiUnavailableError("PosoKanei returned invalid JSON");
+      }
+      const fetchedAt = new Date().toISOString();
+      const offers = parseOffers(payload, fetchedAt);
+      cacheResult(code, { expiresAt: Date.now() + CACHE_MS, offers });
       return offers;
-    }
-    if (response.status === 429) {
-      const wait = retryAfter(response);
-      upstreamBlockedUntil = Date.now() + wait * 1000;
-      await cancelBody(response);
-      throw new PosoKaneiUnavailableError("PosoKanei asked SVault to slow down. Try again later.", wait);
-    }
-    if (!response.ok) {
-      await cancelBody(response);
-      throw new PosoKaneiUnavailableError(`PosoKanei returned HTTP ${response.status}`);
-    }
-    const contentType = response.headers.get("content-type") ?? "";
-    if (!contentType.toLowerCase().includes("application/json")) {
-      await cancelBody(response);
-      throw new PosoKaneiUnavailableError("PosoKanei returned a non-JSON response");
-    }
-    let payload: unknown;
-    try {
-      payload = JSON.parse(await readBoundedBody(response));
-    } catch (error) {
-      if (error instanceof PosoKaneiUnavailableError) throw error;
-      throw new PosoKaneiUnavailableError("PosoKanei returned invalid JSON");
-    }
-    const fetchedAt = new Date().toISOString();
-    const offers = parseOffers(payload, fetchedAt);
-    cacheResult(code, { expiresAt: Date.now() + CACHE_MS, offers });
-    return offers;
-  })().finally(() => inFlight.delete(code));
-  inFlight.set(code, request);
-  return request;
-}
+    })().finally(() => inFlight.delete(code));
+    inFlight.set(code, request);
+    return request;
+  }
 
   return { lookupPosoKaneiBarcode };
 }
