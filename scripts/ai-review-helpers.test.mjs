@@ -44,9 +44,34 @@ test("mergeChunkReviews keeps prose blocking findings", () => {
   assert.match(review, /drops rows during migration/);
 });
 
+test("mergeChunkReviews flags a missing Blocking section", () => {
+  const review = mergeChunkReviews([
+    { index: 1, text: "### Non-blocking\n- some note\n### Tests\nNone." },
+  ]);
+  assert.match(review, /omitted the Blocking section/);
+});
+
+test("splitDiff keeps chunks within the limit even with a long header", () => {
+  const header = `diff --git a/very-long.ts b/very-long.ts\n${"index 111..222 100644\n".repeat(40)}`;
+  const diff = `${header}@@ -1 +1 @@\n${Array.from({ length: 300 }, (_, i) => `+line ${i}`).join("\n")}`;
+  const limit = 1_200;
+  const chunks = splitDiff(diff, limit);
+  assert.ok(chunks.length > 1);
+  for (const chunk of chunks) assert.ok(chunk.length <= limit + 60, `chunk is ${chunk.length}`);
+});
+
+test("splitDiff keeps continuation lines intact", () => {
+  const diff = `diff --git a/lines.ts b/lines.ts\n@@ -1 +1 @@\n${Array.from({ length: 200 }, (_, i) => `+line-${i}`).join("\n")}`;
+  const chunks = splitDiff(diff, 700);
+  for (const chunk of chunks.slice(1)) {
+    const lines = chunk.split("\n").filter((line) => line.startsWith("+line-"));
+    for (const line of lines) assert.match(line, /^\+line-\d+$/);
+  }
+});
+
 test("clipComment handles text without a newline before the limit", () => {
   const clipped = clipComment("x".repeat(500), 100);
-  assert.match(clipped, /truncated before 100 characters/);
+  assert.match(clipped, /truncated at \d+ characters/);
   assert.ok(clipped.length < 220);
 });
 

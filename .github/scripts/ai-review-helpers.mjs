@@ -2,9 +2,11 @@
 
 function safeCut(text, limit) {
   if (text.length <= limit) return text.length;
-  const newline = text.lastIndexOf("\n", limit);
-  let end = newline > 1000 ? newline : Math.min(limit, text.length);
-  // Never split a surrogate pair.
+  let end = text.lastIndexOf("\n", limit);
+  if (end < 1000) {
+    const next = text.indexOf("\n", limit);
+    end = next >= 0 ? next : text.length;
+  }
   if (end > 0 && end < text.length) {
     const code = text.charCodeAt(end - 1);
     if (code >= 0xd800 && code <= 0xdbff) end -= 1;
@@ -26,12 +28,17 @@ export function splitDiff(diff, limit) {
       flush();
       const lines = section.split("\n");
       const hunk = lines.findIndex((line) => line.startsWith("@@"));
-      const header = `${(hunk > 0 ? lines.slice(0, hunk) : [lines[0]]).join("\n")}\n`;
+      const fullHeader = `${(hunk > 0 ? lines.slice(0, hunk) : [lines[0]]).join("\n")}\n`;
+      const firstLine = `${lines[0]}\n`;
+      const minimumPiece = Math.max(400, Math.floor(limit / 3));
+      const fits = (candidate) => candidate.length + 48 + minimumPiece <= limit;
+      const header = fits(fullHeader) ? fullHeader : fits(firstLine) ? firstLine : "";
       const reserve = header.length + 48;
+      const pieceLimit = Math.max(limit - reserve, 500);
       let rest = section;
       let first = true;
       while (rest.length > limit) {
-        const end = safeCut(rest, Math.max(limit - reserve, 1_000));
+        const end = safeCut(rest, pieceLimit);
         const piece = rest.slice(0, end).replace(/\n+$/, "");
         chunks.push(`${first ? "" : header}${piece}\n\n[Diff part continues in the next chunk]\n`);
         rest = rest.slice(end).replace(/^\n+/, "");
@@ -78,6 +85,11 @@ export function mergeChunkReviews(parts) {
     if (!partBlocking.length && blockingText && !/^no blocking issues found\.?$/i.test(blockingText)) {
       partBlocking.push(`- ${blockingText.slice(0, 2_000)}`);
     }
+    if (!blockingText && (nonBlockingText || testsText)) {
+      nonBlocking.push(
+        `[part ${part.index}] Reviewer omitted the Blocking section; cannot confirm this part has no blockers.`,
+      );
+    }
     if (!partNonBlocking.length && nonBlockingText && !/^none\.?$/i.test(nonBlockingText)) {
       partNonBlocking.push(`- ${nonBlockingText.slice(0, 2_000)}`);
     }
@@ -119,5 +131,5 @@ export function clipComment(text, limit) {
   let out = text.slice(0, cut);
   const fences = (out.match(/^```/gm) || []).length;
   if (fences % 2) out += "\n```";
-  return `${out}\n\n[Review comment truncated before ${limit} characters]`;
+  return `${out}\n\n[Review comment truncated at ${out.length} characters]`;
 }

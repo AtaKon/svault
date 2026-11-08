@@ -129,7 +129,7 @@ function trimDiff(diff, limit) {
 let buildPrompt;
 let fullDiff = "";
 let buildChunkPrompt = () => {
-  throw new Error("Chunked review is only available for pull requests");
+  throw new Error("unreachable chunk prompt");
 };
 if (isPullRequest) {
   const diffResponse = await github(`/repos/${repository}/pulls/${number}`, {
@@ -325,20 +325,22 @@ if (isPullRequest && fullDiff.length > MAX_DIFF_CHARS) {
       index: "size",
       text: `### Blocking\n- The diff is ${fullDiff.length} characters, above the ${MAX_TOTAL_DIFF_CHARS}-character review budget. Split the PR before merging.\n`,
     });
-  }
-  if (chunks.length > MAX_CHUNKS) {
+  } else if (chunks.length > MAX_CHUNKS) {
     parts.push({
       index: "overflow",
       text: `### Blocking\n- The diff needs ${chunks.length} review parts; only the first ${MAX_CHUNKS} were reviewed. The unreviewed part is not approved. Split the PR.\n`,
     });
   }
+  const limit = tooLarge ? 0 : Math.min(chunks.length, MAX_CHUNKS);
   let consecutiveFailures = 0;
-  for (let index = 0; index < (tooLarge ? 0 : Math.min(chunks.length, MAX_CHUNKS)); index++) {
+  let stopped = false;
+  for (let index = 0; index < limit; index++) {
     if (consecutiveFailures >= 3) {
       parts.push({
         index: "stopped",
-        text: `### Blocking\n- Review stopped after 3 consecutive part failures; parts ${index + 1}-${Math.min(chunks.length, MAX_CHUNKS)} were not reviewed.\n`,
+        text: `### Blocking\n- Review stopped after 3 consecutive part failures; parts ${index + 1}-${limit} were not reviewed.\n`,
       });
+      stopped = true;
       break;
     }
     const prompt = buildChunkPrompt(chunks[index], index + 1, chunks.length);
@@ -366,8 +368,13 @@ if (isPullRequest && fullDiff.length > MAX_DIFF_CHARS) {
         index: index + 1,
         text: `### Blocking\n- Reviewer returned no answer for part ${index + 1}.\n`,
       });
-      continue;
     }
+  }
+  if (!stopped && consecutiveFailures >= 3) {
+    parts.push({
+      index: "stopped",
+      text: `### Blocking\n- Review ended with 3 consecutive part failures; the last reviewed part was ${limit} of ${chunks.length}.\n`,
+    });
   }
   review = mergeChunkReviews(parts);
 } else {
