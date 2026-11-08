@@ -86,7 +86,7 @@ export function AppShell() {
           Notification.permission === "granted"
         ) {
           new Notification("SVault", {
-            body: fresh.length === 1 ? fresh[0].title : `${fresh.length} new reminders`,
+            body: fresh.length === 1 ? t(fresh[0].title) : t("{count} new reminders", { count: fresh.length }),
           });
         }
         notificationsPrimed.current = true;
@@ -158,7 +158,7 @@ export function AppShell() {
             className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm text-muted transition-colors hover:bg-raised hover:text-ink"
           >
             <Icon name={theme === "dark" ? "sun" : "moon"} size={17} />
-            {theme === "dark" ? "Light mode" : "Dark mode"}
+            {theme === "dark" ? t("Light mode") : t("Dark mode")}
           </button>
           <button
             onClick={() => navigate("/profile")}
@@ -288,7 +288,7 @@ export function AppShell() {
           await refresh();
           selectHouse(created.id);
           setCreateOpen(false);
-          toast.success(`${created.name} added`);
+      toast.success(t("{house} added", { house: created.name }));
         }}
       />
     </div>
@@ -333,8 +333,9 @@ function HouseSwitcher({
   onSelect: (id: string) => void;
   onCreate: () => void;
 }) {
+  const { t } = useI18n();
   return (
-    <Sheet open={open} onClose={onClose} title="Your houses" description="Inventory, recipes and photos are kept per house.">
+    <Sheet open={open} onClose={onClose} title={t("Your houses")} description={t("Inventory, recipes and photos are kept per house.")}>
       <div className="space-y-1.5">
         {houses.map((house) => (
           <button
@@ -351,7 +352,7 @@ function HouseSwitcher({
             <span className="min-w-0 flex-1">
               <span className="block truncate text-sm font-medium">{house.name}</span>
               <span className="block text-[11px] capitalize text-muted">
-                {house.role} · {house.kind}
+                {t(house.role)} · {t(house.kind)}
               </span>
             </span>
             {house.id === currentId && <Icon name="check" size={17} className="text-brand" />}
@@ -359,7 +360,7 @@ function HouseSwitcher({
         ))}
       </div>
       <Button variant="secondary" block icon="plus" className="mt-4" onClick={onCreate}>
-        Add another house
+        {t("Add another house")}
       </Button>
     </Sheet>
   );
@@ -374,6 +375,7 @@ function NewHouseSheet({
   onClose: () => void;
   onCreated: (house: House) => void | Promise<void>;
 }) {
+  const { t } = useI18n();
   const toast = useToast();
   const [name, setName] = useState("");
   const [kind, setKind] = useState("home");
@@ -395,7 +397,7 @@ function NewHouseSheet({
       const house = await api<House>("/api/houses", { method: "POST", body: { name, kind, currency } });
       await onCreated(house);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not create the house");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not create the house"));
     } finally {
       setSaving(false);
     }
@@ -405,35 +407,35 @@ function NewHouseSheet({
     <Sheet
       open={open}
       onClose={onClose}
-      title="New house"
-      description="Every house has its own stock, recipes and photo library."
+      title={t("New house")}
+      description={t("Every house has its own stock, recipes and photo library.")}
       footer={
         <Button block onClick={submit} loading={saving} disabled={!name.trim()}>
-          Create house
+          {t("Create house")}
         </Button>
       }
     >
       <form onSubmit={submit} className="space-y-3">
-        <Field label="Name" required>
+        <Field label={t("Name")} required>
           <Input
             autoFocus
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="Lake cabin, city flat…"
+            placeholder={t("Lake cabin, city flat…")}
             maxLength={80}
           />
         </Field>
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Type">
+          <Field label={t("Type")}>
             <Select value={kind} onChange={(e) => setKind(e.target.value)}>
-              <option value="home">Home</option>
-              <option value="cabin">Cabin</option>
-              <option value="apartment">Apartment</option>
-              <option value="garage">Garage / storage</option>
-              <option value="office">Office</option>
+              <option value="home">{t("home")}</option>
+              <option value="cabin">{t("Cabin")}</option>
+              <option value="apartment">{t("Apartment")}</option>
+              <option value="garage">{t("Garage / storage")}</option>
+              <option value="office">{t("Office")}</option>
             </Select>
           </Field>
-          <Field label="Currency">
+          <Field label={t("Currency")}>
             <Select value={currency} onChange={(e) => setCurrency(e.target.value)}>
               {CURRENCIES.map((code) => (
                 <option key={code} value={code}>

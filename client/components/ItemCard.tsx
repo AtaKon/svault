@@ -9,6 +9,7 @@ import { ZoomableImage } from "@/components/ZoomableImage";
 import { useToast } from "@/components/toast";
 import { useAuth } from "@/state";
 import { enqueueStockAction, isOffline } from "@/offline-queue";
+import { useI18n } from "@/i18n";
 
 /* ----------------------------------------------------------------- item card */
 
@@ -21,6 +22,7 @@ export function ItemCard({
   onUpdated?: (item: ItemDetail) => void;
   compact?: boolean;
 }) {
+  const { t } = useI18n();
   const navigate = useNavigate();
   const { house, user } = useAuth();
   const toast = useToast();
@@ -47,7 +49,7 @@ export function ItemCard({
           ...previous,
           quantity: Math.max(0, previous.quantity + (action === "add" ? 1 : -1)),
         }));
-        toast.push("Queued offline — it will sync when you reconnect");
+        toast.push(t("Queued offline — it will sync when you reconnect"));
         return;
       }
       const detail = await api<ItemDetail>(`/api/items/${item.id}/stock`, {
@@ -57,7 +59,7 @@ export function ItemCard({
       setCurrent(detail);
       onUpdated?.(detail);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not update stock");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not update stock"));
     } finally {
       setBusy(null);
     }
@@ -103,7 +105,7 @@ export function ItemCard({
           <div className={cn("min-w-0 truncate font-medium leading-tight", compact ? "text-sm" : "text-[15px]")}>{item.name}</div>
           {item.isLow && (
             <Badge tone="warn" className="shrink-0">
-              low
+              {t("low")}
             </Badge>
           )}
         </div>
@@ -111,7 +113,7 @@ export function ItemCard({
           {item.categoryName && <span className="min-w-0 truncate">{item.categoryName}</span>}
           {item.brand && <span className="min-w-0 truncate">· {item.brand}</span>}
           {item.barcodes.length > 0 && (
-            <span className="inline-flex shrink-0 items-center gap-0.5" title={`${item.barcodes.length} barcode${item.barcodes.length === 1 ? "" : "s"}`}>
+            <span className="inline-flex shrink-0 items-center gap-0.5" title={t(item.barcodes.length === 1 ? "{count} barcode" : "{count} barcodes", { count: item.barcodes.length })}>
               · <Icon name="barcode" size={11} />
             </span>
           )}
@@ -130,7 +132,7 @@ export function ItemCard({
         </div>
         <div className="flex items-center gap-1">
           <button
-            aria-label={`Remove one ${item.name}`}
+            aria-label={t("Remove one {item}", { item: item.name })}
             className="flex h-8 w-8 items-center justify-center rounded-lg border border-line bg-surface text-muted transition-colors hover:border-danger/40 hover:text-danger disabled:opacity-40"
             disabled={busy !== null || current.quantity <= 0}
             onClick={() => void step("remove")}
@@ -138,7 +140,7 @@ export function ItemCard({
             {busy === "remove" ? <Spinner size={13} /> : <Icon name="minus" size={15} />}
           </button>
           <button
-            aria-label={`Add one ${item.name}`}
+            aria-label={t("Add one {item}", { item: item.name })}
             className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-soft text-brand transition-colors hover:brightness-95 disabled:opacity-40"
             disabled={busy !== null}
             onClick={() => void step("add")}
@@ -184,6 +186,7 @@ export function StockDialog({
   initialAction?: StockAction;
 }) {
   const { house, user } = useAuth();
+  const { t } = useI18n();
   const toast = useToast();
   const [action, setAction] = useState<StockAction>(initialAction);
   const [amount, setAmount] = useState("1");
@@ -259,7 +262,7 @@ export function StockDialog({
       if (isOffline()) {
         if (!user) return;
         if (action === "add" && vendorId === "__new" && newVendor.trim()) {
-          throw new Error("Add the new shop while you are online, then queue the stock change");
+          throw new Error(t("Add the new shop while you are online, then queue the stock change"));
         }
         await enqueueStockAction({
           userId: user.id,
@@ -270,16 +273,16 @@ export function StockDialog({
           body,
           baseUpdatedAt: item.updatedAt,
         });
-        toast.push("Queued offline — it will sync when you reconnect");
+        toast.push(t("Queued offline — it will sync when you reconnect"));
         onClose();
         return;
       }
       const detail = await api<ItemDetail>(`/api/items/${item.id}/stock`, { method: "POST", body });
       onUpdated(detail);
-      toast.success(action === "add" ? "Stock added" : action === "set" ? "Stock counted" : "Stock updated");
+      toast.success(t(action === "add" ? "Stock added" : action === "set" ? "Stock counted" : "Stock updated"));
       onClose();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not update stock");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not update stock"));
     } finally {
       setBusy(false);
     }
@@ -290,10 +293,10 @@ export function StockDialog({
       open={open}
       onClose={onClose}
       title={item.name}
-      description={`${formatQty(item.quantity)} ${item.unit} now in stock`}
+      description={t("{quantity} {unit} now in stock", { quantity: formatQty(item.quantity), unit: item.unit })}
       footer={
         <Button block onClick={submit} loading={busy} disabled={!canSubmit}>
-          {action === "add"
+          {t(action === "add"
             ? "Add to stock"
             : action === "remove"
               ? "Take out of stock"
@@ -301,7 +304,7 @@ export function StockDialog({
                 ? "Record waste"
                 : action === "set"
                   ? "Save count"
-                  : "Move stock"}
+                  : "Move stock")}
         </Button>
       }
     >
@@ -315,7 +318,7 @@ export function StockDialog({
               action === entry.value ? "bg-ink text-bg" : "text-muted hover:bg-raised hover:text-ink",
             )}
           >
-            {entry.label}
+            {t(entry.label)}
           </button>
         ))}
       </div>
@@ -324,7 +327,7 @@ export function StockDialog({
         {action === "move" ? (
           <>
             <div className="grid grid-cols-2 gap-3">
-              <Field label="From">
+            <Field label={t("From")}>
                 <Select value={fromLocationId} onChange={(e) => setFromLocationId(e.target.value)}>
                   {locations.map((loc) => (
                     <option key={loc.id} value={loc.id}>
@@ -333,7 +336,7 @@ export function StockDialog({
                   ))}
                 </Select>
               </Field>
-              <Field label="To">
+              <Field label={t("To")}>
                 <Select value={toLocationId} onChange={(e) => setToLocationId(e.target.value)}>
                   {locations.map((loc) => (
                     <option key={loc.id} value={loc.id}>
@@ -343,16 +346,16 @@ export function StockDialog({
                 </Select>
               </Field>
             </div>
-            <Field label={`Quantity (${item.unit})`} required>
+            <Field label={t("Quantity ({unit})", { unit: item.unit })} required>
               <Input type="number" inputMode="decimal" min="0" value={amount} onChange={(e) => setAmount(e.target.value)} />
             </Field>
           </>
         ) : (
           <>
             <Field
-              label={action === "set" ? `Counted quantity (${item.unit})` : `Quantity (${item.unit})`}
+              label={t(action === "set" ? "Counted quantity ({unit})" : "Quantity ({unit})", { unit: item.unit })}
               required
-              hint={action === "set" ? `currently ${formatQty(item.quantity)}` : undefined}
+              hint={action === "set" ? t("currently {quantity}", { quantity: formatQty(item.quantity) }) : undefined}
             >
               <Input
                 type="number"
@@ -368,12 +371,12 @@ export function StockDialog({
             {action === "add" && (
               <>
                 <div className="grid grid-cols-2 gap-3">
-                  <Field label={`Unit price (${house?.currency})`} hint={`per ${item.unit}`}>
+                  <Field label={t("Unit price ({currency})", { currency: house?.currency ?? "EUR" })} hint={t("per {unit}", { unit: item.unit })}>
                     <Input type="number" inputMode="decimal" min="0" step="any" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="0.00" />
                   </Field>
-                  <Field label="Location">
+                  <Field label={t("Location")}>
                     <Select value={locationId} onChange={(e) => setLocationId(e.target.value)}>
-                      <option value="">Unassigned</option>
+                      <option value="">{t("Unassigned")}</option>
                       {locations.map((loc) => (
                         <option key={loc.id} value={loc.id}>
                           {loc.name}
@@ -383,29 +386,29 @@ export function StockDialog({
                   </Field>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
-                  <Field label="Purchased">
+                  <Field label={t("Purchased")}>
                     <Input type="date" value={purchasedAt} onChange={(e) => setPurchasedAt(e.target.value)} />
                   </Field>
-                  <Field label="Expires" hint="optional">
+                  <Field label={t("Expires")} hint={t("optional")}>
                     <Input type="date" value={expiresAt} onChange={(e) => setExpiresAt(e.target.value)} />
                   </Field>
                 </div>
-                <Field label="Where from" hint="optional">
+                <Field label={t("Where from")} hint={t("optional")}>
                   <Select value={vendorId} onChange={(e) => setVendorId(e.target.value)}>
-                    <option value="">Not recorded</option>
+                    <option value="">{t("Not recorded")}</option>
                     {vendors.map((vendor) => (
                       <option key={vendor.id} value={vendor.id}>
                         {vendor.name}
                       </option>
                     ))}
-                    <option value="__new">+ Add a new shop…</option>
+                    <option value="__new">+ {t("Add a new shop…")}</option>
                   </Select>
                 </Field>
                 {vendorId === "__new" && (
                   <Input
                     value={newVendor}
                     onChange={(e) => setNewVendor(e.target.value)}
-                    placeholder="Shop name, e.g. Corner Market"
+                    placeholder={t("Shop name, e.g. Corner Market")}
                     autoFocus
                     maxLength={80}
                   />
@@ -414,9 +417,9 @@ export function StockDialog({
             )}
 
             {action === "set" && (
-              <Field label="Location for differences">
+              <Field label={t("Location for differences")}>
                 <Select value={locationId} onChange={(e) => setLocationId(e.target.value)}>
-                  <option value="">Unassigned</option>
+                  <option value="">{t("Unassigned")}</option>
                   {locations.map((loc) => (
                     <option key={loc.id} value={loc.id}>
                       {loc.name}
@@ -428,8 +431,8 @@ export function StockDialog({
           </>
         )}
 
-        <Field label="Note" hint="optional">
-          <Textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} maxLength={300} placeholder="Why did it change?" />
+        <Field label={t("Note")} hint={t("optional")}>
+          <Textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} maxLength={300} placeholder={t("Why did it change?")} />
         </Field>
       </div>
     </Sheet>
@@ -447,8 +450,9 @@ export function AttributeFields({
   values: Record<string, unknown>;
   onChange: (values: Record<string, unknown>) => void;
 }): ReactNode {
+  const { t } = useI18n();
   if (!defs.length) {
-    return <p className="text-xs text-muted">No custom attributes yet. Add them in Settings → Attributes.</p>;
+    return <p className="text-xs text-muted">{t("No custom attributes yet. Add them in Settings → Attributes.")}</p>;
   }
   return (
     <div className="grid gap-3 sm:grid-cols-2">

@@ -1,5 +1,6 @@
 import { useId } from "react";
 import { money, qty } from "@/format";
+import { useI18n } from "@/i18n";
 
 export function PriceChart({
   points,
@@ -12,11 +13,12 @@ export function PriceChart({
   currency?: string;
   height?: number;
 }) {
+  const { t, locale } = useI18n();
   const gradientId = useId().replace(/:/g, "");
   if (!points.length) {
     return (
       <div className="flex h-32 items-center justify-center rounded-xl border border-dashed border-line text-xs text-muted">
-        Record a purchase price to see history
+        {t("Record a purchase price to see history")}
       </div>
     );
   }
@@ -55,7 +57,7 @@ export function PriceChart({
       <div className="mb-2 flex items-end justify-between gap-3">
         <div>
           <div className="font-display text-2xl leading-none">{money(latest, currency)}</div>
-          <div className="mt-1 text-[11px] text-muted">per {unit} · latest purchase</div>
+          <div className="mt-1 text-[11px] text-muted">{t("per {unit} · latest purchase", { unit })}</div>
         </div>
         {points.length > 1 && (
           <div className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${change > 0 ? "bg-danger-soft text-danger" : change < 0 ? "bg-brand-soft text-brand" : "bg-raised text-muted"}`}>
@@ -85,11 +87,11 @@ export function PriceChart({
         </div>
       </div>
       <div className="mt-1 flex justify-between text-[10px] text-muted">
-        <span>{new Date(points[0].at).toLocaleDateString()}</span>
+        <span>{new Date(points[0].at).toLocaleDateString(locale)}</span>
         <span>
-          {qty(points.length)} purchase{points.length === 1 ? "" : "s"}
+          {t(points.length === 1 ? "{count} purchase" : "{count} purchases", { count: qty(points.length) })}
         </span>
-        <span>{new Date(points[points.length - 1].at).toLocaleDateString()}</span>
+        <span>{new Date(points[points.length - 1].at).toLocaleDateString(locale)}</span>
       </div>
     </div>
   );

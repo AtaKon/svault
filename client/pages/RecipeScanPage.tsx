@@ -9,6 +9,7 @@ import { useToast } from "@/components/toast";
 import { ocrImage } from "@/ocr";
 import { aiCostLabel, minutesLabel, plural, qty } from "@/format";
 import type { Recipe } from "@shared/types";
+import { useI18n } from "@/i18n";
 
 interface Draft {
   title: string;
@@ -28,6 +29,7 @@ interface Draft {
 }
 
 export function RecipeScanPage() {
+  const { t } = useI18n();
   const { house } = useHouse();
   const navigate = useNavigate();
   const toast = useToast();
@@ -63,7 +65,7 @@ export function RecipeScanPage() {
       const data = await api<{ path: string }>(`/api/houses/${house.id}/recipes/upload`, { method: "POST", body: form });
       setUploadedPath(data.path);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not upload the photo");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not upload the photo"));
     } finally {
       setUploading(false);
     }
@@ -75,17 +77,17 @@ export function RecipeScanPage() {
     if (!target) return;
     setOcrRunning(true);
     setOcrProgress(0);
-    setOcrStatus("Starting OCR");
+    setOcrStatus(t("Starting OCR"));
     setOcrError(null);
     try {
       const result = await ocrImage(target, (progress, status) => {
         setOcrProgress(progress);
-        setOcrStatus(status);
+        setOcrStatus(t(status));
       });
       setText(result.trim());
-      if (!result.trim()) setOcrError("No text was detected. Try a sharper, brighter photo or type the recipe.");
+      if (!result.trim()) setOcrError(t("No text was detected. Try a sharper, brighter photo or type the recipe."));
     } catch (err) {
-      setOcrError(err instanceof Error ? err.message : "OCR failed");
+      setOcrError(err instanceof Error ? t(err.message) : t("OCR failed"));
     } finally {
       setOcrRunning(false);
     }
@@ -93,7 +95,7 @@ export function RecipeScanPage() {
 
   const digitize = async () => {
     if (!text.trim() && !uploadedPath) {
-      toast.error("Add a photo or paste some text first");
+      toast.error(t("Add a photo or paste some text first"));
       return;
     }
     setBusy(true);
@@ -107,7 +109,7 @@ export function RecipeScanPage() {
       setWarning(data.warning);
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not read the recipe");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not read the recipe"));
     } finally {
       setBusy(false);
     }
@@ -126,10 +128,10 @@ export function RecipeScanPage() {
           ocrText: text,
         },
       });
-      toast.success("Recipe digitised");
+      toast.success(t("Recipe digitised"));
       navigate(`/recipes/${recipe.id}`, { replace: true });
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not save the recipe");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not save the recipe"));
     } finally {
       setSaving(false);
     }
@@ -151,14 +153,13 @@ export function RecipeScanPage() {
     <div className="space-y-4">
       <PageHeader
         back={() => navigate("/recipes")}
-        eyebrow="Digitise a recipe"
-        title="Scan grandma's recipe"
-        subtitle="Photograph the card or notebook page. We read the text, fix OCR mistakes and rebuild the steps."
+        eyebrow={t("Digitise a recipe")}
+        title={t("Scan grandma's recipe")}
+        subtitle={t("Photograph the card or notebook page. We read the text, fix OCR mistakes and rebuild the steps.")}
         actions={
           preview ? (
             <Button variant="ghost" size="sm" icon="refresh" onClick={reset}>
-              Start over
-            </Button>
+              {t("Start over ")}</Button>
           ) : undefined
         }
       />
@@ -174,10 +175,10 @@ export function RecipeScanPage() {
               <Icon name="camera" size={28} />
             </span>
             <div>
-              <div className="font-display text-xl">Take a photo of the recipe</div>
-              <div className="mt-1 text-xs text-muted">JPG, PNG or HEIC · English & Greek OCR on this device first</div>
+              <div className="font-display text-xl">{t("Take a photo of the recipe")}</div>
+              <div className="mt-1 text-xs text-muted">{t("JPG, PNG or HEIC · English & Greek OCR on this device first")}</div>
             </div>
-            <span className="rounded-full border border-line bg-surface px-3 py-1.5 text-xs font-medium">Choose photo / camera</span>
+            <span className="rounded-full border border-line bg-surface px-3 py-1.5 text-xs font-medium">{t("Choose photo / camera")}</span>
           </button>
           <input
             ref={fileRef}
@@ -190,12 +191,11 @@ export function RecipeScanPage() {
       ) : (
         <div className="grid gap-4 lg:grid-cols-[1fr_1.05fr]">
           <Card className="overflow-hidden">
-            <ZoomableImage src={preview} alt="Recipe scan" className="max-h-[420px] w-full bg-raised object-contain" />
+            <ZoomableImage src={preview} alt={t("Recipe scan")} className="max-h-[420px] w-full bg-raised object-contain" />
             <div className="flex items-center justify-between px-3 py-2 text-[11px] text-muted">
-              <span>{uploading ? "Uploading scan…" : uploadedPath ? "Scan stored" : "Local only"}</span>
+              <span>{uploading ? t("Uploading scan…") : uploadedPath ? t("Scan stored") : t("Local only")}</span>
               <button type="button" onClick={() => fileRef.current?.click()} className="font-medium text-brand hover:underline">
-                Replace photo
-              </button>
+                {t("Replace photo ")}</button>
             </div>
             <input
               ref={fileRef}
@@ -210,7 +210,7 @@ export function RecipeScanPage() {
           <div className="space-y-3">
             <Card className="p-4">
               <div className="flex items-center justify-between gap-2">
-                <h2 className="font-display text-lg">Recognised text</h2>
+                <h2 className="font-display text-lg">{t("Recognised text")}</h2>
                 {ocrRunning && (
                   <span className="flex items-center gap-1.5 text-[11px] text-muted">
                     <Spinner size={12} /> {Math.round(ocrProgress * 100)}%
@@ -225,45 +225,41 @@ export function RecipeScanPage() {
               {ocrRunning && <p className="mt-1.5 text-[11px] text-muted">{ocrStatus}</p>}
               {ocrError && (
                 <div className="mt-2 rounded-xl bg-warn-soft px-3 py-2 text-[11px] text-warn">
-                  {ocrError} You can still type the text below, or let AI read the photo.
-                </div>
+                  {t(ocrError)} {' '}{t(" You can still type the text below, or let AI read the photo. ")}</div>
               )}
               <Textarea
                 rows={9}
                 value={text}
                 onChange={(event) => setText(event.target.value)}
-                placeholder="The recipe text appears here. Fix any OCR mistakes before digitising — AI does the rest."
+                placeholder={t("The recipe text appears here. Fix any OCR mistakes before digitising — AI does the rest.")}
                 className="mt-2 text-[13px]"
               />
               <div className="mt-2 flex flex-wrap gap-2">
                 <Button type="button" size="sm" variant="secondary" icon="refresh" onClick={() => void runOcr()} disabled={ocrRunning}>
-                  Re-run OCR
-                </Button>
+                  {t("Re-run OCR ")}</Button>
                 <Button type="button" size="sm" icon="sparkles" loading={busy} onClick={() => void digitize()}>
-                  Digitise recipe
-                </Button>
+                  {t("Digitise recipe ")}</Button>
               </div>
               {!text.trim() && uploadedPath && (
                 <p className="mt-2 text-[11px] text-muted">
-                  No OCR text? You can still digitise — if a vision-capable AI model is configured, it will read the photo itself.
-                </p>
+                  {t("No OCR text? You can still digitise — if a vision-capable AI model is configured, it will read the photo itself. ")}</p>
               )}
             </Card>
 
             {draft && (
               <Card className="p-4">
                 <div className="flex items-center justify-between gap-2">
-                  <h2 className="font-display text-lg">Ready to save</h2>
+                  <h2 className="font-display text-lg">{t("Ready to save")}</h2>
                   <div className="flex items-center gap-1.5">
-                    <Badge tone={provider === "ai" ? "brand" : "neutral"}>{provider === "ai" ? "AI cleaned" : "local parse"}</Badge>
+                    <Badge tone={provider === "ai" ? "brand" : "neutral"}>{provider === "ai" ? t("AI cleaned") : t("local parse")}</Badge>
                     {draft.aiCost != null && <Badge tone="outline">{aiCostLabel(draft.aiCost)}</Badge>}
                   </div>
                 </div>
                 {warning && (
-                  <p className="mt-2 rounded-xl bg-raised px-3 py-2 text-[11px] leading-relaxed text-muted">{warning}</p>
+                  <p className="mt-2 rounded-xl bg-raised px-3 py-2 text-[11px] leading-relaxed text-muted">{t(warning)}</p>
                 )}
                 <div className="mt-3 space-y-3">
-                  <Field label="Title" required>
+                  <Field label={t("Title")} required>
                     <Input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} maxLength={160} />
                   </Field>
                   <div className="flex flex-wrap gap-1.5">
@@ -276,14 +272,14 @@ export function RecipeScanPage() {
                   </div>
                   {draft.ingredients.length > 0 && (
                     <div>
-                      <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">Ingredients</div>
+                      <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">{t("Ingredients")}</div>
                       <ul className="mt-1 space-y-0.5 text-[13px]">
                         {draft.ingredients.map((ingredient, index) => (
                           <li key={index} className="truncate">
                             {ingredient.quantity != null ? `${qty(ingredient.quantity)} ` : ""}
                             {ingredient.unit ? `${ingredient.unit} ` : ""}
                             {ingredient.name}
-                            {ingredient.optional && <span className="text-[11px] text-muted"> (optional)</span>}
+                            {ingredient.optional && <span className="text-[11px] text-muted"> {' '}{t(" (optional)")}</span>}
                           </li>
                         ))}
                       </ul>
@@ -291,7 +287,7 @@ export function RecipeScanPage() {
                   )}
                   {draft.steps.length > 0 && (
                     <div>
-                      <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">Steps</div>
+                      <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">{t("Steps")}</div>
                       <ol className="mt-1 max-h-40 space-y-1 overflow-y-auto pr-1 text-[12px] leading-relaxed text-muted">
                         {draft.steps.map((step, index) => (
                           <li key={index} className={cn("flex gap-2")}>
@@ -304,19 +300,17 @@ export function RecipeScanPage() {
                   )}
                   {draft.aiNotes && (
                     <div className="rounded-xl border border-line bg-raised p-2.5 text-[11px] leading-relaxed text-muted">
-                      <span className="font-semibold text-ink">AI notes: </span>
+                      <span className="font-semibold text-ink">{t("AI notes: ")}{' '}</span>
                       {draft.aiNotes}
                     </div>
                   )}
                   <div className="flex gap-2">
                     <Button type="button" block loading={saving} onClick={() => void save()}>
-                      Save recipe
-                    </Button>
+                      {t("Save recipe ")}</Button>
                     <Button type="button" variant="secondary" onClick={() => void digitize()} disabled={busy}>
-                      Retry
-                    </Button>
+                      {t("Retry ")}</Button>
                   </div>
-                  <p className="text-[11px] text-muted">You can fine-tune every field after saving.</p>
+                  <p className="text-[11px] text-muted">{t("You can fine-tune every field after saving.")}</p>
                 </div>
               </Card>
             )}
@@ -329,12 +323,10 @@ export function RecipeScanPage() {
           <Icon name="key" size={17} />
         </span>
         <div className="text-[11px] leading-relaxed text-muted">
-          OCR runs in your browser. Clean-up uses the AI provider configured under{" "}
+          {t("OCR runs in your browser. Clean-up uses the AI provider configured under")}{" "}
           <button onClick={() => navigate("/settings?tab=ai")} className="font-medium text-brand hover:underline">
-            Settings → AI
-          </button>
-          . Without a key, SVault still splits ingredients and steps locally — no data leaves the house.
-        </div>
+            {t("Settings → AI ")}</button>
+          {t(". Without a key, SVault still splits ingredients and steps locally — no data leaves the house. ")}</div>
       </Card>
     </div>
   );

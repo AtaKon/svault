@@ -4,6 +4,7 @@ import { Badge, Button, Field, Input, Sheet, Spinner, cn } from "@/components/ui
 import { Icon } from "@/components/icons";
 import { useToast } from "@/components/toast";
 import type { Photo, PhotoLabel } from "@shared/types";
+import { useI18n } from "@/i18n";
 
 const SPLITS: Photo["split"][] = ["unassigned", "train", "val", "test"];
 
@@ -24,6 +25,7 @@ export function PhotoViewer({
   canEdit: boolean;
   onNavigate: (photoId: string) => void;
 }) {
+  const { t } = useI18n();
   const toast = useToast();
   const [drag, setDrag] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
   const [pending, setPending] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
@@ -73,7 +75,7 @@ export function PhotoViewer({
 
   const addLabel = async () => {
     if (!labelText.trim()) {
-      toast.error("Give the label a name first");
+      toast.error(t("Give the label a name first"));
       return;
     }
     setLabelBusy(true);
@@ -86,7 +88,7 @@ export function PhotoViewer({
       setLabelText("");
       setPending(null);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not save the label");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not save the label"));
     } finally {
       setLabelBusy(false);
     }
@@ -97,7 +99,7 @@ export function PhotoViewer({
       await api(`/api/photos/${photo.id}/labels/${labelId}`, { method: "DELETE" });
       onUpdated({ ...photo, labels: photo.labels.filter((label) => label.id !== labelId) });
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not remove the label");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not remove the label"));
     }
   };
 
@@ -106,7 +108,7 @@ export function PhotoViewer({
       const updated = await api<Photo>(`/api/photos/${photo.id}`, { method: "PATCH", body: { split } });
       onUpdated(updated);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not update the split");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not update the split"));
     }
   };
 
@@ -117,7 +119,7 @@ export function PhotoViewer({
       onDeleted(photo.id);
       onClose();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not delete the photo");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not delete the photo"));
     } finally {
       setBusy(false);
     }
@@ -139,13 +141,17 @@ export function PhotoViewer({
       onClose={onClose}
       wide
       title={photo.originalName}
-      description={`${photo.width ?? "?"} × ${photo.height ?? "?"} · ${photo.labels.length} label${photo.labels.length === 1 ? "" : "s"}`}
+      description={t("{width} × {height} · {count} {label}", {
+        width: photo.width ?? "?",
+        height: photo.height ?? "?",
+        count: photo.labels.length,
+        label: t(photo.labels.length === 1 ? "label" : "labels"),
+      })}
       footer={
         <div className="flex items-center justify-between gap-2">
           <div className="flex gap-1">
             <Button size="sm" variant="ghost" icon="arrowLeft" disabled={index <= 0} onClick={() => onNavigate(photos[index - 1].id)}>
-              Prev
-            </Button>
+              {t("Prev ")}</Button>
             <Button
               size="sm"
               variant="ghost"
@@ -153,18 +159,15 @@ export function PhotoViewer({
               disabled={index < 0 || index >= photos.length - 1}
               onClick={() => onNavigate(photos[index + 1].id)}
             >
-              Next
-            </Button>
+              {t("Next ")}</Button>
           </div>
           <div className="flex gap-2">
             {canEdit && (
               <Button variant="ghost" size="sm" icon="trash" className="text-danger hover:bg-danger-soft" loading={busy} onClick={() => void removePhoto()}>
-                Delete
-              </Button>
+                {t("Delete ")}</Button>
             )}
             <Button size="sm" variant="secondary" onClick={onClose}>
-              Close
-            </Button>
+              {t("Close ")}</Button>
           </div>
         </div>
       }
@@ -203,11 +206,11 @@ export function PhotoViewer({
         {canEdit && (
           <>
             <div className="flex items-end gap-2">
-              <Field label={pending ? "Label this box" : "Add a label / class"} className="flex-1">
+              <Field label={pending ? t("Label this box") : t("Add a label / class")} className="flex-1">
                 <Input
                   value={labelText}
                   onChange={(event) => setLabelText(event.target.value)}
-                  placeholder="milk carton, boot, chair…"
+                  placeholder={t("milk carton, boot, chair…")}
                   onKeyDown={(event) => {
                     if (event.key === "Enter") void addLabel();
                   }}
@@ -215,11 +218,11 @@ export function PhotoViewer({
                 />
               </Field>
               <Button variant="secondary" loading={labelBusy} onClick={() => void addLabel()} icon={pending ? "check" : "tag"}>
-                {pending ? "Save box" : "Label"}
+                {pending ? t("Save box") : t("Label")}
               </Button>
             </div>
             <p className="text-[11px] text-muted">
-              {pending ? "A box is selected. Name it and save." : canEdit ? "Drag on the photo to draw a bounding box, or add a label without a box for classification." : ""}
+              {pending ? t("A box is selected. Name it and save.") : canEdit ? t("Drag on the photo to draw a bounding box, or add a label without a box for classification.") : ""}
             </p>
           </>
         )}
@@ -229,9 +232,9 @@ export function PhotoViewer({
             {photo.labels.map((label) => (
               <span key={label.id} className="inline-flex items-center gap-1.5 rounded-full bg-raised px-2 py-1 text-[11px]">
                 {label.label}
-                {label.x == null && <span className="text-muted">no box</span>}
+                {label.x == null && <span className="text-muted">{t("no box")}</span>}
                 {canEdit && (
-                  <button onClick={() => void removeLabel(label.id)} aria-label="Remove label" className="text-muted hover:text-danger">
+                  <button onClick={() => void removeLabel(label.id)} aria-label={t("Remove label")} className="text-muted hover:text-danger">
                     <Icon name="close" size={11} />
                   </button>
                 )}
@@ -241,7 +244,7 @@ export function PhotoViewer({
         )}
 
         <div>
-          <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">Dataset split</div>
+          <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">{t("Dataset split")}</div>
           <div className="flex flex-wrap gap-1.5">
             {SPLITS.map((split) => (
               <button
@@ -253,18 +256,17 @@ export function PhotoViewer({
                   photo.split === split ? "border-brand/40 bg-brand-soft text-brand" : "border-line bg-surface text-muted hover:text-ink",
                 )}
               >
-                {split}
+                {t(split)}
               </button>
             ))}
           </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted">
-          {photo.labels.length === 0 && <Badge tone="warn">unlabeled</Badge>}
+          {photo.labels.length === 0 && <Badge tone="warn">{t("unlabeled")}</Badge>}
           {labelBusy && (
             <span className="flex items-center gap-1.5">
-              <Spinner size={11} /> saving
-            </span>
+              <Spinner size={11} /> {' '}{t(" saving ")}</span>
           )}
         </div>
       </div>

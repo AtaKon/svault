@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, prepareImage } from "@/api";
 import { useHouse } from "@/state";
+import { useI18n } from "@/i18n";
 import {
   Badge,
   Button,
@@ -23,6 +24,7 @@ import { UNIT_OPTIONS } from "@/units";
 import { todayInput } from "@/format";import type { AttributeDef, Category, ItemDetail, Location, Vendor } from "@shared/types";
 
 export function ItemFormPage() {
+  const { t } = useI18n();
   const { itemId } = useParams();
   const editing = Boolean(itemId);
   const { house } = useHouse();
@@ -95,7 +97,7 @@ export function ItemFormPage() {
           setLoading(false);
         })
         .catch((err) => {
-          toast.error(err instanceof Error ? err.message : "Could not load the item");
+          toast.error(err instanceof Error ? t(err.message) : t("Could not load the item"));
           setLoading(false);
         });
     }
@@ -117,7 +119,7 @@ export function ItemFormPage() {
     const trimmed = code.trim();
     if (!trimmed) return;
     if (barcodes.includes(trimmed)) {
-      toast.push("That barcode is already on the item");
+      toast.push(t("That barcode is already on the item"));
       return;
     }
     setBarcodes((current) => [...current, trimmed]);
@@ -176,27 +178,27 @@ export function ItemFormPage() {
         await api(`/api/items/${item.id}/image`, { method: "POST", body: form });
       }
 
-      toast.success(editing ? "Item updated" : `${item.name} added`);
+      toast.success(editing ? t("Item updated") : t("{item} added", { item: item.name }));
       navigate(`/items/${item.id}`, { replace: true });
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not save the item");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not save the item"));
     } finally {
       setSaving(false);
     }
   };
 
-  if (loading) return <LoadingBlock label="Loading item" />;
+  if (loading) return <LoadingBlock label={t("Loading item")} />;
 
   return (
     <form onSubmit={submit}>
       <PageHeader
         back={() => navigate(-1)}
-        eyebrow={editing ? "Edit item" : "New item"}
-        title={editing ? name || "Untitled" : "Add something to the house"}
-        subtitle="Attributes are defined by you, per house — no fixed template."
+        eyebrow={t(editing ? "Edit item" : "New item")}
+        title={editing ? name || t("Untitled") : t("Add something to the house")}
+        subtitle={t("Attributes are defined by you, per house — no fixed template.")}
         actions={
           <Button type="submit" loading={saving} disabled={!name.trim()}>
-            {editing ? "Save" : "Add item"}
+            {editing ? t("Save") : t("Add item")}
           </Button>
         }
       />
@@ -204,13 +206,13 @@ export function ItemFormPage() {
       <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr]">
         <div className="space-y-4">
           <Card className="space-y-3 p-4">
-            <Field label="Name" required>
-              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Milk, hiking boots, olive oil…" autoFocus={!editing} maxLength={120} />
+            <Field label={t("Name")} required>
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("Milk, hiking boots, olive oil…")} autoFocus={!editing} maxLength={120} />
             </Field>
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Category">
+              <Field label={t("Category")}>
                 <Select value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
-                  <option value="">Uncategorised</option>
+                  <option value="">{t("Uncategorised")}</option>
                   {categories.map((category) => (
                     <option key={category.id} value={category.id}>
                       {category.icon} {category.name}
@@ -218,12 +220,12 @@ export function ItemFormPage() {
                   ))}
                 </Select>
               </Field>
-              <Field label="Brand" hint="optional">
+              <Field label={t("Brand")} hint={t("optional")}>
                 <Input value={brand} onChange={(e) => setBrand(e.target.value)} maxLength={80} />
               </Field>
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Stock unit" required hint="pcs, kg, g, l…">
+              <Field label={t("Stock unit")} required hint={t("pcs, kg, g, l…")}>
                 <Input value={unit} onChange={(e) => setUnit(e.target.value)} list="unit-options" maxLength={10} />
                 <datalist id="unit-options">
                   {UNIT_OPTIONS.map((option) => (
@@ -231,23 +233,23 @@ export function ItemFormPage() {
                   ))}
                 </datalist>
               </Field>
-              <Field label="Low-stock alert at" hint="0 = off">
+              <Field label={t("Low-stock alert at")} hint={t("0 = off")}>
                 <Input type="number" min="0" step="any" inputMode="decimal" value={reorderPoint} onChange={(e) => setReorderPoint(e.target.value)} placeholder="0" />
               </Field>
             </div>
-            <Field label="Description" hint="optional">
-              <Textarea rows={3} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Notes, size, flavour, where it lives…" maxLength={2000} />
+            <Field label={t("Description")} hint={t("optional")}>
+              <Textarea rows={3} value={description} onChange={(e) => setDescription(e.target.value)} placeholder={t("Notes, size, flavour, where it lives…")} maxLength={2000} />
             </Field>
-            <Field label="Tags" hint="comma separated">
-              <Input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="breakfast, vegan, camping" />
+            <Field label={t("Tags")} hint={t("comma separated")}>
+              <Input value={tags} onChange={(e) => setTags(e.target.value)} placeholder={t("breakfast, vegan, camping")} />
             </Field>
           </Card>
 
           <Card className="p-4">
             <div className="mb-3 flex items-center justify-between">
-              <h2 className="font-display text-lg">Custom attributes</h2>
+              <h2 className="font-display text-lg">{t("Custom attributes")}</h2>
               <button type="button" onClick={() => navigate("/settings?tab=attributes")} className="text-[11px] font-medium text-brand hover:underline">
-                Manage
+                {t("Manage")}
               </button>
             </div>
             <AttributeFields defs={visibleAttributes} values={values} onChange={setValues} />
@@ -258,21 +260,21 @@ export function ItemFormPage() {
           {!editing && (
             <Card className="space-y-3 p-4">
               <div>
-                <h2 className="font-display text-lg">Starting stock</h2>
-                <p className="text-[11px] text-muted">Optional — you can also add stock later. Prices feed the price history.</p>
+                <h2 className="font-display text-lg">{t("Starting stock")}</h2>
+                <p className="text-[11px] text-muted">{t("Optional — you can also add stock later. Prices feed the price history.")}</p>
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <Field label={`Quantity (${unit || "pcs"})`}>
+                <Field label={t("Quantity ({unit})", { unit: unit || "pcs" })}>
                   <Input type="number" min="0" step="any" inputMode="decimal" value={initialQty} onChange={(e) => setInitialQty(e.target.value)} />
                 </Field>
-                <Field label={`Unit price (${house.currency})`}>
+                <Field label={t("Unit price ({currency})", { currency: house.currency })}>
                   <Input type="number" min="0" step="any" inputMode="decimal" value={initialPrice} onChange={(e) => setInitialPrice(e.target.value)} placeholder="0.00" />
                 </Field>
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <Field label="Location">
+                <Field label={t("Location")}>
                   <Select value={initialLocation} onChange={(e) => setInitialLocation(e.target.value)}>
-                    <option value="">Unassigned</option>
+                    <option value="">{t("Unassigned")}</option>
                     {locations.map((location) => (
                       <option key={location.id} value={location.id}>
                         {location.icon} {location.name}
@@ -280,14 +282,14 @@ export function ItemFormPage() {
                     ))}
                   </Select>
                 </Field>
-                <Field label="Expires" hint="optional">
+                <Field label={t("Expires")} hint={t("optional")}>
                   <Input type="date" value={expiresAt} onChange={(e) => setExpiresAt(e.target.value)} />
                 </Field>
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <Field label="Where from" hint="manage under Purchases">
+                <Field label={t("Where from")} hint={t("manage under Purchases")}>
                   <Select value={initialVendor} onChange={(e) => setInitialVendor(e.target.value)}>
-                    <option value="">Not recorded</option>
+                    <option value="">{t("Not recorded")}</option>
                     {vendors.map((vendor) => (
                       <option key={vendor.id} value={vendor.id}>
                         {vendor.name}
@@ -295,7 +297,7 @@ export function ItemFormPage() {
                     ))}
                   </Select>
                 </Field>
-                <Field label="Purchased on">
+                <Field label={t("Purchased on")}>
                   <Input type="date" value={purchasedAt} onChange={(e) => setPurchasedAt(e.target.value)} />
                 </Field>
               </div>
@@ -305,7 +307,7 @@ export function ItemFormPage() {
 
         <div className="space-y-4">
           <Card className="p-4">
-            <h2 className="mb-3 font-display text-lg">Photo</h2>
+            <h2 className="mb-3 font-display text-lg">{t("Photo")}</h2>
             <div className="flex gap-3">
               <button
                 type="button"
@@ -316,7 +318,7 @@ export function ItemFormPage() {
               </button>
               <div className="min-w-0 flex-1 space-y-2">
                 <Button type="button" variant="secondary" size="sm" icon="upload" onClick={() => fileRef.current?.click()}>
-                  Choose photo
+                  {t("Choose photo")}
                 </Button>
                 {imagePreview && (
                   <Button
@@ -329,10 +331,10 @@ export function ItemFormPage() {
                       setImagePreview(null);
                     }}
                   >
-                    Remove
+                    {t("Remove")}
                   </Button>
                 )}
-                <p className="text-[11px] text-muted">A quick photo makes items recognisable at a glance.</p>
+                <p className="text-[11px] text-muted">{t("A quick photo makes items recognisable at a glance.")}</p>
               </div>
             </div>
             <input
@@ -346,19 +348,19 @@ export function ItemFormPage() {
 
           <Card className="p-4">
             <div className="mb-2 flex items-center justify-between">
-              <h2 className="font-display text-lg">Barcodes</h2>
+              <h2 className="font-display text-lg">{t("Barcodes")}</h2>
               <button type="button" onClick={() => setScanOpen(true)} className="flex items-center gap-1 text-[11px] font-medium text-brand hover:underline">
-                <Icon name="scan" size={12} /> Scan
+                <Icon name="scan" size={12} /> {t("Scan")}
               </button>
             </div>
             {barcodes.length === 0 ? (
-              <p className="text-xs text-muted">Attach a barcode to find this item instantly when scanning.</p>
+              <p className="text-xs text-muted">{t("Attach a barcode to find this item instantly when scanning.")}</p>
             ) : (
               <div className="mb-2 flex flex-wrap gap-1.5">
                 {barcodes.map((code) => (
                   <Badge key={code} tone="outline" className="font-mono">
                     {code}
-                    <button type="button" onClick={() => setBarcodes((current) => current.filter((c) => c !== code))} aria-label="Remove barcode">
+                    <button type="button" onClick={() => setBarcodes((current) => current.filter((c) => c !== code))} aria-label={t("Remove barcode")}>
                       <Icon name="close" size={10} />
                     </button>
                   </Badge>
@@ -375,34 +377,34 @@ export function ItemFormPage() {
                     addBarcode(barcodeInput);
                   }
                 }}
-                placeholder="Type a barcode"
+                placeholder={t("Type a barcode")}
                 inputMode="numeric"
                 className="h-9 text-[13px]"
               />
               <Button type="button" size="sm" variant="secondary" onClick={() => addBarcode(barcodeInput)}>
-                Add
+                {t("Add")}
               </Button>
             </div>
-            {editing && <p className="mt-2 text-[11px] text-muted">Manage existing barcodes from the item page.</p>}
+            {editing && <p className="mt-2 text-[11px] text-muted">{t("Manage existing barcodes from the item page.")}</p>}
           </Card>
 
           <Card className="space-y-2 p-4">
-            <h2 className="font-display text-lg">Where should it go?</h2>
+            <h2 className="font-display text-lg">{t("Where should it go?")}</h2>
             <p className="text-[11px] text-muted">
-              Stock locations are managed per house. Need another shelf or cabin? Add it under Settings → Places.
+              {t("Stock locations are managed per house. Need another shelf or cabin? Add it under Settings → Places.")}
             </p>
             <Button type="button" variant="secondary" size="sm" icon="mapPin" onClick={() => navigate("/settings?tab=places")}>
-              Manage places
+              {t("Manage places")}
             </Button>
           </Card>
 
           <Button type="submit" block size="lg" loading={saving} disabled={!name.trim()}>
-            {editing ? "Save changes" : "Add to inventory"}
+            {editing ? t("Save changes") : t("Add to inventory")}
           </Button>
         </div>
       </div>
 
-      <Sheet open={scanOpen} onClose={() => setScanOpen(false)} title="Scan a barcode">
+      <Sheet open={scanOpen} onClose={() => setScanOpen(false)} title={t("Scan a barcode")}>
         <BarcodeScanner
           onDetected={(code) => {
             addBarcode(code);

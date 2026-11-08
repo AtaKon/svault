@@ -18,6 +18,7 @@ import {
 import { Icon } from "@/components/icons";
 import { useToast } from "@/components/toast";
 import type { AiCallLog, AiCallLogPage } from "@shared/types";
+import { useI18n } from "@/i18n";
 
 const OPERATION_LABELS: Record<string, string> = {
   "receipt.scan": "Receipt scan",
@@ -42,6 +43,7 @@ function duration(ms: number): string {
 }
 
 export function DeveloperPage() {
+  const { t } = useI18n();
   const { user } = useAuth();
   const { house, can } = useHouse();
   const navigate = useNavigate();
@@ -87,7 +89,7 @@ export function DeveloperPage() {
         setSummary(page.summary);
         setTotal(page.total);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Could not load AI calls");
+        setError(err instanceof Error ? t(err.message) : t("Could not load AI calls"));
       } finally {
         setLoading(false);
         setLoadingMore(false);
@@ -121,7 +123,7 @@ export function DeveloperPage() {
       const full = await api<AiCallLog>(`/api/houses/${house.id}/ai/logs/${log.id}`);
       setDetail(full);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not load the call details");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not load the call details"));
     } finally {
       setDetailLoading(false);
     }
@@ -131,13 +133,13 @@ export function DeveloperPage() {
     setClearing(true);
     try {
       const result = await api<{ deleted: number }>(`/api/houses/${house.id}/ai/logs`, { method: "DELETE" });
-      toast.success(`${result.deleted} log${result.deleted === 1 ? "" : "s"} cleared`);
+      toast.success(t("{count} AI log entries cleared", { count: result.deleted }));
       setClearOpen(false);
       setExpanded(null);
       setDetail(null);
       await load(0, false);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not clear the logs");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not clear the logs"));
     } finally {
       setClearing(false);
     }
@@ -157,7 +159,7 @@ export function DeveloperPage() {
       anchor.click();
       window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not export the logs");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not export the logs"));
     } finally {
       setExporting(false);
     }
@@ -166,15 +168,13 @@ export function DeveloperPage() {
   if (!allowed) {
     return (
       <div className="space-y-4">
-        <PageHeader back={() => navigate("/more")} eyebrow="Developer" title="AI call log" />
+        <PageHeader back={() => navigate("/more")} eyebrow={t("Developer")} title={t("AI call log")} />
         <Card className="p-4">
-          <h2 className="font-display text-lg">Developer mode is off</h2>
+          <h2 className="font-display text-lg">{t("Developer mode is off")}</h2>
           <p className="mt-1 text-[12px] text-muted">
-            Turn on developer mode in your profile to inspect every request SVault sends to its AI provider.
-          </p>
+            {t("Turn on developer mode in your profile to inspect every request SVault sends to its AI provider. ")}</p>
           <Button className="mt-3" icon="settings" onClick={() => navigate("/profile")}>
-            Open profile
-          </Button>
+            {t("Open profile ")}</Button>
         </Card>
       </div>
     );
@@ -184,17 +184,15 @@ export function DeveloperPage() {
     <div className="space-y-4">
       <PageHeader
         back={() => navigate("/more")}
-        eyebrow="Developer"
-        title="AI call log"
-        subtitle="Every request SVault sends to your AI provider, including failures."
+        eyebrow={t("Developer")}
+        title={t("AI call log")}
+        subtitle={t("Every request SVault sends to your AI provider, including failures.")}
         actions={
           <div className="flex flex-wrap gap-2">
             <Button variant="secondary" size="sm" icon="refresh" onClick={() => void load(0, false)} loading={loading}>
-              Refresh
-            </Button>
+              {t("Refresh ")}</Button>
             <Button variant="secondary" size="sm" icon="download" onClick={() => void exportLogs()} loading={exporting}>
-              Export JSON
-            </Button>
+              {t("Export JSON ")}</Button>
             {can("admin") && total > 0 && (
               <Button
                 variant="ghost"
@@ -203,65 +201,68 @@ export function DeveloperPage() {
                 className="text-danger hover:bg-danger-soft"
                 onClick={() => setClearOpen(true)}
               >
-                Clear
-              </Button>
+                {t("Clear ")}</Button>
             )}
           </div>
         }
       />
 
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <Metric label="Calls" value={summary ? qty(summary.calls) : "—"} icon="wifi" />
+        <Metric label={t("Calls")} value={summary ? qty(summary.calls) : "—"} icon="wifi" />
         <Metric
-          label="Errors"
+          label={t("Errors")}
           value={summary ? qty(summary.errors) : "—"}
           icon="alert"
           tone={summary && summary.errors > 0 ? "danger" : undefined}
         />
-        <Metric label="Tokens" value={summary ? qty(summary.totalTokens) : "—"} icon="sparkles" />
-        <Metric label="Spend" value={summary ? aiCostLabel(summary.cost) : "—"} icon="price" />
+        <Metric label={t("Tokens")} value={summary ? qty(summary.totalTokens) : "—"} icon="sparkles" />
+        <Metric label={t("Spend")} value={summary ? aiCostLabel(summary.cost) : "—"} icon="price" />
       </div>
 
       <Card className="p-4">
         <div className="grid gap-3 sm:grid-cols-3">
-          <Field label="Operation">
+          <Field label={t("Operation")}>
             <Select value={operation} onChange={(event) => setOperation(event.target.value)}>
-              <option value="">All operations</option>
+              <option value="">{t("All operations")}</option>
               {OPERATIONS.map((value) => (
                 <option key={value} value={value}>
-                  {operationLabel(value)}
+                  {t(operationLabel(value))}
                 </option>
               ))}
             </Select>
           </Field>
-          <Field label="Result">
+          <Field label={t("Result")}>
             <Select value={status} onChange={(event) => setStatus(event.target.value)}>
-              <option value="">Successful and failed</option>
-              <option value="ok">Successful only</option>
-              <option value="error">Failed only</option>
+              <option value="">{t("Successful and failed")}</option>
+              <option value="ok">{t("Successful only")}</option>
+              <option value="error">{t("Failed only")}</option>
             </Select>
           </Field>
-          <Field label="Scope">
+          <Field label={t("Scope")}>
             <Select
               value={scope}
               onChange={(event) => setScope(event.target.value as "mine" | "all")}
               disabled={!can("admin")}
             >
-              <option value="mine">My calls</option>
-              <option value="all">Everyone in this house</option>
+              <option value="mine">{t("My calls")}</option>
+              <option value="all">{t("Everyone in this house")}</option>
             </Select>
           </Field>
         </div>
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-3">
           <div className="text-[11px] text-muted">
-            {total === 0 ? "No matching calls" : `Showing ${logs.length} of ${total} call${total === 1 ? "" : "s"}`}
+            {total === 0 ? t("No matching calls") : t("Showing {shown} of {total} {calls}", {
+              shown: logs.length,
+              total,
+              calls: t(total === 1 ? "call" : "calls"),
+            })}
           </div>
           <div className="w-full sm:w-64">
             <Switch
               checked={autoRefresh}
               onChange={setAutoRefresh}
-              label="Auto-refresh"
-              description="Reload every 20 seconds"
+              label={t("Auto-refresh")}
+              description={t("Reload every 20 seconds")}
             />
           </div>
         </div>
@@ -279,8 +280,7 @@ export function DeveloperPage() {
         </div>
       ) : logs.length === 0 ? (
         <Card className="p-8 text-center text-sm text-muted">
-          No AI calls yet. Scans and idea requests will appear here as soon as the provider is used.
-        </Card>
+          {t("No AI calls yet. Scans and idea requests will appear here as soon as the provider is used. ")}</Card>
       ) : (
         <div className="space-y-2">
           {logs.map((log) => {
@@ -302,15 +302,15 @@ export function DeveloperPage() {
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="flex flex-wrap items-center gap-1.5">
-                      <span className="text-[13px] font-medium">{operationLabel(log.operation)}</span>
+                      <span className="text-[13px] font-medium">{t(operationLabel(log.operation))}</span>
                       <Badge tone={log.status === "error" ? "danger" : "brand"}>
-                        {log.status === "error" ? "failed" : "ok"}
+                        {log.status === "error" ? t("failed") : t("ok")}
                       </Badge>
-                      {log.attempts > 1 && <Badge tone="warn">{log.attempts} attempts</Badge>}
-                      {log.imageCount > 0 && <Badge tone="outline">{log.imageCount} image{log.imageCount === 1 ? "" : "s"}</Badge>}
+                      {log.attempts > 1 && <Badge tone="warn">{log.attempts} {' '}{t(" attempts")}</Badge>}
+                      {log.imageCount > 0 && <Badge tone="outline">{log.imageCount} {' '}{t(" image")}{log.imageCount === 1 ? "" : "s"}</Badge>}
                     </span>
                     <span className="mt-0.5 block truncate text-[11px] text-muted">
-                      {log.model || "unknown model"} · {log.provider || "unknown provider"}
+                      {log.model || t("unknown model")} · {log.provider || t("unknown provider")}
                       {log.userName ? ` · ${log.userName}` : ""}
                     </span>
                     <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted">
@@ -318,9 +318,9 @@ export function DeveloperPage() {
                         <Icon name="clock" size={11} /> {relativeTime(log.createdAt)}
                       </span>
                       <span>{duration(log.durationMs)}</span>
-                      <span>{qty(log.totalTokens)} tokens</span>
+                      <span>{qty(log.totalTokens)} {' '}{t(" tokens")}</span>
                       <span>{aiCostLabel(log.cost)}</span>
-                      {log.httpStatus != null && <span>HTTP {log.httpStatus}</span>}
+                      {log.httpStatus != null && <span>{t("HTTP ")}{' '}{log.httpStatus}</span>}
                     </span>
                   </span>
                   <Icon name={open ? "chevronDown" : "chevronRight"} size={15} className="mt-1 shrink-0 text-muted" />
@@ -349,25 +349,21 @@ export function DeveloperPage() {
               loading={loadingMore}
               onClick={() => void load(logs.length, true)}
             >
-              Load more
-            </Button>
+              {t("Load more ")}</Button>
           )}
         </div>
       )}
 
       <Card className="p-4 text-[11px] leading-relaxed text-muted">
-        API keys are never stored in this log. Prompt and answer previews are truncated, and older entries are pruned
-        automatically. The same records are written to the server console as structured <code>[ai]</code> JSON lines,
-        ready for Docker logs, Loki, Grafana or any other log collector.
-      </Card>
+        {t("API keys are never stored in this log. Prompt and answer previews are truncated, and older entries are pruned automatically. The same records are written to the server console as structured ")}{' '}<code>[ai]</code> {' '}{t(" JSON lines, ready for Docker logs, Loki, Grafana or any other log collector. ")}</Card>
 
       <ConfirmDialog
         open={clearOpen}
         onClose={() => setClearOpen(false)}
         onConfirm={() => void clearLogs()}
-        title="Clear every AI call log?"
-        body="This removes the audit trail for this house, including successful and failed calls. Scans and saved data are not touched."
-        confirmLabel={clearing ? "Clearing…" : "Clear logs"}
+        title={t("Clear every AI call log?")}
+      body={t("This removes the audit trail for this house, including successful and failed calls. Scans and saved data are not touched.")}
+        confirmLabel={clearing ? t("Clearing…") : t("Clear logs")}
         danger
       />
     </div>
@@ -397,33 +393,34 @@ function Metric({
 }
 
 function LogDetail({ log }: { log: AiCallLog }) {
+  const { t } = useI18n();
   return (
     <div className="space-y-3 text-[11px]">
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <DetailField label="Model" value={log.model || "—"} />
-        <DetailField label="Provider" value={log.provider || "—"} />
-        <DetailField label="Duration" value={duration(log.durationMs)} />
-        <DetailField label="Attempts" value={String(log.attempts)} />
-        <DetailField label="Prompt tokens" value={qty(log.promptTokens)} />
-        <DetailField label="Completion tokens" value={qty(log.completionTokens)} />
-        <DetailField label="Total tokens" value={qty(log.totalTokens)} />
-        <DetailField label="Cost" value={aiCostLabel(log.cost)} />
-        <DetailField label="Request size" value={`${qty(log.requestBytes)} bytes`} />
-        <DetailField label="Response size" value={`${qty(log.responseBytes)} bytes`} />
-        <DetailField label="Images" value={String(log.imageCount)} />
-        <DetailField label="When" value={new Date(log.createdAt).toLocaleString()} />
+        <DetailField label={t("Model")} value={log.model || "—"} />
+        <DetailField label={t("Provider")} value={log.provider || "—"} />
+        <DetailField label={t("Duration")} value={duration(log.durationMs)} />
+        <DetailField label={t("Attempts")} value={String(log.attempts)} />
+        <DetailField label={t("Prompt tokens")} value={qty(log.promptTokens)} />
+        <DetailField label={t("Completion tokens")} value={qty(log.completionTokens)} />
+        <DetailField label={t("Total tokens")} value={qty(log.totalTokens)} />
+        <DetailField label={t("Cost")} value={aiCostLabel(log.cost)} />
+        <DetailField label={t("Request size")} value={`${qty(log.requestBytes)} bytes`} />
+        <DetailField label={t("Response size")} value={`${qty(log.responseBytes)} bytes`} />
+        <DetailField label={t("Images")} value={String(log.imageCount)} />
+        <DetailField label={t("When")} value={new Date(log.createdAt).toLocaleString()} />
       </div>
 
       {log.error && (
         <div className="rounded-xl border border-danger/30 bg-danger-soft px-3 py-2 text-danger">
-          <div className="mb-0.5 font-semibold">Error</div>
+          <div className="mb-0.5 font-semibold">{t("Error")}</div>
           <div className="whitespace-pre-wrap break-words">{log.error}</div>
         </div>
       )}
 
       {Object.keys(log.metadata ?? {}).length > 0 && (
         <div>
-          <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">Metadata</div>
+          <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">{t("Metadata")}</div>
           <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-xl border border-line bg-surface p-2 font-mono text-[10px] leading-relaxed">
             {JSON.stringify(log.metadata, null, 2)}
           </pre>
@@ -432,7 +429,7 @@ function LogDetail({ log }: { log: AiCallLog }) {
 
       {log.requestPreview && (
         <div>
-          <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">Request</div>
+          <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">{t("Request")}</div>
           <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-xl border border-line bg-surface p-2 font-mono text-[10px] leading-relaxed">
             {log.requestPreview}
           </pre>
@@ -441,7 +438,7 @@ function LogDetail({ log }: { log: AiCallLog }) {
 
       {log.responsePreview && (
         <div>
-          <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">Response</div>
+          <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">{t("Response")}</div>
           <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-xl border border-line bg-surface p-2 font-mono text-[10px] leading-relaxed">
             {log.responsePreview}
           </pre>

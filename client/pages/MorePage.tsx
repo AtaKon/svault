@@ -117,7 +117,7 @@ export function MorePage() {
             <span className="block text-[13px] font-medium">{t("Developer")}</span>
             <span className="block truncate text-[11px] text-muted">{t("AI call log, tokens, cost and errors")}</span>
           </span>
-          <Badge tone="brand">dev</Badge>
+          <Badge tone="brand">{t("dev")}</Badge>
           <Icon name="chevronRight" size={15} className="text-muted" />
         </button>
       )}
@@ -161,7 +161,7 @@ export function MorePage() {
       <div className="flex items-center gap-2.5 px-1 py-2">
         <LogoMark size={28} />
         <div className="text-[11px] leading-tight text-muted">
-          <div className="font-medium text-ink">SVault 1.0</div>
+          <div className="font-medium text-ink">{"SVault 1.0"}</div>
           <div>{t("Self-hosted · your data stays on your machine")}</div>
         </div>
       </div>

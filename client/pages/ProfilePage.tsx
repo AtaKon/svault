@@ -62,9 +62,9 @@ export function ProfilePage() {
         body: { password: securityPassword },
       });
       setTotpSetup(data);
-      toast.success("Scan or paste the secret into your authenticator");
+      toast.success(t("Scan or paste the secret into your authenticator"));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not start 2FA setup");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not start 2FA setup"));
     } finally {
       setSecurityBusy(false);
     }
@@ -82,10 +82,10 @@ export function ProfilePage() {
       setTotpSetup(null);
       setTotpCode("");
       setSecurityPassword("");
-      toast.success("Two-factor authentication enabled");
+      toast.success(t("Two-factor authentication enabled"));
       await loadSecurity();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not enable 2FA");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not enable 2FA"));
     } finally {
       setSecurityBusy(false);
     }
@@ -102,10 +102,10 @@ export function ProfilePage() {
       setSecurityPassword("");
       setTotpCode("");
       setBackupCodes([]);
-      toast.success("Two-factor authentication disabled");
+      toast.success(t("Two-factor authentication disabled"));
       await loadSecurity();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not disable 2FA");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not disable 2FA"));
     } finally {
       setSecurityBusy(false);
     }
@@ -121,23 +121,23 @@ export function ProfilePage() {
         body: { challengeId: options.challengeId, response, name: passkeyName.trim() || undefined },
       });
       setPasskeyName("");
-      toast.success("Passkey added");
+      toast.success(t("Passkey added"));
       await loadSecurity();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not add a passkey");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not add a passkey"));
     } finally {
       setPasskeyBusy(false);
     }
   };
 
   const removePasskey = async (id: string) => {
-    if (passkeys.length === 1 && !window.confirm("This is your last passkey. Your password will be the only way in. Continue?")) return;
+    if (passkeys.length === 1 && !window.confirm(t("This is your last passkey. Your password will be the only way in. Continue?"))) return;
     try {
       await api(`/api/auth/passkeys/${id}`, { method: "DELETE" });
       await loadSecurity();
-      toast.success("Passkey removed");
+      toast.success(t("Passkey removed"));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not remove the passkey");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not remove the passkey"));
     }
   };
 
@@ -150,10 +150,10 @@ export function ProfilePage() {
         body: { developerMode: next },
       });
       setSession(data);
-      toast.success(next ? "Developer mode enabled" : "Developer mode disabled");
+      toast.success(t(next ? "Developer mode enabled" : "Developer mode disabled"));
     } catch (err) {
       setDeveloperMode(!next);
-      toast.error(err instanceof Error ? err.message : "Could not save developer mode");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not save developer mode"));
     } finally {
       setSavingDeveloper(false);
     }
@@ -175,9 +175,9 @@ export function ProfilePage() {
       });
       setSession(data);
       setProfilePassword("");
-      toast.success("Profile updated");
+      toast.success(t("Profile updated"));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not save your profile");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not save your profile"));
     } finally {
       setSavingProfile(false);
     }
@@ -186,7 +186,7 @@ export function ProfilePage() {
   const changePassword = async (event: FormEvent) => {
     event.preventDefault();
     if (newPassword !== confirmPassword) {
-      toast.error("New passwords do not match");
+      toast.error(t("New passwords do not match"));
       return;
     }
     setSavingPassword(true);
@@ -195,9 +195,9 @@ export function ProfilePage() {
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
-      toast.success("Password changed — other sessions signed out");
+      toast.success(t("Password changed — other sessions signed out"));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not change the password");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not change the password"));
     } finally {
       setSavingPassword(false);
     }
@@ -205,25 +205,25 @@ export function ProfilePage() {
 
   return (
     <div className="space-y-4">
-      <PageHeader back={() => navigate("/more")} eyebrow="Account" title="Your profile" subtitle="Account details for every house you belong to." />
+      <PageHeader back={() => navigate("/more")} eyebrow={t("Account")} title={t("Your profile")} subtitle={t("Account details for every house you belong to.")} />
 
       <Card className="flex items-center gap-3 p-4">
         <Avatar name={user?.name ?? "?"} size={52} />
         <div>
           <div className="font-display text-xl leading-tight">{user?.name}</div>
           <div className="text-[11px] text-muted">
-            Joined {shortDate(user?.createdAt)} · {houses.length} house{houses.length === 1 ? "" : "s"}
+            {t("Joined {date} · {count} {houseLabel}", { date: shortDate(user?.createdAt), count: houses.length, houseLabel: t(houses.length === 1 ? "house" : "houses") })}
           </div>
         </div>
       </Card>
 
       <Card className="p-4">
-        <h2 className="mb-3 font-display text-lg">Details</h2>
+        <h2 className="mb-3 font-display text-lg">{t("Details")}</h2>
         <form onSubmit={saveProfile} className="space-y-3">
-          <Field label="Name" required>
+          <Field label={t("Name")} required>
             <Input value={name} onChange={(event) => setName(event.target.value)} maxLength={80} />
           </Field>
-          <Field label="Email" hint={hasPassword ? undefined : "managed by your single sign-on provider"} required>
+          <Field label={t("Email")} hint={hasPassword ? undefined : t("managed by your single sign-on provider")} required>
             <Input
               type="email"
               value={email}
@@ -232,7 +232,7 @@ export function ProfilePage() {
               disabled={!hasPassword}
             />
           </Field>
-          <Field label="Username" hint="sign in with this instead of your email" required>
+          <Field label={t("Username")} hint={t("sign in with this instead of your email")} required>
             <Input
               value={username}
               onChange={(event) => setUsername(event.target.value)}
@@ -243,7 +243,7 @@ export function ProfilePage() {
             />
           </Field>
           {needsProfilePassword && (
-            <Field label="Current password" hint="needed to change your email or username" required>
+            <Field label={t("Current password")} hint={t("needed to change your email or username")} required>
               <Input
                 type="password"
                 value={profilePassword}
@@ -257,35 +257,35 @@ export function ProfilePage() {
             loading={savingProfile}
             disabled={!name.trim() || !email.trim() || username.trim().length < 3 || (needsProfilePassword && !profilePassword)}
           >
-            Save profile
+            {t("Save profile")}
           </Button>
         </form>
       </Card>
 
       <Card className="p-4">
-        <h2 className="mb-1 font-display text-lg">Password</h2>
-        <p className="mb-3 text-[11px] text-muted">Changing your password signs out every other session.</p>
+        <h2 className="mb-1 font-display text-lg">{t("Password")}</h2>
+        <p className="mb-3 text-[11px] text-muted">{t("Changing your password signs out every other session.")}</p>
         <form onSubmit={changePassword} className="space-y-3">
-          <Field label="Current password" required>
+          <Field label={t("Current password")} required>
             <Input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} autoComplete="current-password" />
           </Field>
           <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="New password" required hint="min 8 characters">
+            <Field label={t("New password")} required hint={t("min 8 characters")}>
               <Input type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} autoComplete="new-password" minLength={8} />
             </Field>
-            <Field label="Repeat new password" required>
+            <Field label={t("Repeat new password")} required>
               <Input type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} autoComplete="new-password" />
             </Field>
           </div>
           <Button type="submit" variant="secondary" loading={savingPassword} disabled={!currentPassword || newPassword.length < 8}>
-            Change password
+            {t("Change password")}
           </Button>
         </form>
       </Card>
 
       <Card className="p-4">
         <h2 className="mb-1 font-display text-lg">{t("Language")}</h2>
-        <p className="mb-3 text-[11px] text-muted">The choice is saved on your account, not the house.</p>
+        <p className="mb-3 text-[11px] text-muted">{t("The choice is saved on your account, not the house.")}</p>
         <div className="flex flex-wrap gap-2">
           {(["en", "el"] as Language[]).map((option) => (
             <Button
@@ -302,15 +302,15 @@ export function ProfilePage() {
 
       <Card className="p-4">
         <div className="mb-3 flex items-center justify-between gap-2">
-          <h2 className="font-display text-lg">Developer mode</h2>
-          <Badge tone={developerMode ? "brand" : "neutral"}>{developerMode ? "on" : "off"}</Badge>
+          <h2 className="font-display text-lg">{t("Developer mode")}</h2>
+          <Badge tone={developerMode ? "brand" : "neutral"}>{t(developerMode ? "on" : "off")}</Badge>
         </div>
         <Switch
           checked={developerMode}
           disabled={savingDeveloper}
           onChange={(next) => void saveDeveloperMode(next)}
-          label="Show developer tools"
-          description="Adds a Developer section with a detailed log of every AI call SVault makes, including tokens, cost, duration and errors."
+          label={t("Show developer tools")}
+          description={t("Adds a Developer section with a detailed log of every AI call SVault makes, including tokens, cost, duration and errors.")}
         />
         {developerMode && (
           <Button
@@ -320,7 +320,7 @@ export function ProfilePage() {
             className="mt-3"
             onClick={() => navigate("/developer")}
           >
-            Open AI call log
+            {t("Open AI call log")}
           </Button>
         )}
       </Card>
@@ -329,23 +329,23 @@ export function ProfilePage() {
         <div className="mb-3 flex items-center justify-between gap-2">
           <h2 className="font-display text-lg">{t("Two-factor authentication")}</h2>
           <Badge tone={twoFactor?.enabled ? "brand" : "neutral"}>
-            {twoFactor?.enabled ? t("Two-factor enabled") : "optional"}
+            {twoFactor?.enabled ? t("Two-factor enabled") : t("optional")}
           </Badge>
         </div>
         {!twoFactor?.enabled && !totpSetup && (
           <form onSubmit={startTotp} className="space-y-3">
-            <Field label={t("Password")} required hint="confirm it is you">
+            <Field label={t("Password")} required hint={t("confirm it is you")}>
               <Input type="password" value={securityPassword} onChange={(event) => setSecurityPassword(event.target.value)} autoComplete="current-password" />
             </Field>
             <Button type="submit" loading={securityBusy} disabled={!securityPassword}>
-              Start 2FA setup
+              {t("Start 2FA setup")}
             </Button>
           </form>
         )}
         {totpSetup && (
           <form onSubmit={enableTotp} className="space-y-3">
             <div className="rounded-xl border border-line bg-raised p-3 text-[11px]">
-              <div className="font-medium">Add this to your authenticator app</div>
+              <div className="font-medium">{t("Add this to your authenticator app")}</div>
               <div className="mt-1 break-all font-mono text-[12px]">{totpSetup.secret}</div>
               <div className="mt-2 break-all text-[10px] text-muted">{totpSetup.otpauth}</div>
             </div>
@@ -353,29 +353,29 @@ export function ProfilePage() {
               <Input value={totpCode} onChange={(event) => setTotpCode(event.target.value)} inputMode="numeric" autoComplete="one-time-code" placeholder="123456" maxLength={6} />
             </Field>
             <Button type="submit" loading={securityBusy} disabled={totpCode.length !== 6}>
-              Enable 2FA
+              {t("Enable 2FA")}
             </Button>
           </form>
         )}
         {twoFactor?.enabled && (
           <form onSubmit={disableTotp} className="space-y-3">
             <p className="text-[11px] text-muted">
-              {twoFactor.backupCodesRemaining} backup code{twoFactor.backupCodesRemaining === 1 ? "" : "s"} remaining.
+              {t(twoFactor.backupCodesRemaining === 1 ? "{count} backup code remaining." : "{count} backup codes remaining.", { count: twoFactor.backupCodesRemaining })}
             </p>
             <Field label={t("Password")} required>
               <Input type="password" value={securityPassword} onChange={(event) => setSecurityPassword(event.target.value)} autoComplete="current-password" />
             </Field>
             <Field label={t("Authentication code")} required>
-              <Input value={totpCode} onChange={(event) => setTotpCode(event.target.value)} inputMode="numeric" autoComplete="one-time-code" placeholder="123456 or backup code" maxLength={30} />
+              <Input value={totpCode} onChange={(event) => setTotpCode(event.target.value)} inputMode="numeric" autoComplete="one-time-code" placeholder={t("123456 or backup code")} maxLength={30} />
             </Field>
             <Button type="submit" variant="secondary" loading={securityBusy} disabled={!securityPassword || !totpCode}>
-              Disable 2FA
+              {t("Disable 2FA")}
             </Button>
           </form>
         )}
         {backupCodes.length > 0 && (
           <div className="mt-3 rounded-xl border border-brand/30 bg-brand-soft p-3 text-[11px] text-brand">
-            <div className="font-medium">Save these backup codes now. They will not be shown again.</div>
+            <div className="font-medium">{t("Save these backup codes now. They will not be shown again.")}</div>
             <div className="mt-2 grid grid-cols-2 gap-1 font-mono text-[11px] sm:grid-cols-4">
               {backupCodes.map((code) => (
                 <span key={code}>{code}</span>
@@ -391,28 +391,28 @@ export function ProfilePage() {
           <Badge tone="outline">{passkeys.length}</Badge>
         </div>
         <p className="mb-3 text-[11px] text-muted">
-          Passkeys need HTTPS or localhost. Your password remains a fallback.
+          {t("Passkeys need HTTPS or localhost. Your password remains a fallback.")}
         </p>
         <div className="space-y-1.5">
-          {passkeys.length === 0 && <div className="rounded-lg bg-raised px-3 py-2 text-[11px] text-muted">No passkeys yet.</div>}
+          {passkeys.length === 0 && <div className="rounded-lg bg-raised px-3 py-2 text-[11px] text-muted">{t("No passkeys yet.")}</div>}
           {passkeys.map((passkey) => (
             <div key={passkey.id} className="flex items-center gap-2 rounded-lg bg-raised px-3 py-2 text-sm">
               <Icon name="key" size={14} className="text-muted" />
               <div className="min-w-0 flex-1">
                 <div className="truncate">{passkey.name}</div>
                 <div className="text-[10px] text-muted">
-                  added {shortDate(passkey.createdAt)}
-                  {passkey.lastUsedAt ? ` · last used ${shortDate(passkey.lastUsedAt)}` : ""}
+                  {t("Added {date}", { date: shortDate(passkey.createdAt) })}
+                  {passkey.lastUsedAt ? ` · ${t("last used {date}", { date: shortDate(passkey.lastUsedAt) })}` : ""}
                 </div>
               </div>
-              <button onClick={() => void removePasskey(passkey.id)} className="text-muted hover:text-danger" aria-label={`Remove ${passkey.name}`}>
+              <button onClick={() => void removePasskey(passkey.id)} className="text-muted hover:text-danger" aria-label={t("Remove {item}", { item: passkey.name })}>
                 <Icon name="trash" size={14} />
               </button>
             </div>
           ))}
         </div>
         <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-          <Input value={passkeyName} onChange={(event) => setPasskeyName(event.target.value)} placeholder="This phone" maxLength={60} />
+          <Input value={passkeyName} onChange={(event) => setPasskeyName(event.target.value)} placeholder={t("This phone")} maxLength={60} />
           <Button variant="secondary" icon="key" loading={passkeyBusy} onClick={() => void addPasskey()}>
             {t("Add a passkey")}
           </Button>
@@ -420,13 +420,13 @@ export function ProfilePage() {
       </Card>
 
       <Card className="p-4">
-        <h2 className="mb-3 font-display text-lg">Houses</h2>
+        <h2 className="mb-3 font-display text-lg">{t("Houses")}</h2>
         <div className="space-y-1.5">
           {houses.map((house) => (
             <div key={house.id} className="flex items-center gap-2 rounded-lg bg-raised px-3 py-2 text-sm">
               <Icon name="mapPin" size={15} className="text-muted" />
               <span className="flex-1 truncate">{house.name}</span>
-              <span className="text-[11px] capitalize text-muted">{house.role}</span>
+              <span className="text-[11px] capitalize text-muted">{t(house.role)}</span>
             </div>
           ))}
         </div>
@@ -436,8 +436,8 @@ export function ProfilePage() {
 
       <Card className="flex items-center justify-between gap-3 p-4">
         <div>
-          <div className="text-sm font-medium">Sign out of SVault</div>
-          <div className="text-[11px] text-muted">Your data stays here, ready for next time.</div>
+          <div className="text-sm font-medium">{t("Sign out of SVault")}</div>
+          <div className="text-[11px] text-muted">{t("Your data stays here, ready for next time.")}</div>
         </div>
         <Button
           variant="ghost"
@@ -448,7 +448,7 @@ export function ProfilePage() {
             navigate("/login", { replace: true });
           }}
         >
-          Sign out
+          {t("Sign out")}
         </Button>
       </Card>
     </div>
@@ -457,6 +457,7 @@ export function ProfilePage() {
 
 /** Read-only API tokens for dashboards and home automation. */
 function ApiTokensCard() {
+  const { t } = useI18n();
   const toast = useToast();
   const [tokens, setTokens] = useState<ApiToken[] | null>(null);
   const [name, setName] = useState("");
@@ -489,21 +490,21 @@ function ApiTokensCard() {
       setFresh(created.token);
       setName("");
       await load();
-      toast.success("Token created. Copy it now; it is shown only once.");
+      toast.success(t("Token created. Copy it now; it is shown only once."));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not create the token");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not create the token"));
     } finally {
       setCreating(false);
     }
   };
 
   const revoke = async (token: ApiToken) => {
-    if (!window.confirm(`Revoke “${token.name}”? Anything using it stops working immediately.`)) return;
+    if (!window.confirm(t("Revoke “{name}”? Anything using it stops working immediately.", { name: token.name }))) return;
     try {
       await api(`/api/tokens/${token.id}`, { method: "DELETE" });
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not revoke the token");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not revoke the token"));
     }
   };
 
@@ -511,9 +512,9 @@ function ApiTokensCard() {
     <Card className="p-4">
       <div className="flex items-center justify-between gap-2">
         <div>
-          <h2 className="font-display text-lg">API tokens</h2>
+          <h2 className="font-display text-lg">{t("API tokens")}</h2>
           <p className="text-[11px] text-muted">
-            Read-only access to your houses for Home Assistant, Grafana or a script. Tokens cannot change data.
+            {t("Read-only access to your houses for Home Assistant, Grafana or a script. Tokens cannot change data.")}
           </p>
         </div>
         <Badge tone="outline">{loadError ? "?" : tokens?.length ?? 0}</Badge>
@@ -521,7 +522,7 @@ function ApiTokensCard() {
 
       {fresh && (
         <div className="mt-3 rounded-xl border border-brand/30 bg-brand-soft/50 p-3">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.1em] text-brand">Copy this token now</div>
+          <div className="text-[11px] font-semibold uppercase tracking-[0.1em] text-brand">{t("Copy this token now")}</div>
           <code
             ref={freshRef}
             tabIndex={-1}
@@ -536,13 +537,13 @@ function ApiTokensCard() {
               onClick={async () => {
                 try {
                   await navigator.clipboard.writeText(fresh);
-                  toast.success("Copied");
+                  toast.success(t("Copied"));
                 } catch {
-                  toast.push("Select the token and copy it manually.");
+                  toast.push(t("Select the token and copy it manually."));
                 }
               }}
             >
-              Copy
+              {t("Copy")}
             </Button>
             <Button
               size="sm"
@@ -558,10 +559,10 @@ function ApiTokensCard() {
                 }
               }}
             >
-              Select
+              {t("Select")}
             </Button>
             <Button size="sm" variant="ghost" onClick={() => setFresh(null)}>
-              Done
+              {t("Done")}
             </Button>
           </div>
         </div>
@@ -569,12 +570,12 @@ function ApiTokensCard() {
 
       <form onSubmit={create} className="mt-3 flex items-end gap-2">
         <div className="min-w-0 flex-1">
-          <Field label="New token name">
-            <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Home Assistant" maxLength={80} />
+          <Field label={t("New token name")}>
+            <Input value={name} onChange={(event) => setName(event.target.value)} placeholder={"Home Assistant"} maxLength={80} />
           </Field>
         </div>
         <Button type="submit" size="sm" icon="key" loading={creating} disabled={!name.trim()}>
-          Create
+          {t("Create")}
         </Button>
       </form>
 
@@ -588,22 +589,22 @@ function ApiTokensCard() {
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[12px]">{token.name}</span>
                 <span className="block text-[10px] text-muted">
-                  created {shortDate(token.createdAt)} · {token.lastUsedAt ? `used ${shortDate(token.lastUsedAt)}` : "never used"}
+                  {t("Created {date}", { date: shortDate(token.createdAt) })} · {token.lastUsedAt ? t("used {date}", { date: shortDate(token.lastUsedAt) }) : t("never used")}
                 </span>
               </span>
               <Button size="sm" variant="ghost" className="text-danger hover:bg-danger-soft" onClick={() => void revoke(token)}>
-                Revoke
+                {t("Revoke")}
               </Button>
             </div>
           ))}
         </div>
       ) : (
         <p className={loadError ? "mt-3 text-[12px] text-danger" : "mt-3 text-[12px] text-muted"}>
-          {loadError ? "Could not load your tokens." : "No tokens yet."}
+          {loadError ? t("Could not load your tokens.") : t("No tokens yet.")}
         </p>
       )}
       {loadError && tokens && tokens.length > 0 && (
-        <p className="mt-1 text-[10px] text-danger">This list may be out of date; refresh to be sure.</p>
+        <p className="mt-1 text-[10px] text-danger">{t("This list may be out of date; refresh to be sure.")}</p>
       )}
     </Card>
   );

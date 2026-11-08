@@ -3,6 +3,7 @@ import { api } from "@/api";
 import { Input, Sheet, Spinner, cn, useDebounced } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import type { Item } from "@shared/types";
+import { useI18n } from "@/i18n";
 
 /**
  * Pick an inventory item with a server-side search, so the choice works for
@@ -25,6 +26,7 @@ export function ItemPickerSheet({
   onSelect: (item: Pick<Item, "id" | "name" | "unit"> | null) => void;
   autoLabel?: string;
 }) {
+  const { t } = useI18n();
   const [query, setQuery] = useState(initialQuery);
   const debounced = useDebounced(query.trim(), 250);
   const [items, setItems] = useState<Item[]>([]);
@@ -52,16 +54,16 @@ export function ItemPickerSheet({
   }, [open, houseId, debounced]);
 
   return (
-    <Sheet open={open} onClose={onClose} title="Match to an item" description="Search your inventory by name, brand or barcode.">
+    <Sheet open={open} onClose={onClose} title={t("Match to an item")} description={t("Search your inventory by name, brand or barcode.")}>
       <div className="space-y-3">
         <div className="relative">
           <Input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search items"
+            placeholder={t("Search items")}
             autoFocus
             className="pr-9"
-            aria-label="Search items"
+            aria-label={t("Search items")}
           />
           <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted">
             {loading ? <Spinner size={14} /> : <Icon name="search" size={14} />}
@@ -97,7 +99,7 @@ export function ItemPickerSheet({
           ))}
           {!loading && !items.length && (
             <p className="py-4 text-center text-xs text-muted">
-              {debounced ? "No item matches that search." : "No items yet."}
+              {debounced ? t("No item matches that search.") : t("No items yet.")}
             </p>
           )}
         </div>

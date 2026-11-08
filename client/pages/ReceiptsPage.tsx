@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useI18n } from "@/i18n";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { ApiError, api } from "@/api";
 import { useHouse } from "@/state";
@@ -40,6 +41,7 @@ import type {
 const SHOP_KINDS = ["shop", "supermarket", "market", "online", "restaurant", "other"];
 
 export function ReceiptsPage() {
+  const { t } = useI18n();
   const { house, can } = useHouse();
   const navigate = useNavigate();
   const toast = useToast();
@@ -89,7 +91,7 @@ export function ReceiptsPage() {
       setVendors(vendorList);
       setTemplates(await api<ReceiptTemplate[]>(`/api/houses/${house.id}/receipt-templates`));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not load receipts");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not load receipts"));
       setReceipts([]);
       setVendors([]);
     }
@@ -109,7 +111,7 @@ export function ReceiptsPage() {
       const query = from ? `?from=${encodeURIComponent(from)}` : "";
       setAnalytics(await api<PurchaseAnalytics>(`/api/houses/${house.id}/purchases/analytics${query}`));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not load spending insights");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not load spending insights"));
       setAnalytics(null);
     } finally {
       setAnalyticsLoading(false);
@@ -127,7 +129,7 @@ export function ReceiptsPage() {
     try {
       setDetail(await api<Receipt>(`/api/receipts/${receipt.id}`));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not load the receipt");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not load the receipt"));
       setDetail(null);
     } finally {
       setDetailLoading(false);
@@ -159,30 +161,28 @@ export function ReceiptsPage() {
         { method: "DELETE" },
       );
       if (!revertStock) {
-        toast.success("Receipt deleted — the stock it added stays in inventory");
+        toast.success(t("Receipt deleted — the stock it added stays in inventory"));
       } else {
         const reverted = result.reverted.filter((entry) => entry.reverted > 0);
         const used = result.reverted.filter((entry) => entry.consumed > 0);
-        const usedText = used.length
-          ? ` Already used, so not removed: ${used
-              .slice(0, 3)
-              .map((entry) => `${qty(entry.consumed)} ${entry.unit} ${entry.itemName}`)
-              .join(", ")}${used.length > 3 ? ` and ${used.length - 3} more` : ""}.`
-          : "";
+        const usedItems = used.slice(0, 3).map((entry) => `${qty(entry.consumed)} ${entry.unit} ${entry.itemName}`).join(", ");
+        const usedMore = used.length > 3 ? t("and {count} more", { count: used.length - 3 }) : "";
+        const usedText = used.length ? t(" Already used, so not removed: {items}{more}.", { items: usedItems, more: usedMore }) : "";
         toast.success(
           reverted.length
-            ? `Receipt deleted and ${reverted.length} item${reverted.length === 1 ? "" : "s"} taken back out of stock (${reverted
-                .slice(0, 3)
-                .map((entry) => `${qty(entry.reverted)} ${entry.unit} ${entry.itemName}`)
-                .join(", ")}${reverted.length > 3 ? "…" : ""}).${usedText}`
-            : `Receipt deleted — none of its stock was left to remove.${usedText}`,
+            ? t("Receipt deleted and {count} items taken back out of stock ({items}).{used}", {
+                count: reverted.length,
+                items: reverted.slice(0, 3).map((entry) => `${qty(entry.reverted)} ${entry.unit} ${entry.itemName}`).join(", "),
+                used: usedText,
+              })
+            : t("Receipt deleted — none of its stock was left to remove.{used}", { used: usedText }),
         );
       }
       setDeleteTarget(null);
       setDetail(null);
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not remove the receipt");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not remove the receipt"));
     } finally {
       setBusy(false);
     }
@@ -203,12 +203,12 @@ export function ReceiptsPage() {
       const body = { name: shopName.trim(), kind: shopKind, note: shopNote.trim() || null };
       if (editingShop) await api(`/api/houses/${house.id}/vendors/${editingShop.id}`, { method: "PATCH", body });
       else await api(`/api/houses/${house.id}/vendors`, { method: "POST", body });
-      toast.success(editingShop ? "Shop updated" : "Shop added");
+      toast.success(editingShop ? t("Shop updated") : t("Shop added"));
       setShopOpen(false);
       setEditingShop(null);
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not save the shop");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not save the shop"));
     } finally {
       setBusy(false);
     }
@@ -219,11 +219,11 @@ export function ReceiptsPage() {
     setBusy(true);
     try {
       await api(`/api/houses/${house.id}/vendors/${deleteShop.id}`, { method: "DELETE" });
-      toast.success("Shop removed");
+      toast.success(t("Shop removed"));
       setDeleteShop(null);
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not remove the shop");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not remove the shop"));
     } finally {
       setBusy(false);
     }
@@ -234,11 +234,11 @@ export function ReceiptsPage() {
     setBusy(true);
     try {
       await api(`/api/houses/${house.id}/receipt-templates/${deleteTemplate.id}`, { method: "DELETE" });
-      toast.success("Template removed");
+      toast.success(t("Template removed"));
       setDeleteTemplate(null);
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not remove the template");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not remove the template"));
     } finally {
       setBusy(false);
     }
@@ -253,7 +253,7 @@ export function ReceiptsPage() {
       setSuggestions(data);
       setSuggestCountry(data.country);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not load suggested shops");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not load suggested shops"));
       setSuggestions(null);
     } finally {
       setSuggestLoading(false);
@@ -280,7 +280,7 @@ export function ReceiptsPage() {
           ? { ...current, entries: current.entries.map((item) => (item.id === entry.id ? { ...item, added: true } : item)) }
           : current,
       );
-      toast.success(`${vendor.name} added`);
+      toast.success(t("{shop} added", { shop: vendor.name }));
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
         setSuggestions((current) =>
@@ -288,9 +288,9 @@ export function ReceiptsPage() {
             ? { ...current, entries: current.entries.map((item) => (item.id === entry.id ? { ...item, added: true } : item)) }
             : current,
         );
-        toast.push(`${entry.name} is already in your shops`);
+        toast.push(t("{shop} is already in your shops", { shop: entry.name }));
       } else {
-        toast.error(err instanceof Error ? err.message : "Could not add the shop");
+        toast.error(err instanceof Error ? t(err.message) : t("Could not add the shop"));
       }
     } finally {
       setSuggestBusyId(null);
@@ -309,32 +309,29 @@ export function ReceiptsPage() {
   return (
     <div className="space-y-4">
       <PageHeader
-        eyebrow="Purchases"
-        title="Receipts & shops"
-        subtitle="Where your things came from — and a whole weekly shop added in one go."
+        eyebrow={t("Purchases")}
+        title={t("Receipts & shops")}
+        subtitle={t("Where your things came from — and a whole weekly shop added in one go.")}
         actions={
           <>
             <div className="hidden sm:block">
               <Button variant="secondary" icon="store" onClick={() => setTab("shops")}>
-                Shops
-              </Button>
+                {t("Shops")}</Button>
             </div>
             <Button variant="secondary" icon="upload" onClick={() => setEReceiptOpen(true)} disabled={!can("member")}>
-              E-receipt
-            </Button>
+              {t("E-receipt")}</Button>
             <Button icon="scan" onClick={() => navigate("/receipts/scan")} disabled={!can("member")}>
-              Scan receipt
-            </Button>
+              {t("Scan receipt")}</Button>
           </>
         }
       />
 
       <Tabs
         items={[
-          { value: "receipts", label: "Receipts", count: receipts?.length },
-          { value: "shops", label: "Shops", count: vendors?.length },
-          { value: "insights", label: "Insights" },
-          { value: "templates", label: "Templates", count: templates.filter((template) => !template.builtIn).length },
+          { value: "receipts", label: t("Receipts"), count: receipts?.length },
+          { value: "shops", label: t("Shops"), count: vendors?.length },
+          { value: "insights", label: t("Insights") },
+          { value: "templates", label: t("Templates"), count: templates.filter((template) => !template.builtIn).length },
         ]}
         value={tab}
         onChange={setTab}
@@ -351,12 +348,11 @@ export function ReceiptsPage() {
           ) : receipts.length === 0 ? (
             <EmptyState
               icon="receipt"
-              title="No receipts yet"
-              body="Scan a shopping receipt once and the whole basket becomes stock, with the shop and prices attached."
+              title={t("No receipts yet")}
+              body={t("Scan a shopping receipt once and the whole basket becomes stock, with the shop and prices attached.")}
               action={
                 <Button icon="scan" onClick={() => navigate("/receipts/scan")}>
-                  Scan a receipt
-                </Button>
+                  {t("Scan a receipt")}</Button>
               }
             />
           ) : (
@@ -373,29 +369,30 @@ export function ReceiptsPage() {
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="flex items-center gap-1.5">
-                        <span className="truncate text-sm font-medium">{receipt.vendorName ?? "Unknown shop"}</span>
+                        <span className="truncate text-sm font-medium">{receipt.vendorName ?? t("Unknown shop")}</span>
                         <Badge tone={receipt.provider === "ai" ? "brand" : "outline"}>
-                          {receiptProviderLabel(receipt.provider, receipt.source)}
+                          {t(receiptProviderLabel(receipt.provider, receipt.source))}
                         </Badge>
                       </span>
                       <span className="block text-[11px] text-muted">
                         {receipt.purchasedAt ? shortDate(receipt.purchasedAt) : shortDate(receipt.createdAt)}
-                        {receipt.lineCount != null ? ` · ${receipt.lineCount} line${receipt.lineCount === 1 ? "" : "s"}` : ""}
+                        {receipt.lineCount != null
+                          ? ` · ${t(receipt.lineCount === 1 ? "{count} line" : "{count} lines", { count: receipt.lineCount })}`
+                          : ""}
                         {receipt.savings != null && receipt.savings > 0
-                          ? ` · saved ${money(receipt.savings, receipt.currency ?? house.currency)}`
+                          ? t(" · saved {amount}", { amount: money(receipt.savings, receipt.currency ?? house.currency) })
                           : ""}
                       </span>
                     </span>
                     <span className="shrink-0 text-right">
                       <span className="block font-display text-lg leading-none">{money(receipt.total, receipt.currency ?? house.currency)}</span>
-                      <span className="mt-0.5 block text-[10px] uppercase tracking-wide text-muted">total</span>
+                      <span className="mt-0.5 block text-[10px] uppercase tracking-wide text-muted">{t("total")}</span>
                     </span>
                   </button>
                 ))}
               </div>
               <p className="text-right text-[11px] text-muted">
-                {receipts.length} receipt{receipts.length === 1 ? "" : "s"} · {money(totalValue, house.currency)} recorded
-              </p>
+                {t("{count} receipts recorded", { count: receipts.length })} · {money(totalValue, house.currency)}</p>
             </>
           )}
         </>
@@ -403,24 +400,22 @@ export function ReceiptsPage() {
         <Card className="p-4">
           <div className="mb-3 flex items-center justify-between gap-2">
             <div>
-              <h2 className="font-display text-lg">Shops & suppliers</h2>
-              <p className="text-[11px] text-muted">Used when you add stock, scan a receipt or review where an item came from.</p>
+              <h2 className="font-display text-lg">{t("Shops & suppliers")}</h2>
+              <p className="text-[11px] text-muted">{t("Used when you add stock, scan a receipt or review where an item came from.")}</p>
             </div>
             {can("member") && (
               <div className="flex shrink-0 gap-2">
                 <Button size="sm" variant="secondary" icon="sparkles" onClick={openSuggestions}>
-                  Suggested
-                </Button>
+                  {t("Suggested")}</Button>
                 <Button size="sm" variant="secondary" icon="plus" onClick={() => openShop(null)}>
-                  Add
-                </Button>
+                  {t("Add")}</Button>
               </div>
             )}
           </div>
           {vendors === null ? (
             <Skeleton className="h-32" />
           ) : vendors.length === 0 ? (
-            <p className="py-3 text-sm text-muted">No shops yet. Scan a receipt or add one here.</p>
+            <p className="py-3 text-sm text-muted">{t("No shops yet. Scan a receipt or add one here.")}</p>
           ) : (
             <div className="divide-y divide-line">
               {vendors.map((vendor) => (
@@ -431,14 +426,16 @@ export function ReceiptsPage() {
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-medium">{vendor.name}</div>
                     <div className="text-[11px] capitalize text-muted">
-                      {vendor.kind}
-                      {vendor.purchaseCount != null ? ` · ${qty(vendor.purchaseCount)} purchase${vendor.purchaseCount === 1 ? "" : "s"}` : ""}
+                      {t(vendor.kind)}
+                      {vendor.purchaseCount != null
+                        ? ` · ${t(vendor.purchaseCount === 1 ? "{count} purchase" : "{count} purchases", { count: qty(vendor.purchaseCount) })}`
+                        : ""}
                       {vendor.note ? ` · ${vendor.note}` : ""}
                     </div>
                   </div>
-                  {can("member") && <IconButton icon="pencil" label="Edit shop" onClick={() => openShop(vendor)} />}
+                  {can("member") && <IconButton icon="pencil" label={t("Edit shop")} onClick={() => openShop(vendor)} />}
                   {can("admin") && (
-                    <IconButton icon="trash" label="Delete shop" className="hover:text-danger" onClick={() => setDeleteShop(vendor)} />
+                    <IconButton icon="trash" label={t("Delete shop")} className="hover:text-danger" onClick={() => setDeleteShop(vendor)} />
                   )}
                 </div>
               ))}
@@ -470,23 +467,21 @@ export function ReceiptsPage() {
           <Icon name="store" size={17} />
         </span>
         <div className="text-[11px] leading-relaxed text-muted">
-          Every receipt keeps the shop, date, line prices and the original photo. Stock lots remember the shop too, so
-          “where did this come from?” has an answer long after the paper is gone.
-        </div>
+          {t("Every receipt keeps the shop, date, line prices and the original photo. Stock lots remember the shop too, so “where did this come from?” has an answer long after the paper is gone.")}</div>
       </Card>
 
       <Sheet
         open={Boolean(detail)}
         onClose={() => setDetail(null)}
-        title={detail?.vendorName ?? "Receipt"}
+        title={detail?.vendorName ?? t("Receipt")}
         description={
           detail
             ? [
                 detail.purchasedAt ? shortDate(detail.purchasedAt) : null,
-                detail.lines?.length ? `${detail.lines.length} lines` : null,
-                receiptProviderLabel(detail.provider, detail.source),
+                detail.lines?.length ? t("{count} lines", { count: detail.lines.length }) : null,
+                t(receiptProviderLabel(detail.provider, detail.source)),
                 detail.aiCost != null ? `AI ${aiCostLabel(detail.aiCost)}` : null,
-                receiptTemplateLabel(detail.templateId),
+                receiptTemplateLabel(detail.templateId) ? t(receiptTemplateLabel(detail.templateId)!) : null,
               ]
                 .filter(Boolean)
                 .join(" · ")
@@ -498,43 +493,41 @@ export function ReceiptsPage() {
             <div className="flex gap-2">
               {can("member") && (
                 <Button variant="secondary" block icon="trash" className="text-danger" onClick={() => askDeleteReceipt(detail)}>
-                  Delete record
-                </Button>
+                  {t("Delete record")}</Button>
               )}
               <Button block icon="plus" onClick={() => navigate("/receipts/scan")}>
-                Scan another
-              </Button>
+                {t("Scan another")}</Button>
             </div>
           ) : undefined
         }
       >
         {detailLoading ? (
-          <LoadingBlock label="Loading receipt" />
+          <LoadingBlock label={t("Loading receipt")} />
         ) : detail ? (
           <div className="space-y-3">
             {detail.image && (
               <ZoomableImage
                 src={detail.image}
-                alt={`Receipt from ${detail.vendorName ?? "an unknown shop"}`}
+                alt={t("Receipt from {shop}", { shop: detail.vendorName ?? t("an unknown shop") })}
                 wrapperClassName="max-h-64 overflow-hidden rounded-xl bg-raised"
                 className="max-h-64 w-full object-contain"
               />
             )}
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-              <ReceiptStat label="Total" value={money(detail.total, detail.currency ?? house.currency)} />
+              <ReceiptStat label={t("Total")} value={money(detail.total, detail.currency ?? house.currency)} />
               <ReceiptStat
-                label="Net"
+                label={t("Net")}
                 value={money(
                   detail.subtotal ??
                     (detail.total != null && detail.tax != null ? detail.total - detail.tax : detail.total),
                   detail.currency ?? house.currency,
                 )}
               />
-              <ReceiptStat label="Tax" value={money(detail.tax, detail.currency ?? house.currency)} />
+              <ReceiptStat label={t("Tax")} value={money(detail.tax, detail.currency ?? house.currency)} />
               {detail.savings != null && detail.savings > 0 && (
-                <ReceiptStat label="Saved" value={money(detail.savings, detail.currency ?? house.currency)} />
+                <ReceiptStat label={t("Saved")} value={money(detail.savings, detail.currency ?? house.currency)} />
               )}
-              <ReceiptStat label="Lines" value={qty(detail.lines?.length ?? 0)} />
+              <ReceiptStat label={t("Lines")} value={qty(detail.lines?.length ?? 0)} />
             </div>
             <div className="divide-y divide-line rounded-xl border border-line">
               {(detail.lines ?? []).map((line: ReceiptLine) => (
@@ -542,14 +535,14 @@ export function ReceiptsPage() {
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-medium">{line.description}</div>
                     <div className="text-[11px] text-muted">
-                      {qty(line.quantity)} {line.unit ?? "pcs"}
-                      {line.itemName ? ` · ${line.itemName}` : " · not linked"}
-                      {line.taxRate != null ? ` · VAT ${line.taxRate}%` : ""}
-                      {(line.discount ?? 0) > 0 ? ` · discount ${money(line.discount, detail.currency ?? house.currency)}` : ""}
+                      {qty(line.quantity)} {line.unit ?? t("pcs")}
+                      {line.itemName ? ` · ${line.itemName}` : t(" · not linked")}
+                      {line.taxRate != null ? t(" · VAT {rate}%", { rate: line.taxRate }) : ""}
+                      {(line.discount ?? 0) > 0 ? t(" · discount {amount}", { amount: money(line.discount, detail.currency ?? house.currency) }) : ""}
                       {line.barcode ? ` · ${line.barcode}` : ""}
                     </div>
                     {line.rawDescription && line.rawDescription !== line.description && (
-                      <div className="truncate text-[10px] text-muted">receipt: {line.rawDescription}</div>
+                      <div className="truncate text-[10px] text-muted">{t("receipt:")} {line.rawDescription}</div>
                     )}
                   </div>
                   <div className="shrink-0 text-right text-xs">
@@ -558,22 +551,22 @@ export function ReceiptsPage() {
                     </div>
                     {line.unitPrice != null && (
                       <div className="text-[10px] text-muted">
-                        {money(line.unitPrice, detail.currency ?? house.currency)} / {line.unit ?? "unit"}
+                        {money(line.unitPrice, detail.currency ?? house.currency)} / {line.unit ?? t("unit")}
                       </div>
                     )}
                   </div>
                 </div>
               ))}
-              {(detail.lines ?? []).length === 0 && <p className="px-3 py-3 text-sm text-muted">No product lines stored.</p>}
+              {(detail.lines ?? []).length === 0 && <p className="px-3 py-3 text-sm text-muted">{t("No product lines stored.")}</p>}
             </div>
             {detail.taxBreakdown.length > 0 && (
               <div className="rounded-xl bg-raised px-3 py-2">
-                <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">VAT split</div>
+                <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">{t("VAT split")}</div>
                 <div className="mt-1.5 flex flex-wrap gap-1.5">
                   {detail.taxBreakdown.map((entry, index) => (
                     <Badge key={`${entry.rate ?? "tax"}-${index}`} tone="outline">
-                      {entry.rate != null ? `${entry.rate}%` : "Tax"} · {money(entry.tax, detail.currency ?? house.currency)}
-                      <span className="font-normal opacity-70">net {money(entry.net, detail.currency ?? house.currency)}</span>
+                      {entry.rate != null ? `${entry.rate}%` : t("Tax")} · {money(entry.tax, detail.currency ?? house.currency)}
+                      <span className="font-normal opacity-70">{t("net")} {money(entry.net, detail.currency ?? house.currency)}</span>
                     </Badge>
                   ))}
                 </div>
@@ -581,8 +574,7 @@ export function ReceiptsPage() {
             )}
             {detail.notes && <p className="rounded-xl bg-raised px-3 py-2 text-[11px] text-muted">{detail.notes}</p>}
             <p className="text-[11px] text-muted">
-              Deleting this record keeps every stock batch it created. Remove or adjust that stock from the item pages.
-            </p>
+              {t("Deleting this record keeps every stock batch it created. Remove or adjust that stock from the item pages.")}</p>
           </div>
         ) : null}
       </Sheet>
@@ -590,12 +582,12 @@ export function ReceiptsPage() {
       <Sheet
         open={suggestOpen}
         onClose={() => setSuggestOpen(false)}
-        title="Suggested shops"
-        description="Common supermarkets, delis, kiosks and online shops in Greece."
+        title={t("Suggested shops")}
+        description={t("Common supermarkets, delis, kiosks and online shops in Greece.")}
         wide
       >
         {suggestLoading ? (
-          <LoadingBlock label="Loading suggested shops" />
+          <LoadingBlock label={t("Loading suggested shops")} />
         ) : suggestions ? (
           <div className="space-y-3">
             <div className="flex gap-2">
@@ -604,7 +596,7 @@ export function ReceiptsPage() {
                 <Input
                   value={suggestQuery}
                   onChange={(event) => setSuggestQuery(event.target.value)}
-                  placeholder="Search shops"
+                  placeholder={t("Search shops")}
                   className="pl-9"
                   inputMode="search"
                 />
@@ -644,7 +636,7 @@ export function ReceiptsPage() {
                       : "shrink-0 rounded-full px-3 py-1.5 text-[12px] font-medium text-muted transition-colors hover:bg-raised hover:text-ink"
                   }
                 >
-                  {kind === "all" ? "All" : kind}
+                  {kind === "all" ? t("All") : t(kind)}
                 </button>
               ))}
             </div>
@@ -657,12 +649,11 @@ export function ReceiptsPage() {
                   </span>
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-medium">{entry.name}</div>
-                    <div className="text-[11px] capitalize text-muted">{entry.kind}</div>
+                    <div className="text-[11px] capitalize text-muted">{t(entry.kind)}</div>
                   </div>
                   {entry.added ? (
                     <Badge tone="brand">
-                      <Icon name="check" size={11} /> added
-                    </Badge>
+                      <Icon name="check" size={11} /> {t("added")}</Badge>
                   ) : (
                     <Button
                       size="sm"
@@ -672,23 +663,20 @@ export function ReceiptsPage() {
                       disabled={suggestBusyId !== null}
                       onClick={() => void addSuggested(entry)}
                     >
-                      Add
-                    </Button>
+                      {t("Add")}</Button>
                   )}
                 </div>
               ))}
               {visibleSuggestions.length === 0 && (
-                <p className="px-3 py-4 text-sm text-muted">No shops match that search or type.</p>
+                <p className="px-3 py-4 text-sm text-muted">{t("No shops match that search or type.")}</p>
               )}
             </div>
 
             <p className="text-[11px] leading-relaxed text-muted">
-              This list is a starting point, not a limit. Add any local deli, kiosk or market by hand under Shops. The
-              catalogue is country-based, so more countries can be added later without changing how receipts work.
-            </p>
+              {t("This list is a starting point, not a limit. Add any local deli, kiosk or market by hand under Shops. The catalogue is country-based, so more countries can be added later without changing how receipts work.")}</p>
           </div>
         ) : (
-          <p className="text-sm text-muted">Could not load the suggested shops. Try again from the Shops tab.</p>
+          <p className="text-sm text-muted">{t("Could not load the suggested shops. Try again from the Shops tab.")}</p>
         )}
       </Sheet>
 
@@ -698,29 +686,29 @@ export function ReceiptsPage() {
           setShopOpen(false);
           setEditingShop(null);
         }}
-        title={editingShop ? "Edit shop" : "New shop"}
-        description="A supermarket, market stall, online shop or anywhere else you buy from."
+        title={editingShop ? t("Edit shop") : t("New shop")}
+        description={t("A supermarket, market stall, online shop or anywhere else you buy from.")}
         footer={
           <Button block loading={busy} disabled={!shopName.trim()} onClick={() => void saveShop()}>
-            {editingShop ? "Save shop" : "Add shop"}
+            {editingShop ? t("Save shop") : t("Add shop")}
           </Button>
         }
       >
         <div className="space-y-3">
-          <Field label="Name" required>
-            <Input value={shopName} onChange={(event) => setShopName(event.target.value)} placeholder="Corner Market" autoFocus maxLength={80} />
+          <Field label={t("Name")} required>
+            <Input value={shopName} onChange={(event) => setShopName(event.target.value)} placeholder={t("Corner Market")} autoFocus maxLength={80} />
           </Field>
-          <Field label="Type">
+          <Field label={t("Type")}>
             <Select value={shopKind} onChange={(event) => setShopKind(event.target.value)}>
               {SHOP_KINDS.map((kind) => (
                 <option key={kind} value={kind}>
-                  {kind}
+                  {t(kind)}
                 </option>
               ))}
             </Select>
           </Field>
-          <Field label="Note" hint="optional">
-            <Textarea rows={2} value={shopNote} onChange={(event) => setShopNote(event.target.value)} maxLength={300} placeholder="Opening hours, loyalty card, delivery day…" />
+          <Field label={t("Note")} hint={t("optional")}>
+            <Textarea rows={2} value={shopNote} onChange={(event) => setShopNote(event.target.value)} maxLength={300} placeholder={t("Opening hours, loyalty card, delivery day…")} />
           </Field>
         </div>
       </Sheet>
@@ -728,24 +716,22 @@ export function ReceiptsPage() {
       <Sheet
         open={Boolean(deleteTarget)}
         onClose={() => setDeleteTarget(null)}
-        title="Delete this receipt?"
+        title={t("Delete this receipt?")}
         footer={
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={() => setDeleteTarget(null)} disabled={busy}>
-              Cancel
-            </Button>
+              {t("Cancel")}</Button>
             <Button variant="danger" onClick={() => void removeReceipt()} loading={busy}>
-              Delete receipt
-            </Button>
+              {t("Delete receipt")}</Button>
           </div>
         }
       >
         <div className="space-y-3 text-sm">
           <p className="text-muted">
-            The receipt record, its line details and its scanned image are removed.{" "}
+            {t("The receipt record, its line details and its scanned image are removed.")}{" "}
             {revertStock
-              ? "The stock this receipt added is taken back out of inventory, except what was already used."
-              : "The stock it added stays in inventory; the batches simply lose their link to this receipt. Price history is kept."}
+              ? t("The stock this receipt added is taken back out of inventory, except what was already used.")
+              : t("The stock it added stays in inventory; the batches simply lose their link to this receipt. Price history is kept.")}
           </p>
           <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-line px-3 py-2.5">
             <input
@@ -755,10 +741,9 @@ export function ReceiptsPage() {
               className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--sv-brand)]"
             />
             <span>
-              <span className="block font-medium">Also remove the stock this receipt added</span>
+              <span className="block font-medium">{t("Also remove the stock this receipt added")}</span>
               <span className="block text-[11px] text-muted">
-                Use this when the receipt was imported by mistake or twice. Anything already used is left as it is.
-              </span>
+                {t("Use this when the receipt was imported by mistake or twice. Anything already used is left as it is.")}</span>
             </span>
           </label>
         </div>
@@ -768,9 +753,9 @@ export function ReceiptsPage() {
         open={Boolean(deleteShop)}
         onClose={() => setDeleteShop(null)}
         onConfirm={() => void removeShop()}
-        title={`Delete ${deleteShop?.name ?? "shop"}?`}
-        body="Existing stock keeps its price, but loses the shop link. Receipts will show the name they were scanned with."
-        confirmLabel="Delete shop"
+        title={t("Delete {name}?", { name: deleteShop?.name ?? t("shop") })}
+        body={t("Existing stock keeps its price, but loses the shop link. Receipts will show the name they were scanned with.")}
+        confirmLabel={t("Delete shop")}
         loading={busy}
       />
 
@@ -778,9 +763,9 @@ export function ReceiptsPage() {
         open={Boolean(deleteTemplate)}
         onClose={() => setDeleteTemplate(null)}
         onConfirm={() => void removeTemplate()}
-        title={`Delete ${deleteTemplate?.name ?? "template"}?`}
-        body="Receipts already parsed with this template keep their data. Future scans from this shop will use the generic parser unless another template matches."
-        confirmLabel="Delete template"
+        title={t("Delete {name}?", { name: deleteTemplate?.name ?? t("template") })}
+        body={t("Receipts already parsed with this template keep their data. Future scans from this shop will use the generic parser unless another template matches.")}
+        confirmLabel={t("Delete template")}
         loading={busy}
       />
 
@@ -796,11 +781,9 @@ export function ReceiptsPage() {
 
       <div className="flex flex-wrap gap-2">
         <Badge tone="outline">
-          <Icon name="receipt" size={11} /> receipt-first inventory
-        </Badge>
+          <Icon name="receipt" size={11} /> {t("receipt-first inventory")}</Badge>
         <Badge tone="outline">
-          <Icon name="store" size={11} /> every batch knows its shop
-        </Badge>
+          <Icon name="store" size={11} /> {t("every batch knows its shop")}</Badge>
       </div>
     </div>
   );
@@ -821,6 +804,7 @@ function TemplatesPanel({
   onClone: (template: ReceiptTemplate) => void;
   onDelete: (template: ReceiptTemplate) => void;
 }) {
+  const { t } = useI18n();
   const builtIn = templates.filter((template) => template.builtIn);
   const custom = templates.filter((template) => !template.builtIn);
   return (
@@ -828,15 +812,13 @@ function TemplatesPanel({
       <Card className="p-4">
         <div className="mb-3 flex items-center justify-between gap-3">
           <div>
-            <h2 className="font-display text-lg">Receipt templates</h2>
+            <h2 className="font-display text-lg">{t("Receipt templates")}</h2>
             <p className="text-[11px] text-muted">
-              A template teaches SVault a shop's layout: product lines, quantities, discounts, totals and VAT.
-            </p>
+              {t("A template teaches SVault a shop's layout: product lines, quantities, discounts, totals and VAT.")}</p>
           </div>
           {canEdit && (
             <Button size="sm" icon="plus" onClick={onNew}>
-              New template
-            </Button>
+              {t("New template")}</Button>
           )}
         </div>
 
@@ -849,16 +831,14 @@ function TemplatesPanel({
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1.5">
                   <span className="truncate text-sm font-medium">{template.name}</span>
-                  <Badge tone="brand">built-in</Badge>
+                  <Badge tone="brand">{t("built-in")}</Badge>
                 </div>
                 <div className="text-[11px] text-muted">
-                  {template.country} · {template.rules.keywords.length} detection signals · read-only
-                </div>
+                  {template.country} · {template.rules.keywords.length} {t("detection signals · read-only")}</div>
               </div>
               {canEdit && (
                 <Button size="sm" variant="secondary" icon="plus" onClick={() => onClone(template)}>
-                  Clone
-                </Button>
+                  {t("Clone")}</Button>
               )}
             </div>
           ))}
@@ -871,17 +851,16 @@ function TemplatesPanel({
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1.5">
                   <span className="truncate text-sm font-medium">{template.name}</span>
-                  {!template.active && <Badge tone="warn">inactive</Badge>}
+                  {!template.active && <Badge tone="warn">{t("inactive")}</Badge>}
                 </div>
                 <div className="text-[11px] text-muted">
-                  {template.vendorName ?? "Any shop"} · {template.country} · v{template.version} ·{" "}
-                  {template.rules.keywords.length} detection signals
-                </div>
+                  {template.vendorName ?? t("Any shop")} · {template.country} · v{template.version} ·{" "}
+                  {template.rules.keywords.length} {t("detection signals")}</div>
               </div>
               {canEdit && (
                 <>
-                  <IconButton icon="pencil" label="Edit template" onClick={() => onEdit(template)} />
-                  <IconButton icon="trash" label="Delete template" className="hover:text-danger" onClick={() => onDelete(template)} />
+                  <IconButton icon="pencil" label={t("Edit template")} onClick={() => onEdit(template)} />
+                  <IconButton icon="trash" label={t("Delete template")} className="hover:text-danger" onClick={() => onDelete(template)} />
                 </>
               )}
             </div>
@@ -889,8 +868,7 @@ function TemplatesPanel({
 
           {custom.length === 0 && (
             <p className="py-4 text-sm text-muted">
-              No custom templates yet. Start from the Lidl or Sklavenitis example or create one for another shop.
-            </p>
+              {t("No custom templates yet. Start from the Lidl or Sklavenitis example or create one for another shop.")}</p>
           )}
         </div>
       </Card>
@@ -900,10 +878,7 @@ function TemplatesPanel({
           <Icon name="key" size={17} />
         </span>
         <div className="text-[11px] leading-relaxed text-muted">
-          Templates are selected by detection keywords and a confidence threshold. Unknown layouts fall back to the
-          generic parser or the AI provider. Product names still use learned aliases, so correcting one line teaches
-          that shop's shorthand for next time.
-        </div>
+          {t("Templates are selected by detection keywords and a confidence threshold. Unknown layouts fall back to the generic parser or the AI provider. Product names still use learned aliases, so correcting one line teaches that shop's shorthand for next time.")}</div>
       </Card>
     </div>
   );
@@ -933,6 +908,7 @@ function InsightsPanel({
   currency: string;
   onScan: () => void;
 }) {
+  const { t, locale } = useI18n();
   const ranges = [
     { value: "3", label: "3 months" },
     { value: "6", label: "6 months" },
@@ -941,7 +917,7 @@ function InsightsPanel({
   ];
   const monthLabel = (month: string) => {
     if (!/^\d{4}-\d{2}$/.test(month)) return month;
-    return new Date(`${month}-01T00:00:00`).toLocaleDateString(undefined, { month: "short", year: "numeric" });
+    return new Date(`${month}-01T00:00:00`).toLocaleDateString(locale, { month: "short", year: "numeric" });
   };
 
   return (
@@ -958,37 +934,36 @@ function InsightsPanel({
                 : "shrink-0 rounded-full px-3.5 py-1.5 text-[12px] font-medium text-muted transition-colors hover:bg-raised hover:text-ink"
             }
           >
-            {entry.label}
+            {t(entry.label)}
           </button>
         ))}
       </div>
 
       {loading ? (
-        <LoadingBlock label="Adding up receipts" />
+        <LoadingBlock label={t("Adding up receipts")} />
       ) : !data || data.totals.receipts === 0 ? (
         <EmptyState
           icon="receipt"
-          title="No spending yet"
-          body="Scan a receipt with prices and tax to see what you spend at each shop, how much is tax and how prices move."
+          title={t("No spending yet")}
+          body={t("Scan a receipt with prices and tax to see what you spend at each shop, how much is tax and how prices move.")}
           action={
             <Button icon="scan" onClick={onScan}>
-              Scan a receipt
-            </Button>
+              {t("Scan a receipt")}</Button>
           }
         />
       ) : (
         <>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-            <SpendStat label="Total spend" value={money(data.totals.total, currency)} hint={`${qty(data.totals.receipts)} receipts`} tone="brand" />
-            <SpendStat label="Net" value={money(data.totals.net, currency)} hint="before tax" />
-            <SpendStat label="Tax / VAT" value={money(data.totals.tax, currency)} hint="included" tone="warn" />
-            <SpendStat label="Money saved" value={money(data.totals.savings, currency)} hint="discounts" />
-            <SpendStat label="Average basket" value={money(data.totals.average, currency)} hint="per receipt" />
+            <SpendStat label={t("Total spend")} value={money(data.totals.total, currency)} hint={t("{count} receipts", { count: qty(data.totals.receipts) })} tone="brand" />
+            <SpendStat label={t("Net")} value={money(data.totals.net, currency)} hint={t("before tax")} />
+            <SpendStat label={t("Tax / VAT")} value={money(data.totals.tax, currency)} hint={t("included")} tone="warn" />
+            <SpendStat label={t("Money saved")} value={money(data.totals.savings, currency)} hint={t("discounts")} />
+            <SpendStat label={t("Average basket")} value={money(data.totals.average, currency)} hint={t("per receipt")} />
           </div>
 
           <Card className="p-4">
             <div className="mb-3 flex items-center justify-between gap-2">
-              <h2 className="font-display text-lg">Spending by month</h2>
+              <h2 className="font-display text-lg">{t("Spending by month")}</h2>
               <Badge tone="outline">{money(data.totals.total, currency)}</Badge>
             </div>
             <div className="space-y-2">
@@ -1006,15 +981,14 @@ function InsightsPanel({
               })}
             </div>
             <p className="mt-3 text-[11px] leading-relaxed text-muted">
-              Based on receipts in this period. Net is the amount before tax; tax is what was included in the total.
-            </p>
+              {t("Based on receipts in this period. Net is the amount before tax; tax is what was included in the total.")}</p>
           </Card>
 
           <div className="grid gap-4 lg:grid-cols-2">
             <Card className="p-4">
               <div className="mb-2 flex items-center justify-between gap-2">
-                <h2 className="font-display text-lg">By shop</h2>
-                <Badge tone="outline">{qty(data.byVendor.length)} shops</Badge>
+                <h2 className="font-display text-lg">{t("By shop")}</h2>
+                <Badge tone="outline">{qty(data.byVendor.length)} {t("shops")}</Badge>
               </div>
               <div className="divide-y divide-line">
                 {data.byVendor.map((vendor) => (
@@ -1025,14 +999,14 @@ function InsightsPanel({
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-sm font-medium">{vendor.vendorName}</div>
                       <div className="text-[10px] text-muted">
-                        {qty(vendor.receipts)} receipt{vendor.receipts === 1 ? "" : "s"} · net {money(vendor.net, currency)} · tax{" "}
+                        {qty(vendor.receipts)} {t("receipt")}{vendor.receipts === 1 ? "" : t("s")} {t("· net")} {money(vendor.net, currency)} {t("· tax")}{" "}
                         {money(vendor.tax, currency)}
                       </div>
                     </div>
                     <div className="shrink-0 text-right">
                       <div className="text-sm font-medium">{money(vendor.total, currency)}</div>
                       <div className="text-[10px] text-muted">
-                        avg {money(vendor.receipts ? vendor.total / vendor.receipts : 0, currency)}
+                        {t("avg")} {money(vendor.receipts ? vendor.total / vendor.receipts : 0, currency)}
                       </div>
                     </div>
                   </div>
@@ -1042,20 +1016,19 @@ function InsightsPanel({
 
             <Card className="p-4">
               <div className="mb-2 flex items-center justify-between gap-2">
-                <h2 className="font-display text-lg">Tax split</h2>
+                <h2 className="font-display text-lg">{t("Tax split")}</h2>
                 <Badge tone="outline">{money(data.totals.tax, currency)}</Badge>
               </div>
               {data.taxRates.length === 0 ? (
                 <p className="py-3 text-sm text-muted">
-                  No VAT rate breakdown was read from these receipts. The total tax figure is still included above.
-                </p>
+                  {t("No VAT rate breakdown was read from these receipts. The total tax figure is still included above.")}</p>
               ) : (
                 <div className="divide-y divide-line">
                   {data.taxRates.map((entry) => (
                     <div key={`${entry.rate ?? "other"}`} className="flex items-center gap-3 py-2.5 text-xs">
-                      <Badge tone="outline">{entry.rate != null ? `${entry.rate}%` : "Tax"}</Badge>
+                      <Badge tone="outline">{entry.rate != null ? `${entry.rate}%` : t("Tax")}</Badge>
                       <div className="min-w-0 flex-1 text-[10px] text-muted">
-                        net {money(entry.net, currency)} · gross {money(entry.gross, currency)}
+                        {t("net")} {money(entry.net, currency)} {t("· gross")} {money(entry.gross, currency)}
                       </div>
                       <div className="text-sm font-medium">{money(entry.tax, currency)}</div>
                     </div>
@@ -1067,11 +1040,11 @@ function InsightsPanel({
 
           <Card className="p-4">
             <div className="mb-3 flex items-center justify-between gap-2">
-              <h2 className="font-display text-lg">Spending by category</h2>
-              <Badge tone="outline">items</Badge>
+              <h2 className="font-display text-lg">{t("Spending by category")}</h2>
+              <Badge tone="outline">{t("items")}</Badge>
             </div>
             {data.byCategory.length === 0 ? (
-              <p className="py-3 text-sm text-muted">No categorised receipt lines in this period.</p>
+              <p className="py-3 text-sm text-muted">{t("No categorised receipt lines in this period.")}</p>
             ) : (
               <div className="space-y-2">
                 {data.byCategory.map((entry) => {
@@ -1089,8 +1062,7 @@ function InsightsPanel({
               </div>
             )}
             <p className="mt-3 text-[11px] leading-relaxed text-muted">
-              Category totals use the item each receipt line was matched to, so they improve as items are categorised.
-            </p>
+              {t("Category totals use the item each receipt line was matched to, so they improve as items are categorised.")}</p>
           </Card>
         </>
       )}
@@ -1148,6 +1120,7 @@ function EReceiptSheet({
   onClose: () => void;
   onSaved: () => void | Promise<void>;
 }) {
+  const { t } = useI18n();
   const toast = useToast();
   const [text, setText] = useState("");
   const [draft, setDraft] = useState<ReceiptDraft | null>(null);
@@ -1178,7 +1151,7 @@ function EReceiptSheet({
       setDuplicate(null);
       setCurrency(result.currency);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not read the e-receipt");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not read the e-receipt"));
     } finally {
       setBusy(false);
     }
@@ -1214,14 +1187,14 @@ function EReceiptSheet({
           })),
         },
       });
-      toast.success("E-receipt imported");
+      toast.success(t("E-receipt imported"));
       await onSaved();
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
         const details = err.details as { duplicateOf?: ReceiptDuplicate } | undefined;
         setDuplicate(details?.duplicateOf ?? { id: "", purchasedAt: null, total: draft.total, vendorName: draft.vendorName });
       } else {
-        toast.error(err instanceof Error ? err.message : "Could not save the e-receipt");
+        toast.error(err instanceof Error ? t(err.message) : t("Could not save the e-receipt"));
       }
     } finally {
       setBusy(false);
@@ -1232,28 +1205,25 @@ function EReceiptSheet({
     <Sheet
       open={open}
       onClose={onClose}
-      title="Import an e-receipt"
-      description="Paste the text of an emailed receipt, a copied PDF, or an e-invoice JSON payload."
+      title={t("Import an e-receipt")}
+      description={t("Paste the text of an emailed receipt, a copied PDF, or an e-invoice JSON payload.")}
       footer={
         draft ? (
           duplicate ? (
             <Button block variant="warn" loading={busy} onClick={() => void save(true)}>
-              Import anyway
-            </Button>
+              {t("Import anyway")}</Button>
           ) : (
             <Button block loading={busy} onClick={() => void save()}>
-              Save receipt
-            </Button>
+              {t("Save receipt")}</Button>
           )
         ) : (
           <Button block loading={busy} disabled={!text.trim()} onClick={() => void parse()}>
-            Read e-receipt
-          </Button>
+            {t("Read e-receipt")}</Button>
         )
       }
     >
       <div className="space-y-3">
-        <Field label="E-receipt text">
+        <Field label={t("E-receipt text")}>
           <Textarea
             value={text}
             onChange={(event) => {
@@ -1262,38 +1232,32 @@ function EReceiptSheet({
               setDuplicate(null);
             }}
             rows={8}
-            placeholder={"Milk 1.50\nBread 2.20\nTotal 3.70"}
+            placeholder={t("Milk 1.50\nBread 2.20\nTotal 3.70")}
             className="font-mono text-[12px]"
           />
         </Field>
 
         {duplicate && (
           <div className="rounded-xl border border-warn/40 bg-warn-soft p-3 text-[11px] text-warn">
-            This looks like a receipt you already saved
-            {duplicate.purchasedAt ? ` on ${shortDate(duplicate.purchasedAt)}` : ""}
-            {duplicate.total == null ? "" : ` for ${money(duplicate.total, currency)}`}. Importing it again adds
-            its stock twice.
-          </div>
+            {t("This looks like a receipt you already saved")}{duplicate.purchasedAt ? t(" on {date}", { date: shortDate(duplicate.purchasedAt) }) : ""}
+            {duplicate.total == null ? "" : t(" for {amount}", { amount: money(duplicate.total, currency) })}{t(". Importing it again adds its stock twice.")}</div>
         )}
 
         {draft && (
           <div className="space-y-2">
             <div className="rounded-xl border border-line bg-raised/50 p-3 text-[12px]">
               <div className="flex items-center justify-between gap-2">
-                <span className="font-medium">{draft.vendorName ?? "Unknown shop"}</span>
+                <span className="font-medium">{draft.vendorName ?? t("Unknown shop")}</span>
                 <span className="tabular-nums">
-                  {draft.total == null ? "No total" : money(draft.total, draft.currency ?? currency)}
+                  {draft.total == null ? t("No total") : money(draft.total, draft.currency ?? currency)}
                 </span>
               </div>
               <div className="mt-0.5 text-[11px] text-muted">
-                {draft.purchasedAt ? shortDate(draft.purchasedAt) : "No date"} · {draft.lines.length} line
-                {draft.lines.length === 1 ? "" : "s"}
+                {draft.purchasedAt ? shortDate(draft.purchasedAt) : t("No date")} · {draft.lines.length} {t("line")}{draft.lines.length === 1 ? "" : t("s")}
               </div>
               {reconciliation && reconciliation.difference != null && !reconciliation.ok && (
                 <div className="mt-1 text-[11px] text-warn">
-                  Lines are off by {money(Math.abs(reconciliation.difference), draft.currency ?? currency)} from the printed
-                  total. Check before saving.
-                </div>
+                  {t("Lines are off by")} {money(Math.abs(reconciliation.difference), draft.currency ?? currency)} {t("from the printed total. Check before saving.")}</div>
               )}
             </div>
             <div className="max-h-56 space-y-1 overflow-y-auto rounded-xl border border-line p-2">
@@ -1310,8 +1274,7 @@ function EReceiptSheet({
               ))}
             </div>
             <button type="button" className="text-[11px] text-brand" onClick={() => setDraft(null)}>
-              Edit the text instead
-            </button>
+              {t("Edit the text instead")}</button>
           </div>
         )}
       </div>

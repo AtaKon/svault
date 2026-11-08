@@ -30,6 +30,7 @@ import { PlanPage } from "@/pages/PlanPage";
 import { IntakePage } from "@/pages/IntakePage";
 import { InsightsPage } from "@/pages/InsightsPage";
 import { AdminPage } from "@/pages/AdminPage";
+import { useI18n } from "@/i18n";
 
 export function App() {
   return (
@@ -78,6 +79,7 @@ export function App() {
 }
 
 function RequireAuth({ children }: { children: ReactNode }) {
+  const { t } = useI18n();
   const { user, loading, house } = useAuth();
   const location = useLocation();
 
@@ -86,8 +88,7 @@ function RequireAuth({ children }: { children: ReactNode }) {
       <div className="flex min-h-dvh flex-col items-center justify-center gap-3 bg-bg">
         <LogoMark size={44} />
         <div className="flex items-center gap-2 text-xs text-muted">
-          <Spinner size={14} /> Opening your vault
-        </div>
+          <Spinner size={14} /> {' '}{t(" Opening your vault ")}</div>
       </div>
     );
   }

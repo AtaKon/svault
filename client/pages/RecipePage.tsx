@@ -19,8 +19,10 @@ import { ZoomableImage } from "@/components/ZoomableImage";
 import { useToast } from "@/components/toast";
 import { aiCostLabel, minutesLabel, plural, qty, relativeTime } from "@/format";
 import type { Recipe } from "@shared/types";
+import { useI18n } from "@/i18n";
 
 export function RecipePage() {
+  const { t } = useI18n();
   const { recipeId = "" } = useParams();
   const { house, can } = useHouse();
   const navigate = useNavigate();
@@ -39,7 +41,7 @@ export function RecipePage() {
       setRecipe(data);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not load the recipe");
+      setError(err instanceof Error ? t(err.message) : t("Could not load the recipe"));
     }
   }, [recipeId]);
 
@@ -65,9 +67,9 @@ export function RecipePage() {
     try {
       const updated = await api<Recipe>(`/api/recipes/${recipe.id}/ai`, { method: "POST", body: { action: "complete" } });
       setRecipe(updated);
-      toast.success("Recipe refreshed with AI");
+      toast.success(t("Recipe refreshed with AI"));
     } catch (err) {
-      const message = err instanceof Error ? err.message : "AI assistance failed";
+      const message = err instanceof Error ? t(err.message) : t("AI assistance failed");
       setAiHint(message);
       toast.error(message);
     } finally {
@@ -80,10 +82,10 @@ export function RecipePage() {
     setDeleting(true);
     try {
       await api(`/api/recipes/${recipe.id}`, { method: "DELETE" });
-      toast.success("Recipe deleted");
+      toast.success(t("Recipe deleted"));
       navigate("/recipes", { replace: true });
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not delete the recipe");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not delete the recipe"));
       setDeleting(false);
     }
   };
@@ -97,22 +99,22 @@ export function RecipePage() {
       );
       const count = result.added + result.merged;
       if (count) {
-        toast.success(`Added ${count} ingredient${count === 1 ? "" : "s"} to the shopping list`);
+        toast.success(t("Added {count} ingredients to the shopping list", { count }));
         navigate("/shopping");
       } else {
-        toast.push("Everything is already in stock or on the list");
+        toast.push(t("Everything is already in stock or on the list"));
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not build the shopping list");
+      toast.error(err instanceof Error ? t(err.message) : t("Could not build the shopping list"));
     }
   };
 
   if (error) {
     return (
-      <EmptyState icon="book" title="Recipe not found" body={error} action={<Button onClick={() => navigate("/recipes")}>Back to recipes</Button>} />
+      <EmptyState icon="book" title={t("Recipe not found")} body={error} action={<Button onClick={() => navigate("/recipes")}>{t("Back to recipes")}</Button>} />
     );
   }
-  if (!recipe) return <LoadingBlock label="Loading recipe" />;
+  if (!recipe) return <LoadingBlock label={t("Loading recipe")} />;
 
   const missingNames = new Set((recipe.match?.missing ?? []).map((item) => item.name.toLowerCase()));
   const totalMinutes = (recipe.prepMinutes ?? 0) + (recipe.cookMinutes ?? 0);
@@ -121,14 +123,14 @@ export function RecipePage() {
     <div className="space-y-4">
       <PageHeader
         back={() => navigate(-1)}
-        eyebrow={recipe.source === "scan" ? "Scanned recipe" : recipe.source === "ai" ? "AI idea" : "Recipe"}
+        eyebrow={recipe.source === "scan" ? t("Scanned recipe") : recipe.source === "ai" ? t("AI idea") : t("Recipe")}
         title={recipe.title}
         subtitle={recipe.description || undefined}
         actions={
           <>
             <button
               onClick={() => void toggleFavorite()}
-              aria-label="Toggle favourite"
+              aria-label={t("Toggle favourite")}
               className={cn(
                 "flex h-10 w-10 items-center justify-center rounded-xl border transition-colors",
                 recipe.favorite ? "border-brand/40 bg-brand-soft text-brand" : "border-line bg-surface text-muted hover:text-ink",
@@ -139,7 +141,7 @@ export function RecipePage() {
             {can("member") && (
               <button
                 onClick={() => navigate(`/recipes/${recipe.id}/edit`)}
-                aria-label="Edit recipe"
+                aria-label={t("Edit recipe")}
                 className="flex h-10 w-10 items-center justify-center rounded-xl border border-line bg-surface text-muted transition-colors hover:text-ink"
               >
                 <Icon name="pencil" size={17} />
@@ -154,18 +156,17 @@ export function RecipePage() {
         {totalMinutes > 0 && <Badge tone="outline"><Icon name="clock" size={11} /> {minutesLabel(totalMinutes)}</Badge>}
         {recipe.match && (
           <Badge tone={recipe.match.coverage >= 0.75 ? "brand" : recipe.match.coverage >= 0.4 ? "warn" : "neutral"}>
-            {recipe.match.available} of {recipe.match.total} ingredients in stock
-          </Badge>
+            {recipe.match.available} {' '}{t(" of ")}{' '}{recipe.match.total} {' '}{t(" ingredients in stock ")}</Badge>
         )}
         {recipe.nutrition?.perServing?.energyKcal != null && (
-          <Badge tone="outline">~{Math.round(recipe.nutrition.perServing.energyKcal)} kcal / portion</Badge>
+          <Badge tone="outline">~{Math.round(recipe.nutrition.perServing.energyKcal)} {' '}{t(" kcal / portion")}</Badge>
         )}
         {recipe.tags.map((tag) => (
           <Badge key={tag} tone="neutral">
             {tag}
           </Badge>
         ))}
-        <span className="text-[11px] text-muted">updated {relativeTime(recipe.updatedAt)}</span>
+        <span className="text-[11px] text-muted">{t("updated ")}{' '}{relativeTime(recipe.updatedAt)}</span>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[1fr_1.1fr]">
@@ -180,11 +181,9 @@ export function RecipePage() {
               {recipe.sourceImage && (
                 <div className="flex items-center justify-between px-3 py-2 text-[11px] text-muted">
                   <span className="inline-flex items-center gap-1">
-                    <Icon name="camera" size={12} /> Original scan
-                  </span>
+                    <Icon name="camera" size={12} /> {' '}{t(" Original scan ")}</span>
                   <a href={recipe.sourceImage} target="_blank" rel="noreferrer" className="font-medium text-brand hover:underline">
-                    Open full size
-                  </a>
+                    {t("Open full size ")}</a>
                 </div>
               )}
             </Card>
@@ -192,11 +191,11 @@ export function RecipePage() {
 
           <Card className="p-4">
             <div className="mb-2 flex items-center justify-between">
-              <h2 className="font-display text-lg">Ingredients</h2>
+              <h2 className="font-display text-lg">{t("Ingredients")}</h2>
               <span className="text-[11px] text-muted">{recipe.ingredients.length}</span>
             </div>
             {recipe.ingredients.length === 0 ? (
-              <p className="text-sm text-muted">No ingredients recorded yet.</p>
+              <p className="text-sm text-muted">{t("No ingredients recorded yet.")}</p>
             ) : (
               <ul className="divide-y divide-line">
                 {recipe.ingredients.map((ingredient, index) => {
@@ -215,14 +214,14 @@ export function RecipePage() {
                         {ingredient.quantity != null && <span className="font-medium">{qty(ingredient.quantity)} </span>}
                         {ingredient.unit && <span className="text-muted">{ingredient.unit} </span>}
                         {ingredient.name}
-                        {ingredient.optional && <span className="text-[11px] text-muted"> (optional)</span>}
+                        {ingredient.optional && <span className="text-[11px] text-muted"> {' '}{t(" (optional)")}</span>}
                         {ingredient.note && <span className="block text-[11px] text-muted">{ingredient.note}</span>}
                       </span>
                       {ingredient.itemId && (
                         <button
                           onClick={() => navigate(`/items/${ingredient.itemId}`)}
                           className="text-muted transition-colors hover:text-brand"
-                          aria-label="Open item"
+                          aria-label={t("Open item")}
                         >
                           <Icon name="arrowUpRight" size={14} />
                         </button>
@@ -234,7 +233,7 @@ export function RecipePage() {
             )}
             {recipe.match && recipe.match.missing.length > 0 && (
               <div className="mt-3 rounded-xl bg-warn-soft p-3">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.1em] text-warn">Missing</div>
+                <div className="text-[11px] font-semibold uppercase tracking-[0.1em] text-warn">{t("Missing")}</div>
                 <div className="mt-1.5 flex flex-wrap gap-1.5">
                   {recipe.match.missing.map((item) => (
                     <button
@@ -246,50 +245,43 @@ export function RecipePage() {
                     </button>
                   ))}
                 </div>
-                <p className="mt-1.5 text-[11px] text-warn/80">Tap one to add it to your inventory.</p>
+                <p className="mt-1.5 text-[11px] text-warn/80">{t("Tap one to add it to your inventory.")}</p>
               </div>
             )}
             <div className="mt-3 flex flex-wrap gap-2">
               <Button size="sm" variant="soft" icon="list" onClick={() => void addToShoppingList(false, true)} disabled={!can("member")}>
-                Add missing to list
-              </Button>
+                {t("Add missing to list ")}</Button>
               <Button size="sm" variant="secondary" icon="plus" onClick={() => void addToShoppingList(true, false)} disabled={!can("member")}>
-                Add all (optional too)
-              </Button>
+                {t("Add all (optional too) ")}</Button>
             </div>
           </Card>
 
           <Card className="p-4">
             <div className="flex items-center justify-between gap-2">
-              <h2 className="font-display text-lg">AI polish</h2>
+              <h2 className="font-display text-lg">{t("AI polish")}</h2>
               <div className="flex items-center gap-1.5">
                 {recipe.aiCost != null && <Badge tone="outline">{aiCostLabel(recipe.aiCost)}</Badge>}
                 <Button size="sm" variant="soft" icon="sparkles" loading={aiBusy} onClick={() => void improve()} disabled={!can("member")}>
-                  Improve
-                </Button>
+                  {t("Improve ")}</Button>
               </div>
             </div>
             {aiBusy ? (
               <div className="mt-3 flex items-center gap-2 rounded-xl bg-brand-soft px-3 py-2.5 text-xs text-brand">
-                <Spinner size={14} /> Reading the notes, filling gaps and tidying the steps…
-              </div>
+                <Spinner size={14} /> {' '}{t(" Reading the notes, filling gaps and tidying the steps… ")}</div>
             ) : (
               <p className="mt-2 text-xs leading-relaxed text-muted">
-                Let AI fill missing quantities, add temperatures and timings, and rewrite steps so they are easy to follow.
-                It keeps your ingredients and explains what it changed.
-              </p>
+                {t("Let AI fill missing quantities, add temperatures and timings, and rewrite steps so they are easy to follow. It keeps your ingredients and explains what it changed. ")}</p>
             )}
             {recipe.aiNotes && (
               <div className="mt-3 rounded-xl border border-line bg-raised p-3">
-                <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">AI notes</div>
+                <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">{t("AI notes")}</div>
                 <p className="mt-1 whitespace-pre-line text-xs leading-relaxed">{recipe.aiNotes}</p>
               </div>
             )}
             {aiHint && <p className="mt-2 text-[11px] text-danger">{aiHint}</p>}
             {!recipe.aiNotes && !aiBusy && (
               <p className="mt-2 text-[11px] text-muted">
-                No AI provider? Add an OpenAI-compatible key in Settings → AI. Without one, scans still parse locally.
-              </p>
+                {t("No AI provider? Add an OpenAI-compatible key in Settings → AI. Without one, scans still parse locally. ")}</p>
             )}
           </Card>
         </div>
@@ -297,27 +289,26 @@ export function RecipePage() {
         <div className="space-y-4">
           <Card className="p-4">
             <div className="mb-2 flex items-center justify-between gap-2">
-              <h2 className="font-display text-lg">Nutrition</h2>
-              {recipe.nutrition && <Badge tone="outline">estimated</Badge>}
+              <h2 className="font-display text-lg">{t("Nutrition")}</h2>
+              {recipe.nutrition && <Badge tone="outline">{t("estimated")}</Badge>}
             </div>
             {recipe.nutrition ? (
               <>
                 <div className="flex items-end justify-between gap-3">
                   <div>
                     <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">
-                      {recipe.nutrition.perServing ? "Per portion" : "Whole recipe"}
+                      {recipe.nutrition.perServing ? t("Per portion") : t("Whole recipe")}
                     </div>
                     <div className="mt-0.5 font-display text-4xl leading-none">
                       {Math.round(
                         (recipe.nutrition.perServing ?? recipe.nutrition.total).energyKcal ?? 0,
                       )}
-                      <span className="ml-1 text-sm text-muted">kcal</span>
+                      <span className="ml-1 text-sm text-muted">{t("kcal")}</span>
                     </div>
                   </div>
                   {recipe.nutrition.perServing && (
                     <div className="text-right text-[11px] text-muted">
-                      {Math.round(recipe.nutrition.total.energyKcal ?? 0)} kcal total
-                      {recipe.nutrition.servings ? ` · ${recipe.nutrition.servings} portions` : ""}
+                      {Math.round(recipe.nutrition.total.energyKcal ?? 0)} {' '}{t(" kcal total ")}{recipe.nutrition.servings ? t(" · {count} portions", { count: recipe.nutrition.servings }) : ""}
                     </div>
                   )}
                 </div>
@@ -325,27 +316,24 @@ export function RecipePage() {
                   <NutritionRows values={recipe.nutrition.perServing ?? recipe.nutrition.total} />
                 </div>
                 <p className="mt-2 text-[11px] leading-relaxed text-muted">
-                  Estimated from {recipe.nutrition.matched} of {recipe.nutrition.ingredients} ingredients
-                  {recipe.nutrition.coverage < 1
-                    ? " — add nutrition to the remaining items for a closer number."
+                  {t("Estimated from ")}{' '}{recipe.nutrition.matched} {' '}{t(" of ")}{' '}{recipe.nutrition.ingredients} {' '}{t(" ingredients ")}{recipe.nutrition.coverage < 1
+                    ? t(" — add nutrition to the remaining items for a closer number.")
                     : "."}
                 </p>
               </>
             ) : (
               <p className="text-xs leading-relaxed text-muted">
-                No estimate yet. Ingredients that match inventory items with nutrition data are summed automatically.
-                Link an OpenFoodFacts product or enter the label values on an item to start.
-              </p>
+                {t("No estimate yet. Ingredients that match inventory items with nutrition data are summed automatically. Link an OpenFoodFacts product or enter the label values on an item to start. ")}</p>
             )}
           </Card>
 
           <Card className="p-4">
             <div className="mb-3 flex items-center justify-between">
-              <h2 className="font-display text-lg">Method</h2>
-              <span className="text-[11px] text-muted">{recipe.steps.length} steps</span>
+              <h2 className="font-display text-lg">{t("Method")}</h2>
+              <span className="text-[11px] text-muted">{recipe.steps.length} {' '}{t(" steps")}</span>
             </div>
             {recipe.steps.length === 0 ? (
-              <p className="text-sm text-muted">No steps yet — add them in the editor or let AI rebuild the method.</p>
+              <p className="text-sm text-muted">{t("No steps yet — add them in the editor or let AI rebuild the method.")}</p>
             ) : (
               <ol className="space-y-2.5">
                 {recipe.steps.map((step, index) => (
@@ -385,18 +373,18 @@ export function RecipePage() {
                 ))}
               </ol>
             )}
-            <p className="mt-3 text-[11px] text-muted">Tap a step to tick it off while you cook.</p>
+            <p className="mt-3 text-[11px] text-muted">{t("Tap a step to tick it off while you cook.")}</p>
           </Card>
 
           <Card className="p-4">
-            <h2 className="mb-2 font-display text-lg">More</h2>
+            <h2 className="mb-2 font-display text-lg">{t("More")}</h2>
             <div className="space-y-1.5">
               <button
                 onClick={() => navigate(`/ideas`)}
                 className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left text-sm transition-colors hover:bg-raised"
               >
                 <Icon name="sparkles" size={16} className="text-muted" />
-                <span className="flex-1">Ask for ideas using this kitchen</span>
+                <span className="flex-1">{t("Ask for ideas using this kitchen")}</span>
                 <Icon name="chevronRight" size={14} className="text-muted" />
               </button>
               <button
@@ -404,7 +392,7 @@ export function RecipePage() {
                 className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left text-sm transition-colors hover:bg-raised"
               >
                 <Icon name="image" size={16} className="text-muted" />
-                <span className="flex-1">Photo library</span>
+                <span className="flex-1">{t("Photo library")}</span>
                 <Icon name="chevronRight" size={14} className="text-muted" />
               </button>
               {can("member") && (
@@ -413,7 +401,7 @@ export function RecipePage() {
                   className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left text-sm text-danger transition-colors hover:bg-danger-soft"
                 >
                   <Icon name="trash" size={16} />
-                  <span className="flex-1">Delete recipe</span>
+                  <span className="flex-1">{t("Delete recipe")}</span>
                 </button>
               )}
             </div>
@@ -425,12 +413,12 @@ export function RecipePage() {
         open={deleteOpen}
         onClose={() => setDeleteOpen(false)}
         onConfirm={() => void remove()}
-        title={`Delete ${recipe.title}?`}
-        body="The recipe and its ingredient list will be removed from this house."
-        confirmLabel="Delete recipe"
+        title={t("Delete {name}?", { name: recipe.title })}
+        body={t("The recipe and its ingredient list will be removed from this house.")}
+        confirmLabel={t("Delete recipe")}
         loading={deleting}
       />
-      <p className="text-center text-[10px] text-muted">Recipe from {house.name}</p>
+      <p className="text-center text-[10px] text-muted">{t("Recipe from ")}{' '}{house.name}</p>
     </div>
   );
 }
