@@ -1477,6 +1477,8 @@ describe("espresso log", () => {
       body: { role: "viewer" },
     });
     assert.equal(demoted.status, 200);
+    const viewerRead = await request(`/api/items/${coffeeId}/espresso-shots`, { auth: secondUserCookie });
+    assert.equal(viewerRead.status, 200);
     const viewerPost = await request(`/api/items/${coffeeId}/espresso-shots`, {
       method: "POST",
       auth: secondUserCookie,
@@ -1554,6 +1556,18 @@ describe("espresso log", () => {
     });
     assert.equal(maxTag.status, 201);
 
+    const nullTags = await request(`/api/items/${temp.data.id}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 3, tags: null },
+    });
+    assert.equal(nullTags.status, 400);
+    const clearTags = await request(`/api/items/${temp.data.id}/espresso-shots/${maxTag.data.id}`, {
+      method: "PATCH",
+      body: { tags: [] },
+    });
+    assert.equal(clearTags.status, 200);
+    assert.deepEqual(clearTags.data.tags, []);
+
     const oldDate = await request(`/api/items/${temp.data.id}/espresso-shots`, {
       method: "POST",
       body: { rating: 3, brewedAt: "1999-12-31T00:00:00.000Z" },
@@ -1564,9 +1578,14 @@ describe("espresso log", () => {
       body: { rating: 3, brewedAt: "2000-01-01T00:00:00.000Z" },
     });
     assert.equal(minDate.status, 201);
+    const upperDate = await request(`/api/items/${temp.data.id}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 3, brewedAt: new Date(Date.now() + 864e5).toISOString() },
+    });
+    assert.equal(upperDate.status, 201);
     const farFuture = await request(`/api/items/${temp.data.id}/espresso-shots`, {
       method: "POST",
-      body: { rating: 3, brewedAt: new Date(Date.now() + 2 * 864e5).toISOString() },
+      body: { rating: 3, brewedAt: new Date(Date.now() + 864e5 + 5000).toISOString() },
     });
     assert.equal(farFuture.status, 400);
 
@@ -1579,6 +1598,7 @@ describe("espresso log", () => {
     const summary = await request(`/api/items/${temp.data.id}/espresso-shots`);
     assert.equal(summary.data.summary.averageRatio, 2);
     assert.equal(summary.data.summary.averageExtractionYieldPercent, 18);
+    assert.equal(summary.data.summary.averageDoseGrams, 18);
 
     const wrongItem = await request(`/api/items/${coffeeId}/espresso-shots/${logged.data.id}`, {
       method: "PATCH",
@@ -1611,7 +1631,7 @@ describe("espresso log", () => {
 
     const filtered = await request(`/api/houses/${houseId}/espresso-shots?itemId=${temp.data.id}`);
     assert.equal(filtered.data.summary.count, filtered.data.shots.length);
-    assert.equal(filtered.data.shots.length, 5);
+    assert.equal(filtered.data.shots.length, 6);
     assert.equal(filtered.data.summary.averageRatio, 2);
 
     const removed = await request(`/api/items/${temp.data.id}`, { method: "DELETE" });
@@ -1683,12 +1703,22 @@ console.log(JSON.stringify({
 }));
 await closeDb();
 `;
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
+        DATA_DIR: dir,
+        NODE_ENV: "test",
+        DATABASE_URL: "",
+        SV_DATABASE_KIND: "sqlite",
+      };
+      for (const key of Object.keys(env)) {
+        if (key.startsWith("PG") || key === "SV_DATABASE_URL") delete env[key];
+      }
       const output = execFileSync(
         process.execPath,
         ["--import", "tsx", "--disable-warning=ExperimentalWarning", "--input-type=module", "-e", script],
         {
           cwd: path.resolve("."),
-          env: { ...process.env, DATA_DIR: dir, NODE_ENV: "test", DATABASE_URL: "", SV_DATABASE_KIND: "sqlite" },
+          env,
           encoding: "utf8",
         },
       );
@@ -1709,6 +1739,8 @@ await closeDb();
     assert.match(POSTGRES_SCHEMA, /CREATE TABLE IF NOT EXISTS espresso_shots/);
     assert.ok(POSTGRES_MIGRATIONS.includes("ALTER TABLE items ADD COLUMN IF NOT EXISTS espresso INTEGER NOT NULL DEFAULT 0"));
     assert.ok(POSTGRES_TABLE_ORDER.indexOf("espresso_shots") > POSTGRES_TABLE_ORDER.indexOf("items"));
+    assert.ok(POSTGRES_TABLE_ORDER.indexOf("espresso_shots") > POSTGRES_TABLE_ORDER.indexOf("users"));
+    assert.ok(POSTGRES_TABLE_ORDER.indexOf("espresso_shots") > POSTGRES_TABLE_ORDER.indexOf("houses"));
     assert.ok(POSTGRES_TABLE_ORDER.indexOf("espresso_shots") < POSTGRES_TABLE_ORDER.indexOf("receipts"));
   });
 });
