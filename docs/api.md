@@ -125,7 +125,7 @@ Mounted at `/api/houses`.
 | `DELETE` | `/:houseId/invites/:inviteId` | admin+ | Revoke an invite. |
 | `POST` | `/:houseId/leave` | viewer+ | Leave the house. The sole owner cannot leave until ownership transfer exists ([#16](https://github.com/AtaKon/svault/issues/16)). |
 
-`settings` accepts a partial object and is deep-merged for `ai` and `notifications`:
+`settings` accepts a partial object and is deep-merged for `ai`, `notifications` and `priceLookup`:
 
 ```json
 {
@@ -139,7 +139,8 @@ Mounted at `/api/houses`.
       "visionModel": "",
       "apiKey": "sk-..."
     },
-    "notifications": { "lowStock": true, "expiryDays": 7 }
+    "notifications": { "lowStock": true, "expiryDays": 7 },
+    "priceLookup": { "enabled": true }
   }
 }
 ```
@@ -771,8 +772,17 @@ Mounted at `/api/houses/:houseId/insights`. Reads need `viewer`; changing settin
 | `POST` | `/price-alerts/scan` | Create in-app reminders for those alerts (one per item per month) and return `{ created, alerts }`. |
 | `GET` | `/use-it-up?days=7` | Expiring lots grouped by item plus recipes that use them. Defaults to `useItUpDays` from settings. |
 | `GET` | `/shopping-prices` | Best recent unit price and shop for each open shopping-list line. |
+| `GET` | `/shopping-offers/:lineId` | `member+`; when enabled by a house admin, looks up exact-barcode Greek retailer prices and promotions from PosoKanei. Results do not change SVault purchase history. |
 | `GET` | `/household` | Per-member `paid`, `share` and `balance`, settle-up transfers, and the recent receipts used. |
 | `PATCH` | `/settings` | Set `{ monthlyBudget, priceAlertPercent, useItUpDays }`; stored in the house settings. |
+
+Price lookup is off by default. A house admin enables it with `PATCH /api/houses/:houseId` and
+`{ "settings": { "priceLookup": { "enabled": true } } }`. Members trigger one lookup at a time from
+the shopping list. SVault sends only the linked item's barcode to the fixed HTTPS PosoKanei API;
+successful results are cached for 30 minutes, not written to purchase history. By default, requests
+are limited to two per user and three instance-wide per 15 minutes, and upstream rate-limit responses
+temporarily pause lookups. PosoKanei does not publish an API contract, so responses may change or be
+unavailable.
 
 Receipts accept `paidBy` and `splitWith` on import, and `PATCH /api/receipts/:receiptId` changes them
 later. An empty `splitWith` means everyone currently in the house.

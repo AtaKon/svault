@@ -75,6 +75,7 @@ const TABS = [
   { value: "attributes", label: "Attributes" },
   { value: "members", label: "Members" },
   { value: "ai", label: "AI" },
+  { value: "prices", label: "Prices" },
   { value: "reminders", label: "Reminders" },
   { value: "data", label: "Data" },
 ];
@@ -140,6 +141,7 @@ export function SettingsPage() {
       {tab === "attributes" && <AttributesTab house={house} />}
       {tab === "members" && <MembersTab house={house} detail={detail} can={can} onChanged={() => void loadDetail()} />}
       {tab === "ai" && <AiTab house={house} onSave={saveSettings} />}
+      {tab === "prices" && <PriceLookupTab house={house} onSave={saveSettings} />}
       {tab === "reminders" && <RemindersTab house={house} onSave={saveSettings} />}
       {tab === "data" && <DataTab house={house} detail={detail} />}
 
@@ -153,6 +155,55 @@ export function SettingsPage() {
           navigate("/");
         }} />
       )}
+    </div>
+  );
+}
+
+function PriceLookupTab({ house, onSave }: { house: House; onSave: (patch: Record<string, unknown>) => Promise<void> }) {
+  const { t } = useI18n();
+  const { can } = useHouse();
+  const toast = useToast();
+  const [enabled, setEnabled] = useState(house.settings?.priceLookup?.enabled === true);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setEnabled(house.settings?.priceLookup?.enabled === true);
+  }, [house.settings?.priceLookup?.enabled]);
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      await onSave({ priceLookup: { enabled } });
+      toast.success(t("Price lookup settings saved"));
+    } catch (err) {
+      toast.error(err instanceof Error ? t(err.message) : t("Could not save"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <Card className="space-y-4 p-4">
+        <div>
+          <h2 className="font-display text-lg">{t("Public supermarket prices")}</h2>
+          <p className="mt-1 text-xs leading-relaxed text-muted">
+            {t("Allow house members to check a linked item's exact barcode against current Greek retailer prices and promotions from PosoKanei.")}
+          </p>
+        </div>
+        <Switch
+          checked={enabled}
+          onChange={setEnabled}
+          label={t("Enable PosoKanei lookups")}
+          disabled={!can("admin")}
+        />
+        <Button onClick={() => void save()} loading={busy} disabled={!can("admin")}>
+          {t("Save price settings")}
+        </Button>
+      </Card>
+      <Card className="p-4 text-[11px] leading-relaxed text-muted">
+        {t("Lookups run only when a member presses Check offers on a shopping line. SVault sends the item's barcode to the PosoKanei service over HTTPS. Results are cached and rate limited; no store accounts, location, or purchase history are sent. PosoKanei's API is undocumented and may change or become unavailable. Offers are informational and may not reflect local availability or checkout prices.")}
+      </Card>
     </div>
   );
 }

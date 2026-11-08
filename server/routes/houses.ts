@@ -62,6 +62,9 @@ function mergeSettings(current: Record<string, any>, incoming: Record<string, an
       next.notifications.channels = current.notifications.channels;
     }
   }
+  if (incoming.priceLookup && typeof incoming.priceLookup === "object") {
+    next.priceLookup = { ...(current.priceLookup ?? {}), ...incoming.priceLookup };
+  }
   return next;
 }
 
@@ -125,6 +128,9 @@ houseRoutes.patch(
       req.body,
     );
     const current = (await houseRow(houseId))!;
+    if (body.settings?.priceLookup !== undefined) {
+      body.settings.priceLookup = parseBody(z.object({ enabled: z.boolean() }).strict(), body.settings.priceLookup);
+    }
     const settings = body.settings
       ? mergeSettings(parseJson<Record<string, any>>(current.settings, {}), body.settings)
       : parseJson<Record<string, any>>(current.settings, {});

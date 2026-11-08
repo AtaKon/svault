@@ -20,7 +20,7 @@ import {
 import { Icon } from "@/components/icons";
 import { useToast } from "@/components/toast";
 import { qty, todayInput } from "@/format";
-import type { Item, Location, ShoppingItem, ShoppingPriceHint } from "@shared/types";
+import type { ExternalShoppingOffer, Item, Location, ShoppingItem, ShoppingPriceHint } from "@shared/types";
 
 interface Groups {
   [key: string]: ShoppingItem[];
@@ -40,6 +40,8 @@ export function ShoppingPage() {
   const [busy, setBusy] = useState(false);
   const [checkTarget, setCheckTarget] = useState<ShoppingItem | null>(null);
   const [priceHints, setPriceHints] = useState<Record<string, ShoppingPriceHint>>({});
+  const [externalOffers, setExternalOffers] = useState<Record<string, ExternalShoppingOffer[]>>({});
+  const [lookingUp, setLookingUp] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -122,6 +124,21 @@ export function ShoppingPage() {
   const remove = async (item: ShoppingItem) => {
     await api(`/api/houses/${house.id}/shopping/${item.id}`, { method: "DELETE" });
     await load();
+  };
+
+  const lookupOffers = async (line: ShoppingItem) => {
+    setLookingUp(line.id);
+    try {
+      const result = await api<{ offers: ExternalShoppingOffer[] }>(
+        `/api/houses/${house.id}/insights/shopping-offers/${line.id}`,
+      );
+      setExternalOffers((current) => ({ ...current, [line.id]: result.offers }));
+      if (!result.offers.length) toast.push(t("No matching retailer offers were found"), "info");
+    } catch (err) {
+      toast.error(err instanceof Error ? t(err.message) : t("Could not check prices"));
+    } finally {
+      setLookingUp(null);
+    }
   };
 
   const uncheckedCount = items.filter((item) => !item.checked).length;
@@ -207,7 +224,44 @@ export function ShoppingPage() {
                             {priceHints[item.id].unit ? `/${priceHints[item.id].unit}` : ""}
                           </span>
                         )}
+                        {!item.checked && house.settings?.priceLookup?.enabled === true && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 px-2 text-[10px]"
+                            icon="search"
+                            onClick={() => void lookupOffers(item)}
+                            loading={lookingUp === item.id}
+                            disabled={!can("member") || lookingUp !== null}
+                          >
+                            {t("Check offers")}
+                          </Button>
+                        )}
                       </div>
+                      {!item.checked && externalOffers[item.id]?.length ? (
+                        <div className="mt-1 space-y-1">
+                          <div className="text-[10px] text-muted">
+                            {externalOffers[item.id][0].productName} · {t("via PosoKanei")} ·{" "}
+                            {externalOffers[item.id][0].updatedAt ?? externalOffers[item.id][0].fetchedAt}
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {externalOffers[item.id].slice(0, 3).map((offer, index) => (
+                              <span
+                                key={`${offer.productId}-${offer.retailer}`}
+                                className={cn(
+                                  "rounded-md border px-1.5 py-0.5 text-[10px]",
+                                  offer.discount ? "border-brand/30 bg-brand-soft text-brand" : "border-line text-muted",
+                                )}
+                              >
+                                {offer.retailer} · {offer.price.toFixed(2)} {offer.currency}
+                                {offer.unitPrice != null && offer.unit && ` · ${offer.unitPrice.toFixed(2)}/${offer.unit}`}
+                                {offer.discountPercent != null && ` · -${offer.discountPercent}%`}
+                                {index === 0 && offer.discount && ` · ${t("Promotion")}`}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
                     <IconButton icon="pencil" label={t("Edit {item}", { item: item.name })} onClick={() => setEditTarget(item)} disabled={!can("member")} />
                     <IconButton icon="trash" label={t("Remove {item}", { item: item.name })} onClick={() => void remove(item)} disabled={!can("member")} />
