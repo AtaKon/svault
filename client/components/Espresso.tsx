@@ -119,7 +119,7 @@ export function EspressoShotSheet({
   const [itemId, setItemId] = useState(initialItemId ?? beans[0]?.id ?? "");
   const [brewedAt, setBrewedAt] = useState(localInput(new Date().toISOString()));
   const [rating, setRating] = useState(0);
-  const [roastLevel, setRoastLevel] = useState("");
+  const [roastLevel, setRoastLevel] = useState<EspressoRoastLevel | "">("");
   const [grindSetting, setGrindSetting] = useState("");
   const [grindSeconds, setGrindSeconds] = useState("");
   const [doseGrams, setDoseGrams] = useState("");
@@ -177,7 +177,7 @@ export function EspressoShotSheet({
       setTags("");
       setNotes("");
     }
-  }, [open, shot?.id, initialItemId]);
+  }, [open, shot?.id]);
 
   // If the bean list arrives after the sheet opened, seed the selector instead
   // of leaving an empty item id and a disabled save button.
@@ -298,10 +298,16 @@ export function EspressoShotSheet({
 
         <div className="grid grid-cols-2 gap-3">
           <Field label={t("Brew date")} required>
-            <Input type="datetime-local" value={brewedAt} onChange={(event) => setBrewedAt(event.target.value)} />
+            <Input
+              type="datetime-local"
+              value={brewedAt}
+              min="2000-01-01T00:00"
+              max={localInput(new Date(Date.now() + 864e5).toISOString())}
+              onChange={(event) => setBrewedAt(event.target.value)}
+            />
           </Field>
           <Field label={t("Roast level")}>
-            <Select value={roastLevel} onChange={(event) => setRoastLevel(event.target.value)}>
+            <Select value={roastLevel} onChange={(event) => setRoastLevel(event.target.value as EspressoRoastLevel | "")}>
               <option value="">{t("Not recorded")}</option>
               {ESPRESSO_ROAST_LEVELS.map((level) => (
                 <option key={level} value={level}>

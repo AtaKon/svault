@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, qs } from "@/api";
 import { useAuth, useHouse } from "@/state";
@@ -21,17 +21,21 @@ export function EspressoPage() {
   const [loading, setLoading] = useState(true);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [editing, setEditing] = useState<EspressoShot | null>(null);
+  const requestId = useRef(0);
 
   const load = useCallback(async () => {
+    const current = ++requestId.current;
     try {
       const result = await api<EspressoShotList>(
         `/api/houses/${house.id}/espresso-shots${qs({ itemId: filter, limit: 500 })}`,
       );
-      setData(result);
+      if (current === requestId.current) setData(result);
     } catch (error) {
-      toast.error(error instanceof Error ? t(error.message) : t("Could not load espresso shots"));
+      if (current === requestId.current) {
+        toast.error(error instanceof Error ? t(error.message) : t("Could not load espresso shots"));
+      }
     } finally {
-      setLoading(false);
+      if (current === requestId.current) setLoading(false);
     }
   }, [house.id, filter, t, toast]);
 
