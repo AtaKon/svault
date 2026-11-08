@@ -781,13 +781,14 @@ Price lookup is off by default. A house admin enables it with `PATCH /api/houses
 the shopping list. SVault sends the oldest valid barcode attached to the linked item to the fixed
 HTTPS PosoKanei API and returns that barcode with the offers so the UI can show which code was checked.
 Successful results are cached in memory for 30 minutes; unknown barcodes are cached for 10 minutes.
+The cache is per process, holds at most 500 barcodes, and is cleared when the server restarts.
 Neither is written to purchase history. Each user's lookup requests, including cache hits and requests
 joining an in-flight lookup, are limited to two per 15 minutes. Actual upstream requests are limited
 to three instance-wide per 15 minutes; concurrent requests for the same barcode share one upstream
 fetch, including across users, because the result contains public price data only. Failed upstream
 requests refund their rate-limit slots and pause further lookups for one minute; upstream 429 responses
-use the supplied retry delay instead. A user's request slot still counts when the request is rejected
-by the shared cooldown or instance-wide quota.
+use the supplied retry delay instead. Requests rejected by the shared cooldown or instance-wide quota
+do not consume a per-user slot.
 PosoKanei does not publish an API contract, so responses may change or be unavailable.
 
 Receipts accept `paidBy` and `splitWith` on import, and `PATCH /api/receipts/:receiptId` changes them

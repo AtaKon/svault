@@ -92,7 +92,11 @@ async function readBoundedBody(response: Response): Promise<string> {
       chunks.push(value);
     }
   } finally {
-    reader.releaseLock();
+    try {
+      reader.releaseLock();
+    } catch {
+      /* A stream may already have released its lock after a read failure. */
+    }
   }
   const joined = new Uint8Array(size);
   let offset = 0;
@@ -157,6 +161,7 @@ export function createPosoKaneiClient(
     if (cache.size <= 500) return;
     const now = Date.now();
     for (const [key, value] of cache) if (value.expiresAt <= now) cache.delete(key);
+    // FIFO by write time; cache reads do not refresh eviction order.
     while (cache.size > 500) cache.delete(cache.keys().next().value!);
   };
 
@@ -170,6 +175,7 @@ export function createPosoKaneiClient(
     const cached = cache.get(code);
     if (cached && cached.expiresAt > now) return cached.offers;
     if (upstreamBlockedUntil > now) {
+      releaseUserLimit?.();
       throw new PosoKaneiUnavailableError(
         "PosoKanei asked SVault to slow down. Try again later.",
         Math.ceil((upstreamBlockedUntil - now) / 1000),
@@ -189,6 +195,7 @@ export function createPosoKaneiClient(
     try {
       releaseGlobalLimit = consumeGlobalRateLimit();
     } catch (error) {
+      releaseUserLimit?.();
       throw error;
     }
 

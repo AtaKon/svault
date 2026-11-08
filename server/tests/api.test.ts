@@ -99,7 +99,7 @@ await new Promise<void>((resolve) => {
   });
 });
 
-const { app } = await import("../index.js");
+const { app, apiErrorHandler } = await import("../index.js");
 const { closeDb, get, run } = await import("../db.js");
 const { heuristicRecipe, parseIngredientLine, localIdeas } = await import("../services/recipe-local.js");
 const { heuristicReceipt } = await import("../services/receipt-local.js");
@@ -4643,7 +4643,9 @@ describe("insights, household split and admin console", () => {
       body: { name: "Offer lookup test", itemId: milkId, quantity: 1, unit: "l" },
     });
     assert.equal(line.status, 200);
-    const path = `/api/houses/${insightHouse}/insights/shopping-offers/${line.data.item.id}`;
+    const lineId = line.data.item.id;
+    assert.ok((await request(`/api/houses/${insightHouse}/shopping`)).data.items.some((item: any) => item.id === lineId));
+    const path = `/api/houses/${insightHouse}/insights/shopping-offers/${lineId}`;
     assert.equal((await request(path)).status, 404, "external lookups are off by default");
 
     const enabled = await request(`/api/houses/${insightHouse}`, {
@@ -4651,7 +4653,9 @@ describe("insights, household split and admin console", () => {
       body: { settings: { priceLookup: { enabled: true } } },
     });
     assert.equal(enabled.status, 200);
-    assert.equal((await request(path)).status, 400, "the inventory item needs a barcode");
+    const missingBarcode = await request(path);
+    assert.equal(missingBarcode.status, 400);
+    assert.equal(missingBarcode.data.error, "Add a valid barcode to this inventory item first");
     assert.equal(
       (await request(path, { auth: secondUserCookie })).status,
       400,
@@ -4665,6 +4669,13 @@ describe("insights, household split and admin console", () => {
       400,
       "price lookup settings reject unknown fields",
     );
+
+    const disabledAgain = await request(`/api/houses/${insightHouse}`, {
+      method: "PATCH",
+      body: { settings: { priceLookup: { enabled: false } } },
+    });
+    assert.equal(disabledAgain.status, 200);
+    assert.equal((await request(path)).status, 404, "turning lookups off blocks existing shopping lines immediately");
 
     const checked = await request(`/api/houses/${insightHouse}/shopping/${line.data.item.id}/check`, {
       method: "POST",
@@ -4693,6 +4704,7 @@ describe("insights, household split and admin console", () => {
       lookup: typeof import("../services/posokanei.js").lookupPosoKaneiBarcode,
       headers: Record<string, string>,
       requestHouseId = insightHouse,
+      requestLineId = line.data.item.id,
     ) =>
       new Promise<any>((resolve, reject) => {
         const response = {
@@ -4700,7 +4712,7 @@ describe("insights, household split and admin console", () => {
           json(data: unknown) { resolve(data); return this; },
         };
         createShoppingOffersHandler(lookup)(
-          { params: { houseId: requestHouseId, lineId: line.data.item.id }, user: { id: me.data.user.id } } as any,
+          { params: { houseId: requestHouseId, lineId: requestLineId }, user: { id: me.data.user.id } } as any,
           response as any,
           (error: unknown) => { if (error) reject(error); },
         );
@@ -4716,22 +4728,43 @@ describe("insights, household split and admin console", () => {
     assert.deepEqual(result, { barcode: code, offers });
 
     const retryHeaders: Record<string, string> = {};
-    await assert.rejects(
-      makeRequest(async () => { throw new PosoKaneiUnavailableError("upstream throttled", 120); }, retryHeaders),
-      (error: any) => error.status === 502 &&
-        error.message === "External price lookup is unavailable. Try again later." &&
-        error.details?.retryAfterSeconds === 120,
-    );
+    let routeError: any;
+    try {
+      await makeRequest(async () => { throw new PosoKaneiUnavailableError("upstream throttled", 120); }, retryHeaders);
+    } catch (error) {
+      routeError = error;
+    }
+    assert.equal(routeError.status, 502);
+    assert.equal(routeError.message, "External price lookup is unavailable. Try again later.");
+    assert.deepEqual(routeError.details, { retryAfterSeconds: 120 });
     assert.equal(retryHeaders["Retry-After"], "120");
+    let errorStatus = 0;
+    let errorBody: any;
+    apiErrorHandler(routeError, {} as any, {
+      setHeader(name: string, value: string) { retryHeaders[name] = value; return this; },
+      status(code: number) { errorStatus = code; return this; },
+      json(body: unknown) { errorBody = body; return this; },
+    } as any, () => {});
+    assert.equal(errorStatus, 502);
+    assert.equal(errorBody.error, "External price lookup is unavailable. Try again later.");
+    assert.equal(retryHeaders["Retry-After"], "120", "the global error handler preserves the route's header");
 
     const foreignHouse = await request("/api/houses", {
       auth: secondUserCookie,
       method: "POST",
       body: { name: "Offer isolation house", currency: "EUR" },
     });
+    const foreignItem = await request(`/api/houses/${foreignHouse.data.id}/items`, {
+      auth: secondUserCookie,
+      body: { name: "Foreign offer item", unit: "pcs" },
+    });
+    const foreignLine = await request(`/api/houses/${foreignHouse.data.id}/shopping`, {
+      auth: secondUserCookie,
+      body: { name: "Foreign offer line", itemId: foreignItem.data.id, quantity: 1, unit: "pcs" },
+    });
     await assert.rejects(
-      makeRequest(async () => { throw new Error("must not reach the lookup"); }, {}, foreignHouse.data.id),
-      (error: any) => error.status === 404,
+      makeRequest(async () => { throw new Error("must not reach the lookup"); }, {}, insightHouse, foreignLine.data.item.id),
+      (error: any) => error.status === 404 && error.message === "Open shopping line not found",
     );
   });
 
@@ -5146,7 +5179,7 @@ describe("PosoKanei price lookup client", () => {
       client.lookupPosoKaneiBarcode("12345690", userId),
       (error: unknown) => error instanceof PosoKaneiUnavailableError && error.retryAfterSeconds != null,
     );
-    assert.equal(userSlots, 1, "the request rejected by the shared cooldown still counts against the user quota");
+    assert.equal(userSlots, 0, "requests rejected before upstream access do not consume the user quota");
     assert.equal(globalSlots, 0);
   });
 
@@ -5176,7 +5209,7 @@ describe("PosoKanei price lookup client", () => {
       (error: unknown) => error instanceof PosoKaneiUnavailableError && error.retryAfterSeconds === 120,
     );
     assert.equal(fetches, 1);
-    assert.equal(userReservations, 1, "the request rejected during upstream cooldown still counts for the user");
+    assert.equal(userReservations, 0, "the request rejected during upstream cooldown refunds the user slot");
   });
 
   it("maps upstream throttling to a 502 with Retry-After metadata", async () => {
@@ -5205,7 +5238,7 @@ describe("PosoKanei price lookup client", () => {
     );
   });
 
-  it("keeps the per-user request slot when the instance-wide limit rejects the fetch", async () => {
+  it("refunds the per-user request slot when the instance-wide limit rejects the fetch", async () => {
     let userSlots = 0;
     const client = createPosoKaneiClient(
       async () => { throw new Error("fetch must not run after global throttling"); },
@@ -5219,7 +5252,7 @@ describe("PosoKanei price lookup client", () => {
       client.lookupPosoKaneiBarcode("12345697", userId),
       (error: unknown) => error instanceof RateLimitError && error.status === 429,
     );
-    assert.equal(userSlots, 1, "the user's lookup request counts even when global capacity is exhausted");
+    assert.equal(userSlots, 0, "global throttling does not consume an individual user's quota");
   });
 
   it("caches valid products that have no Greek retailer offers and rejects malformed products", async () => {

@@ -287,7 +287,7 @@ if (fs.existsSync(CLIENT_DIR)) {
   });
 }
 
-app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+export function apiErrorHandler(err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) {
   if (err instanceof RateLimitError) res.setHeader("Retry-After", String(err.retryAfter));
   if (err instanceof ApiError) {
     res.status(err.status).json({ error: err.message, details: err.details ?? undefined });
@@ -305,7 +305,9 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
   }
   console.error("Unhandled error:", err);
   res.status(500).json({ error: "Something went wrong on the server" });
-});
+}
+
+app.use(apiErrorHandler);
 
 if (process.env.NODE_ENV !== "test") {
   const server = app.listen(PORT, "0.0.0.0", async () => {
