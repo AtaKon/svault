@@ -87,8 +87,8 @@ export function PhotoViewer({
       onUpdated({ ...photo, labels: [...photo.labels, label] });
       setLabelText("");
       setPending(null);
-    } catch (err) {
-      toast.error(err instanceof Error ? t(err.message) : t("Could not save the label"));
+    } catch {
+      toast.error(t("Could not save the label"));
     } finally {
       setLabelBusy(false);
     }
@@ -98,8 +98,8 @@ export function PhotoViewer({
     try {
       await api(`/api/photos/${photo.id}/labels/${labelId}`, { method: "DELETE" });
       onUpdated({ ...photo, labels: photo.labels.filter((label) => label.id !== labelId) });
-    } catch (err) {
-      toast.error(err instanceof Error ? t(err.message) : t("Could not remove the label"));
+    } catch {
+      toast.error(t("Could not remove the label"));
     }
   };
 
@@ -107,8 +107,8 @@ export function PhotoViewer({
     try {
       const updated = await api<Photo>(`/api/photos/${photo.id}`, { method: "PATCH", body: { split } });
       onUpdated(updated);
-    } catch (err) {
-      toast.error(err instanceof Error ? t(err.message) : t("Could not update the split"));
+    } catch {
+      toast.error(t("Could not update the split"));
     }
   };
 
@@ -118,8 +118,8 @@ export function PhotoViewer({
       await api(`/api/photos/${photo.id}`, { method: "DELETE" });
       onDeleted(photo.id);
       onClose();
-    } catch (err) {
-      toast.error(err instanceof Error ? t(err.message) : t("Could not delete the photo"));
+    } catch {
+      toast.error(t("Could not delete the photo"));
     } finally {
       setBusy(false);
     }
@@ -141,17 +141,18 @@ export function PhotoViewer({
       onClose={onClose}
       wide
       title={photo.originalName}
-      description={t("{width} × {height} · {count} {label}", {
+      description={t(photo.labels.length === 1
+        ? "{width} × {height} · {count} label"
+        : "{width} × {height} · {count} labels", {
         width: photo.width ?? "?",
         height: photo.height ?? "?",
         count: photo.labels.length,
-        label: t(photo.labels.length === 1 ? "label" : "labels"),
       })}
       footer={
         <div className="flex items-center justify-between gap-2">
           <div className="flex gap-1">
             <Button size="sm" variant="ghost" icon="arrowLeft" disabled={index <= 0} onClick={() => onNavigate(photos[index - 1].id)}>
-              {t("Prev ")}</Button>
+              {t("Prev")}</Button>
             <Button
               size="sm"
               variant="ghost"
@@ -159,15 +160,15 @@ export function PhotoViewer({
               disabled={index < 0 || index >= photos.length - 1}
               onClick={() => onNavigate(photos[index + 1].id)}
             >
-              {t("Next ")}</Button>
+              {t("Next")}</Button>
           </div>
           <div className="flex gap-2">
             {canEdit && (
               <Button variant="ghost" size="sm" icon="trash" className="text-danger hover:bg-danger-soft" loading={busy} onClick={() => void removePhoto()}>
-                {t("Delete ")}</Button>
+                {t("Delete")}</Button>
             )}
             <Button size="sm" variant="secondary" onClick={onClose}>
-              {t("Close ")}</Button>
+              {t("Close")}</Button>
           </div>
         </div>
       }
@@ -266,7 +267,7 @@ export function PhotoViewer({
           {photo.labels.length === 0 && <Badge tone="warn">{t("unlabeled")}</Badge>}
           {labelBusy && (
             <span className="flex items-center gap-1.5">
-              <Spinner size={11} /> {' '}{t(" saving ")}</span>
+              <Spinner size={11} /> <span>{t("Saving")}</span></span>
           )}
         </div>
       </div>

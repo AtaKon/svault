@@ -58,8 +58,8 @@ export function ItemCard({
       });
       setCurrent(detail);
       onUpdated?.(detail);
-    } catch (err) {
-      toast.error(err instanceof Error ? t(err.message) : t("Could not update stock"));
+    } catch {
+      toast.error(t("Could not update stock"));
     } finally {
       setBusy(null);
     }
@@ -279,10 +279,16 @@ export function StockDialog({
       }
       const detail = await api<ItemDetail>(`/api/items/${item.id}/stock`, { method: "POST", body });
       onUpdated(detail);
-      toast.success(t(action === "add" ? "Stock added" : action === "set" ? "Stock counted" : "Stock updated"));
+      toast.success(t(
+        action === "add" ? "Stock added"
+          : action === "set" ? "Stock counted"
+            : action === "remove" ? "Stock removed"
+              : action === "waste" ? "Waste recorded"
+                : "Stock moved",
+      ));
       onClose();
-    } catch (err) {
-      toast.error(err instanceof Error ? t(err.message) : t("Could not update stock"));
+    } catch {
+      toast.error(t("Could not update stock"));
     } finally {
       setBusy(false);
     }

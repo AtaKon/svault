@@ -64,9 +64,13 @@ export function OffProductPicker({
       }
       const data = await api<OffSearchResult>(`/api/catalog/search?q=${encodeURIComponent(q)}&online=1`);
       setProducts(data.products);
-      setWarning(data.warning ? t(data.warning) : null);
-    } catch (err) {
-      setWarning(err instanceof Error ? t(err.message) : t("Could not search OpenFoodFacts"));
+      setWarning(
+        data.warning === "Nothing found on OpenFoodFacts. Check the name or paste a barcode."
+          ? t("Nothing found on OpenFoodFacts. Check the name or paste a barcode.")
+          : data.warning,
+      );
+    } catch {
+      setWarning(t("Could not search OpenFoodFacts"));
       setProducts([]);
     } finally {
       setBusy(false);

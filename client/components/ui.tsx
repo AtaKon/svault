@@ -101,14 +101,13 @@ export function IconButton({
 }
 
 export function Spinner({ size = 18, className }: { size?: number; className?: string }) {
-  const { t } = useI18n();
   return (
     <svg
       width={size}
       height={size}
       viewBox="0 0 24 24"
       className={cn("animate-spin", className)}
-      aria-label={t("Loading")}
+      aria-label="Loading"
       role="status"
     >
       <circle cx="12" cy="12" r="9" stroke="currentColor" strokeOpacity="0.2" strokeWidth="3" fill="none" />
@@ -488,7 +487,7 @@ export function ConfirmDialog({
       footer={
         <div className="flex justify-end gap-2">
           <Button variant="secondary" onClick={onClose} disabled={loading}>
-            {t("Cancel ")}</Button>
+            {t("Cancel")}</Button>
           <Button variant={danger ? "danger" : "primary"} onClick={onConfirm} loading={loading}>
             {confirmLabel}
           </Button>
