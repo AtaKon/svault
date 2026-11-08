@@ -777,7 +777,8 @@ Mounted at `/api/houses/:houseId/insights`. Reads need `viewer`; changing settin
 | `PATCH` | `/settings` | Set `{ monthlyBudget, priceAlertPercent, useItUpDays }`; stored in the house settings. |
 
 Price lookup is off by default. A house admin enables it with `PATCH /api/houses/:houseId` and
-`{ "settings": { "priceLookup": { "enabled": true } } }`. Members trigger one lookup at a time from
+`{ "settings": { "priceLookup": { "enabled": true } } }`. `priceLookup` accepts exactly
+`{ "enabled": boolean }`. Members trigger one lookup at a time from
 the shopping list. SVault sends the oldest valid barcode attached to the linked item to the fixed
 HTTPS PosoKanei API and returns that barcode with the offers so the UI can show which code was checked.
 Successful results are cached in memory for 30 minutes; unknown barcodes are cached for 10 minutes.
@@ -785,17 +786,21 @@ The cache is per process, holds at most 500 barcodes, and is cleared when the se
 Neither is written to purchase history. Successful lookups and upstream 429 attempts are limited to
 two per user and three instance-wide per 15 minutes. Concurrent requests for the same barcode from the
 same user share one upstream fetch. Different users make separately rate-limited requests. Rate-limit
-slots are charged as follows:
+slots are charged as follows. Separately, all authenticated lookup endpoint requests, including requests
+rejected during validation and cache hits, are capped at 60 per user per 10 minutes to bound database
+reads. This request guard is separate from the upstream quota.
 
 | Lookup outcome | User slot | Instance slot |
 | --- | --- | --- |
 | Successful product or unknown barcode | Initiating caller | Consumed |
 | Upstream 429 | Initiating caller | Consumed; all barcode lookups pause for the supplied retry delay |
 | Cached or same-user shared in-flight result | None for a cache hit or same-user join | None for cache hits; one slot belongs to the shared upstream request |
-| Other upstream failure | Refunded | Refunded; further lookups pause for 15 seconds |
+| Other upstream or malformed-product failure | Refunded | Refunded; further lookups pause for 15 seconds |
 | Rejected by cooldown or instance quota | None | None |
 
 PosoKanei does not publish an API contract, so responses may change or be unavailable.
+Valid product responses with an empty retailer-price list return no offers; responses missing required
+product fields are treated as malformed upstream responses and return an unavailable error.
 
 Receipts accept `paidBy` and `splitWith` on import, and `PATCH /api/receipts/:receiptId` changes them
 later. An empty `splitWith` means everyone currently in the house.

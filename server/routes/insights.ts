@@ -2,6 +2,7 @@ import { Router, type Response } from "express";
 import { z } from "zod";
 import { requireAuth } from "../auth.js";
 import { ApiError, handler, parseBody, requireHouse } from "../http.js";
+import { limitRequests, limiters, userOrIp } from "../rate-limit.js";
 import { all, get, parseJson } from "../db.js";
 import { lookupPosoKaneiBarcode, PosoKaneiUnavailableError } from "../services/posokanei.js";
 import { shoppingRow } from "../services/shopping.js";
@@ -126,6 +127,7 @@ insightRoutes.get(
 
 insightRoutes.get(
   "/:houseId/insights/shopping-offers/:lineId",
+  limitRequests(limiters.posokaneiRequests, userOrIp, "Too many price lookup requests. Try again later."),
   createShoppingOffersHandler(),
 );
 

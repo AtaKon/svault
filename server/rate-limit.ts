@@ -149,6 +149,8 @@ export const limiters = {
   /** Unofficial upstream barcode price lookups are tightly rate limited. */
   posokanei: new RateLimiter("POSOKANEI", { max: 2, windowMs: 15 * 60_000 }),
   posokaneiGlobal: new RateLimiter("POSOKANEI_GLOBAL", { max: 3, windowMs: 15 * 60_000 }),
+  /** Bounds authenticated validation/cache requests before they reach the lookup service. */
+  posokaneiRequests: new RateLimiter("POSOKANEI_REQUESTS", { max: 60, windowMs: 10 * 60_000 }),
 };
 
 export const userOrIp = (req: Request) => (req.user ? `user:${req.user.id}` : `ip:${clientIp(req)}`);

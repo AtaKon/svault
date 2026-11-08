@@ -293,6 +293,11 @@ export function ShoppingPage() {
                           </div>
                         </div>
                       ) : null}
+                      {!item.checked && lookupBarcodes[item.id] && !externalOffers[item.id]?.length ? (
+                        <div className="mt-1 text-[10px] text-muted">
+                          {t("Barcode queried: {barcode}", { barcode: lookupBarcodes[item.id] })} · {t("No matching retailer offers were found")}
+                        </div>
+                      ) : null}
                     </div>
                     <IconButton icon="pencil" label={t("Edit {item}", { item: item.name })} onClick={() => setEditTarget(item)} disabled={!can("member")} />
                     <IconButton icon="trash" label={t("Remove {item}", { item: item.name })} onClick={() => void remove(item)} disabled={!can("member")} />

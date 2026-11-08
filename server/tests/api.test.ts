@@ -4709,7 +4709,13 @@ describe("insights, household split and admin console", () => {
     assert.equal(initial.status, 200);
     const pricePatch = await request(`/api/houses/${houseId}`, {
       method: "PATCH",
-      body: { settings: { priceLookup: { enabled: true } } },
+      body: {
+        settings: {
+          ai: { enabled: false, model: "keep-model" },
+          notifications: { enabled: false, digestHour: 8 },
+          priceLookup: { enabled: true },
+        },
+      },
     });
     assert.equal(pricePatch.status, 200);
     const persisted = await request(`/api/houses/${houseId}`);
@@ -4717,6 +4723,36 @@ describe("insights, household split and admin console", () => {
     assert.equal(persisted.data.settings.ai.enabled, false);
     assert.equal(persisted.data.settings.notifications.digestHour, 8);
     assert.equal(persisted.data.settings.priceLookup.enabled, true);
+  });
+
+  it("rate-limits authenticated offer validation requests before database reads", async () => {
+    const previousEnabled = process.env.SV_RATE_LIMIT;
+    const previousRule = process.env.SV_RATE_LIMIT_POSOKANEI_REQUESTS;
+    process.env.SV_RATE_LIMIT = "on";
+    process.env.SV_RATE_LIMIT_POSOKANEI_REQUESTS = "2/900";
+    const me = await request("/api/auth/me");
+    const key = `user:${me.data.user.id}`;
+    limiters.posokaneiRequests.reset(key);
+    try {
+      await request(`/api/houses/${insightHouse}`, {
+        method: "PATCH",
+        body: { settings: { priceLookup: { enabled: true } } },
+      });
+      const line = await request(`/api/houses/${insightHouse}/shopping`, {
+        method: "POST",
+        body: { name: "Validation throttle line", itemId: milkId, quantity: 1, unit: "l" },
+      });
+      const path = `/api/houses/${insightHouse}/insights/shopping-offers/${line.data.item.id}`;
+      assert.equal((await request(path)).status, 400, "first validation runs and reports the missing barcode");
+      assert.equal((await request(path)).status, 400, "the second validation remains within the request guard");
+      assert.equal((await request(path)).status, 429, "the third validation is rejected before database reads");
+    } finally {
+      limiters.posokaneiRequests.reset(key);
+      if (previousEnabled === undefined) delete process.env.SV_RATE_LIMIT;
+      else process.env.SV_RATE_LIMIT = previousEnabled;
+      if (previousRule === undefined) delete process.env.SV_RATE_LIMIT_POSOKANEI_REQUESTS;
+      else process.env.SV_RATE_LIMIT_POSOKANEI_REQUESTS = previousRule;
+    }
   });
 
   it("returns the queried barcode and propagates upstream Retry-After from the route", async () => {
