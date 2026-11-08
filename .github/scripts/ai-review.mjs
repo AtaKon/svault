@@ -15,9 +15,15 @@
 //                       "low" asks for short thinking, "default" sends nothing.
 
 import { readFile } from "node:fs/promises";
+import { clipComment, failureStopNote, mergeChunkReviews, splitDiff } from "./ai-review-helpers.mjs";
 
 const MARKER = "<!-- svault-ai-review -->";
+// Single-call limit stays conservative. Larger PRs are split into file-sized
+// chunks so the model never receives a prompt that can exceed its context.
 const MAX_DIFF_CHARS = 60_000;
+const CHUNK_DIFF_CHARS = 60_000;
+const MAX_CHUNKS = 20;
+const MAX_TOTAL_DIFF_CHARS = 600_000;
 const RETRY_DIFF_CHARS = 30_000;
 const MAX_COMMENT_CHARS = 60_000;
 
@@ -121,23 +127,28 @@ function trimDiff(diff, limit) {
 
 /** Builds the prompt; `diffLimit` lets a retry send a shorter diff. */
 let buildPrompt;
+let fullDiff = "";
+let buildChunkPrompt = () => {
+  throw new Error("unreachable chunk prompt");
+};
 if (isPullRequest) {
   const diffResponse = await github(`/repos/${repository}/pulls/${number}`, {
     headers: { Accept: "application/vnd.github.v3.diff" },
   });
-  const fullDiff = await diffResponse.text();
+  fullDiff = await diffResponse.text();
   const body = (issue.body || "(no description)").slice(0, 8_000);
-  buildPrompt = (diffLimit) => {
-    const diff = trimDiff(fullDiff, diffLimit);
-    return `Review this pull request.
-
-Title: ${issue.title || "(no title)"}
+  const header = `Title: ${issue.title || "(no title)"}
 Author: ${issue.user?.login || "unknown"}
 Base: ${issue.base?.ref || "?"}
 Head: ${issue.head?.ref || "?"}
 
 Description:
-${body}
+${body}`;
+  buildPrompt = (diffLimit) => {
+    const diff = trimDiff(fullDiff, diffLimit);
+    return `Review this pull request.
+
+${header}
 
 Diff:
 \`\`\`diff
@@ -157,6 +168,25 @@ Bullet list, or "None."
 ### Tests
 Concrete tests or manual checks that are missing.`;
   };
+  buildChunkPrompt = (chunk, index, total) => `Review part ${index} of ${total} of a large pull request.
+
+${header}
+
+Only review this part; other parts are reviewed separately. If a part ends with a continuation marker, the same file continues in the next part; do not report it as truncated. Cover every file visible here.
+Diff part ${index}:
+\`\`\`diff
+${chunk}
+\`\`\`
+
+Return Markdown with these sections:
+### Blocking
+Bullet list, or "No blocking issues found."
+
+### Non-blocking
+Bullet list, or "None."
+
+### Tests
+Concrete tests or manual checks that are missing for this part.`;
 } else {
   const body = (issue.body || "(no description)").slice(0, 12_000);
   const issuePrompt = `Triage this issue for SVault and assess whether it deserves implementation.
@@ -269,34 +299,106 @@ function describeAttempt(label, attempt) {
 // is turned off by default; a model that cannot turn it off is asked for low
 // effort instead.
 let reasoning = isOpenRouter ? REASONING[reasoningMode] : null;
-let first;
-try {
-  first = await requestReview(buildPrompt(MAX_DIFF_CHARS), maxTokens, reasoning);
-} catch (error) {
-  // Only a rejection of the reasoning switch itself is worth a retry; any other
-  // 400 (unknown model, bad request) should fail with its own message.
-  const rejectedReasoning = reasoning?.enabled === false && error.status === 400 && /reason|think/i.test(error.message);
-  if (!rejectedReasoning) throw error;
-  console.log(`The model cannot turn thinking off; asking for low effort instead. Original error: ${error.message}`);
-  reasoning = REASONING.low;
-  first = await requestReview(buildPrompt(MAX_DIFF_CHARS), maxTokens, reasoning);
-}
-let review = first.text;
-if (!review) {
-  console.log(`Empty review. ${describeAttempt("attempt 1", first)}`);
-  const second = await requestReview(buildPrompt(RETRY_DIFF_CHARS), maxTokens * 2, reasoning);
-  review = second.text;
-  if (!review) {
-    throw new Error(
-      `AI provider returned an empty review twice. ${describeAttempt("attempt 1", first)}; ` +
-        `${describeAttempt("attempt 2", second)}. Raise AI_REVIEW_MAX_TOKENS or pick a non-reasoning model ` +
-        `(AI_REVIEW_REASONING=${reasoningMode}${reasoning === REASONING.low && reasoningMode === "off" ? ", but this model cannot turn thinking off" : ""}).`,
-    );
+
+async function reviewCall(prompt, budget) {
+  try {
+    return await requestReview(prompt, budget, reasoning);
+  } catch (error) {
+    // Only a rejection of the reasoning switch itself is worth a retry; any other
+    // 400 (unknown model, bad request) should fail with its own message. If the
+    // model rejects thinking-off, all later calls use low effort intentionally.
+    const rejectedReasoning = reasoning?.enabled === false && error.status === 400 && /reason|think/i.test(error.message);
+    if (!rejectedReasoning) throw error;
+    console.log(`The model cannot turn thinking off; asking for low effort instead. Original error: ${error.message}`);
+    reasoning = REASONING.low;
+    return requestReview(prompt, budget, reasoning);
   }
 }
 
+let review = "";
+if (isPullRequest && fullDiff.length > MAX_DIFF_CHARS) {
+  const { chunks, oversized } = splitDiff(fullDiff, CHUNK_DIFF_CHARS);
+  const parts = [];
+  const tooLarge = fullDiff.length > MAX_TOTAL_DIFF_CHARS;
+  if (tooLarge) {
+    parts.push({
+      index: "size",
+      text: `### Blocking\n- The diff is ${fullDiff.length} characters, above the ${MAX_TOTAL_DIFF_CHARS}-character review budget. Split the PR before merging.\n`,
+    });
+  } else if (oversized.length) {
+    parts.push({
+      index: "oversized",
+      text: `### Blocking\n- These files are too large to review in one chunk: ${oversized.join(", ")}. Split the PR or split the files.\n`,
+    });
+  } else if (!chunks.length) {
+    parts.push({
+      index: "empty",
+      text: `### Blocking\n- The diff produced no reviewable chunks; nothing was reviewed.\n`,
+    });
+  } else if (chunks.length > MAX_CHUNKS) {
+    parts.push({
+      index: "overflow",
+      text: `### Blocking\n- The diff needs ${chunks.length} review parts; only the first ${MAX_CHUNKS} were reviewed. The unreviewed part is not approved. Split the PR.\n`,
+    });
+  }
+  const limit = tooLarge || oversized.length ? 0 : Math.min(chunks.length, MAX_CHUNKS);
+  let consecutiveFailures = 0;
+  for (let index = 0; index < limit; index++) {
+    if (consecutiveFailures >= 3) {
+      parts.push({
+        index: "stopped",
+        text: `### Blocking\n${failureStopNote(index, limit)}\n`,
+      });
+      break;
+    }
+    const prompt = buildChunkPrompt(chunks[index], index + 1, chunks.length);
+    let attempt;
+    try {
+      attempt = await reviewCall(prompt, maxTokens);
+      if (!attempt.text) {
+        console.log(`Empty chunk ${index + 1} review. ${describeAttempt("chunk", attempt)}`);
+        attempt = await reviewCall(prompt, maxTokens * 2);
+      }
+    } catch (error) {
+      consecutiveFailures++;
+      parts.push({
+        index: index + 1,
+        text: `### Blocking\n- Review part ${index + 1} failed: ${error instanceof Error ? error.message : String(error)}\n`,
+      });
+      continue;
+    }
+    if (attempt.text) {
+      consecutiveFailures = 0;
+      parts.push({ index: index + 1, text: attempt.text });
+    } else {
+      consecutiveFailures++;
+      parts.push({
+        index: index + 1,
+        text: `### Blocking\n- Reviewer returned no answer for part ${index + 1}.\n`,
+      });
+    }
+  }
+  review = mergeChunkReviews(parts);
+} else {
+  const first = await reviewCall(buildPrompt(MAX_DIFF_CHARS), maxTokens);
+  review = first.text;
+  if (!review) {
+    console.log(`Empty review. ${describeAttempt("attempt 1", first)}`);
+    const second = await reviewCall(buildPrompt(RETRY_DIFF_CHARS), maxTokens * 2);
+    review = second.text;
+    if (!review) {
+      throw new Error(
+        `AI provider returned an empty review twice. ${describeAttempt("attempt 1", first)}; ` +
+          `${describeAttempt("attempt 2", second)}. Raise AI_REVIEW_MAX_TOKENS or pick a non-reasoning model ` +
+          `(AI_REVIEW_REASONING=${reasoningMode}${reasoning === REASONING.low && reasoningMode === "off" ? ", but this model cannot turn thinking off" : ""}).`,
+      );
+    }
+  }
+}
+
+const clippedReview = clipComment(review, MAX_COMMENT_CHARS);
 const commentBody = `${MARKER}
-${review.slice(0, MAX_COMMENT_CHARS)}
+${clippedReview}
 
 ---
 <sub>Automated review by SVault's AI bot. This is not a human approval.</sub>`;

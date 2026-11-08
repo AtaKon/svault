@@ -1,5 +1,7 @@
 // Shared domain types used by both the API and the web client.
 
+import type { BillType } from "./bill-types.js";
+
 export type Role = "owner" | "admin" | "member" | "viewer";
 
 export interface User {
@@ -56,6 +58,9 @@ export interface NotificationChannel {
 }
 
 export interface HouseSettings {
+  priceLookup?: {
+    enabled?: boolean;
+  };
   ai?: {
     enabled?: boolean;
     baseUrl?: string;
@@ -1110,6 +1115,21 @@ export interface HouseholdReceipt {
   participantNames: string[];
 }
 
+export interface UtilityBill {
+  id: string;
+  name: string;
+  billType: BillType;
+  category: "to_split" | "personal";
+  amount: number;
+  currency: string;
+  dueDate: string | null;
+  paidBy: string | null;
+  splitWith: string[];
+  document: string | null;
+  notes: string | null;
+  createdAt: string;
+}
+
 export interface UseItUpLot {
   id: string;
   quantity: number;
@@ -1146,6 +1166,21 @@ export interface ShoppingPriceHint {
   currency: string;
   cheapest: { vendorName: string; price: number; purchasedAt: string; unit: string | null };
   vendors: { vendorName: string; price: number; purchasedAt: string; unit: string | null }[];
+}
+
+export interface ExternalShoppingOffer {
+  source: "PosoKanei";
+  productId: string;
+  productName: string;
+  unit: string | null;
+  retailer: string;
+  price: number;
+  unitPrice: number | null;
+  currency: "EUR";
+  discount: boolean;
+  discountPercent: number | null;
+  updatedAt: string | null;
+  fetchedAt: string;
 }
 
 export interface ApiToken {

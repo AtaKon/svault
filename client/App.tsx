@@ -11,6 +11,7 @@ import { ItemPage } from "@/pages/ItemPage";
 import { ItemFormPage } from "@/pages/ItemFormPage";
 import { ScanPage } from "@/pages/ScanPage";
 import { ReceiptsPage } from "@/pages/ReceiptsPage";
+import { BillsPage } from "@/pages/BillsPage";
 import { ReceiptScanPage } from "@/pages/ReceiptScanPage";
 import { ReceiptTemplateFormPage } from "@/pages/ReceiptTemplateFormPage";
 import { RecipesPage } from "@/pages/RecipesPage";
@@ -53,6 +54,7 @@ export function App() {
         <Route path="/items/:itemId/edit" element={<ItemFormPage />} />
         <Route path="/scan" element={<ScanPage />} />
         <Route path="/receipts" element={<ReceiptsPage />} />
+        <Route path="/bills" element={<BillsPage />} />
         <Route path="/receipts/scan" element={<ReceiptScanPage />} />
         <Route path="/receipts/templates/new" element={<ReceiptTemplateFormPage />} />
         <Route path="/receipts/templates/:templateId" element={<ReceiptTemplateFormPage />} />
