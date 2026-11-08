@@ -2900,6 +2900,15 @@ describe("security hardening", () => {
 });
 
 describe("multi-photo receipt OCR", () => {
+  it("uses only complete alternative page sets and preserves manual edits", async () => {
+    const { mergeOcrCandidates } = await import("../../client/ocr-merge.js");
+    const first = { text: "MILK 1.50", candidates: ["MILK 1.50", "MILK 1.80"] };
+    const second = { text: "BREAD 2.00", candidates: ["BREAD 2.00", "BREAD 2.20"] };
+    assert.deepEqual(mergeOcrCandidates([first, { text: second.text }], "MILK 1.50\nBREAD 2.00"), []);
+    assert.deepEqual(mergeOcrCandidates([first, second], "MILK 1.50\nBREAD 2.00"), ["MILK 1.80\nBREAD 2.20"]);
+    assert.deepEqual(mergeOcrCandidates([first, second], "MILK 1.50\nBREAD 2.10"), []);
+  });
+
   it("drops the lines two overlapping pages share", () => {
     const merged = mergeOcrTexts([
       "MILK 1.50\nBREAD 2.00\nTOTAL 3.50",
@@ -3961,6 +3970,15 @@ describe("receipt scan fixes", () => {
     assert.equal(lidl.data.provider, "template");
     assert.equal(lidl.data.reconciliation.ok, true);
     assert.equal(lidl.data.reconciliation.savings, 1.04);
+  });
+
+  it("reports when a requested AI re-read is unavailable for a recognized template", async () => {
+    const result = await request(`/api/houses/${plainHouse}/receipts/scan`, {
+      method: "POST", body: { text: LIDL_SAMPLE, preferAi: true },
+    });
+    assert.equal(result.status, 200);
+    assert.equal(result.data.provider, "template");
+    assert.match(result.data.warning, /AI re-read is unavailable/);
   });
 
   it("keeps a lower-confidence template without AI when its lines add up", async () => {

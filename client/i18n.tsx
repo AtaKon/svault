@@ -1491,6 +1491,7 @@ const EL: Record<string, string> = {
   "Parsed locally. Check the lines, or choose Re-read with AI.": "Η ανάγνωση έγινε τοπικά. Έλεγξε τις γραμμές ή επίλεξε νέα ανάγνωση με AI.",
   "Parsed locally. Check the rows, or choose Re-read with AI.": "Η ανάγνωση έγινε τοπικά. Έλεγξε τις γραμμές ή επίλεξε νέα ανάγνωση με AI.",
   "AI did not find any product lines, so the local result was kept.": "Το AI δεν βρήκε προϊόντα, οπότε διατηρήθηκε η τοπική ανάγνωση.",
+  "AI re-read is unavailable. Configure an AI provider and provide recognised text or a vision model for the photo.": "Η νέα ανάγνωση με AI δεν είναι διαθέσιμη. Ρύθμισε έναν πάροχο AI και δώσε αναγνωρισμένο κείμενο ή μοντέλο όρασης για τη φωτογραφία.",
   "Re-run OCR": "Εκ νέου αναγνώριση κειμένου",
   "Re-run OCR for this page": "Εκ νέου αναγνώριση κειμένου για αυτή τη σελίδα",
   "Read receipt": "Ανάγνωση απόδειξης",

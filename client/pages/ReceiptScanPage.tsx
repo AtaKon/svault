@@ -7,7 +7,7 @@ import { Badge, Button, Card, Field, Input, PageHeader, Select, Sheet, Spinner, 
 import { Icon } from "@/components/icons";
 import { useToast } from "@/components/toast";
 import { ocrImage } from "@/ocr";
-import { mergeOcrTexts } from "@/ocr-merge";
+import { mergeOcrCandidates, mergeOcrTexts } from "@/ocr-merge";
 import { scanDocument } from "@/document-scan";
 import { stitchImages } from "@/image-stitch";
 import { money, aiCostLabel, receiptTemplateLabel, relativeTime, shortDate, todayInput } from "@/format";
@@ -709,12 +709,7 @@ export function ReceiptScanPage() {
     setBusy(true);
     try {
       const currentPages = pagesRef.current;
-      const mergedText = mergeOcrTexts(currentPages.map((page) => page.text)).text;
-      // A manual edit always takes precedence over OCR alternatives.
-      const alternatives = text === mergedText && currentPages.length
-        ? [1, 2].map((index) => mergeOcrTexts(currentPages.map((page) => page.candidates?.[index] ?? page.text)).text)
-            .filter((candidate, index, all) => candidate && candidate !== text && all.indexOf(candidate) === index)
-        : [];
+      const alternatives = mergeOcrCandidates(currentPages, text);
       const data = await api<ReceiptScanResponse>(`/api/houses/${house.id}/receipts/scan`, {
         method: "POST",
         body: {

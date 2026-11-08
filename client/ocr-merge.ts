@@ -128,3 +128,15 @@ export function mergeOcrTexts(pages: string[]): MergedOcrText {
 
   return { text: merged.join("\n"), removedLines };
 }
+
+/** Only compare complete alternative passes, and never override edited text. */
+export function mergeOcrCandidates(pages: { text: string; candidates?: string[] }[], text: string): string[] {
+  if (!pages.length || text !== mergeOcrTexts(pages.map((page) => page.text)).text) return [];
+  const alternatives: string[] = [];
+  for (const index of [1, 2]) {
+    if (!pages.every((page) => Boolean(page.candidates?.[index]?.trim()))) continue;
+    const candidate = mergeOcrTexts(pages.map((page) => page.candidates![index])).text;
+    if (candidate && candidate !== text && !alternatives.includes(candidate)) alternatives.push(candidate);
+  }
+  return alternatives;
+}

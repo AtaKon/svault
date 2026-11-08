@@ -558,6 +558,10 @@ receiptRoutes.post(
       warnings.push("Parsed locally. Check the lines, or choose Re-read with AI.");
     }
 
+    if (body.preferAi && !canUseAi) {
+      warnings.push("AI re-read is unavailable. Configure an AI provider and provide recognised text or a vision model for the photo.");
+    }
+
     if (draft.lines.some((line) => line.lineTotal == null && line.unitPrice == null)) {
       warnings.push("Some product lines have no price. Check them against the receipt.");
     }

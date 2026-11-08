@@ -6,6 +6,8 @@ import type { SelectedReceiptTemplate } from "./receipt-templates.js";
 function evidence(draft: ReceiptDraft, text: string, templateId: string) {
   const check = reconcileReceipt({ total: draft.total, savings: draft.savings, lines: draft.lines });
   const charges = templateId === "lidl-gr" ? lidlExcludedCharges(text) : 0;
+  // Reconciliation has a difference whenever it has a finite printed total.
+  // Treat an unknown total as unrankable, never as a better match.
   const gap = check.difference == null ? Infinity : Math.abs(check.difference - charges);
   const priced = draft.lines.filter((line) => line.lineTotal != null || line.unitPrice != null).length;
   const barcodes = draft.lines.flatMap((line) => line.barcode ? [line.barcode] : []);
