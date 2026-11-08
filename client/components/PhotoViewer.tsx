@@ -266,9 +266,9 @@ export function PhotoViewer({
         <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted">
           {photo.labels.length === 0 && <Badge tone="warn">{t("unlabeled")}</Badge>}
           {labelBusy && (
-            <span className="flex items-center gap-1.5">
-              <Spinner size={11} label={t("Saving")} />
-              <span aria-hidden="true">{t("Saving")}</span>
+            <span role="status" className="flex items-center gap-1.5">
+              <Spinner size={11} />
+              <span>{t("Saving")}</span>
             </span>
           )}
         </div>
