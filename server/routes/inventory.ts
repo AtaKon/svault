@@ -122,7 +122,7 @@ const espressoShotBody = z.object({
 
 function espressoBrewedAt(value: string | null | undefined): string {
   if (value === null) throw new ApiError(400, "Brew date cannot be cleared");
-  if (!value) return now();
+  if (value === undefined) return now();
   const timestamp = Date.parse(value);
   if (!Number.isFinite(timestamp)) throw new ApiError(400, "Invalid brew date");
   const earliest = Date.parse("2000-01-01T00:00:00.000Z");
@@ -156,8 +156,9 @@ function parseEspressoTags(value: unknown): string[] {
 async function espressoSummary(houseId: string, itemId?: string) {
   const params: unknown[] = [houseId];
   let sql = `SELECT COUNT(*) AS count, AVG(rating) AS average_rating, MAX(rating) AS best_rating,
-      MAX(brewed_at) AS last_brewed_at, AVG(dose_grams) AS average_dose_grams,
-      AVG(yield_grams) AS average_yield_grams, AVG(extraction_seconds) AS average_extraction_seconds,
+      MAX(brewed_at) AS last_brewed_at, AVG(CASE WHEN dose_grams > 0 THEN dose_grams END) AS average_dose_grams,
+      AVG(CASE WHEN yield_grams > 0 THEN yield_grams END) AS average_yield_grams,
+      AVG(extraction_seconds) AS average_extraction_seconds,
       AVG(CASE WHEN dose_grams > 0 AND yield_grams IS NOT NULL
         THEN yield_grams / NULLIF(dose_grams, 0) END) AS average_ratio,
       AVG(CASE WHEN dose_grams > 0 AND yield_grams IS NOT NULL AND tds_percent IS NOT NULL
@@ -190,9 +191,10 @@ async function espressoShots(houseId: string, itemId: string | null, limit: numb
 
 async function shotAccess(req: any, minRole: Role = "member") {
   const { item, houseId, role } = await itemAccess(req, minRole);
-  const shot = await get<any>("SELECT * FROM espresso_shots WHERE id = ? AND item_id = ?", [
+  const shot = await get<any>("SELECT * FROM espresso_shots WHERE id = ? AND item_id = ? AND house_id = ?", [
     req.params.shotId,
     item.id,
+    item.house_id,
   ]);
   if (!shot) throw new ApiError(404, "Shot not found");
   return { shot, item, houseId, role };
