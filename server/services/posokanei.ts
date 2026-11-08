@@ -186,6 +186,7 @@ export function createPosoKaneiClient(
     const request = Promise.resolve().then(async () => {
       const releaseUserLimit = consumeRateLimit(userId);
       let releaseGlobalLimit: ReleaseRateLimit;
+      let upstreamRateLimited = false;
       try {
         releaseGlobalLimit = consumeGlobalRateLimit();
       } catch (error) {
@@ -212,6 +213,7 @@ export function createPosoKaneiClient(
           return offers;
         }
         if (response.status === 429) {
+          upstreamRateLimited = true;
           const wait = retryAfter(response);
           upstreamBlockedUntil = Date.now() + wait * 1000;
           await cancelBody(response);
@@ -241,8 +243,6 @@ export function createPosoKaneiClient(
         const normalizedError = error instanceof PosoKaneiUnavailableError
           ? error
           : new PosoKaneiUnavailableError("PosoKanei could not be reached. Try again later.");
-        // A 429 request reached the upstream, so keep both request reservations.
-        const upstreamRateLimited = normalizedError.retryAfterSeconds != null;
         if (!upstreamRateLimited) {
           releaseUserLimit?.();
           releaseGlobalLimit?.();

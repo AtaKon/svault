@@ -783,14 +783,18 @@ HTTPS PosoKanei API and returns that barcode with the offers so the UI can show 
 Successful results are cached in memory for 30 minutes; unknown barcodes are cached for 10 minutes.
 The cache is per process, holds at most 500 barcodes, and is cleared when the server restarts.
 Neither is written to purchase history. Successful lookups and upstream 429 attempts are limited to
-two per user and three instance-wide per 15 minutes. Cache hits and joins to an in-flight lookup do not
-consume a user slot. Concurrent requests for the same barcode share one upstream fetch, including
-across users, because the result contains public price data only. Other failed upstream requests refund
-their rate-limit slots and pause further lookups for 15 seconds. An upstream 429 consumes the initiating
-caller's user slot and the global slot, then pauses every barcode
-lookup instance-wide for the supplied retry delay; callers who joined that in-flight request don't use a
-user slot because they did not initiate an upstream request. Requests rejected by the shared cooldown or
-instance-wide quota do not consume a per-user slot.
+two per user and three instance-wide per 15 minutes. Concurrent requests for the same barcode share one
+upstream fetch, including across users, because the result contains public price data only. Rate-limit
+slots are charged as follows:
+
+| Lookup outcome | User slot | Instance slot |
+| --- | --- | --- |
+| Successful product or unknown barcode | Initiating caller | Consumed |
+| Upstream 429 | Initiating caller | Consumed; all barcode lookups pause for the supplied retry delay |
+| Cached or shared in-flight result | None; a joiner receives the public result without initiating another upstream request | None for cache hits; one slot belongs to the shared upstream request |
+| Other upstream failure | Refunded | Refunded; further lookups pause for 15 seconds |
+| Rejected by cooldown or instance quota | None | None |
+
 PosoKanei does not publish an API contract, so responses may change or be unavailable.
 
 Receipts accept `paidBy` and `splitWith` on import, and `PATCH /api/receipts/:receiptId` changes them

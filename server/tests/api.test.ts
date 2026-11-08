@@ -5247,6 +5247,30 @@ describe("PosoKanei price lookup client", () => {
     assert.equal(globalSlots, 0);
   });
 
+  it("does not mistake retry metadata on a non-429 failure for an upstream 429", async () => {
+    let userSlots = 0;
+    let globalSlots = 0;
+    const client = createPosoKaneiClient(
+      async () => { throw new PosoKaneiUnavailableError("synthetic fetch failure", 120); },
+      () => {
+        userSlots++;
+        return () => { userSlots--; };
+      },
+      () => {
+        globalSlots++;
+        return () => { globalSlots--; };
+      },
+    );
+    await assert.rejects(client.lookupPosoKaneiBarcode("12345678", userId), /synthetic fetch failure/);
+    assert.equal(userSlots, 0, "non-429 failures refund the user reservation even if they carry retry metadata");
+    assert.equal(globalSlots, 0, "non-429 failures refund the global reservation even if they carry retry metadata");
+    await assert.rejects(
+      client.lookupPosoKaneiBarcode("12345679", "another-user"),
+      (error: unknown) => error instanceof PosoKaneiUnavailableError &&
+        Number(error.retryAfterSeconds) > 0 && Number(error.retryAfterSeconds) <= 15,
+    );
+  });
+
   it("uses the short shared cooldown after a malformed successful response", async () => {
     let calls = 0;
     const client = createPosoKaneiClient(async () => {
