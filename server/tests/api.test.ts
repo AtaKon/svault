@@ -1,7 +1,7 @@
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createHmac, createSign, generateKeyPairSync } from "node:crypto";
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { splitAmountEvenly } from "../../shared/bill-splitting.js";
@@ -4545,19 +4545,26 @@ describe("insights, household split and admin console", () => {
     assert.deepEqual(files(), before, "invalid PDF signature must be removed");
 
     const beforePostInsertFailure = files();
-    await run(`CREATE TRIGGER delete_bill_after_insert AFTER INSERT ON bills
+    const redirectedHouse = await request("/api/houses", {
+      method: "POST",
+      body: { name: "Redirected bill fixture", currency: "GBP" },
+    });
+    assert.equal(redirectedHouse.status, 201);
+    await run(`CREATE TRIGGER reassign_bill_after_insert AFTER INSERT ON bills
       WHEN NEW.name = 'Post insert cleanup fixture'
-      BEGIN DELETE FROM bills WHERE id = NEW.id; END`);
+      BEGIN UPDATE bills SET house_id = '${redirectedHouse.data.id}' WHERE id = NEW.id; END`);
     try {
       const postInsertFailure = await request(`/api/houses/${billHouse}/bills`, {
         method: "POST",
         body: form(pdf, "Post insert cleanup fixture"),
       });
       assert.equal(postInsertFailure.status, 404);
+      assert.equal(await get("SELECT id FROM bills WHERE name = ?", ["Post insert cleanup fixture"]), undefined,
+        "the committed row is removed if its post-insert response cannot be produced");
       assert.deepEqual(files(), beforePostInsertFailure,
         "files are removed if the insert succeeded but the subsequent row read fails");
     } finally {
-      await run("DROP TRIGGER delete_bill_after_insert");
+      await run("DROP TRIGGER reassign_bill_after_insert");
     }
 
     const beforeFailedInsert = files();
@@ -4770,6 +4777,10 @@ describe("insights, household split and admin console", () => {
     assert.match(documentResponse.headers.get("content-disposition") ?? "", /^attachment;/);
     assert.equal(documentResponse.headers.get("x-content-type-options"), "nosniff");
     assert.match(documentResponse.headers.get("content-security-policy") ?? "", /sandbox/);
+    await run("UPDATE bills SET document = ? WHERE id = ?", ["../outside.pdf", accepted.data.id]);
+    const traversalDocument = await fetch(base + accepted.data.document, { headers: { cookie } });
+    assert.equal(traversalDocument.status, 404, "stored document names cannot traverse outside the bill upload directory");
+    await run("UPDATE bills SET document = ? WHERE id = ?", [addedFile, accepted.data.id]);
     assert.equal((await request(`/uploads/bills/${addedFile}`)).status, 404);
 
     const ledger = await request(`/api/houses/${billHouse}/insights/household`);
@@ -4913,12 +4924,19 @@ describe("insights, household split and admin console", () => {
   });
 
   it("makes upload cleanup safe to repeat", async () => {
-    const file = path.join(dataDir, "discard-twice.pdf");
+    const uploadDirectory = path.join(dataDir, "uploads", "bills");
+    mkdirSync(uploadDirectory, { recursive: true });
+    const file = path.join(uploadDirectory, "discard-twice.pdf");
     writeFileSync(file, "temporary upload");
     const fakeRequest = { file: { path: file } } as any;
     discardUploads(fakeRequest);
     assert.equal(existsSync(file), false);
     assert.doesNotThrow(() => discardUploads(fakeRequest));
+
+    const outsideFile = path.join(dataDir, "must-not-delete.pdf");
+    writeFileSync(outsideFile, "outside upload root");
+    discardUploads({ file: { path: outsideFile } } as any);
+    assert.equal(existsSync(outsideFile), true, "cleanup only removes files beneath UPLOAD_DIR");
   });
 
   it("restores bill rows only after their user and house foreign keys", () => {

@@ -184,13 +184,13 @@ billRoutes.post("/:houseId/bills", requireHouseBillMember, pdfUpload.single("doc
     if (!created) {
       discardUploads(req);
     } else if (filename && id) {
-      // If a post-insert read/serialization failed, detach the new file before
-      // deleting it. A concurrent deletion is already safe: this update is a no-op.
+      // Roll back the row if a post-insert read/serialization failed. If another
+      // request already removed or changed it, this conditional delete is safe.
       try {
-        await run("UPDATE bills SET document = NULL WHERE id = ? AND document = ?", [id, filename]);
+        await run("DELETE FROM bills WHERE id = ? AND document = ?", [id, filename]);
         discardUploads(req);
       } catch {
-        // Keep the file if the database cannot confirm it is detached.
+        // Keep the file if the database cannot confirm the row was rolled back.
       }
     }
     throw error;
@@ -247,12 +247,14 @@ billRoutes.post("/:houseId/bills/:billId/document", requireBillDocumentMember, p
 billRoutes.get("/:houseId/bills/:billId/document", handler(async (req, res) => {
   const { houseId } = await requireHouse(req);
   const bill = await billRow(String(req.params.billId), houseId);
-  if (!bill?.document) throw new ApiError(404, "Bill PDF not found");
+  if (!bill?.document || path.basename(bill.document) !== bill.document) throw new ApiError(404, "Bill PDF not found");
+  const documentPath = uploadPath("bills", bill.document);
+  if (!fs.existsSync(documentPath)) throw new ApiError(404, "Bill PDF not found");
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
   res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(`${bill.name}.pdf`)}`);
-  res.sendFile(uploadPath("bills", bill.document));
+  res.sendFile(documentPath);
 }));
 
 singleBillRoutes.delete("/:billId", handler(async (req, res) => {

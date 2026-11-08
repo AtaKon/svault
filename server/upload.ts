@@ -89,8 +89,16 @@ function requestFiles(req: Request): Express.Multer.File[] {
 
 /** Delete every file multer stored for this request. */
 export function discardUploads(req: Request) {
+  const uploadRoot = path.resolve(UPLOAD_DIR);
   for (const file of requestFiles(req)) {
-    if (file.path) fs.rmSync(file.path, { force: true });
+    if (!file.path) continue;
+    const resolved = path.resolve(file.path);
+    const relative = path.relative(uploadRoot, resolved);
+    // Multer writes inside UPLOAD_DIR. Never let a malformed request object
+    // turn this cleanup helper into an arbitrary file deletion primitive.
+    if (relative && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) {
+      fs.rmSync(resolved, { force: true });
+    }
   }
 }
 
