@@ -58,8 +58,8 @@ export function ItemCard({
       });
       setCurrent(detail);
       onUpdated?.(detail);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : t("Could not update stock"));
+    } catch {
+      toast.error(t("Could not update stock"));
     } finally {
       setBusy(null);
     }
@@ -291,8 +291,8 @@ export function StockDialog({
       onUpdated(detail);
       toast.success(t(STOCK_SUCCESS_MESSAGES[action]));
       onClose();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : t("Could not update stock"));
+    } catch {
+      toast.error(t("Could not update stock"));
     } finally {
       setBusy(false);
     }

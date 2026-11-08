@@ -60,6 +60,7 @@ catalogRoutes.get(
         }
         products = [...byCode.values()].slice(0, limit);
       } else if (!cached.length) {
+        // Preserve the legacy display text for API consumers; clients localize warningCode.
         warning = "Nothing found on OpenFoodFacts. Check the name or paste a barcode.";
         warningCode = "NOTHING_FOUND";
       }

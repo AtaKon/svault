@@ -87,8 +87,8 @@ export function PhotoViewer({
       onUpdated({ ...photo, labels: [...photo.labels, label] });
       setLabelText("");
       setPending(null);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : t("Could not save the label"));
+    } catch {
+      toast.error(t("Could not save the label"));
     } finally {
       setLabelBusy(false);
     }
@@ -98,8 +98,8 @@ export function PhotoViewer({
     try {
       await api(`/api/photos/${photo.id}/labels/${labelId}`, { method: "DELETE" });
       onUpdated({ ...photo, labels: photo.labels.filter((label) => label.id !== labelId) });
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : t("Could not remove the label"));
+    } catch {
+      toast.error(t("Could not remove the label"));
     }
   };
 
@@ -107,8 +107,8 @@ export function PhotoViewer({
     try {
       const updated = await api<Photo>(`/api/photos/${photo.id}`, { method: "PATCH", body: { split } });
       onUpdated(updated);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : t("Could not update the split"));
+    } catch {
+      toast.error(t("Could not update the split"));
     }
   };
 
@@ -118,8 +118,8 @@ export function PhotoViewer({
       await api(`/api/photos/${photo.id}`, { method: "DELETE" });
       onDeleted(photo.id);
       onClose();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : t("Could not delete the photo"));
+    } catch {
+      toast.error(t("Could not delete the photo"));
     } finally {
       setBusy(false);
     }
