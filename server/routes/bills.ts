@@ -45,7 +45,7 @@ const pdfUpload = multer({
     ? cb(null, true)
     : cb(new ApiError(400, "Upload a PDF bill")),
 });
-const verifyPdf = (req: any, _res: any, next: (error?: unknown) => void) => {
+const verifyPdf: RequestHandler = (req, _res, next) => {
   if (!req.file) return next();
   try {
     const fd = fs.openSync(req.file.path, "r");
@@ -67,7 +67,7 @@ const input = z.object({
   billType: z.enum(BILL_TYPE_VALUES).default("other"),
   category: z.enum(["to_split", "personal"]).default("personal"),
   amount: z.coerce.number().finite().positive().max(1_000_000_000)
-    .refine((value) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-7, "Enter an amount with up to two decimal places")
+    .refine((value) => Math.abs(value - Math.round(value * 100) / 100) < 1e-7, "Enter an amount with up to two decimal places")
     .transform((value) => Math.round(value * 100) / 100),
   currency: z.string().trim().regex(/^[A-Za-z]{3}$/).optional(),
   dueDate: z.preprocess((value) => value === "" ? null : value, z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).refine((date) => {
@@ -123,7 +123,8 @@ const requireBillDocumentMember: RequestHandler = (req, _res, next) => {
   // Check both house membership and bill ownership before accepting the file.
   void (async () => {
     const { houseId } = await requireHouse(req, "member");
-    if (!await billRow(String(req.params.billId), houseId)) throw new ApiError(404, "Bill not found");
+    const bill = await billRow(String(req.params.billId), houseId);
+    if (!bill || bill.house_id !== houseId) throw new ApiError(404, "Bill not found");
   })().then(() => next(), next);
 };
 async function billAccess(req: Request, minRole: "viewer" | "member" = "viewer") {

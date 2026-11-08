@@ -4843,6 +4843,16 @@ describe("insights, household split and admin console", () => {
     const payerAfterLeaving = await request(`/api/houses/${otherHouse.data.id}/insights/household`);
     assert.equal(payerAfterLeaving.data.balances.find((row: any) => row.userId === ownerId).balance, -6,
       "a departed payer contributes nothing to paid while the remaining member still owes their share");
+    const beforeHousePdf = files();
+    const housePdfBill = await request(`/api/houses/${otherHouse.data.id}/bills`, {
+      method: "POST",
+      body: form(pdf, "House deletion cleanup fixture"),
+    });
+    assert.equal(housePdfBill.status, 201);
+    const housePdfFile = files().find((file) => !beforeHousePdf.includes(file));
+    assert.ok(housePdfFile);
+    assert.equal((await request(`/api/houses/${otherHouse.data.id}`, { method: "DELETE" })).status, 200);
+    assert.ok(!files().includes(housePdfFile), "deleting the house removes its now-unreferenced bill PDF");
 
     const allTypes: any[] = [];
     for (const type of BILL_TYPE_VALUES) {
@@ -4877,8 +4887,10 @@ describe("insights, household split and admin console", () => {
 
   it("keeps utility bill share allocation cent-exact", () => {
     assert.deepEqual(splitAmountEvenly(10, 3), [3.34, 3.33, 3.33]);
+    assert.deepEqual(splitAmountEvenly(999_999_999.99, 3), [333_333_333.33, 333_333_333.33, 333_333_333.33]);
     assert.deepEqual(splitAmountEvenly(1.005, 2), [], "amounts with sub-cent precision are rejected like the bill API");
     assert.deepEqual(splitAmountEvenly(1e15, 2), [], "unsafe cent totals are rejected");
+    assert.deepEqual(splitAmountEvenly(0.02, 5), [0.01, 0.01, 0, 0, 0]);
     assert.deepEqual(splitAmountEvenly(0.01, 3), [0.01, 0, 0]);
     assert.deepEqual(splitAmountEvenly(0, 3), [0, 0, 0]);
     assert.deepEqual(splitAmountEvenly(-1, 2), []);
