@@ -148,7 +148,7 @@ taxonomy calls. A product that is missing everywhere is created on the project t
 | Open Prices (`https://prices.openfoodfacts.org/api/v1`) | Prices, receipts, proofs, locations, products, challenges, badges | `POST /api/v1/auth` → bearer token (OFF username/password or Keycloak access token) |
 | Folksonomy Engine (`https://api.folksonomy.openfoodfacts.org`) | Free key/value properties beyond the product schema | `POST /auth` → bearer token |
 | Robotoff (`https://robotoff.openfoodfacts.org/api/v1`) | Questions/insights/predictions that fill gaps from photos | Mostly public reads; annotation endpoint to be verified in Phase 0 |
-| NutriPatrol (`https://nutripatrol.openfoodfacts.org/api/v1`) | Report product/image/search problems; moderators get a ticket | Public flag creation; `user_id` included for moderation |
+| NutriPatrol (`https://nutripatrol.openfoodfacts.org/api/v1`) | Report product/image/search problems; moderators get a ticket | **Requires an OFF session token**; flags return `401` without one |
 
 ### 4.4 Capability matrix
 
@@ -172,6 +172,10 @@ service in Phase 0. A capability is enabled only after a successful read-only pr
 enabled only after a staging write test.
 
 ### 4.5 Operating rules (non-negotiable)
+
+> Phase 0 found that NutriPatrol flags require an OFF session (`401 Missing session token`) and that
+> Robotoff can return `502`. See [openfoodfacts-spike.md](openfoodfacts-spike.md). Treat both as
+> account-gated, failure-tolerant features; never block product lookup on them.
 
 - **Identify the app.** `User-Agent: SVault/<version> (<contact>)`; include `app_name=SVault`,
   `app_version`, `app_uuid` (a random per-user pseudonym) and a `comment` with a hashed local user id
