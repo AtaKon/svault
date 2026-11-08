@@ -9,6 +9,7 @@ import { currentTheme, toggleTheme } from "@/theme";
 
 const LINKS: { to: string; label: string; description: string; icon: IconName; tint: string }[] = [
   { to: "/insights", label: "Insights", description: "Spending, prices, waste and use-it-up", icon: "price", tint: "bg-warn-soft text-warn" },
+  { to: "/contribute", label: "Contribute", description: "Share missing product data with Open Food Facts", icon: "sparkles", tint: "bg-brand-soft text-brand" },
   { to: "/espresso", label: "Espresso log", description: "Ratings, grind and extraction history", icon: "cup", tint: "bg-warn-soft text-warn" },
   { to: "/shopping", label: "Shopping list", description: "From recipes, low stock and the plan", icon: "list", tint: "bg-brand-soft text-brand" },
   { to: "/plan", label: "Meal plan", description: "Seven days, scaled servings", icon: "calendar", tint: "bg-warn-soft text-warn" },

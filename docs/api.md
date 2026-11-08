@@ -355,23 +355,31 @@ Barcode scan response:
 ```
 
 `match` is `local`, `external` or `none`. For `external`, `product` contains the cached
-OpenFoodFacts product (`code`, `name`, `brand`, `genericName`, `quantity`, `categories`, `image`,
-`ingredients`, `allergens`, `labels`, `nutriscore`, `novaGroup`, `countries`, `packaging`,
-`servingSize`, `nutrition`) and `item` is null. `nutrition` is the parsed per-100 panel, or null when
-the product has no nutrition data.
+OpenFoodFacts product (`code`, `project`, `productType`, `name`, `brand`, `genericName`, `quantity`,
+`categories`, `image`, `ingredients`, `allergens`, `labels`, `nutriscore`, `novaGroup`, `countries`,
+`packaging`, `servingSize`, `nutrition`) and `item` is null. `nutrition` is the parsed per-100 panel,
+or null when the product has no nutrition data.
 
 ## OpenFoodFacts catalogue
 
-Barcode scans and receipt imports enrich inventory from OpenFoodFacts. Products are cached in a
-shared `catalog_products` table for `OFF_CACHE_DAYS` (default 30). Receipt text mappings live in
-`catalog_mappings`: bundled seed rows ship in `assets/catalog/off-mappings.json`, mappings learned on
-the instance are `local`, and imported files are `community`. A local mapping is never overwritten by
-a seed file or import.
+SVault reads four Open Food Facts databases: Open Food Facts (`off`), Open Beauty Facts (`obf`), Open
+Pet Food Facts (`opff`) and Open Products Facts (`opf`). Products are cached in a shared
+`catalog_products` table keyed by `(project, code)` for `OFF_CACHE_DAYS` (default 30). A universal
+lookup asks `product_type=all` and records the project returned by the owning database. Existing cache
+rows from older versions are migrated to `project='off'`; the new primary key allows the same barcode
+to exist independently in more than one project.
+
+Receipt text mappings live in `catalog_mappings`: bundled seed rows ship in
+`assets/catalog/off-mappings.json`, mappings learned on the instance are `local`, and imported files
+are `community`. A local mapping is never overwritten by a seed file or import.
 
 | Method | Path | Min role | Purpose |
 | --- | --- | --- | --- |
-| `GET` | `/api/catalog/search?q=...` | signed in | Search the cache, then OpenFoodFacts. `online=0` skips the network; `limit` 1-20. |
-| `GET` | `/api/catalog/product/:code` | signed in | Cached or live product. `full=1` adds the stored OFF payload. |
+| `GET` | `/api/catalog/search?q=...&project=off` | signed in | Search the cache, then OpenFoodFacts. `online=0` skips the network; `limit` 1-20. `project=all` searches every cache plus OFF full text; other projects search their cache only. |
+| `GET` | `/api/catalog/product/:code?project=all` | signed in | Cached or live product. `project=all` (default) routes to the owning database; `full=1` adds the stored OFF payload. |
+| `GET` | `/api/off/projects` | signed in | Project registry: labels, product types, sites and capability flags. |
+| `GET` | `/api/off/lookup/:code?project=all` | signed in | Universal or project-specific lookup. Returns `{ product, project }`. |
+| `GET` | `/api/off/product/:project/:code?full=1` | signed in | Full read from one project; `project` must be `off`, `obf`, `opff` or `opf`. |
 | `GET` | `/api/catalog/resolve?raw=...&houseId=...` | signed in | Best mapping for a raw receipt line: shared rows, plus that house's learned rows when the caller is a member. |
 | `GET` | `/api/catalog/mappings` | signed in | List/search shared mappings (`q`, `limit` 1-500). |
 | `GET` | `/api/catalog/stats` | instance admin | Mapping and cache counts plus the configured sync URL. |
@@ -379,12 +387,52 @@ a seed file or import.
 | `POST` | `/api/catalog/import` | instance admin | Merge `{ "version": 1, "mappings": [...] }`. Local rows are skipped. |
 | `POST` | `/api/catalog/sync` | instance admin | Download and merge `SV_CATALOG_URL`, or a `{ "url": "https://..." }` override. |
 
+Search responses include `project` and a stable `warningCode`: `NOTHING_FOUND` when an online search
+had no result, or `LIMITED_SEARCH` when the selected non-food project can only search this server's
+cache. The legacy warning text is kept for older clients. With `online=0`, `project=all` returns only
+the local cache across projects. `/api/catalog/product/:code` now defaults to universal routing;
+clients that need the old food-only behaviour pass `project=off`.
+
 Linking an item returns `{ item, product, filled, skipped }`. `filled` lists the first-class fields
 that were blank and are now populated (name, description, brand, image, category); `skipped` explains
-values that were kept. Existing values are never overwritten.
+values that were kept. Existing values are never overwritten. The item's `off` link includes the
+product's `project`, so a pet-food or beauty product never resolves against the food cache.
 
 Receipt imports accept `offCode` per line. When a line also has a printed `barcode`, the barcode wins;
-otherwise the shared catalogue resolves the raw text. Line responses expose `offCode`.
+otherwise the shared catalogue resolves the raw text. Line responses expose `offCode` and `offProject`.
+
+### Contributing back
+
+Contributions are opt-in and disabled until `SV_OFF_WRITE_ENABLED=true`. A user connects an Open Food
+Facts account (or the instance account is configured), accepts the license, and reviews the exact
+fields before anything is queued. SVault stores an encrypted session cookie, never a password.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/off/accounts` | Linked accounts, instance-account availability, consent state and write flags. |
+| `POST` | `/api/off/accounts/:project/link` | `{ username, password, consent? }`. Exchanges the credentials for a session, stores it encrypted, discards the password. |
+| `POST` | `/api/off/accounts/:project/verify` | Re-check a stored session. |
+| `DELETE` | `/api/off/accounts/:project` | Remove the link and its secret. |
+| `GET` | `/api/off/consent` | Current consent version and timestamp. |
+| `POST` | `/api/off/consent` | `{ accept: true }`. Required before contributing. |
+| `GET` | `/api/off/contributions/candidates?houseId=` | Ranked eligible items with fields, preview values and blockers (`account`, `consent`, `writes_disabled`). Includes missing fields, new products, Open Prices lines and wrong-project reports. |
+| `GET` | `/api/off/contributions` | The caller's queue/history (`status`, `limit`). |
+| `POST` | `/api/off/contributions` | `{ houseId, itemId?, receiptLineId?, kind, fields }`. Re-runs eligibility and queues the write. `kind` is `new_product`, `missing_fields`, `photo`, `price`, `report` or `wrong_project`; prices use `receiptLineId`. |
+| `GET` | `/api/off/contributions/:id` | Status, remote message and retry/cancel flags. |
+| `POST` | `/api/off/contributions/:id/retry` | Requeue a failed/retrying contribution. |
+| `DELETE` | `/api/off/contributions/:id` | Cancel a queued/retrying contribution. |
+| `POST` | `/api/off/services/:service/link` | `{ username, password }`. Exchange OFF credentials for an Open Prices or Folksonomy bearer token, stored encrypted. |
+| `DELETE` | `/api/off/services/:service` | Remove a secondary service token. |
+| `GET` | `/api/off/report-reasons` | NutriPatrol reason values and labels. |
+| `GET` | `/api/off/prices/locations?q=` | Search Open Prices locations when sharing a receipt price. |
+| `GET` | `/api/off/robotoff/questions?project=off&count=1` | Optional Robotoff questions. Returns `{ questions, supported }`; unavailable services return an empty list. |
+| `POST` | `/api/off/robotoff/answers` | `{ insightId, annotation: 1 \| 0 \| -1 }`. |
+| `POST` | `/api/off/folksonomy` | Advanced: `{ project, code, key, value }` writes one Folksonomy property. |
+| `GET` | `/api/off/stats` | Instance admin: queue counts and write flags. |
+
+Price contributions upload the receipt as an Open Prices proof, then submit `{ product_code, price, currency, date, proof_id }`. NutriPatrol reports reuse the linked OFF session and send `{ barcode, type, url, user_id, source, flavor, reason, comment }`. Both are queued through the same retry/cancel history as product edits. Secondary service connection status is returned by `GET /api/off/accounts` as `services.prices` and `services.folksonomy`.
+
+The queue retries network, `429` and `5xx` failures with exponential backoff. Validation and auth failures stop and keep the draft. A successful write refreshes the local cache immediately. With `SV_OFF_DRY_RUN=true`, the full payload is built and queued but no request is sent.
 
 ## Receipts and shops
 

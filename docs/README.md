@@ -17,6 +17,9 @@ guides below go deeper.
 | [Self-hosted CI/CD](../deploy/woodpecker/README.md) | Woodpecker CI, private image registry, automatic deploys and the AI review bot |
 | [Development](development.md) | Local setup, scripts, tests, project layout and contribution workflow |
 | [Roadmap](roadmap.md) | Planned features, priorities and the reasoning behind them |
+| [Open Food Facts platform plan](openfoodfacts-platform.md) | Proposal for all four OFF databases, the read APIs, and opt-in contribution back |
+| [Open Food Facts API spike](openfoodfacts-spike.md) | Phase 0 findings: verified endpoints, auth gaps and service availability |
+| [Open Food Facts staging runbook](openfoodfacts-staging.md) | Manual, write-free validation checklist before enabling contributions |
 
 ## Other project files
 

@@ -29,6 +29,7 @@ import { PriceChart } from "@/components/PriceChart";
 import { EspressoLogCard } from "@/components/Espresso";
 import { useToast } from "@/components/toast";
 import { daysUntil, money, qty, relativeTime, shortDate, unitPriceLabel } from "@/format";
+import { offProjectLabel } from "@/off";
 import type {
   AttributeDef,
   ItemDetail,
@@ -180,7 +181,7 @@ export function ItemPage() {
     try {
       const result = await api<OffLinkResult>(`/api/items/${item.id}/off/link`, {
         method: "POST",
-        body: { code: product.code },
+        body: { code: product.code, project: product.project },
       });
       setItem(result.item as ItemDetail);
       setOffPickerOpen(false);
@@ -668,6 +669,7 @@ export function ItemPage() {
                       {[item.off.product?.brand, item.off.product?.quantity].filter(Boolean).join(" · ") || t("No brand or size")}
                     </div>
                     <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                      <Badge tone={item.off.project === "off" ? "outline" : "brand"}>{t(offProjectLabel(item.off.project))}</Badge>
                       <Badge tone="outline">{item.off.source}</Badge>
                       <span className="font-mono text-[10px] text-muted">{item.off.code}</span>
                     </div>
@@ -703,6 +705,8 @@ export function ItemPage() {
                       {t("Fill empty fields ")}</Button>
                     <Button size="sm" variant="ghost" icon="arrowUpRight" onClick={() => setOffPickerOpen(true)}>
                       {t("Change ")}</Button>
+                    <Button size="sm" variant="ghost" icon="sparkles" onClick={() => navigate("/contribute")}>
+                      {t("Contribute ")}</Button>
                     <Button
                       size="sm"
                       variant="ghost"

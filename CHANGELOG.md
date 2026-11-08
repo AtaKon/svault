@@ -8,6 +8,21 @@ All notable changes to SVault are documented here. The format follows
 
 ### Added
 
+- Open Food Facts lookups now cover all four databases: Open Food Facts, Open Beauty Facts, Open Pet
+  Food Facts and Open Products Facts. A universal barcode lookup reports which project owns the
+  product, the shared cache is keyed by project, and product cards show a Food/Beauty/Pet food/Products
+  badge. Name search remains full-text for food; the other projects search the local cache and say so.
+- Opt-in contributions back to Open Food Facts. Signed-in users can connect an OFF account (or use an
+  instance account), review which local fields are missing from the product, and queue a safe additive
+  edit or front photo. A dedicated **Contribute** page ranks eligible items, shows blockers, and keeps
+  a history with retry/cancel. Passwords are never stored; session cookies are encrypted at rest and
+  writes are disabled unless `SV_OFF_WRITE_ENABLED=true`.
+- Contributions now cover all four product databases, with separate account links for beauty, pet food
+  and general products. The same page shares receipt prices through **Open Prices** (with the receipt
+  as proof), files wrong-project reports through **NutriPatrol**, and offers optional **Robotoff**
+  verification questions. Several ready items can be shared in one batch.
+- Open Prices and Folksonomy bearer tokens are stored encrypted per user; the instance account can be
+  used as a fallback. A Folksonomy property endpoint is available for advanced automation.
 - **Espresso log.** Mark a bag of coffee beans as espresso and keep a tasting history with 1-5 star
   ratings, roast level, grind setting and time, dose, yield, extraction time, water temperature,
   pressure, TDS, grinder, machine, flavour tags and notes. SVault computes the brew ratio and extraction

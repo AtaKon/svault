@@ -9,6 +9,7 @@ import { BarcodeScanner } from "@/components/BarcodeScanner";
 import { ZoomableImage } from "@/components/ZoomableImage";
 import { useToast } from "@/components/toast";
 import { qty as formatQty } from "@/format";
+import { offProjectLabel } from "@/off";
 import type { Item, OffProduct } from "@shared/types";
 
 interface ScanResponse {
@@ -94,6 +95,7 @@ export function ScanPage() {
     if (!result) return;
     const query = new URLSearchParams({ barcode: result.code });
     if (result.product?.code) query.set("offCode", result.product.code);
+    if (result.product?.project) query.set("offProject", result.product.project);
     if (result.product?.name) query.set("name", result.product.name);
     if (result.product?.brand) query.set("brand", result.product.brand);
     if (result.product?.genericName) query.set("description", result.product.genericName);
@@ -276,7 +278,12 @@ export function ScanPage() {
             <div className="rounded-xl bg-raised p-3 text-sm">
               {result.product ? (
                 <div className="space-y-1">
-                  {result.product.name && <div className="font-medium">{result.product.name}</div>}
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {result.product.name && <span className="font-medium">{result.product.name}</span>}
+                    <Badge tone={result.product.project === "off" ? "outline" : "brand"}>
+                      {t(offProjectLabel(result.product.project))}
+                    </Badge>
+                  </div>
                   {result.product.brand && <div className="text-xs text-muted">{result.product.brand}</div>}
                   {result.product.quantity && <div className="text-xs text-muted">{result.product.quantity}</div>}
                   {(result.product.categories ?? []).length > 0 && (

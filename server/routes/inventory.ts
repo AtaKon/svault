@@ -601,6 +601,7 @@ inventoryRoutes.post(
         espresso: z.boolean().optional(),
         barcodes: z.array(z.string().trim().min(1).max(80)).max(10).optional(),
         offCode: z.string().trim().max(80).nullish(),
+        offProject: z.enum(["off", "obf", "opff", "opf"]).optional(),
         initialStock: z
           .object({
             quantity: z.number().positive(),
@@ -690,7 +691,7 @@ inventoryRoutes.post(
     }
 
     if (body.offCode) {
-      const product = await fetchOffProduct(body.offCode);
+      const product = await fetchOffProduct(body.offCode, { project: body.offProject ?? "all" });
       if (product) {
         const item = await get<any>("SELECT * FROM items WHERE id = ?", [id]);
         try {
@@ -783,6 +784,7 @@ itemRoutes.patch(
         archived: z.boolean().optional(),
         espresso: z.boolean().optional(),
         offCode: z.string().trim().max(80).nullish(),
+        offProject: z.enum(["off", "obf", "opff", "opf"]).optional(),
       }),
       req.body,
     );
@@ -825,7 +827,7 @@ itemRoutes.patch(
       if (body.offCode === null || body.offCode === "") {
         await unlinkItemFromOff(item.id);
       } else {
-        const product = await fetchOffProduct(body.offCode);
+        const product = await fetchOffProduct(body.offCode, { project: body.offProject ?? "all" });
         if (product) {
           const current = await get<any>("SELECT * FROM items WHERE id = ?", [item.id]);
           await linkItemToOff({ item: current, product, source: "manual" });
@@ -1141,7 +1143,7 @@ itemRoutes.get(
       res.json({ off: null, product: null });
       return;
     }
-    const product = await fetchOffProduct(item.off_code);
+    const product = await fetchOffProduct(item.off_code, { project: item.off_project ?? "off" });
     const row = await get<any>(`${ITEM_SELECT} WHERE i.id = ?`, [item.id]);
     res.json({
       off: row ? serializeItem(row, await barcodesForItem(item.id)).off : null,
@@ -1157,22 +1159,23 @@ itemRoutes.post(
     const body = parseBody(
       z.object({
         code: z.string().trim().min(1).max(80),
+        project: z.enum(["off", "obf", "opff", "opf", "all"]).optional(),
         fill: z.boolean().optional(),
       }),
       req.body,
     );
-    const product = await fetchOffProduct(body.code);
+    const product = await fetchOffProduct(body.code, { project: body.project ?? "all" });
     if (!product) throw new ApiError(404, "Could not load this product from OpenFoodFacts");
 
     if (body.fill === false) {
       const other = await get<any>(
-        "SELECT id, name FROM items WHERE house_id = ? AND off_code = ? AND id <> ?",
-        [item.house_id, product.code, item.id],
+        "SELECT id, name FROM items WHERE house_id = ? AND off_code = ? AND off_project = ? AND id <> ?",
+        [item.house_id, product.code, product.project, item.id],
       );
       if (other) throw new ApiError(409, `OpenFoodFacts product ${product.code} is already linked to ${other.name}`);
       await run(
-        "UPDATE items SET off_code = ?, off_source = 'manual', off_linked_at = ?, off_synced_at = NULL, off_filled = '[]', updated_at = ? WHERE id = ?",
-        [product.code, now(), now(), item.id],
+        "UPDATE items SET off_code = ?, off_project = ?, off_source = 'manual', off_linked_at = ?, off_synced_at = NULL, off_filled = '[]', updated_at = ? WHERE id = ?",
+        [product.code, product.project, now(), now(), item.id],
       );
       res.json({
         item: await itemDetail(item.id, req.user!.id),
@@ -1199,7 +1202,7 @@ itemRoutes.post(
     const { item } = await itemAccess(req, "member");
     if (!item.off_code) throw new ApiError(400, "This item is not linked to OpenFoodFacts");
     const force = String(req.query.force ?? "") === "1";
-    const product = await fetchOffProduct(item.off_code, { force });
+    const product = await fetchOffProduct(item.off_code, { force, project: item.off_project ?? "off" });
     if (!product) throw new ApiError(404, "Product not found on OpenFoodFacts");
     const result = await fillItemFromOff({ item, product, source: "manual" });
     const previous = parseJson<string[]>(item.off_filled, []);
@@ -1305,7 +1308,7 @@ inventoryRoutes.get(
       res.json({ code, match: "local", item: serializeItem(row, await barcodesForItem(row.id)) });
       return;
     }
-    const product = await fetchOffProduct(code);
+    const product = await fetchOffProduct(code, { project: "all" });
     res.json({ code, match: product ? "external" : "none", item: null, product });
   }),
 );

@@ -178,9 +178,43 @@ export interface NutritionFacts extends NutritionValues {
   source: "openfoodfacts" | "manual";
 }
 
+/** The four Open Food Facts product databases. */
+export type OffProjectId = "off" | "obf" | "opff" | "opf";
+
+/** The `product_type` values returned by the universal lookup. */
+export type OffProductType = "food" | "beauty" | "petfood" | "product";
+
+export interface OffProjectCapabilities {
+  read: boolean;
+  write: boolean;
+  images: boolean;
+  fullTextSearch: boolean;
+  structuredSearch: boolean;
+  taxonomy: boolean;
+  knowledgePanels: boolean;
+  robotoff: boolean;
+  folksonomy: boolean;
+  openPrices: boolean;
+  nutripatrol: boolean;
+  nutrition: boolean;
+  scores: boolean;
+}
+
+export interface OffProjectInfo {
+  id: OffProjectId;
+  label: string;
+  shortLabel: string;
+  productType: OffProductType;
+  site: string;
+  capabilities: OffProjectCapabilities;
+}
+
 /** A product as stored in the shared OpenFoodFacts cache. */
 export interface OffProduct {
   code: string;
+  /** Which database owns this product. */
+  project: OffProjectId;
+  productType: OffProductType;
   name: string;
   brand: string;
   genericName: string;
@@ -206,6 +240,7 @@ export interface OffProduct {
 /** An item's link to an OpenFoodFacts product. */
 export interface OffLink {
   code: string;
+  project: OffProjectId;
   source: "barcode" | "receipt" | "manual" | "catalog";
   linkedAt: string;
   syncedAt: string | null;
@@ -224,10 +259,123 @@ export interface OffLinkResult {
 export interface OffSearchResult {
   products: OffProduct[];
   online: boolean;
+  /** The project that was searched, or all projects for a universal search. */
+  project?: OffProjectId | "all";
   /** @deprecated Retained for consumers of the original API; clients should localize warningCode. */
   warning: string | null;
-  /** Stable code for clients that have localized warning copy (currently `NOTHING_FOUND`). */
-  warningCode: string | null;
+  /** Stable code for clients that have localized warning copy. */
+  warningCode: "NOTHING_FOUND" | "LIMITED_SEARCH" | null;
+}
+
+/** Something SVault can add to Open Food Facts on a user's behalf. */
+export type OffContributionKind = "new_product" | "missing_fields" | "photo" | "price" | "report" | "folksonomy";
+export type OffCandidateKind = OffContributionKind | "wrong_project";
+
+export interface OffPriceCandidate {
+  code: string;
+  receiptLineId: string;
+  receiptId: string;
+  amount: number;
+  currency: string;
+  date: string | null;
+  vendor: string | null;
+  productName: string;
+  receiptImage: string;
+  quantity: number;
+  unit: string | null;
+  unitPrice: number | null;
+  locationId?: number | null;
+  locationName?: string | null;
+}
+
+export interface OffPriceLocation {
+  id: number;
+  name: string;
+  city: string | null;
+  country: string | null;
+}
+
+export interface OffReportCandidate {
+  type: "product" | "image";
+  reason: string;
+  comment: string;
+  flavor: OffProjectId;
+}
+
+export interface OffRobotoffQuestion {
+  barcode: string;
+  insightId: string;
+  insightType: string;
+  question: string;
+  value: string | null;
+  valueTag: string | null;
+  sourceImageUrl: string | null;
+  refImageUrl: string | null;
+}
+
+export interface OffContributionCandidate {
+  id: string;
+  kind: OffCandidateKind;
+  project: OffProjectId;
+  code: string;
+  itemId: string;
+  itemName: string;
+  score: number;
+  fields: string[];
+  /** Human-readable preview values, keyed by field. */
+  values: Record<string, string | null>;
+  product: OffProduct | null;
+  image: string | null;
+  price?: OffPriceCandidate | null;
+  report?: OffReportCandidate | null;
+  /** False when an account, consent or feature flag is missing. */
+  ready: boolean;
+  blocked: string[];
+}
+
+export type OffContributionStatus = "queued" | "sending" | "sent" | "retry" | "failed" | "cancelled";
+
+export interface OffContribution {
+  id: string;
+  project: OffProjectId;
+  code: string;
+  kind: OffContributionKind;
+  status: OffContributionStatus;
+  itemId: string | null;
+  itemName: string | null;
+  fields: string[];
+  attempts: number;
+  nextAttemptAt: string | null;
+  lastAttemptAt: string | null;
+  remoteStatus: string | null;
+  remoteMessage: string | null;
+  remoteId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  canRetry: boolean;
+  canCancel: boolean;
+}
+
+export interface OffAccountPublic {
+  project: OffProjectId;
+  username: string;
+  kind: "user" | "instance";
+  linkedAt: string | null;
+  verifiedAt: string | null;
+  expiresAt: string | null;
+  status: "connected" | "expired" | "error";
+  error: string | null;
+}
+
+export interface OffAccountSummary {
+  accounts: OffAccountPublic[];
+  instanceAccount: { available: boolean; username: string | null };
+  services: { prices: boolean; folksonomy: boolean };
+  writesEnabled: boolean;
+  dryRun: boolean;
+  consentAt: string | null;
+  consentVersion: string | null;
+  consentRequired: boolean;
 }
 
 export interface CatalogMapping {
@@ -236,6 +384,7 @@ export interface CatalogMapping {
   vendor: string | null;
   rawText: string;
   offCode: string | null;
+  offProject: OffProjectId;
   name: string | null;
   brand: string | null;
   unit: string | null;
@@ -538,6 +687,7 @@ export interface ReceiptLine {
   locationId?: string | null;
   barcode?: string | null;
   offCode?: string | null;
+  offProject?: OffProjectId | null;
   sort?: number;
 }
 

@@ -68,7 +68,7 @@ async function stockMaps(houseId: string) {
 async function nutritionItems(houseId: string): Promise<NutritionSourceItem[]> {
   return (await all<any>(
     `SELECT i.id, i.name, i.unit, i.nutrition, cp.summary AS off_summary
-     FROM items i LEFT JOIN catalog_products cp ON cp.code = i.off_code
+     FROM items i LEFT JOIN catalog_products cp ON cp.code = i.off_code AND cp.project = i.off_project
      WHERE i.house_id = ? AND i.archived = 0`,
     [houseId],
   )).map((row) => ({

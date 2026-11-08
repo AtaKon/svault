@@ -400,7 +400,8 @@ CREATE TABLE IF NOT EXISTS product_aliases (
 CREATE INDEX IF NOT EXISTS product_aliases_house ON product_aliases(house_id, vendor_key);
 
 CREATE TABLE IF NOT EXISTS catalog_products (
-  code TEXT PRIMARY KEY,
+  project TEXT NOT NULL DEFAULT 'off',
+  code TEXT NOT NULL,
   name TEXT,
   brand TEXT,
   quantity TEXT,
@@ -410,10 +411,11 @@ CREATE TABLE IF NOT EXISTS catalog_products (
   payload TEXT NOT NULL DEFAULT '{}',
   source TEXT NOT NULL DEFAULT 'openfoodfacts',
   fetched_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (project, code)
 );
-CREATE INDEX IF NOT EXISTS catalog_products_name ON catalog_products(name);
-CREATE INDEX IF NOT EXISTS catalog_products_brand ON catalog_products(brand);
+CREATE INDEX IF NOT EXISTS catalog_products_name ON catalog_products(project, name);
+CREATE INDEX IF NOT EXISTS catalog_products_brand ON catalog_products(project, brand);
 
 CREATE TABLE IF NOT EXISTS catalog_mappings (
   id TEXT PRIMARY KEY,
@@ -436,6 +438,76 @@ CREATE TABLE IF NOT EXISTS catalog_mappings (
 );
 CREATE INDEX IF NOT EXISTS catalog_mappings_lookup ON catalog_mappings(country, vendor_key, raw_key);
 CREATE INDEX IF NOT EXISTS catalog_mappings_off ON catalog_mappings(off_code);
+
+/* Open Food Facts contribution plumbing. Accounts store only an encrypted
+   session/token; contributions keep the exact write payload for retry/audit. */
+CREATE TABLE IF NOT EXISTS user_off_accounts (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  project TEXT NOT NULL DEFAULT 'off',
+  username TEXT NOT NULL,
+  secret_kind TEXT NOT NULL DEFAULT 'cookie',
+  secret_ciphertext TEXT NOT NULL,
+  secret_iv TEXT NOT NULL,
+  secret_tag TEXT NOT NULL,
+  secret_expires_at TEXT,
+  app_uuid TEXT NOT NULL,
+  linked_at TEXT NOT NULL,
+  verified_at TEXT,
+  last_error TEXT,
+  PRIMARY KEY (user_id, project)
+);
+
+CREATE TABLE IF NOT EXISTS off_consents (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  accepted_at TEXT NOT NULL,
+  version TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS off_service_tokens (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  service TEXT NOT NULL,
+  username TEXT NOT NULL,
+  token_ciphertext TEXT NOT NULL,
+  token_iv TEXT NOT NULL,
+  token_tag TEXT NOT NULL,
+  linked_at TEXT NOT NULL,
+  last_error TEXT,
+  PRIMARY KEY (user_id, service)
+);
+
+CREATE TABLE IF NOT EXISTS off_contributions (
+  id TEXT PRIMARY KEY,
+  idempotency_key TEXT NOT NULL UNIQUE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  house_id TEXT REFERENCES houses(id) ON DELETE SET NULL,
+  item_id TEXT REFERENCES items(id) ON DELETE SET NULL,
+  project TEXT NOT NULL,
+  code TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  payload TEXT NOT NULL DEFAULT '{}',
+  field_keys TEXT NOT NULL DEFAULT '[]',
+  image_field TEXT,
+  status TEXT NOT NULL DEFAULT 'queued',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at TEXT,
+  last_attempt_at TEXT,
+  remote_status TEXT,
+  remote_message TEXT,
+  remote_id TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS off_contributions_user ON off_contributions(user_id, created_at);
+CREATE INDEX IF NOT EXISTS off_contributions_queue ON off_contributions(status, next_attempt_at);
+
+CREATE TABLE IF NOT EXISTS off_contribution_events (
+  id TEXT PRIMARY KEY,
+  contribution_id TEXT NOT NULL REFERENCES off_contributions(id) ON DELETE CASCADE,
+  status TEXT NOT NULL,
+  detail TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS off_contribution_events_contribution ON off_contribution_events(contribution_id, created_at);
 
 CREATE TABLE IF NOT EXISTS receipt_templates (
   id TEXT PRIMARY KEY,
@@ -674,6 +746,23 @@ export const POSTGRES_MIGRATIONS: string[] = [
   "CREATE INDEX IF NOT EXISTS catalog_mappings_house ON catalog_mappings(house_id)",
   "ALTER TABLE receipts ADD COLUMN IF NOT EXISTS paid_by TEXT",
   "ALTER TABLE receipts ADD COLUMN IF NOT EXISTS split_with TEXT NOT NULL DEFAULT '[]'",
+  // Open Food Facts projects: the shared product cache is keyed by project.
+  "ALTER TABLE catalog_products ADD COLUMN IF NOT EXISTS project TEXT NOT NULL DEFAULT 'off'",
+  `DO $$ DECLARE pk text; BEGIN
+     SELECT c.conname INTO pk
+     FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid
+     WHERE t.relname = 'catalog_products' AND c.contype = 'p' AND array_length(c.conkey, 1) = 1;
+     IF pk IS NOT NULL THEN EXECUTE format('ALTER TABLE catalog_products DROP CONSTRAINT %I', pk); END IF;
+   END $$;`,
+  `DO $$ BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid
+       WHERE t.relname = 'catalog_products' AND c.contype = 'p'
+     ) THEN ALTER TABLE catalog_products ADD PRIMARY KEY (project, code); END IF;
+   END $$;`,
+  "ALTER TABLE items ADD COLUMN IF NOT EXISTS off_project TEXT NOT NULL DEFAULT 'off'",
+  "ALTER TABLE receipt_lines ADD COLUMN IF NOT EXISTS off_project TEXT NOT NULL DEFAULT 'off'",
+  "ALTER TABLE catalog_mappings ADD COLUMN IF NOT EXISTS off_project TEXT NOT NULL DEFAULT 'off'",
   "ALTER TABLE items ADD COLUMN IF NOT EXISTS espresso INTEGER NOT NULL DEFAULT 0",
   // POSTGRES_SCHEMA creates bills on fresh installs; this atomically upgrades
   // an existing bills table created before ledger_confirmed was introduced.
@@ -732,6 +821,11 @@ export const POSTGRES_TABLE_ORDER = [
   "product_aliases",
   "catalog_products",
   "catalog_mappings",
+  "user_off_accounts",
+  "off_consents",
+  "off_service_tokens",
+  "off_contributions",
+  "off_contribution_events",
   "receipt_templates",
   "notifications",
   "shopping_list_items",

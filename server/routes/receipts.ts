@@ -603,7 +603,7 @@ receiptRoutes.post(
         rawDescription: line.rawDescription ?? line.description,
       });
       const offCode = line.barcode || mapping?.offCode || null;
-      const product = offCode ? await getCachedOffProduct(offCode) : null;
+      const product = offCode ? await getCachedOffProduct(offCode, mapping?.offProject ?? "all") : null;
       return {
         ...line,
         suggestedItemId: top?.itemId ?? null,
@@ -822,7 +822,7 @@ receiptRoutes.post(
         rawDescription,
       });
       const wanted = line.offCode || line.barcode || mapping?.offCode || null;
-      const product = wanted ? await fetchOffProduct(wanted) : null;
+      const product = wanted ? await fetchOffProduct(wanted, { project: mapping?.offProject ?? "all" }) : null;
       return { line, rawDescription, mapping, offCode: product?.code ?? wanted, product };
     });
 

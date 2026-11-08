@@ -75,7 +75,7 @@ async function parseBarcodes(houseId: string, codes: string[]): Promise<IntakePa
       });
       continue;
     }
-    const product = await fetchOffProduct(code);
+    const product = await fetchOffProduct(code, { project: "all" });
     rows.push({
       description: product?.name || `Barcode ${code}`,
       rawDescription: code,
@@ -214,7 +214,7 @@ intakeRoutes.post(
       const text = line.rawDescription ?? line.description;
       const candidates = await candidatesFor(houseId, vendor?.id ?? null, text);
       const top = candidates[0];
-      const product = line.offCode ? await getCachedOffProduct(line.offCode) : null;
+      const product = line.offCode ? await getCachedOffProduct(line.offCode, "all") : null;
       return {
         description: line.description,
         rawDescription: line.rawDescription ?? null,
