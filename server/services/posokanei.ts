@@ -80,15 +80,9 @@ async function readBoundedBody(response: Response, timeoutSignal: AbortSignal): 
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
-  let rejectTimedOut!: () => void;
-  const timedOut = new Promise<never>((_, reject) => {
-    rejectTimedOut = () => reject(new PosoKaneiUnavailableError("PosoKanei response timed out"));
-    if (timeoutSignal.aborted) rejectTimedOut();
-    else timeoutSignal.addEventListener("abort", rejectTimedOut, { once: true });
-  });
   try {
     while (true) {
-      const { done, value } = await Promise.race([reader.read(), timedOut]);
+      const { done, value } = await readWithTimeout(reader, timeoutSignal);
       if (done) break;
       size += value.byteLength;
       if (size > MAX_BODY_BYTES) {
@@ -101,7 +95,6 @@ async function readBoundedBody(response: Response, timeoutSignal: AbortSignal): 
     void reader.cancel().catch(() => {});
     throw error;
   } finally {
-    timeoutSignal.removeEventListener("abort", rejectTimedOut);
     try {
       reader.releaseLock();
     } catch {
@@ -123,6 +116,41 @@ async function cancelBody(response: Response) {
   } catch {
     /* A body may already be closed by the upstream client. */
   }
+}
+
+function readWithTimeout(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  timeoutSignal: AbortSignal,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  return new Promise((resolve, reject) => {
+    if (timeoutSignal.aborted) {
+      reject(new PosoKaneiUnavailableError("PosoKanei response timed out"));
+      return;
+    }
+    let settled = false;
+    const cleanup = () => timeoutSignal.removeEventListener("abort", onAbort);
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new PosoKaneiUnavailableError("PosoKanei response timed out"));
+    };
+    timeoutSignal.addEventListener("abort", onAbort, { once: true });
+    reader.read().then(
+      (result) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(result);
+      },
+      (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+      },
+    );
+  });
 }
 
 function retryAfter(response: Response): number {
