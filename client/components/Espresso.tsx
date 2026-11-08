@@ -177,7 +177,7 @@ export function EspressoShotSheet({
       setTags("");
       setNotes("");
     }
-  }, [open, shot?.id]);
+  }, [open, shot?.id, initialItemId]);
 
   // If the bean list arrives after the sheet opened, seed the selector instead
   // of leaving an empty item id and a disabled save button.
@@ -203,7 +203,7 @@ export function EspressoShotSheet({
       toast.error(t("Choose a rating first"));
       return;
     }
-    if (!shot && !itemId) {
+    if (!shot && (!itemId || !beans.some((bean) => bean.id === itemId))) {
       toast.error(t("Choose a coffee first"));
       return;
     }
