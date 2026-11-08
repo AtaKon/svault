@@ -15,6 +15,7 @@
 //                       "low" asks for short thinking, "default" sends nothing.
 
 import { readFile } from "node:fs/promises";
+import { clipComment, mergeChunkReviews, splitDiff } from "./ai-review-helpers.mjs";
 
 const MARKER = "<!-- svault-ai-review -->";
 // Single-call limit stays conservative. Larger PRs are split into file-sized
@@ -123,90 +124,12 @@ function trimDiff(diff, limit) {
   return `${diff.slice(0, cut > 0 ? cut : limit)}\n\n[Diff truncated at ${limit} characters]`;
 }
 
-/** Split a unified diff at file boundaries, then by lines for huge files. */
-function splitDiff(diff, limit) {
-  const chunks = [];
-  let current = "";
-  const flush = () => {
-    if (current.trim()) chunks.push(current);
-    current = "";
-  };
-  for (const section of diff.split(/(?=^diff --git )/m)) {
-    if (!section.trim()) continue;
-    if (section.length > limit) {
-      flush();
-      let rest = section;
-      while (rest.length > limit) {
-        const cut = rest.lastIndexOf("\n", limit);
-        const end = cut > 1000 ? cut : limit;
-        chunks.push(rest.slice(0, end));
-        rest = rest.slice(end);
-      }
-      if (rest.trim()) chunks.push(rest);
-      continue;
-    }
-    if (current && current.length + section.length > limit) flush();
-    current += section;
-  }
-  flush();
-  return chunks;
-}
-
-function section(text, heading) {
-  const match = new RegExp(`### ${heading}\\s*\\n([\\s\\S]*?)(?=\\n### |$)`).exec(text);
-  return match ? match[1].trim() : "";
-}
-
-function bullets(value) {
-  return value
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => /^[-*]\s+/.test(line));
-}
-
-function mergeChunkReviews(parts) {
-  const blocking = [];
-  const nonBlocking = [];
-  const tests = [];
-  for (const part of parts) {
-    const blockingText = section(part.text, "Blocking");
-    const nonBlockingText = section(part.text, "Non-blocking");
-    const testsText = section(part.text, "Tests");
-    const partBlocking = bullets(blockingText).filter(
-      (line) => !/^[-*]\s*(no blocking issues found|none)\.?$/i.test(line),
-    );
-    const partNonBlocking = bullets(nonBlockingText).filter(
-      (line) => !/^[-*]\s*(none|no non-blocking issues)\.?$/i.test(line),
-    );
-    const partTests = bullets(testsText).filter((line) => !/^[-*]\s*none\.?$/i.test(line));
-    if (partBlocking.length) blocking.push(...partBlocking.map((line) => `[part ${part.index}] ${line}`));
-    if (partNonBlocking.length) nonBlocking.push(...partNonBlocking.map((line) => `[part ${part.index}] ${line}`));
-    if (partTests.length) tests.push(...partTests.map((line) => `[part ${part.index}] ${line}`));
-    if (!blockingText && !nonBlockingText && !testsText) {
-      nonBlocking.push(`[part ${part.index}] Reviewer returned an unexpected format; raw note: ${part.text.slice(0, 500)}`);
-    }
-  }
-  const dedupe = (lines) => [...new Set(lines)];
-  const blockingLines = dedupe(blocking);
-  const nonBlockingLines = dedupe(nonBlocking);
-  const testLines = dedupe(tests);
-  return `### Verdict
-${blockingLines.length ? "Needs changes" : "Ready for review"}
-
-### Blocking
-${blockingLines.length ? blockingLines.join("\n") : "No blocking issues found."}
-
-### Non-blocking
-${nonBlockingLines.length ? nonBlockingLines.join("\n") : "None."}
-
-### Tests
-${testLines.length ? testLines.join("\n") : "None."}`;
-}
-
 /** Builds the prompt; `diffLimit` lets a retry send a shorter diff. */
 let buildPrompt;
 let fullDiff = "";
-let buildChunkPrompt = null;
+let buildChunkPrompt = () => {
+  throw new Error("Chunked review is only available for pull requests");
+};
 if (isPullRequest) {
   const diffResponse = await github(`/repos/${repository}/pulls/${number}`, {
     headers: { Accept: "application/vnd.github.v3.diff" },
@@ -396,11 +319,19 @@ if (isPullRequest && fullDiff.length > MAX_DIFF_CHARS) {
   const parts = [];
   if (chunks.length > MAX_CHUNKS) {
     parts.push({
-      index: 0,
-      text: `### Blocking\n- The diff needs ${chunks.length} review parts; only the first ${MAX_CHUNKS} were reviewed. Split the PR.\n`,
+      index: "overflow",
+      text: `### Blocking\n- The diff needs ${chunks.length} review parts; only the first ${MAX_CHUNKS} were reviewed. The unreviewed part is not approved. Split the PR.\n`,
     });
   }
+  let consecutiveFailures = 0;
   for (let index = 0; index < Math.min(chunks.length, MAX_CHUNKS); index++) {
+    if (consecutiveFailures >= 3) {
+      parts.push({
+        index: "stopped",
+        text: `### Blocking\n- Review stopped after 3 consecutive part failures; parts ${index + 1}-${Math.min(chunks.length, MAX_CHUNKS)} were not reviewed.\n`,
+      });
+      break;
+    }
     const prompt = buildChunkPrompt(chunks[index], index + 1, chunks.length);
     let attempt;
     try {
@@ -410,6 +341,7 @@ if (isPullRequest && fullDiff.length > MAX_DIFF_CHARS) {
         attempt = await reviewCall(prompt, maxTokens * 2);
       }
     } catch (error) {
+      consecutiveFailures++;
       parts.push({
         index: index + 1,
         text: `### Blocking\n- Review part ${index + 1} failed: ${error instanceof Error ? error.message : String(error)}\n`,
@@ -417,8 +349,10 @@ if (isPullRequest && fullDiff.length > MAX_DIFF_CHARS) {
       continue;
     }
     if (attempt.text) {
+      consecutiveFailures = 0;
       parts.push({ index: index + 1, text: attempt.text });
     } else {
+      consecutiveFailures++;
       parts.push({
         index: index + 1,
         text: `### Blocking\n- Reviewer returned no answer for part ${index + 1}.\n`,
@@ -443,10 +377,7 @@ if (isPullRequest && fullDiff.length > MAX_DIFF_CHARS) {
   }
 }
 
-const clippedReview =
-  review.length > MAX_COMMENT_CHARS
-    ? `${review.slice(0, MAX_COMMENT_CHARS - 80)}\n\n[Review comment truncated at ${MAX_COMMENT_CHARS} characters]`
-    : review;
+const clippedReview = clipComment(review, MAX_COMMENT_CHARS);
 const commentBody = `${MARKER}
 ${clippedReview}
 
