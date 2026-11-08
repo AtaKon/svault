@@ -70,7 +70,7 @@ function parseOffers(payload: unknown, fetchedAt: string): ExternalShoppingOffer
   return offers.sort((a, b) => (a.unitPrice ?? a.price) - (b.unitPrice ?? b.price)).slice(0, 20);
 }
 
-async function readBoundedBody(response: Response): Promise<string> {
+async function readBoundedBody(response: Response, timeoutSignal: AbortSignal): Promise<string> {
   const announced = Number(response.headers.get("content-length") ?? 0);
   if (announced > MAX_BODY_BYTES) {
     await cancelBody(response);
@@ -80,18 +80,28 @@ async function readBoundedBody(response: Response): Promise<string> {
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
+  let rejectTimedOut!: () => void;
+  const timedOut = new Promise<never>((_, reject) => {
+    rejectTimedOut = () => reject(new PosoKaneiUnavailableError("PosoKanei response timed out"));
+    if (timeoutSignal.aborted) rejectTimedOut();
+    else timeoutSignal.addEventListener("abort", rejectTimedOut, { once: true });
+  });
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await Promise.race([reader.read(), timedOut]);
       if (done) break;
       size += value.byteLength;
       if (size > MAX_BODY_BYTES) {
-        await reader.cancel();
+        void reader.cancel().catch(() => {});
         throw new PosoKaneiUnavailableError("PosoKanei response was too large");
       }
       chunks.push(value);
     }
+  } catch (error) {
+    void reader.cancel().catch(() => {});
+    throw error;
   } finally {
+    timeoutSignal.removeEventListener("abort", rejectTimedOut);
     try {
       reader.releaseLock();
     } catch {
@@ -151,6 +161,7 @@ export function createPosoKaneiClient(
   fetcher: typeof fetch = fetch,
   consumeRateLimit: ConsumeRateLimit = consumeDefaultRateLimit,
   consumeGlobalRateLimit: ConsumeGlobalRateLimit = consumeDefaultGlobalRateLimit,
+  timeoutMs = TIMEOUT_MS,
 ) {
   const cache = new Map<string, CachedLookup>();
   const inFlight = new Map<string, Promise<ExternalShoppingOffer[]>>();
@@ -198,6 +209,7 @@ export function createPosoKaneiClient(
       }
 
       try {
+        const timeoutSignal = AbortSignal.timeout(timeoutMs);
         const url = new URL(`/products/barcode/${encodeURIComponent(code)}`, API_BASE);
         url.searchParams.set("countries", "GR");
         const response = await fetcher(url, {
@@ -207,7 +219,7 @@ export function createPosoKaneiClient(
             "user-agent": "SVault/1.2 (self-hosted household inventory; https://github.com/AtaKon/svault)",
           },
           redirect: "error",
-          signal: AbortSignal.timeout(TIMEOUT_MS),
+          signal: timeoutSignal,
         });
         if (response.status === 404) {
           const offers: ExternalShoppingOffer[] = [];
@@ -233,7 +245,7 @@ export function createPosoKaneiClient(
         }
         let payload: unknown;
         try {
-          payload = JSON.parse(await readBoundedBody(response));
+          payload = JSON.parse(await readBoundedBody(response, timeoutSignal));
         } catch (error) {
           if (error instanceof PosoKaneiUnavailableError) throw error;
           throw new PosoKaneiUnavailableError("PosoKanei returned an invalid response body");

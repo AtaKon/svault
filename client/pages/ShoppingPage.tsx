@@ -322,6 +322,19 @@ export function ShoppingPage() {
         houseId={house.id}
         items={catalog}
         onSaved={async () => {
+          const editedLineId = editTarget?.id;
+          if (editedLineId) {
+            setExternalOffers((current) => {
+              const next = { ...current };
+              delete next[editedLineId];
+              return next;
+            });
+            setLookupBarcodes((current) => {
+              const next = { ...current };
+              delete next[editedLineId];
+              return next;
+            });
+          }
           setEditTarget(null);
           await load();
         }}

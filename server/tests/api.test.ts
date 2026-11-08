@@ -5477,6 +5477,10 @@ describe("PosoKanei price lookup client", () => {
       (error: unknown) => error instanceof PosoKaneiUnavailableError && error.message.includes("invalid response body"),
     );
 
+    const bomClient = createPosoKaneiClient(async () =>
+      new Response(`\uFEFF${JSON.stringify(product)}`, { headers: { "content-type": "application/json" } }), () => {});
+    assert.equal((await bomClient.lookupPosoKaneiBarcode("12345676", userId)).length, 2, "a UTF-8 BOM is accepted");
+
     const announcedOversizeClient = createPosoKaneiClient(async () =>
       new Response("{}", {
         headers: { "content-type": "application/json", "content-length": "1000001" },
@@ -5502,6 +5506,29 @@ describe("PosoKanei price lookup client", () => {
       PosoKaneiUnavailableError,
     );
     assert.equal(cancelled, true);
+  });
+
+  it("bounds a slow response body with the request timeout", async () => {
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      pull() {
+        return new Promise<void>(() => {});
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const client = createPosoKaneiClient(
+      async () => new Response(stream, { headers: { "content-type": "application/json" } }),
+      () => {},
+      () => {},
+      20,
+    );
+    await assert.rejects(
+      client.lookupPosoKaneiBarcode("12345677", userId),
+      (error: unknown) => error instanceof PosoKaneiUnavailableError && error.message.includes("timed out"),
+    );
+    assert.equal(cancelled, true, "the stalled response body is cancelled when its timeout expires");
   });
 
   it("discards invalid upstream update timestamps", async () => {
