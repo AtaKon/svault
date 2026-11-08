@@ -19,7 +19,7 @@ import {
 } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { useToast } from "@/components/toast";
-import { qty, todayInput } from "@/format";
+import { qty, shortDate, todayInput } from "@/format";
 import type { ExternalShoppingOffer, Item, Location, ShoppingItem, ShoppingPriceHint } from "@shared/types";
 
 interface Groups {
@@ -41,6 +41,7 @@ export function ShoppingPage() {
   const [checkTarget, setCheckTarget] = useState<ShoppingItem | null>(null);
   const [priceHints, setPriceHints] = useState<Record<string, ShoppingPriceHint>>({});
   const [externalOffers, setExternalOffers] = useState<Record<string, ExternalShoppingOffer[]>>({});
+  const [lookupBarcodes, setLookupBarcodes] = useState<Record<string, string>>({});
   const [lookingUp, setLookingUp] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -104,6 +105,8 @@ export function ShoppingPage() {
     setBusy(true);
     try {
       await api(`/api/houses/${house.id}/shopping?checked=1`, { method: "DELETE" });
+      setExternalOffers({});
+      setLookupBarcodes({});
       await load();
     } catch (err) {
       toast.error(err instanceof Error ? t(err.message) : t("Could not clear checked lines"));
@@ -118,21 +121,42 @@ export function ShoppingPage() {
       return;
     }
     await api(`/api/houses/${house.id}/shopping/${item.id}`, { method: "PATCH", body: { checked: false } });
+    setExternalOffers((current) => {
+      const next = { ...current };
+      delete next[item.id];
+      return next;
+    });
+    setLookupBarcodes((current) => {
+      const next = { ...current };
+      delete next[item.id];
+      return next;
+    });
     await load();
   };
 
   const remove = async (item: ShoppingItem) => {
     await api(`/api/houses/${house.id}/shopping/${item.id}`, { method: "DELETE" });
+    setExternalOffers((current) => {
+      const next = { ...current };
+      delete next[item.id];
+      return next;
+    });
+    setLookupBarcodes((current) => {
+      const next = { ...current };
+      delete next[item.id];
+      return next;
+    });
     await load();
   };
 
   const lookupOffers = async (line: ShoppingItem) => {
     setLookingUp(line.id);
     try {
-      const result = await api<{ offers: ExternalShoppingOffer[] }>(
+      const result = await api<{ barcode: string; offers: ExternalShoppingOffer[] }>(
         `/api/houses/${house.id}/insights/shopping-offers/${line.id}`,
       );
       setExternalOffers((current) => ({ ...current, [line.id]: result.offers }));
+      setLookupBarcodes((current) => ({ ...current, [line.id]: result.barcode }));
       if (!result.offers.length) toast.push(t("No matching retailer offers were found"), "info");
     } catch (err) {
       toast.error(err instanceof Error ? t(err.message) : t("Could not check prices"));
@@ -242,7 +266,10 @@ export function ShoppingPage() {
                         <div className="mt-1 space-y-1">
                           <div className="text-[10px] text-muted">
                             {externalOffers[item.id][0].productName} · {t("via PosoKanei")} ·{" "}
-                            {externalOffers[item.id][0].updatedAt ?? externalOffers[item.id][0].fetchedAt}
+                            {t("Updated {date}", {
+                              date: shortDate(externalOffers[item.id][0].updatedAt ?? externalOffers[item.id][0].fetchedAt),
+                            })}
+                            {lookupBarcodes[item.id] && ` · ${t("Barcode queried: {barcode}", { barcode: lookupBarcodes[item.id] })}`}
                           </div>
                           <div className="flex flex-wrap gap-1.5">
                             {externalOffers[item.id].slice(0, 3).map((offer, index) => (
@@ -303,6 +330,19 @@ export function ShoppingPage() {
         currency={house.currency}
         onClose={() => setCheckTarget(null)}
         onDone={async () => {
+          const checkedId = checkTarget?.id;
+          if (checkedId) {
+            setExternalOffers((current) => {
+              const next = { ...current };
+              delete next[checkedId];
+              return next;
+            });
+            setLookupBarcodes((current) => {
+              const next = { ...current };
+              delete next[checkedId];
+              return next;
+            });
+          }
           setCheckTarget(null);
           await load();
         }}

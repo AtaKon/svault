@@ -78,6 +78,7 @@ insightRoutes.get(
   handler(async (req, res) => {
     const { houseId } = await requireHouse(req, "member");
     const house = await get<any>("SELECT settings FROM houses WHERE id = ?", [houseId]);
+    if (!house) throw new ApiError(404, "House not found");
     const settings = parseJson<Record<string, any>>(house?.settings, {});
     if (settings.priceLookup?.enabled !== true) throw new ApiError(404, "External price lookup is disabled");
 
@@ -100,9 +101,10 @@ insightRoutes.get(
 
     try {
       const offers = await lookupPosoKaneiBarcode(validCodes[0], req.user!.id);
-      res.json({ offers });
+      res.json({ barcode: validCodes[0], offers });
     } catch (error) {
       if (error instanceof PosoKaneiUnavailableError) {
+        if (error.retryAfterSeconds) res.setHeader("Retry-After", String(error.retryAfterSeconds));
         throw new ApiError(502, error.message, error.retryAfterSeconds ? { retryAfterSeconds: error.retryAfterSeconds } : undefined);
       }
       throw error;

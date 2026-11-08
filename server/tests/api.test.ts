@@ -112,6 +112,7 @@ const { parseWithTemplateRules } = await import("../services/receipt-template-en
 const { LIDL_TEMPLATE_RULES, SKLAVENITIS_TEMPLATE_RULES } = await import("../../shared/receipt-template-example.js");
 const { convert, pricePerUnit } = await import("../units.js");
 const { parseOffNutrition } = await import("../services/nutrition.js");
+const { createPosoKaneiClient, PosoKaneiUnavailableError } = await import("../services/posokanei.js");
 const { parseCsv, parseCsvNumber } = await import("../services/csv.js");
 const { totpCode, verifyTotp, generateTotpSecret, generateBackupCodes } = await import("../services/totp.js");
 const { backupForTest, validateBackup } = await import("../services/backup.js");
@@ -4634,6 +4635,38 @@ describe("insights, household split and admin console", () => {
     assert.equal(hint.cheapest.price, 1);
   });
 
+  it("gates external offers and validates the linked shopping item", async () => {
+    const line = await request(`/api/houses/${insightHouse}/shopping`, {
+      method: "POST",
+      body: { name: "Offer lookup test", itemId: milkId, quantity: 1, unit: "l" },
+    });
+    assert.equal(line.status, 200);
+    const path = `/api/houses/${insightHouse}/insights/shopping-offers/${line.data.item.id}`;
+    assert.equal((await request(path)).status, 404, "external lookups are off by default");
+
+    const enabled = await request(`/api/houses/${insightHouse}`, {
+      method: "PATCH",
+      body: { settings: { priceLookup: { enabled: true } } },
+    });
+    assert.equal(enabled.status, 200);
+    assert.equal((await request(path)).status, 400, "the inventory item needs a barcode");
+    assert.equal(
+      (await request(`/api/houses/${insightHouse}`, {
+        method: "PATCH",
+        body: { settings: { priceLookup: { enabled: true, unexpected: true } } },
+      })).status,
+      400,
+      "price lookup settings reject unknown fields",
+    );
+
+    const checked = await request(`/api/houses/${insightHouse}/shopping/${line.data.item.id}/check`, {
+      method: "POST",
+      body: { addStock: false },
+    });
+    assert.equal(checked.status, 200);
+    assert.equal((await request(path)).status, 404, "checked lines cannot trigger lookups");
+  });
+
   it("values wasted stock", async () => {
     const bread = await request(`/api/houses/${insightHouse}/items`, {
       method: "POST",
@@ -4969,5 +5002,135 @@ describe("insights, household split and admin console", () => {
     const revoked = await request(`/api/tokens/${created.data.id}`, { method: "DELETE" });
     assert.equal(revoked.status, 200);
     assert.equal((await request("/api/houses", { auth: "", headers: bearer })).status, 401);
+  });
+});
+
+describe("PosoKanei price lookup client", () => {
+  const userId = "posokanei-test-user";
+  const product = {
+    id: "product-1",
+    name: "Test product",
+    unit: "kg",
+    retailer_prices: [
+      { country: "GR", retailer_display_name: "Store B", price: 2, price_normalized: 2, is_discount: true, discount_percentage: 20 },
+      { country: "GR", retailer_display_name: "Store A", price: 1, price_normalized: 1, is_discount: false, discount_percentage: null },
+      { country: "DE", retailer_display_name: "Foreign store", price: 0.5, price_normalized: 0.5, is_discount: true, discount_percentage: 50 },
+      { country: "GR", retailer_display_name: "", price: 0.5, price_normalized: 0.5, is_discount: false, discount_percentage: null },
+    ],
+  };
+
+  it("uses exact barcode lookup, filters and sorts offers, and caches the result", async () => {
+    let calls = 0;
+    let rateLimitCalls = 0;
+    let requestOptions: RequestInit | undefined;
+    const client = createPosoKaneiClient(async (_input, init) => {
+      calls++;
+      requestOptions = init;
+      return new Response(JSON.stringify(product), { headers: { "content-type": "application/json" } });
+    }, () => {
+      rateLimitCalls++;
+    });
+
+    const offers = await client.lookupPosoKaneiBarcode("12345678", userId);
+    const cached = await client.lookupPosoKaneiBarcode("12345678", userId);
+    assert.equal(calls, 1);
+    assert.equal(rateLimitCalls, 1);
+    assert.deepEqual(requestOptions?.redirect, "error");
+    assert.equal(offers.length, 2);
+    assert.equal(offers[0].retailer, "Store A");
+    assert.equal(offers[1].discount, true);
+    assert.equal(offers[1].discountPercent, 20);
+    assert.deepEqual(cached, offers);
+  });
+
+  it("negative-caches unknown barcodes", async () => {
+    let calls = 0;
+    const client = createPosoKaneiClient(async () => {
+      calls++;
+      return new Response(null, { status: 404 });
+    }, () => {});
+    assert.deepEqual(await client.lookupPosoKaneiBarcode("12345679", userId), []);
+    assert.deepEqual(await client.lookupPosoKaneiBarcode("12345679", userId), []);
+    assert.equal(calls, 1);
+  });
+
+  it("keeps the lookup cache bounded, including unknown barcodes", async () => {
+    let calls = 0;
+    const client = createPosoKaneiClient(async () => {
+      calls++;
+      return new Response(null, { status: 404 });
+    }, () => {});
+    const firstCode = "22000000";
+    for (let index = 0; index < 501; index++) {
+      await client.lookupPosoKaneiBarcode(String(22_000_000 + index), userId);
+    }
+    await client.lookupPosoKaneiBarcode(firstCode, userId);
+    assert.equal(calls, 502, "the oldest non-expired cache entry is evicted at the size cap");
+  });
+
+  it("pauses after a 429 and safely handles malformed Retry-After values", async () => {
+    let calls = 0;
+    const client = createPosoKaneiClient(async () => {
+      calls++;
+      return new Response("{}", { status: 429, headers: { "retry-after": "not-a-date" } });
+    }, () => {});
+    await assert.rejects(
+      client.lookupPosoKaneiBarcode("12345680", userId),
+      (error: unknown) => error instanceof PosoKaneiUnavailableError && error.retryAfterSeconds === 900,
+    );
+    await assert.rejects(
+      client.lookupPosoKaneiBarcode("12345681", userId),
+      (error: unknown) => error instanceof PosoKaneiUnavailableError &&
+        Number.isFinite(error.retryAfterSeconds) && Number(error.retryAfterSeconds) > 0,
+    );
+    assert.equal(calls, 1);
+  });
+
+  it("rejects non-JSON and oversized streamed responses", async () => {
+    const nonJsonClient = createPosoKaneiClient(async () =>
+      new Response("<html>blocked</html>", { headers: { "content-type": "text/html" } }), () => {});
+    await assert.rejects(
+      nonJsonClient.lookupPosoKaneiBarcode("12345682", userId),
+      PosoKaneiUnavailableError,
+    );
+
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(new Uint8Array(1_000_001));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const oversizedClient = createPosoKaneiClient(async () =>
+      new Response(stream, { headers: { "content-type": "application/json" } }), () => {});
+    await assert.rejects(
+      oversizedClient.lookupPosoKaneiBarcode("12345683", userId),
+      PosoKaneiUnavailableError,
+    );
+    assert.equal(cancelled, true);
+  });
+
+  it("deduplicates concurrent requests for one barcode", async () => {
+    let calls = 0;
+    let rateLimitCalls = 0;
+    let resolveResponse!: (response: Response) => void;
+    const pending = new Promise<Response>((resolve) => {
+      resolveResponse = resolve;
+    });
+    const client = createPosoKaneiClient(async () => {
+      calls++;
+      return pending;
+    }, () => {
+      rateLimitCalls++;
+    });
+    const first = client.lookupPosoKaneiBarcode("12345684", userId);
+    const second = client.lookupPosoKaneiBarcode("12345684", "another-user");
+    resolveResponse(new Response(JSON.stringify(product), { headers: { "content-type": "application/json" } }));
+    const [one, two] = await Promise.all([first, second]);
+    assert.equal(calls, 1);
+    assert.equal(rateLimitCalls, 1, "joining an existing upstream request does not consume another lookup slot");
+    assert.deepEqual(one, two);
   });
 });

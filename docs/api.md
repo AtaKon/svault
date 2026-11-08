@@ -778,11 +778,12 @@ Mounted at `/api/houses/:houseId/insights`. Reads need `viewer`; changing settin
 
 Price lookup is off by default. A house admin enables it with `PATCH /api/houses/:houseId` and
 `{ "settings": { "priceLookup": { "enabled": true } } }`. Members trigger one lookup at a time from
-the shopping list. SVault sends only the linked item's barcode to the fixed HTTPS PosoKanei API;
-successful results are cached for 30 minutes, not written to purchase history. By default, requests
-are limited to two per user and three instance-wide per 15 minutes, and upstream rate-limit responses
-temporarily pause lookups. PosoKanei does not publish an API contract, so responses may change or be
-unavailable.
+the shopping list. SVault sends the oldest valid barcode attached to the linked item to the fixed
+HTTPS PosoKanei API and returns that barcode with the offers so the UI can show which code was checked.
+Successful results are cached in memory for 30 minutes; unknown barcodes are cached for 10 minutes.
+Neither is written to purchase history. By default, uncached requests are limited to two per user and
+three instance-wide per 15 minutes, and upstream rate-limit responses temporarily pause lookups.
+PosoKanei does not publish an API contract, so responses may change or be unavailable.
 
 Receipts accept `paidBy` and `splitWith` on import, and `PATCH /api/receipts/:receiptId` changes them
 later. An empty `splitWith` means everyone currently in the house.

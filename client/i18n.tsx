@@ -23,6 +23,8 @@ const EL: Record<string, string> = {
   "Check offers": "Έλεγχος προσφορών",
   "No matching retailer offers were found": "Δεν βρέθηκαν αντίστοιχες προσφορές",
   "via PosoKanei": "μέσω PosoKanei",
+  "Updated {date}": "Ενημερώθηκε {date}",
+  "Barcode queried: {barcode}": "Γραμμωτός κώδικας αναζήτησης: {barcode}",
   "Promotion": "Προσφορά",
   "External price lookup is disabled": "Η εξωτερική αναζήτηση τιμών είναι απενεργοποιημένη",
   "Link this shopping line to an inventory item first": "Σύνδεσε πρώτα αυτή τη γραμμή με ένα αντικείμενο αποθέματος",

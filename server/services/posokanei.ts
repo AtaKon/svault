@@ -11,10 +11,6 @@ interface CachedLookup {
   offers: ExternalShoppingOffer[];
 }
 
-const cache = new Map<string, CachedLookup>();
-const inFlight = new Map<string, Promise<ExternalShoppingOffer[]>>();
-let upstreamBlockedUntil = 0;
-
 export class PosoKaneiUnavailableError extends Error {
   constructor(message: string, readonly retryAfterSeconds?: number) {
     super(message);
@@ -74,20 +70,27 @@ function parseOffers(payload: unknown, fetchedAt: string): ExternalShoppingOffer
 
 async function readBoundedBody(response: Response): Promise<string> {
   const announced = Number(response.headers.get("content-length") ?? 0);
-  if (announced > MAX_BODY_BYTES) throw new PosoKaneiUnavailableError("PosoKanei response was too large");
+  if (announced > MAX_BODY_BYTES) {
+    await cancelBody(response);
+    throw new PosoKaneiUnavailableError("PosoKanei response was too large");
+  }
   if (!response.body) throw new PosoKaneiUnavailableError("PosoKanei returned an empty response");
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    size += value.byteLength;
-    if (size > MAX_BODY_BYTES) {
-      await reader.cancel();
-      throw new PosoKaneiUnavailableError("PosoKanei response was too large");
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > MAX_BODY_BYTES) {
+        await reader.cancel();
+        throw new PosoKaneiUnavailableError("PosoKanei response was too large");
+      }
+      chunks.push(value);
     }
-    chunks.push(value);
+  } finally {
+    reader.releaseLock();
   }
   const joined = new Uint8Array(size);
   let offset = 0;
@@ -98,17 +101,57 @@ async function readBoundedBody(response: Response): Promise<string> {
   return new TextDecoder("utf-8", { fatal: true }).decode(joined);
 }
 
+async function cancelBody(response: Response) {
+  try {
+    await response.body?.cancel();
+  } catch {
+    /* A body may already be closed by the upstream client. */
+  }
+}
+
 function retryAfter(response: Response): number {
   const raw = response.headers.get("retry-after");
   if (!raw) return 15 * 60;
   const seconds = Number(raw);
   const result = Number.isFinite(seconds) ? seconds : (Date.parse(raw) - Date.now()) / 1000;
+  if (!Number.isFinite(result)) return 15 * 60;
   return Math.max(1, Math.min(60 * 60, Math.ceil(result)));
 }
 
+type ConsumeRateLimit = (userId: string) => void;
+
+function consumeDefaultRateLimit(userId: string) {
+  const userWait = limiters.posokanei.hit(userId);
+  if (userWait) {
+    throw new RateLimitError(userWait, "Price lookup limit reached. Try again later.");
+  }
+  const globalWait = limiters.posokaneiGlobal.hit("all");
+  if (globalWait) {
+    throw new RateLimitError(globalWait, "Price lookup limit reached. Try again later.");
+  }
+}
+
+/** A factory keeps the HTTP client deterministic and lets unit tests supply a
+ * fake fetcher without changing process-wide network behavior. */
+export function createPosoKaneiClient(
+  fetcher: typeof fetch = fetch,
+  consumeRateLimit: ConsumeRateLimit = consumeDefaultRateLimit,
+) {
+  const cache = new Map<string, CachedLookup>();
+  const inFlight = new Map<string, Promise<ExternalShoppingOffer[]>>();
+  let upstreamBlockedUntil = 0;
+
+  const cacheResult = (code: string, entry: CachedLookup) => {
+    cache.set(code, entry);
+    if (cache.size <= 500) return;
+    const now = Date.now();
+    for (const [key, value] of cache) if (value.expiresAt <= now) cache.delete(key);
+    while (cache.size > 500) cache.delete(cache.keys().next().value!);
+  };
+
 /** Fetch a product only by an exact barcode. The destination is a fixed,
  * HTTPS-only upstream; callers cannot provide URLs, query strings or headers. */
-export async function lookupPosoKaneiBarcode(barcode: string, userId: string): Promise<ExternalShoppingOffer[]> {
+async function lookupPosoKaneiBarcode(barcode: string, userId: string): Promise<ExternalShoppingOffer[]> {
   const code = barcode.trim();
   if (!/^\d{8,14}$/.test(code)) return [];
   const now = Date.now();
@@ -122,16 +165,12 @@ export async function lookupPosoKaneiBarcode(barcode: string, userId: string): P
   }
   const existing = inFlight.get(code);
   if (existing) return existing;
-  const userWait = limiters.posokanei.hit(userId);
-  const globalWait = limiters.posokaneiGlobal.hit("all");
-  if (userWait || globalWait) {
-    throw new RateLimitError(Math.max(userWait, globalWait), "Price lookup limit reached. Try again later.");
-  }
+  consumeRateLimit(userId);
 
   const request = (async () => {
     const url = new URL(`/products/barcode/${encodeURIComponent(code)}`, API_BASE);
     url.searchParams.set("countries", "GR");
-    const response = await fetch(url, {
+    const response = await fetcher(url, {
       method: "GET",
       headers: {
         accept: "application/json",
@@ -142,19 +181,23 @@ export async function lookupPosoKaneiBarcode(barcode: string, userId: string): P
     });
     if (response.status === 404) {
       const offers: ExternalShoppingOffer[] = [];
-      cache.set(code, { expiresAt: Date.now() + 10 * 60_000, offers });
+      await cancelBody(response);
+      cacheResult(code, { expiresAt: Date.now() + 10 * 60_000, offers });
       return offers;
     }
     if (response.status === 429) {
       const wait = retryAfter(response);
       upstreamBlockedUntil = Date.now() + wait * 1000;
+      await cancelBody(response);
       throw new PosoKaneiUnavailableError("PosoKanei asked SVault to slow down. Try again later.", wait);
     }
     if (!response.ok) {
+      await cancelBody(response);
       throw new PosoKaneiUnavailableError(`PosoKanei returned HTTP ${response.status}`);
     }
     const contentType = response.headers.get("content-type") ?? "";
     if (!contentType.toLowerCase().includes("application/json")) {
+      await cancelBody(response);
       throw new PosoKaneiUnavailableError("PosoKanei returned a non-JSON response");
     }
     let payload: unknown;
@@ -166,13 +209,15 @@ export async function lookupPosoKaneiBarcode(barcode: string, userId: string): P
     }
     const fetchedAt = new Date().toISOString();
     const offers = parseOffers(payload, fetchedAt);
-    cache.set(code, { expiresAt: Date.now() + CACHE_MS, offers });
-    if (cache.size > 500) {
-      for (const [key, entry] of cache) if (entry.expiresAt <= Date.now()) cache.delete(key);
-      while (cache.size > 500) cache.delete(cache.keys().next().value!);
-    }
+    cacheResult(code, { expiresAt: Date.now() + CACHE_MS, offers });
     return offers;
   })().finally(() => inFlight.delete(code));
   inFlight.set(code, request);
   return request;
 }
+
+  return { lookupPosoKaneiBarcode };
+}
+
+const defaultClient = createPosoKaneiClient();
+export const lookupPosoKaneiBarcode = defaultClient.lookupPosoKaneiBarcode;

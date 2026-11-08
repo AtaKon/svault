@@ -63,7 +63,7 @@ function mergeSettings(current: Record<string, any>, incoming: Record<string, an
     }
   }
   if (incoming.priceLookup && typeof incoming.priceLookup === "object") {
-    next.priceLookup = { ...(current.priceLookup ?? {}), ...incoming.priceLookup };
+    next.priceLookup = { enabled: incoming.priceLookup.enabled === true };
   }
   return next;
 }
@@ -128,11 +128,15 @@ houseRoutes.patch(
       req.body,
     );
     const current = (await houseRow(houseId))!;
-    if (body.settings?.priceLookup !== undefined) {
-      body.settings.priceLookup = parseBody(z.object({ enabled: z.boolean() }).strict(), body.settings.priceLookup);
+    const incomingSettings = body.settings ? { ...body.settings } : undefined;
+    if (incomingSettings?.priceLookup !== undefined) {
+      incomingSettings.priceLookup = parseBody(
+        z.object({ enabled: z.boolean() }).strict(),
+        incomingSettings.priceLookup,
+      );
     }
-    const settings = body.settings
-      ? mergeSettings(parseJson<Record<string, any>>(current.settings, {}), body.settings)
+    const settings = incomingSettings
+      ? mergeSettings(parseJson<Record<string, any>>(current.settings, {}), incomingSettings)
       : parseJson<Record<string, any>>(current.settings, {});
     await run(
       `UPDATE houses SET name = COALESCE(?, name), kind = COALESCE(?, kind), address = ?, currency = COALESCE(?, currency),
