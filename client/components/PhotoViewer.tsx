@@ -267,7 +267,7 @@ export function PhotoViewer({
           {photo.labels.length === 0 && <Badge tone="warn">{t("unlabeled")}</Badge>}
           {labelBusy && (
             <span className="flex items-center gap-1.5">
-              <Spinner size={11} label={t("Saving")} />
+              <Spinner size={11} />
               <span>{t("Saving")}</span>
             </span>
           )}

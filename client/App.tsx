@@ -88,7 +88,7 @@ function RequireAuth({ children }: { children: ReactNode }) {
       <div className="flex min-h-dvh flex-col items-center justify-center gap-3 bg-bg">
         <LogoMark size={44} />
         <div className="flex items-center gap-2 text-xs text-muted">
-          <Spinner size={14} label={t("Opening your vault")} /> <span>{t("Opening your vault")}</span></div>
+          <Spinner size={14} /> <span>{t("Opening your vault")}</span></div>
       </div>
     );
   }
