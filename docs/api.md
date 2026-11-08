@@ -339,10 +339,13 @@ shots and shows the coffee name. `beans` includes espresso-enabled items plus an
 history, with `espresso: false` on the latter; the log form only offers beans whose flag is on.
 
 A shot response adds computed `ratio` (`yieldGrams / doseGrams`) and `extractionYieldPercent`
-(`yieldGrams × tdsPercent / doseGrams`). The list endpoints return `shots` and a `summary` with `count`,
-`averageRating`, `bestRating`, `lastBrewedAt`, average dose, yield, extraction time, ratio and extraction
-yield. The house-wide response also returns `beans`: each espresso-enabled coffee with its `shotCount`
-and `averageRating`. Deleting the coffee item deletes its shots.
+(`yieldGrams × tdsPercent / doseGrams`; TDS is entered as a percentage, so 36 g yield, 18 g dose and
+9% TDS gives 18). The list endpoints return `shots` and a `summary` with `count`, `averageRating`,
+`bestRating`, `lastBrewedAt`, average dose, yield, extraction time, ratio and extraction yield. Ratio
+and extraction yield averages only include shots with a positive dose (and TDS for extraction yield);
+dose and yield averages ignore zero values, while `count` still counts every shot. The house-wide
+response also returns `beans`: each espresso-enabled coffee, plus any item with history, with its
+`shotCount` and `averageRating`. Deleting the coffee item deletes its shots.
 
 Barcode scan response:
 

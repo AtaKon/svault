@@ -49,6 +49,7 @@ const EL: Record<string, string> = {
   "Time (s)": "Χρόνος (s)",
   "Ratio 1:{value}": "Αναλογία 1:{value}",
   "Extraction yield {value}%": "Απόδοση εκχύλισης {value}%",
+  "EY {value}%": "EY {value}%",
   "Grind setting": "Ρύθμιση άλεσης",
   "a number or a word": "ένας αριθμός ή μια λέξη",
   "Grind time (s)": "Χρόνος άλεσης (s)",

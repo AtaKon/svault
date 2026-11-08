@@ -433,6 +433,9 @@ export function EspressoShotRow({
     shot.ratio != null ? t("1:{value}", { value: qty(shot.ratio) }) : null,
     shot.waterTempC != null ? `${qty(shot.waterTempC)}°C` : null,
     shot.tdsPercent != null ? `TDS ${qty(shot.tdsPercent)}%` : null,
+    shot.extractionYieldPercent != null
+      ? t("EY {value}%", { value: qty(shot.extractionYieldPercent) })
+      : null,
   ].filter(Boolean);
 
   return (
