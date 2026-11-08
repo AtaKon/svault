@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, qs } from "@/api";
 import { useAuth, useHouse } from "@/state";
 import { useI18n } from "@/i18n";
@@ -15,7 +15,8 @@ export function EspressoPage() {
   const { user } = useAuth();
   const toast = useToast();
   const navigate = useNavigate();
-  const [filter, setFilter] = useState("");
+  const [params] = useSearchParams();
+  const [filter, setFilter] = useState(params.get("itemId") ?? "");
   const [data, setData] = useState<EspressoShotList | null>(null);
   const [loading, setLoading] = useState(true);
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -46,7 +47,7 @@ export function EspressoPage() {
 
   if (loading && !data) return <LoadingBlock label={t("Loading espresso shots")} />;
 
-  if (beans.length === 0) {
+  if (beans.length === 0 && (data?.shots.length ?? 0) === 0) {
     return (
       <div className="space-y-4">
         <PageHeader eyebrow={t("Coffee")} title={t("Espresso log")} subtitle={t("Ratings and dial-in history for your coffee beans.")} />

@@ -590,7 +590,10 @@ export function EspressoLogCard({ item }: { item: ItemDetail }) {
             ))}
           </div>
           {data!.shots.length > 8 && (
-            <Link to="/espresso" className="mt-2 inline-flex items-center gap-1 text-[11px] font-medium text-brand hover:underline">
+            <Link
+              to={`/espresso?itemId=${item.id}`}
+              className="mt-2 inline-flex items-center gap-1 text-[11px] font-medium text-brand hover:underline"
+            >
               {t("See all shots")} <Icon name="chevronRight" size={12} />
             </Link>
           )}
