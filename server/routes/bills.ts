@@ -78,7 +78,10 @@ const input = z.object({
   splitWith: z.union([z.string(), z.array(z.string())]).optional(),
   notes: z.string().trim().max(1000).nullable().optional(),
 });
-const patchInput = input.partial().omit({ currency: true }).strict();
+const patchInput = input.omit({ currency: true, billType: true, category: true }).extend({
+  billType: z.enum(BILL_TYPE_VALUES).optional(),
+  category: z.enum(["to_split", "personal"]).optional(),
+}).partial().strict();
 
 function serialize(row: BillRow): UtilityBill {
   return {

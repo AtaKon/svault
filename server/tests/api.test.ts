@@ -1,7 +1,7 @@
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createHmac, createSign, generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { splitAmountEvenly } from "../../shared/bill-splitting.js";
@@ -103,6 +103,7 @@ await new Promise<void>((resolve) => {
 
 const { app } = await import("../index.js");
 const { closeDb, get, run } = await import("../db.js");
+const { discardUploads } = await import("../upload.js");
 const { heuristicRecipe, parseIngredientLine, localIdeas } = await import("../services/recipe-local.js");
 const { heuristicReceipt } = await import("../services/receipt-local.js");
 const { parseLidlReceipt } = await import("../services/receipt-lidl.js");
@@ -4554,6 +4555,18 @@ describe("insights, household split and admin console", () => {
       body: { name: "Wrong currency", amount: 1, currency: "EUR", billType: "electricity" },
     });
     assert.equal(invalidCurrency.status, 400);
+    const invalidSplitMember = await request(`/api/houses/${billHouse}/bills`, {
+      method: "POST",
+      body: { name: "Invalid participant", amount: 1, billType: "water", category: "to_split", paidBy: ownerId, splitWith: ["usr_not_a_member"] },
+    });
+    assert.equal(invalidSplitMember.status, 400);
+    const emptySplit = await request(`/api/houses/${billHouse}/bills`, {
+      method: "POST",
+      body: { name: "Empty split defaults to everyone", amount: 1, billType: "water", category: "to_split", paidBy: ownerId, splitWith: [] },
+    });
+    assert.equal(emptySplit.status, 201);
+    assert.deepEqual([...emptySplit.data.splitWith].sort(), [ownerId, secondUserId].sort());
+    assert.equal((await request(`/api/bills/${emptySplit.data.id}`, { method: "DELETE" })).status, 200);
 
     const accepted = await request(`/api/houses/${billHouse}/bills`, { method: "POST", body: form(pdf) });
     assert.equal(accepted.status, 201, JSON.stringify(accepted.data));
@@ -4561,6 +4574,38 @@ describe("insights, household split and admin console", () => {
     assert.deepEqual([...accepted.data.splitWith].sort(), [ownerId, secondUserId].sort());
     const addedFile = files().find((file) => !before.includes(file));
     assert.ok(addedFile);
+    const billBackup = await backupForTest();
+    assert.ok(billBackup.validation.uploads.some((entry) => entry.name === `bills/${addedFile}`),
+      "house backups include bill PDFs stored under the uploads tree");
+
+    await run("UPDATE house_members SET role = 'viewer' WHERE house_id = ? AND user_id = ?", [billHouse, secondUserId]);
+    const viewerPdf = await fetch(base + accepted.data.document, { headers: { cookie: secondUserCookie } });
+    assert.equal(viewerPdf.status, 200, "viewers can read a bill PDF");
+    const beforeViewerUpload = files();
+    const viewerUpload = await request(`/api/houses/${billHouse}/bills/${accepted.data.id}/document`, {
+      auth: secondUserCookie,
+      method: "POST",
+      body: form(pdf),
+    });
+    assert.equal(viewerUpload.status, 403, "viewers cannot upload or replace bill PDFs");
+    assert.deepEqual(files(), beforeViewerUpload);
+    await run("UPDATE house_members SET role = 'member' WHERE house_id = ? AND user_id = ?", [billHouse, secondUserId]);
+
+    const otherHouse = await request("/api/houses", { method: "POST", body: { name: "Other Utility House", currency: "GBP" } });
+    assert.equal(otherHouse.status, 201);
+    const otherBill = await request(`/api/houses/${otherHouse.data.id}/bills`, {
+      method: "POST",
+      body: { name: "Private house bill", amount: 2, billType: "water", category: "personal" },
+    });
+    assert.equal(otherBill.status, 201);
+    const beforeCrossHouseUpload = files();
+    const crossHouseUpload = await request(`/api/houses/${billHouse}/bills/${otherBill.data.id}/document`, {
+      auth: secondUserCookie,
+      method: "POST",
+      body: form(pdf),
+    });
+    assert.equal(crossHouseUpload.status, 404);
+    assert.deepEqual(files(), beforeCrossHouseUpload, "cross-house document attempts must not write files");
 
     const beforeUnauthorizedAttachment = files();
     const deniedAttachment = await request(`/api/houses/${billHouse}/bills/${accepted.data.id}/document`, {
@@ -4594,6 +4639,14 @@ describe("insights, household split and admin console", () => {
     assert.equal(ledger.status, 200);
     assert.equal(ledger.data.balances.find((row: any) => row.userId === ownerId).balance, 5);
     assert.equal(ledger.data.balances.find((row: any) => row.userId === secondUserId).balance, -5);
+    const personalBill = await request(`/api/houses/${billHouse}/bills`, {
+      method: "POST",
+      body: { name: "Personal utility bill", amount: 25, billType: "electricity", category: "personal" },
+    });
+    assert.equal(personalBill.status, 201);
+    const ledgerWithPersonalBill = await request(`/api/houses/${billHouse}/insights/household`);
+    assert.deepEqual(ledgerWithPersonalBill.data.balances, ledger.data.balances, "personal bills do not affect household balances");
+    assert.equal((await request(`/api/bills/${personalBill.data.id}`, { method: "DELETE" })).status, 200);
 
     // Bills and receipts are separate ledger entries; the API docs and Bills
     // page warn users not to record the same expense in both places.
@@ -4639,6 +4692,9 @@ describe("insights, household split and admin console", () => {
       body: { notes: "Updated after a member left" },
     });
     assert.equal(afterMemberLeft.status, 200, "stale split participants are dropped after a member leaves");
+    assert.equal(afterMemberLeft.data.billType, "electricity", "a notes-only PATCH preserves bill type defaults");
+    assert.equal(afterMemberLeft.data.category, "to_split", "a notes-only PATCH preserves category defaults");
+    assert.deepEqual(afterMemberLeft.data.splitWith, [ownerId]);
     const ledgerAfterMemberLeft = await request(`/api/houses/${billHouse}/insights/household`);
     assert.equal(ledgerAfterMemberLeft.status, 200);
 
@@ -4653,6 +4709,15 @@ describe("insights, household split and admin console", () => {
     assert.deepEqual(splitAmountEvenly(0, 3), [0, 0, 0]);
     assert.deepEqual(splitAmountEvenly(-1, 2), []);
     assert.deepEqual(splitAmountEvenly(1, 0), []);
+  });
+
+  it("makes upload cleanup safe to repeat", async () => {
+    const file = path.join(dataDir, "discard-twice.pdf");
+    writeFileSync(file, "temporary upload");
+    const fakeRequest = { file: { path: file } } as any;
+    discardUploads(fakeRequest);
+    assert.equal(existsSync(file), false);
+    assert.doesNotThrow(() => discardUploads(fakeRequest));
   });
 
   it("restores bill rows only after their user and house foreign keys", () => {
