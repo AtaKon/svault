@@ -16,13 +16,18 @@ export function EspressoPage() {
   const toast = useToast();
   const navigate = useNavigate();
   const [params] = useSearchParams();
-  const [filter, setFilter] = useState(params.get("itemId") ?? "");
+  const paramItemId = params.get("itemId") ?? "";
+  const [filter, setFilter] = useState(paramItemId);
   const [data, setData] = useState<EspressoShotList | null>(null);
   const [loading, setLoading] = useState(true);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [editing, setEditing] = useState<EspressoShot | null>(null);
   const [sheetSession, setSheetSession] = useState(0);
   const requestId = useRef(0);
+
+  useEffect(() => {
+    setFilter(paramItemId);
+  }, [paramItemId]);
 
   const load = useCallback(async () => {
     const current = ++requestId.current;

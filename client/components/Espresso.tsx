@@ -558,7 +558,7 @@ export function EspressoLogCard({ item }: { item: ItemDetail }) {
           <h2 className="font-display text-lg">{t("Espresso log")}</h2>
           <Badge tone="outline">{data?.summary.count ?? 0}</Badge>
         </div>
-        {can("member") && (
+        {can("member") && item.espresso && (
           <Button
             size="sm"
             variant="secondary"
