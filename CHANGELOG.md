@@ -8,6 +8,10 @@ All notable changes to SVault are documented here. The format follows
 
 ### Added
 
+- Open Food Facts lookups now cover all four databases: Open Food Facts, Open Beauty Facts, Open Pet
+  Food Facts and Open Products Facts. A universal barcode lookup reports which project owns the
+  product, the shared cache is keyed by project, and product cards show a Food/Beauty/Pet food/Products
+  badge. Name search remains full-text for food; the other projects search the local cache and say so.
 - A new **Insights** page brings spending together: monthly budget and progress, spend by month, shop
   and category, waste value, price alerts, a use-it-up view with matching recipes, cheapest-shop hints
   for open shopping-list lines, and a household split with settle-up suggestions. Each house stores its

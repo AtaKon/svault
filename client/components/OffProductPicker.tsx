@@ -3,7 +3,8 @@ import { api } from "@/api";
 import { Badge, Button, Input, Sheet, Spinner, cn } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { useI18n } from "@/i18n";
-import type { OffProduct, OffSearchResult } from "@shared/types";
+import { offProjectLabel } from "@/off";
+import type { OffProduct, OffProjectId, OffSearchResult } from "@shared/types";
 
 function looksLikeBarcode(value: string): boolean {
   return /^\d{6,14}$/.test(value.replace(/\s/g, ""));
@@ -15,12 +16,14 @@ export function OffProductPicker({
   onSelect,
   initialQuery = "",
   title = "Link OpenFoodFacts",
+  project = "all",
 }: {
   open: boolean;
   onClose: () => void;
   onSelect: (product: OffProduct) => void;
   initialQuery?: string;
   title?: string;
+  project?: OffProjectId | "all";
 }) {
   const { t } = useI18n();
   const [query, setQuery] = useState(initialQuery);
@@ -62,15 +65,17 @@ export function OffProductPicker({
           // Fall through to a name search: the code may be a shop article code.
         }
       }
-      const data = await api<OffSearchResult>(`/api/catalog/search?q=${encodeURIComponent(q)}&online=1`);
+      const data = await api<OffSearchResult>(`/api/catalog/search?q=${encodeURIComponent(q)}&online=1&project=${project}`);
       setProducts(data.products);
       const warning = data.warningCode === "NOTHING_FOUND"
         ? t("Nothing found on OpenFoodFacts. Check the name or paste a barcode.")
-        : data.warning
-          ? t("OpenFoodFacts search warning: {message}", { message: data.warning })
-          : data.warningCode
-            ? t("OpenFoodFacts search returned a warning")
-            : null;
+        : data.warningCode === "LIMITED_SEARCH"
+          ? t("Name search is limited to this server's cache for this product type. Paste a barcode or try a food product.")
+          : data.warning
+            ? t("OpenFoodFacts search warning: {message}", { message: data.warning })
+            : data.warningCode
+              ? t("OpenFoodFacts search returned a warning")
+              : null;
       setWarning(warning);
     } catch (err) {
       setWarning(err instanceof Error ? err.message : t("Could not search OpenFoodFacts"));
@@ -149,6 +154,7 @@ export function OffProductPicker({
                 <span className="mt-0.5 block truncate font-mono text-[10px] text-muted">{product.code}</span>
               </span>
               <span className="flex shrink-0 flex-col items-end gap-1">
+                <Badge tone={product.project === "off" ? "outline" : "brand"}>{t(offProjectLabel(product.project))}</Badge>
                 {product.nutriscore && <Badge tone="outline">{t("Nutri ")}{' '}{product.nutriscore.toUpperCase()}</Badge>}
                 <Icon name="plus" size={14} className="text-brand" />
               </span>

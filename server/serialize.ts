@@ -30,7 +30,7 @@ export const ITEM_SELECT = `
        ORDER BY sm.created_at DESC LIMIT 1) AS latest_price
   FROM items i
   LEFT JOIN categories c ON c.id = i.category_id
-  LEFT JOIN catalog_products cp ON cp.code = i.off_code
+  LEFT JOIN catalog_products cp ON cp.code = i.off_code AND cp.project = i.off_project
 `;
 
 export function maskHouseSettings(settings: Record<string, any>): Record<string, any> {
@@ -76,16 +76,24 @@ export function serializeItem(row: any, barcodes: { id: string; code: string; fo
   const quantity = round(Number(row.quantity ?? 0));
   const reorderPoint = Number(row.reorder_point ?? 0);
   const offProduct = parseJson<OffProduct | null>(row.off_summary, null);
+  const offProject = ["off", "obf", "opff", "opf"].includes(row.off_project) ? row.off_project : "off";
   const off: OffLink | null = row.off_code
     ? {
         code: row.off_code,
+        project: offProject,
         source: (["barcode", "receipt", "manual", "catalog"].includes(row.off_source)
           ? row.off_source
           : "manual") as OffLink["source"],
         linkedAt: row.off_linked_at ?? row.created_at,
         syncedAt: row.off_synced_at ?? null,
         filled: parseJson<string[]>(row.off_filled, []),
-        product: offProduct,
+        product: offProduct
+          ? {
+              ...offProduct,
+              project: offProduct.project ?? offProject,
+              productType: offProduct.productType ?? (offProject === "obf" ? "beauty" : offProject === "opff" ? "petfood" : offProject === "opf" ? "product" : "food"),
+            }
+          : null,
       }
     : null;
   return {
@@ -218,6 +226,7 @@ export async function receiptLinesFor(receiptId: string) {
     locationId: row.location_id ?? null,
     barcode: row.barcode ?? null,
     offCode: row.off_code ?? null,
+    offProject: ["off", "obf", "opff", "opf"].includes(row.off_project) ? row.off_project : "off",
     sort: Number(row.sort ?? 0),
   }));
 }

@@ -173,9 +173,43 @@ export interface NutritionFacts extends NutritionValues {
   source: "openfoodfacts" | "manual";
 }
 
+/** The four Open Food Facts product databases. */
+export type OffProjectId = "off" | "obf" | "opff" | "opf";
+
+/** The `product_type` values returned by the universal lookup. */
+export type OffProductType = "food" | "beauty" | "petfood" | "product";
+
+export interface OffProjectCapabilities {
+  read: boolean;
+  write: boolean;
+  images: boolean;
+  fullTextSearch: boolean;
+  structuredSearch: boolean;
+  taxonomy: boolean;
+  knowledgePanels: boolean;
+  robotoff: boolean;
+  folksonomy: boolean;
+  openPrices: boolean;
+  nutripatrol: boolean;
+  nutrition: boolean;
+  scores: boolean;
+}
+
+export interface OffProjectInfo {
+  id: OffProjectId;
+  label: string;
+  shortLabel: string;
+  productType: OffProductType;
+  site: string;
+  capabilities: OffProjectCapabilities;
+}
+
 /** A product as stored in the shared OpenFoodFacts cache. */
 export interface OffProduct {
   code: string;
+  /** Which database owns this product. */
+  project: OffProjectId;
+  productType: OffProductType;
   name: string;
   brand: string;
   genericName: string;
@@ -201,6 +235,7 @@ export interface OffProduct {
 /** An item's link to an OpenFoodFacts product. */
 export interface OffLink {
   code: string;
+  project: OffProjectId;
   source: "barcode" | "receipt" | "manual" | "catalog";
   linkedAt: string;
   syncedAt: string | null;
@@ -219,10 +254,12 @@ export interface OffLinkResult {
 export interface OffSearchResult {
   products: OffProduct[];
   online: boolean;
+  /** The project that was searched, or all projects for a universal search. */
+  project?: OffProjectId | "all";
   /** @deprecated Retained for consumers of the original API; clients should localize warningCode. */
   warning: string | null;
-  /** Stable code for clients that have localized warning copy (currently `NOTHING_FOUND`). */
-  warningCode: string | null;
+  /** Stable code for clients that have localized warning copy. */
+  warningCode: "NOTHING_FOUND" | "LIMITED_SEARCH" | null;
 }
 
 export interface CatalogMapping {
@@ -231,6 +268,7 @@ export interface CatalogMapping {
   vendor: string | null;
   rawText: string;
   offCode: string | null;
+  offProject: OffProjectId;
   name: string | null;
   brand: string | null;
   unit: string | null;
@@ -452,6 +490,7 @@ export interface ReceiptLine {
   locationId?: string | null;
   barcode?: string | null;
   offCode?: string | null;
+  offProject?: OffProjectId | null;
   sort?: number;
 }
 

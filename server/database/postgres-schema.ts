@@ -352,7 +352,8 @@ CREATE TABLE IF NOT EXISTS product_aliases (
 CREATE INDEX IF NOT EXISTS product_aliases_house ON product_aliases(house_id, vendor_key);
 
 CREATE TABLE IF NOT EXISTS catalog_products (
-  code TEXT PRIMARY KEY,
+  project TEXT NOT NULL DEFAULT 'off',
+  code TEXT NOT NULL,
   name TEXT,
   brand TEXT,
   quantity TEXT,
@@ -362,10 +363,11 @@ CREATE TABLE IF NOT EXISTS catalog_products (
   payload TEXT NOT NULL DEFAULT '{}',
   source TEXT NOT NULL DEFAULT 'openfoodfacts',
   fetched_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (project, code)
 );
-CREATE INDEX IF NOT EXISTS catalog_products_name ON catalog_products(name);
-CREATE INDEX IF NOT EXISTS catalog_products_brand ON catalog_products(brand);
+CREATE INDEX IF NOT EXISTS catalog_products_name ON catalog_products(project, name);
+CREATE INDEX IF NOT EXISTS catalog_products_brand ON catalog_products(project, brand);
 
 CREATE TABLE IF NOT EXISTS catalog_mappings (
   id TEXT PRIMARY KEY,
@@ -626,6 +628,23 @@ export const POSTGRES_MIGRATIONS: string[] = [
   "CREATE INDEX IF NOT EXISTS catalog_mappings_house ON catalog_mappings(house_id)",
   "ALTER TABLE receipts ADD COLUMN IF NOT EXISTS paid_by TEXT",
   "ALTER TABLE receipts ADD COLUMN IF NOT EXISTS split_with TEXT NOT NULL DEFAULT '[]'",
+  // Open Food Facts projects: the shared product cache is keyed by project.
+  "ALTER TABLE catalog_products ADD COLUMN IF NOT EXISTS project TEXT NOT NULL DEFAULT 'off'",
+  `DO $$ DECLARE pk text; BEGIN
+     SELECT c.conname INTO pk
+     FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid
+     WHERE t.relname = 'catalog_products' AND c.contype = 'p' AND array_length(c.conkey, 1) = 1;
+     IF pk IS NOT NULL THEN EXECUTE format('ALTER TABLE catalog_products DROP CONSTRAINT %I', pk); END IF;
+   END $$;`,
+  `DO $$ BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid
+       WHERE t.relname = 'catalog_products' AND c.contype = 'p'
+     ) THEN ALTER TABLE catalog_products ADD PRIMARY KEY (project, code); END IF;
+   END $$;`,
+  "ALTER TABLE items ADD COLUMN IF NOT EXISTS off_project TEXT NOT NULL DEFAULT 'off'",
+  "ALTER TABLE receipt_lines ADD COLUMN IF NOT EXISTS off_project TEXT NOT NULL DEFAULT 'off'",
+  "ALTER TABLE catalog_mappings ADD COLUMN IF NOT EXISTS off_project TEXT NOT NULL DEFAULT 'off'",
 ];
 
 /**

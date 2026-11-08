@@ -107,7 +107,44 @@ export class SqliteDriver implements DatabaseDriver {
     ensureColumn("items", "off_synced_at", "TEXT");
     ensureColumn("items", "off_filled", "TEXT NOT NULL DEFAULT '[]'");
     ensureColumn("items", "nutrition", "TEXT");
+    ensureColumn("items", "off_project", "TEXT NOT NULL DEFAULT 'off'");
+    ensureColumn("receipt_lines", "off_project", "TEXT NOT NULL DEFAULT 'off'");
+    ensureColumn("catalog_mappings", "off_project", "TEXT NOT NULL DEFAULT 'off'");
     conn.exec("CREATE INDEX IF NOT EXISTS items_off ON items(off_code)");
+
+    /* catalog_products gained a project dimension. SQLite cannot change a
+       primary key in place, so rebuild the cache table once. Rows created
+       before this change belong to Open Food Facts. */
+    if (!columns("catalog_products").some((entry) => entry.name === "project")) {
+      conn.exec(`BEGIN;
+CREATE TABLE catalog_products_project (
+  project TEXT NOT NULL DEFAULT 'off',
+  code TEXT NOT NULL,
+  name TEXT,
+  brand TEXT,
+  quantity TEXT,
+  image TEXT,
+  categories TEXT,
+  summary TEXT NOT NULL DEFAULT '{}',
+  payload TEXT NOT NULL DEFAULT '{}',
+  source TEXT NOT NULL DEFAULT 'openfoodfacts',
+  fetched_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (project, code)
+);
+INSERT INTO catalog_products_project
+  (project, code, name, brand, quantity, image, categories, summary, payload, source, fetched_at, updated_at)
+SELECT 'off', code, name, brand, quantity, image, categories, summary, payload, source, fetched_at, updated_at
+FROM catalog_products;
+DROP TABLE catalog_products;
+ALTER TABLE catalog_products_project RENAME TO catalog_products;
+COMMIT;`);
+    }
+    conn.exec("DROP INDEX IF EXISTS catalog_products_name");
+    conn.exec("DROP INDEX IF EXISTS catalog_products_brand");
+    conn.exec("CREATE INDEX IF NOT EXISTS catalog_products_name ON catalog_products(project, name)");
+    conn.exec("CREATE INDEX IF NOT EXISTS catalog_products_brand ON catalog_products(project, brand)");
+
     conn.exec(`UPDATE receipts SET savings = (
   SELECT ROUND(SUM(COALESCE(discount, 0)), 2) FROM receipt_lines WHERE receipt_id = receipts.id
 ) WHERE savings IS NULL AND EXISTS (
@@ -154,6 +191,7 @@ CREATE INDEX IF NOT EXISTS catalog_mappings_off ON catalog_mappings(off_code);
 COMMIT;`);
     }
     conn.exec("CREATE INDEX IF NOT EXISTS catalog_mappings_house ON catalog_mappings(house_id)");
+    ensureColumn("catalog_mappings", "off_project", "TEXT NOT NULL DEFAULT 'off'");
 
     /**
      * Older versions shipped `brand` both as an items column and as a default
@@ -632,7 +670,8 @@ CREATE INDEX IF NOT EXISTS product_aliases_house ON product_aliases(house_id, ve
    instance-wide; mappings learned from one house's receipts carry that
    house_id ('' marks a shared row) so they never leak into other houses. */
 CREATE TABLE IF NOT EXISTS catalog_products (
-  code TEXT PRIMARY KEY,
+  project TEXT NOT NULL DEFAULT 'off',
+  code TEXT NOT NULL,
   name TEXT,
   brand TEXT,
   quantity TEXT,
@@ -642,10 +681,9 @@ CREATE TABLE IF NOT EXISTS catalog_products (
   payload TEXT NOT NULL DEFAULT '{}',
   source TEXT NOT NULL DEFAULT 'openfoodfacts',
   fetched_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (project, code)
 );
-CREATE INDEX IF NOT EXISTS catalog_products_name ON catalog_products(name);
-CREATE INDEX IF NOT EXISTS catalog_products_brand ON catalog_products(brand);
 
 CREATE TABLE IF NOT EXISTS catalog_mappings (
   id TEXT PRIMARY KEY,

@@ -17,22 +17,45 @@ import {
   syncProductCatalog,
 } from "../services/product-catalog.js";
 import { productAliasKey } from "../services/product-aliases.js";
-import type { OffSearchResult } from "../../shared/types.js";
+import type { OffProjectId, OffSearchResult } from "../../shared/types.js";
+import { isOffProjectId, offProjectList } from "../services/off/projects.js";
 
 export const catalogRoutes = Router();
 catalogRoutes.use(requireAuth);
 
-async function localProducts(query: string, limit: number) {
+const ALL_PROJECTS = "all" as const;
+
+function requestedProject(value: unknown, fallback: OffProjectId | typeof ALL_PROJECTS): OffProjectId | typeof ALL_PROJECTS {
+  const text = String(value ?? "").trim();
+  if (text === ALL_PROJECTS) return ALL_PROJECTS;
+  return isOffProjectId(text) ? text : fallback;
+}
+
+async function localProducts(query: string, limit: number, project: OffProjectId | typeof ALL_PROJECTS) {
   const q = String(query ?? "").trim();
   if (!q) return [];
+  const params: unknown[] = [`%${q}%`, `%${q}%`, `%${q}%`];
+  let clause = "lower(name) LIKE lower(?) OR lower(brand) LIKE lower(?) OR lower(code) LIKE lower(?)";
+  if (project !== ALL_PROJECTS) {
+    clause = `project = ? AND (${clause})`;
+    params.unshift(project);
+  }
+  params.push(Math.min(limit, 20));
   const rows = await all<any>(
     `SELECT * FROM catalog_products
-     WHERE lower(name) LIKE lower(?) OR lower(brand) LIKE lower(?) OR lower(code) LIKE lower(?)
+     WHERE ${clause}
      ORDER BY updated_at DESC LIMIT ?`,
-    [`%${q}%`, `%${q}%`, `%${q}%`, Math.min(limit, 20)],
+    params,
   );
   return rows.map(offProductFromRow).filter(Boolean);
 }
+
+catalogRoutes.get(
+  "/projects",
+  handler(async (_req, res) => {
+    res.json({ projects: offProjectList() });
+  }),
+);
 
 /**
  * Search the shared cache first, then OpenFoodFacts by name. The picker sets
@@ -44,29 +67,36 @@ catalogRoutes.get(
     const q = String(req.query.q ?? "").trim();
     const online = String(req.query.online ?? "1") !== "0";
     const limit = intParam(req.query.limit, 8, 20);
-    const cached = await localProducts(q, limit);
+    const project = requestedProject(req.query.project, "off");
+    const cached = await localProducts(q, limit, project);
     let products = cached;
     let warning: string | null = null;
     let warningCode: OffSearchResult["warningCode"] = null;
     let usedOnline = false;
 
     if (online && q.length >= 3) {
-      const remote = await searchOffProducts(q, limit);
-      usedOnline = remote.length > 0;
-      if (remote.length) {
-        const byCode = new Map<string, any>();
-        for (const product of [...cached, ...remote]) {
-          if (product?.code && !byCode.has(product.code)) byCode.set(product.code, product);
+      if (project === "off" || project === ALL_PROJECTS) {
+        const remote = await searchOffProducts(q, limit);
+        usedOnline = remote.length > 0;
+        if (remote.length) {
+          const byCode = new Map<string, any>();
+          for (const product of [...cached, ...remote]) {
+            if (product?.code && !byCode.has(product.code)) byCode.set(product.code, product);
+          }
+          products = [...byCode.values()].slice(0, limit);
+        } else if (!cached.length) {
+          // Preserve the legacy display text for API consumers; clients localize warningCode.
+          warning = "Nothing found on OpenFoodFacts. Check the name or paste a barcode.";
+          warningCode = "NOTHING_FOUND";
         }
-        products = [...byCode.values()].slice(0, limit);
       } else if (!cached.length) {
-        // Preserve the legacy display text for API consumers; clients localize warningCode.
-        warning = "Nothing found on OpenFoodFacts. Check the name or paste a barcode.";
-        warningCode = "NOTHING_FOUND";
+        warning =
+          "Full-text search is only available for Open Food Facts. Paste a barcode or search this server's cache for this product type.";
+        warningCode = "LIMITED_SEARCH";
       }
     }
 
-    const result: OffSearchResult = { products: products as any, online: usedOnline, warning, warningCode };
+    const result: OffSearchResult = { products: products as any, online: usedOnline, project, warning, warningCode };
     res.json(result);
   }),
 );
@@ -76,10 +106,11 @@ catalogRoutes.get(
   handler(async (req, res) => {
     const code = String(req.params.code ?? "").trim();
     if (!code) throw new ApiError(400, "Missing barcode");
-    const product = await fetchOffProduct(code);
+    const project = requestedProject(req.query.project, ALL_PROJECTS);
+    const product = await fetchOffProduct(code, { project });
     if (!product) throw new ApiError(404, "Product not found on OpenFoodFacts");
     const full = String(req.query.full ?? "") === "1";
-    res.json(full ? { ...product, payload: await getCachedOffPayload(product.code) } : product);
+    res.json(full ? { ...product, payload: await getCachedOffPayload(product.code, product.project) } : product);
   }),
 );
 
@@ -163,12 +194,18 @@ catalogRoutes.get(
       res.json({ mapping: null });
       return;
     }
-    const product = mapping.off_code ? await get<any>("SELECT * FROM catalog_products WHERE code = ?", [mapping.off_code]) : null;
+    const product = mapping.off_code
+      ? await get<any>("SELECT * FROM catalog_products WHERE project = ? AND code = ?", [
+          mapping.off_project ?? "off",
+          mapping.off_code,
+        ])
+      : null;
     res.json({
       mapping: {
         country: mapping.country,
         vendor: mapping.vendor_label,
         offCode: mapping.off_code,
+        offProject: mapping.off_project ?? "off",
         name: mapping.name,
         brand: mapping.brand,
         unit: mapping.unit,

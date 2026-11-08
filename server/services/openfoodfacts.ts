@@ -1,20 +1,36 @@
 import { all, get, newId, now, parseJson, run } from "../db.js";
-import { OFF_API_BASE, OFF_CACHE_DAYS, OFF_SEARCH_BASE, OFF_TIMEOUT_MS } from "../config.js";
-import type { OffProduct } from "../../shared/types.js";
+import { APP_VERSION, OFF_CACHE_DAYS, OFF_SEARCH_BASE, OFF_TIMEOUT_MS } from "../config.js";
+import type { OffProduct, OffProjectId, OffProductType } from "../../shared/types.js";
 import { normaliseNutrition, parseOffNutrition } from "./nutrition.js";
 import { normalizeVendorName } from "./vendors.js";
 import { ApiError } from "../http.js";
+import {
+  OFF_PROJECTS,
+  isOffProjectId,
+  offProductEndpoint,
+  offProjectForDomain,
+  offProjectForProductType,
+  offUniversalEndpoint,
+} from "./off/projects.js";
 
 /**
- * OpenFoodFacts integration.
+ * Open Food Facts integration.
  *
- * Barcodes are looked up on the public product endpoint and cached in
- * `catalog_products`. The cache is shared by every house on the instance, and
- * optional name search uses the search-a-licious endpoint. Nothing is fetched
- * when a fresh cached copy exists, so receipt imports and scans stay fast.
+ * All four product databases (food, beauty, pet food, general products) share
+ * one cache in `catalog_products`, keyed by `(project, code)`. The universal
+ * endpoint answers barcode lookups and tells us which project owns the product.
+ *
+ * Nothing is fetched when a fresh cached copy exists, so receipt imports and
+ * scans stay fast. Writes live in a separate contribution service; this module
+ * is deliberately read-only.
  */
 
-const PRODUCT_HEADERS = { "user-agent": "SVault/1.0 (home inventory)" };
+const CONTACT = String(process.env.SV_OFF_CONTACT ?? "").trim();
+const PRODUCT_HEADERS = {
+  "user-agent": `SVault/${APP_VERSION} (self-hosted household inventory; https://github.com/AtaKon/svault${
+    CONTACT ? `; ${CONTACT}` : ""
+  })`,
+};
 const SEARCH_MIN_INTERVAL = 1500;
 let lastSearchAt = 0;
 
@@ -43,7 +59,12 @@ function stringList(value: unknown, map: (entry: string) => string = (entry) => 
   return [...new Set(value.map((entry) => map(String(entry))).filter(Boolean))];
 }
 
-export function offSummaryFromPayload(payload: any): OffProduct {
+export function offProductTypeFor(project: OffProjectId): OffProductType {
+  return OFF_PROJECTS[project].productType;
+}
+
+export function offSummaryFromPayload(payload: any, project: OffProjectId = "off"): OffProduct {
+  const resolved = offProjectForProductType(payload?.product_type) ?? project;
   const name =
     firstString(payload?.product_name, payload?.generic_name) ||
     Object.entries(payload ?? {})
@@ -62,6 +83,8 @@ export function offSummaryFromPayload(payload: any): OffProduct {
   }
   return {
     code: String(payload?.code ?? payload?._id ?? ""),
+    project: resolved,
+    productType: offProductTypeFor(resolved),
     name,
     brand: brands,
     genericName: firstString(payload?.generic_name),
@@ -84,11 +107,14 @@ export function offSummaryFromPayload(payload: any): OffProduct {
 
 export function offProductFromRow(row: any): OffProduct | null {
   if (!row) return null;
+  const project: OffProjectId = isOffProjectId(row.project) ? row.project : "off";
   const summary = parseJson<OffProduct | null>(row.summary, null);
   if (summary && typeof summary === "object") {
     return {
       ...summary,
       code: summary.code || row.code,
+      project: isOffProjectId(summary.project) ? summary.project : project,
+      productType: summary.productType ?? offProductTypeFor(isOffProjectId(summary.project) ? summary.project : project),
       name: summary.name || row.name || "",
       brand: summary.brand || row.brand || "",
       quantity: summary.quantity || row.quantity || "",
@@ -100,6 +126,8 @@ export function offProductFromRow(row: any): OffProduct | null {
   }
   return {
     code: row.code,
+    project,
+    productType: offProductTypeFor(project),
     name: row.name ?? "",
     brand: row.brand ?? "",
     genericName: "",
@@ -140,43 +168,52 @@ function cacheIsFresh(row: any): boolean {
   return Number.isFinite(fetched) && Date.now() - fetched < OFF_CACHE_DAYS * 864e5;
 }
 
-async function cachedRow(code: string): Promise<any | null> {
+async function cachedRow(code: string, project: OffProjectId | "all" = "off"): Promise<any | null> {
   const candidates = barcodeCandidates(code);
   if (!candidates.length) return null;
   const placeholders = candidates.map(() => "?").join(", ");
+  const params: unknown[] = [...candidates];
+  let clause = `code IN (${placeholders})`;
+  if (project !== "all") {
+    clause += " AND project = ?";
+    params.push(project);
+  }
   return (
-    await get<any>(
-      `SELECT * FROM catalog_products WHERE code IN (${placeholders})
+    (await get<any>(
+      `SELECT * FROM catalog_products WHERE ${clause}
        ORDER BY CASE WHEN payload <> '{}' THEN 0 ELSE 1 END, fetched_at DESC LIMIT 1`,
-      candidates,
-    ) ?? null
+      params,
+    )) ?? null
   );
 }
 
 /** Cached product without touching the network. Used by receipt drafts. */
-export async function getCachedOffProduct(code: string): Promise<OffProduct | null> {
-  return offProductFromRow(await cachedRow(code));
+export async function getCachedOffProduct(code: string, project: OffProjectId | "all" = "off"): Promise<OffProduct | null> {
+  return offProductFromRow(await cachedRow(code, project));
 }
 
 /** Full cached payload, when one has been stored. */
-export async function getCachedOffPayload(code: string): Promise<Record<string, unknown> | null> {
-  const row = await cachedRow(code);
+export async function getCachedOffPayload(
+  code: string,
+  project: OffProjectId | "all" = "off",
+): Promise<Record<string, unknown> | null> {
+  const row = await cachedRow(code, project);
   if (!row) return null;
   const payload = parseJson<Record<string, unknown> | null>(row.payload, null);
   return payload && Object.keys(payload).length ? payload : null;
 }
 
-async function saveOffProduct(payload: any, requestedCode: string) {
-  const summary = offSummaryFromPayload(payload);
+async function saveOffProduct(payload: any, requestedCode: string, fallbackProject: OffProjectId): Promise<OffProduct> {
+  const summary = offSummaryFromPayload(payload, fallbackProject);
   const code = String(summary.code || requestedCode).trim();
   if (!code) return summary;
   summary.code = code;
   const timestamp = now();
   await run(
     `INSERT INTO catalog_products
-       (code, name, brand, quantity, image, categories, summary, payload, source, fetched_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'openfoodfacts', ?, ?)
-     ON CONFLICT(code) DO UPDATE SET
+       (project, code, name, brand, quantity, image, categories, summary, payload, source, fetched_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'openfoodfacts', ?, ?)
+     ON CONFLICT(project, code) DO UPDATE SET
        name = excluded.name,
        brand = excluded.brand,
        quantity = excluded.quantity,
@@ -188,6 +225,7 @@ async function saveOffProduct(payload: any, requestedCode: string) {
        fetched_at = excluded.fetched_at,
        updated_at = excluded.updated_at`,
     [
+      summary.project,
       code,
       summary.name,
       summary.brand,
@@ -205,10 +243,11 @@ async function saveOffProduct(payload: any, requestedCode: string) {
   if (code !== requestedCode) {
     await run(
       `INSERT INTO catalog_products
-         (code, name, brand, quantity, image, categories, summary, payload, source, fetched_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, '{}', 'catalog', ?, ?)
-       ON CONFLICT(code) DO NOTHING`,
+         (project, code, name, brand, quantity, image, categories, summary, payload, source, fetched_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}', 'catalog', ?, ?)
+       ON CONFLICT(project, code) DO NOTHING`,
       [
+        summary.project,
         requestedCode,
         summary.name,
         summary.brand,
@@ -224,34 +263,46 @@ async function saveOffProduct(payload: any, requestedCode: string) {
   return summary;
 }
 
-async function fetchProductPayload(code: string): Promise<any | null> {
-  const url = `${OFF_API_BASE}/api/v2/product/${encodeURIComponent(code)}.json`;
+async function fetchProductPayload(
+  code: string,
+  project: OffProjectId | "all" = "off",
+): Promise<{ payload: any; project: OffProjectId } | null> {
+  const url = project === "all" ? offUniversalEndpoint(code) : offProductEndpoint(project, code);
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(OFF_TIMEOUT_MS), headers: PRODUCT_HEADERS });
     if (!res.ok) return null;
     const data: any = await res.json();
-    if (Number(data?.status) !== 1 || !data.product) return null;
-    return data.product;
+    const payload = data?.product;
+    if (!payload) return null;
+    const resolved =
+      offProjectForProductType(payload?.product_type) ??
+      offProjectForDomain(res.url) ??
+      (project === "all" ? "off" : project);
+    return { payload, project: resolved };
   } catch {
     return null;
   }
 }
 
 /**
- * Resolve an OFF product by code. Fresh caches win; otherwise the product
- * endpoint is tried for each GTIN spelling. Returns null when offline or when
- * the code is unknown, never throws.
+ * Resolve a product by code. Fresh caches win; otherwise the product endpoint
+ * is tried for each GTIN spelling. Use `project: "all"` for an unknown barcode
+ * so the universal endpoint can route to the owning database.
  */
-export async function fetchOffProduct(rawCode: string, options: { force?: boolean } = {}): Promise<OffProduct | null> {
+export async function fetchOffProduct(
+  rawCode: string,
+  options: { force?: boolean; project?: OffProjectId | "all" } = {},
+): Promise<OffProduct | null> {
   const candidates = barcodeCandidates(rawCode);
   if (!candidates.length) return null;
+  const project = options.project ?? "off";
 
-  const cached = await cachedRow(rawCode);
+  const cached = await cachedRow(rawCode, project);
   if (cached && !options.force && cacheIsFresh(cached)) return offProductFromRow(cached);
 
   for (const candidate of candidates) {
-    const payload = await fetchProductPayload(candidate);
-    if (payload) return await saveOffProduct(payload, candidate);
+    const result = await fetchProductPayload(candidate, project);
+    if (result) return await saveOffProduct(result.payload, candidate, result.project);
   }
   return cached ? offProductFromRow(cached) : null;
 }
@@ -276,7 +327,13 @@ async function fetchSearchHits(query: string, limit: number): Promise<OffProduct
   }
 }
 
-export async function searchOffProducts(query: string, limit = 8): Promise<OffProduct[]> {
+/**
+ * Full-text search is only available for Open Food Facts through
+ * Search-a-licious. The other projects fall back to the local cache; callers
+ * should surface the limited-search warning instead of pretending otherwise.
+ */
+export async function searchOffProducts(query: string, limit = 8, project: OffProjectId = "off"): Promise<OffProduct[]> {
+  if (project !== "off") return [];
   const q = String(query ?? "").trim();
   if (q.length < 3) return [];
   const key = q.toLowerCase();
@@ -413,7 +470,7 @@ export async function fillItemFromOff(opts: {
   return {
     filled,
     skipped,
-    item: await get<any>("SELECT * FROM items WHERE id = ?", [item.id]) ?? item,
+    item: (await get<any>("SELECT * FROM items WHERE id = ?", [item.id])) ?? item,
   };
 }
 
@@ -430,10 +487,12 @@ export async function linkItemToOff(opts: {
 }): Promise<OffFillResult> {
   const { item, product, source } = opts;
   const other = await get<any>(
-    "SELECT id, name FROM items WHERE house_id = ? AND off_code = ? AND id <> ?",
-    [item.house_id, product.code, item.id],
+    "SELECT id, name FROM items WHERE house_id = ? AND off_code = ? AND off_project = ? AND id <> ?",
+    [item.house_id, product.code, product.project, item.id],
   );
-  if (other) throw new ApiError(409, `OpenFoodFacts product ${product.code} is already linked to ${other.name}`);
+  if (other) {
+    throw new ApiError(409, `${OFF_PROJECTS[product.project].label} product ${product.code} is already linked to ${other.name}`);
+  }
 
   const skipped: { field: string; reason: string }[] = [];
   const conflict = await get<any>(
@@ -445,21 +504,19 @@ export async function linkItemToOff(opts: {
   if (conflict) {
     skipped.push({ field: "barcode", reason: `code already belongs to ${conflict.name}` });
   } else if (!already) {
-    await run("INSERT INTO item_barcodes (id, item_id, house_id, code, format, created_at) VALUES (?, ?, ?, ?, 'openfoodfacts', ?)", [
-      newId("bar"),
-      item.id,
-      item.house_id,
-      product.code,
-      now(),
-    ]);
+    await run(
+      "INSERT INTO item_barcodes (id, item_id, house_id, code, format, created_at) VALUES (?, ?, ?, ?, 'openfoodfacts', ?)",
+      [newId("bar"), item.id, item.house_id, product.code, now()],
+    );
   }
 
   const result = await fillItemFromOff({ item, product, source, allowDefaultUnit: opts.allowDefaultUnit });
   await run(
-    `UPDATE items SET off_code = ?, off_source = ?, off_linked_at = ?, off_synced_at = ?,
+    `UPDATE items SET off_code = ?, off_project = ?, off_source = ?, off_linked_at = ?, off_synced_at = ?,
        off_filled = ?, updated_at = ? WHERE id = ?`,
     [
       product.code,
+      product.project,
       source,
       now(),
       now(),
@@ -471,13 +528,14 @@ export async function linkItemToOff(opts: {
   return {
     filled: result.filled,
     skipped: [...skipped, ...result.skipped],
-    item: await get<any>("SELECT * FROM items WHERE id = ?", [item.id]) ?? item,
+    item: (await get<any>("SELECT * FROM items WHERE id = ?", [item.id])) ?? item,
   };
 }
 
 export async function unlinkItemFromOff(itemId: string) {
   await run(
-    "UPDATE items SET off_code = NULL, off_source = NULL, off_linked_at = NULL, off_synced_at = NULL, off_filled = '[]', updated_at = ? WHERE id = ?",
+    `UPDATE items SET off_code = NULL, off_project = 'off', off_source = NULL, off_linked_at = NULL,
+       off_synced_at = NULL, off_filled = '[]', updated_at = ? WHERE id = ?`,
     [now(), itemId],
   );
 }
@@ -491,7 +549,12 @@ export function offProductIsFresh(product: OffProduct | null): boolean {
 export async function pruneOffProductCache() {
   const cutoff = new Date(Date.now() - OFF_CACHE_DAYS * 4 * 864e5).toISOString();
   await run(
-    "DELETE FROM catalog_products WHERE fetched_at < ? AND code NOT IN (SELECT off_code FROM items WHERE off_code IS NOT NULL)",
+    `DELETE FROM catalog_products
+     WHERE fetched_at < ?
+       AND NOT EXISTS (
+         SELECT 1 FROM items i
+         WHERE i.off_code = catalog_products.code AND i.off_project = catalog_products.project
+       )`,
     [cutoff],
   );
 }

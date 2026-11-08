@@ -1153,6 +1153,7 @@ describe("inventory and stock", () => {
 describe("OpenFoodFacts links and shared catalogue", () => {
   const fetaCode = "5201704054183";
   const dodoniCode = "5201168218114";
+  const projectCode = "5201704054190";
 
   async function seedProduct(code: string, name: string, brand: string, quantity: string, image: string) {
     const timestamp = new Date().toISOString();
@@ -1193,9 +1194,9 @@ describe("OpenFoodFacts links and shared catalogue", () => {
     };
     await run(
       `INSERT INTO catalog_products
-         (code, name, brand, quantity, image, categories, summary, payload, source, fetched_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, '{}', 'openfoodfacts', ?, ?)
-       ON CONFLICT(code) DO UPDATE SET
+         (project, code, name, brand, quantity, image, categories, summary, payload, source, fetched_at, updated_at)
+       VALUES ('off', ?, ?, ?, ?, ?, ?, ?, '{}', 'openfoodfacts', ?, ?)
+       ON CONFLICT(project, code) DO UPDATE SET
          name = excluded.name, brand = excluded.brand, quantity = excluded.quantity,
          image = excluded.image, categories = excluded.categories, summary = excluded.summary,
          source = excluded.source, fetched_at = excluded.fetched_at, updated_at = excluded.updated_at`,
@@ -1206,6 +1207,7 @@ describe("OpenFoodFacts links and shared catalogue", () => {
   before(async () => {
     await seedProduct(fetaCode, "Feta", "Kolios", "150 g", "https://example.test/feta.png");
     await seedProduct(dodoniCode, "Feta cheese (P.D.O.)", "Dodoni", "1 kg", "https://example.test/dodoni.png");
+    await seedProduct(projectCode, "Project feta", "Kolios", "200 g", "https://example.test/project.png");
   });
 
   it("searches the shared cache without going online", async () => {
@@ -1215,6 +1217,97 @@ describe("OpenFoodFacts links and shared catalogue", () => {
     assert.equal(res.data.warning, null);
     assert.equal(res.data.warningCode, null);
     assert.ok(res.data.products.some((product: any) => product.code === fetaCode));
+  });
+
+  it("lists every Open Food Facts project", async () => {
+    const res = await request("/api/off/projects");
+    assert.equal(res.status, 200);
+    assert.deepEqual(
+      res.data.projects.map((project: any) => project.id),
+      ["off", "obf", "opff", "opf"],
+    );
+    const pet = res.data.projects.find((project: any) => project.id === "opff");
+    assert.equal(pet.label, "Open Pet Food Facts");
+    assert.equal(pet.capabilities.nutrition, true);
+    assert.equal(pet.capabilities.scores, false);
+  });
+
+  it("routes an unknown barcode to the owning project", async () => {
+    const code = "9990000000017";
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes(code) && String(input).includes("product_type=all")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              status: "success",
+              result: { id: "product_found" },
+              product: {
+                code,
+                product_name: "Test lip balm",
+                brands: "Test brand",
+                product_type: "beauty",
+              },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        );
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+
+    try {
+      const lookup = await request(`/api/off/lookup/${code}`);
+      assert.equal(lookup.status, 200);
+      assert.equal(lookup.data.project, "obf");
+      assert.equal(lookup.data.product.productType, "beauty");
+      assert.equal(lookup.data.product.name, "Test lip balm");
+
+      const cached = await request(`/api/off/product/obf/${code}`);
+      assert.equal(cached.status, 200);
+      assert.equal(cached.data.project, "obf");
+
+      const offSearch = await request(`/api/catalog/search?q=lip%20balm&online=0&project=off`);
+      assert.equal(offSearch.data.products.length, 0);
+      const beautySearch = await request(`/api/catalog/search?q=lip%20balm&online=0&project=obf`);
+      assert.ok(beautySearch.data.products.some((product: any) => product.code === code));
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("keeps the same barcode separate in different projects", async () => {
+    const code = "9990000000017";
+    const timestamp = new Date().toISOString();
+    await run(
+      `INSERT INTO catalog_products
+         (project, code, name, brand, quantity, image, categories, summary, payload, source, fetched_at, updated_at)
+       VALUES ('opff', ?, 'Test pet food', 'Pet brand', '85 g', NULL, '[]', ?, '{}', 'openfoodfacts', ?, ?)
+       ON CONFLICT(project, code) DO UPDATE SET name = excluded.name`,
+      [code, JSON.stringify({ code, project: "opff", name: "Test pet food", brand: "Pet brand" }), timestamp, timestamp],
+    );
+
+    const beauty = await request(`/api/off/product/obf/${code}`);
+    const pet = await request(`/api/off/product/opff/${code}`);
+    assert.equal(beauty.data.name, "Test lip balm");
+    assert.equal(pet.data.name, "Test pet food");
+    assert.equal(beauty.data.project, "obf");
+    assert.equal(pet.data.project, "opff");
+  });
+
+  it("links an item with the product's project", async () => {
+    const created = await request(`/api/houses/${houseId}/items`, {
+      method: "POST",
+      body: { name: "Project-aware feta", unit: "pcs" },
+    });
+    assert.equal(created.status, 201);
+    const linked = await request(`/api/items/${created.data.id}/off/link`, {
+      method: "POST",
+      body: { code: projectCode, project: "off" },
+    });
+    assert.equal(linked.status, 200);
+    assert.equal(linked.data.item.off.project, "off");
+    assert.equal(linked.data.item.off.product.project, "off");
   });
 
   it("returns a stable code and human-readable warning for an empty online search", async () => {

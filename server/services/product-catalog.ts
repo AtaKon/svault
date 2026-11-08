@@ -5,6 +5,7 @@ import { ROOT, CATALOG_URL } from "../config.js";
 import type { CatalogExport, CatalogImportResult, CatalogMapping } from "../../shared/types.js";
 import { normalizeVendorName } from "./vendors.js";
 import { productAliasKey } from "./product-aliases.js";
+import { isOffProjectId } from "./off/projects.js";
 
 /**
  * Shared receipt-text -> OpenFoodFacts catalogue.
@@ -30,6 +31,7 @@ interface MappingRow {
   raw_key: string;
   raw_text: string | null;
   off_code: string | null;
+  off_project: string | null;
   name: string | null;
   brand: string | null;
   unit: string | null;
@@ -52,6 +54,7 @@ export function serializeCatalogMapping(row: MappingRow): CatalogMapping {
     vendor: row.vendor_label ?? null,
     rawText: row.raw_text ?? row.raw_key,
     offCode: row.off_code ?? null,
+    offProject: isOffProjectId(row.off_project) ? row.off_project : "off",
     name: row.name ?? null,
     brand: row.brand ?? null,
     unit: row.unit ?? null,
@@ -288,6 +291,7 @@ function normalizeImportEntry(entry: any): Omit<CatalogMapping, "id" | "uses" | 
     vendor: String(entry.vendor ?? "").trim().slice(0, 80) || null,
     rawText: rawText.slice(0, 200),
     offCode,
+    offProject: isOffProjectId(entry.offProject ?? entry.off_project) ? (entry.offProject ?? entry.off_project) : "off",
     name,
     brand: String(entry.brand ?? "").trim().slice(0, 80) || null,
     unit: String(entry.unit ?? "").trim().slice(0, 10) || null,
@@ -331,13 +335,14 @@ export async function importCatalogMappings(input: unknown): Promise<CatalogImpo
     }
     await run(
       `INSERT INTO catalog_mappings
-         (id, country, vendor_key, vendor_label, raw_key, raw_text, off_code, name, brand, unit, category,
+         (id, country, vendor_key, vendor_label, raw_key, raw_text, off_code, off_project, name, brand, unit, category,
           source, confidence, uses, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
        ON CONFLICT(house_id, country, vendor_key, raw_key) DO UPDATE SET
          vendor_label = excluded.vendor_label,
          raw_text = excluded.raw_text,
          off_code = excluded.off_code,
+         off_project = excluded.off_project,
          name = excluded.name,
          brand = excluded.brand,
          unit = excluded.unit,
@@ -354,6 +359,7 @@ export async function importCatalogMappings(input: unknown): Promise<CatalogImpo
         rawKey,
         mapping.rawText,
         mapping.offCode,
+        mapping.offProject,
         mapping.name,
         mapping.brand,
         mapping.unit,
