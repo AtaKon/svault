@@ -140,14 +140,14 @@ export function ContributionsPage() {
 
   const linkAccount = async (project: OffProjectId, account: string, secret: string) => {
     if (!account.trim() || !secret) {
-      setPassword("");
-      setProjectPassword("");
+      if (project === "off") setPassword("");
+      else setProjectPassword("");
       toast.error(t("Enter your Open Food Facts username and password"));
       return;
     }
     if (!consent) {
-      setPassword("");
-      setProjectPassword("");
+      if (project === "off") setPassword("");
+      else setProjectPassword("");
       toast.error(t("Accept the license before connecting an account"));
       return;
     }
@@ -197,6 +197,7 @@ export function ContributionsPage() {
         method: "POST",
         body: { insightId: question.insightId, annotation },
       });
+      dismissedQuestions.current.add(question.insightId);
       setQuestion(null);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t("Could not send the answer"));
@@ -345,7 +346,7 @@ export function ContributionsPage() {
             details: failures.slice(0, 3).join("; "),
           }),
         );
-      } else {
+      } else if (succeeded.length > 0) {
         toast.success(t("Queued {count} contributions", { count: succeeded.length }));
       }
       await load();
@@ -768,7 +769,12 @@ export function ContributionsPage() {
 
       <Sheet
         open={Boolean(selected)}
-        onClose={() => setSelected(null)}
+        onClose={() => {
+          if (selected) {
+            setFieldSelections((selections) => ({ ...selections, [selected.id]: fields }));
+          }
+          setSelected(null);
+        }}
         title={t("Review contribution")}
         description={t("Only the selected fields are sent. Existing Open Food Facts values are never overwritten silently.")}
         footer={

@@ -39,6 +39,7 @@ import { seedVendorCatalog } from "./services/vendors.js";
 import { seedProductCatalog } from "./services/product-catalog.js";
 import { pruneOffProductCache } from "./services/openfoodfacts.js";
 import { startOffContributionWorker } from "./services/off/contributions.js";
+import { offWritesEnabled } from "./services/off/auth.js";
 import { validateSecretKey } from "./services/off/secrets.js";
 import { pruneAiCallLogs } from "./services/ai-logs.js";
 import { sweepOrphanUploads } from "./services/upload-cleanup.js";
@@ -50,7 +51,7 @@ await seedVendorCatalog();
 await seedProductCatalog();
 await pruneOffProductCache();
 await pruneAiCallLogs();
-validateSecretKey();
+if (offWritesEnabled() || process.env.SV_OFF_SECRET_KEY) validateSecretKey();
 startOffContributionWorker();
 
 export const app = express();

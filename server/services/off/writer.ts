@@ -101,6 +101,12 @@ export async function buildContribution(opts: {
     if (!opts.receiptLineId) {
       throw new ApiError(400, "Choose a receipt line before sharing a price");
     }
+    const line = await get<{ id: string }>(
+      `SELECT rl.id FROM receipt_lines rl JOIN receipts r ON r.id = rl.receipt_id
+       WHERE rl.id = ? AND r.house_id = ?`,
+      [opts.receiptLineId, opts.houseId],
+    );
+    if (!line) throw new ApiError(404, "Receipt line not found in this house");
     const prices = await priceCandidates(opts.houseId, 250);
     const match = prices.find(
       (candidate) =>

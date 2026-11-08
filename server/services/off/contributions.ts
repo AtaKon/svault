@@ -327,6 +327,9 @@ export async function processContribution(id: string): Promise<void> {
 }
 
 export async function retryContribution(id: string, userId: string): Promise<OffContribution | null> {
+  if (!offWritesEnabled() && !offDryRun()) {
+    throw new ApiError(403, "Contributions are disabled on this server");
+  }
   const row = await get<ContributionRow>("SELECT * FROM off_contributions WHERE id = ? AND user_id = ?", [id, userId]);
   if (!row) return null;
   if (!["failed", "retry"].includes(row.status)) return getContribution(id, userId);

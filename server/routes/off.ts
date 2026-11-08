@@ -229,14 +229,18 @@ offRoutes.get(
       ...(!consent ? ["consent"] : []),
     ];
     const identityCache = new Map<string, boolean>();
+    let priceIdentity: boolean | null = null;
     const withState = [];
     for (const candidate of candidates) {
       if (candidate.kind !== "price" && recent.has(`${candidate.project}:${candidate.code}`)) continue;
       let hasIdentity: boolean;
       if (candidate.kind === "price") {
-        hasIdentity = Boolean(
-          (await serviceBearer(req.user!.id, "prices")) ?? (await instanceServiceBearer("prices")),
-        );
+        if (priceIdentity === null) {
+          priceIdentity = Boolean(
+            (await serviceBearer(req.user!.id, "prices")) ?? (await instanceServiceBearer("prices")),
+          );
+        }
+        hasIdentity = priceIdentity;
       } else {
         // Reports use the OFF session even when the product lives elsewhere.
         const project = candidate.kind === "wrong_project" || candidate.kind === "report" ? "off" : candidate.project;

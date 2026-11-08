@@ -43,7 +43,7 @@ export function OffProductPicker({
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, initialQuery]);
+  }, [open, initialQuery, project]);
 
   const search = async (raw?: string) => {
     const q = (raw ?? query).trim();

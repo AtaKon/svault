@@ -52,7 +52,7 @@ export async function priceCandidates(houseId: string, limit = 20): Promise<OffC
        AND (rl.barcode IS NOT NULL OR rl.off_code IS NOT NULL)
        AND COALESCE(rl.unit_price, rl.line_total, 0) > 0
      ORDER BY COALESCE(r.purchased_at, r.created_at) DESC
-     LIMIT 60`,
+     LIMIT 250`,
     [houseId],
   );
   const candidates: OffContributionCandidate[] = [];
