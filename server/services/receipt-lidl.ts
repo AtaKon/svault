@@ -18,8 +18,9 @@ const WEIGHT_LINE =
   /^(?<qty>\d+(?:[.,]\d+)?)\s*(?<unit>kg|g|l|ml)\s*[x×Χχ*]\s*(?<unitPrice>\d+[.,]\d{2})(?:\s*(?:EUR|€)\s*\/\s*(?:kg|g|l|ml))?\s*$/i;
 const DISCOUNT_LINE = /κπτωση|discount/i;
 const AMOUNT_LINE = /^-?\d+[.,]\d{2}\s*(?:€|EUR)?$/i;
+const EXCLUDED_CHARGE = /^(?:ΤΣ\.?Π\.?ΧΡ|ΣΑΚΟΥ|ΠΕΡΙΒΑΝ\.?ΤΕΛΟΣ|ΧΑΡΤΟΣΑΚΟΥΛ|ΕΝΟΙΚΙΑΣΗ|ΕΓΓΥΗΣΗ)/i;
 const NON_PRODUCT_LINE =
-  /^(?:ΤΣ\.?Π\.?ΧΡ|ΣΑΚΟΥ|ΠΕΡΙΒΑΝ\.?ΤΕΛΟΣ|ΧΑΡΤΟΣΑΚΟΥΛ|ΕΝΟΙΚΙΑΣΗ|ΕΓΓΥΗΣΗ|ΚΑΡΤΑ|ΜΕΤΡΗΤΑ|ΡΕΣΤΑ|ΠΛΗΡΩΜ|ΦΠΑ|Φ\.Π\.Α|ΑΦΜ|ΤΑΜΕΙΟ|ΗΜΕΡ|ΩΡΑ|ΣΥΝΟΛΟ|ΠΩΛΗΘΕΝΤΑ|EFT|VISA|MASTERCARD|ΕΚΠΤΩΣ|ΕΞΟΙΚΟΝΟΜ)/i;
+  /^(?:ΚΑΡΤΑ|ΜΕΤΡΗΤΑ|ΡΕΣΤΑ|ΠΛΗΡΩΜ|ΦΠΑ|Φ\.Π\.Α|ΑΦΜ|ΤΑΜΕΙΟ|ΗΜΕΡ|ΩΡΑ|ΣΥΝΟΛΟ|ΠΩΛΗΘΕΝΤΑ|EFT|VISA|MASTERCARD|ΕΚΠΤΩΣ|ΕΞΟΙΚΟΝΟΜ)/i;
 const MONEY = /-?\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})|-?\d+[.,]\d{2}/g;
 
 /** Fold look-alike Latin characters so OCR'd totals still match ΣΥΝΟΛΟ. */
@@ -80,6 +81,23 @@ function moneyTokens(text: string): number[] {
     .filter((value): value is number => value != null && Number.isFinite(value));
 }
 
+/** Non-inventory charges are excluded from product drafts but still contribute to the total. */
+export function lidlExcludedCharges(rawText: string): number {
+  const lines = String(rawText ?? "").replace(/\r\n?/g, "\n").split("\n");
+  const header = lines.findIndex((line) => /ΦΟΡΟΛΟΓΙΚΗ/i.test(line));
+  if (header < 0) return 0;
+  let cents = 0;
+  for (const raw of lines.slice(header + 1)) {
+    if (isTotalLine(raw)) break;
+    const line = normalizeOcrLine(raw.trim());
+    const match = line.match(PRODUCT_LINE);
+    if (!match?.groups || !EXCLUDED_CHARGE.test(match.groups.name)) continue;
+    const amount = parseAmount(match.groups.total);
+    if (amount != null && amount > 0) cents += Math.round(amount * 100);
+  }
+  return cents / 100;
+}
+
 function cleanProductName(raw: string): string {
   return raw
     .replace(/\s+-?\d{6,}\s*$/, "") // Lidl article numbers such as -0523350
@@ -101,8 +119,9 @@ export function lidlConfidence(text: string): number {
   const value = String(text ?? "");
   let score = 0;
   if (/\bLIDL\b/i.test(value)) score += 0.5;
-  if (/ΛΙΝΤΑ/i.test(value)) score += 0.3;
-  if (/ΛΙΝΤΑ\s+ΕΛΛΑΣ/i.test(value)) score += 0.2;
+  // The Greek lambda in the legal name can be read as delta on small scans.
+  if (/[ΛΔ]ΙΝΤΑ/i.test(value)) score += 0.3;
+  if (/[ΛΔ]ΙΝΤΑ\s+ΕΛΛΑΣ/i.test(value)) score += 0.2;
   if (/LIDL\s*PLUS|lidlplus/i.test(value)) score += 0.1;
   // A Greek fiscal header is a strong signal even when the logo is cropped.
   if (/ΦΟΡΟΛΟΓΙΚΗ/i.test(value)) score += 0.2;
@@ -141,7 +160,7 @@ export function parseLidlReceipt(rawText: string, fallbackCurrency: string | nul
     const followUp = QUANTITY_LINE.test(line) || WEIGHT_LINE.test(line);
     const productMatch = followUp || DISCOUNT_LINE.test(line) ? null : line.match(PRODUCT_LINE);
     if (productMatch?.groups) {
-      if (NON_PRODUCT_LINE.test(productMatch.groups.name)) {
+      if (EXCLUDED_CHARGE.test(productMatch.groups.name) || NON_PRODUCT_LINE.test(productMatch.groups.name)) {
         current = null;
         pendingDiscount = false;
         continue;

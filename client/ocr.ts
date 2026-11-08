@@ -2,6 +2,8 @@ type OcrMode = "recipe" | "receipt";
 
 export interface OcrOptions {
   mode?: OcrMode;
+  /** Complete readings, called when a product region was found and additional passes succeeded. */
+  onCandidates?: (texts: string[]) => void;
 }
 
 interface BoundingBox {
@@ -99,7 +101,7 @@ function collectLines(page: PageLike): TextLine[] {
   return lines.sort((a, b) => a.top - b.top || a.left - b.left);
 }
 
-function detectProductRegion(page: PageLike, width: number, height: number): Region | null {
+export function detectProductRegion(page: PageLike, width: number, height: number): Region | null {
   const lines = collectLines(page);
   if (lines.length < 3) return null;
 
@@ -114,12 +116,12 @@ function detectProductRegion(page: PageLike, width: number, height: number): Reg
   const firstProduct = beforeTotal.find((line) => isProductLike(line.text));
 
   let top: number;
-  if (firstProduct) {
-    top = firstProduct.top - 8;
-  } else if (header) {
+  if (header) {
     // Even when Tesseract splits names and prices into separate lines, cropping
     // everything between the receipt header and ΣΥΝΟΛΟ still covers the basket.
     top = Math.min(header.bottom + 2, total.top - 24);
+  } else if (firstProduct) {
+    top = firstProduct.top - 8;
   } else {
     return null;
   }
@@ -173,7 +175,7 @@ function extractProductSectionText(fullText: string): string | null {
     .join("\n");
 }
 
-function spliceProductText(fullText: string, productText: string): string {
+export function spliceProductText(fullText: string, productText: string): string {
   const lines = fullText.replace(/\r\n?/g, "\n").split("\n");
   const trimmed = lines.map((line) => line.trim());
   const headerIndex = trimmed.findIndex((line) => HEADER_LINE.test(line));
@@ -188,13 +190,7 @@ function spliceProductText(fullText: string, productText: string): string {
   }
   if (totalIndex < 0) return fullText;
 
-  let start = headerIndex + 1;
-  for (let index = headerIndex + 1; index < totalIndex; index++) {
-    if (isProductLike(trimmed[index])) {
-      start = index;
-      break;
-    }
-  }
+  const start = headerIndex + 1;
 
   const replacement = productText
     .split("\n")
@@ -476,8 +472,9 @@ export async function ocrImage(
     // Only replace the full pass when the dedicated crop is clearly better. A
     // small score difference is usually OCR noise, and the full pass has more
     // context for the parser.
-    if (!best || best.score < fullCandidate.score + 2) return fullText;
-    return spliceProductText(fullText, best.text);
+    const selected = !best || best.score < fullCandidate.score + 2 ? fullText : spliceProductText(fullText, best.text);
+    options.onCandidates?.([...new Set([selected, fullText, ...candidates.slice(1).map((candidate) => spliceProductText(fullText, candidate.text))])]);
+    return selected;
   } finally {
     await worker.terminate().catch(() => undefined);
   }

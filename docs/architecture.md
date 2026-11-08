@@ -196,18 +196,20 @@ stock, prices, barcodes, reminders, photo labelling and authentication.
   and the table is dropped. A crop is only used when the component is bright against its surroundings,
   roughly rectangular, and contains ink; otherwise the original photo is read unchanged. The corrected
   image is also the one uploaded, so the stored scan matches the recognised text.
-- Receipt OCR is two-pass. The full image is read with sparse-text layout detection to find the
+- Receipt OCR is two-pass. The full image is read with single-column layout detection to find the
   `ΦΟΡΟΛΟΓΙΚΗ ΑΠΟΔΕΙΞΗ`/`ΑΠΟΔΕΙΞΗ ΛΙΑΝΙΚΗΣ ΠΩΛΗΣΗΣ` header and the `ΣΥΝΟΛΟ` anchor, keeping the
   merchant, date, payment and VAT summary intact. The product region between them is cropped,
   upscaled, and read again both as grayscale and as an Otsu-binarised image. Candidates are compared
   by how many rows parse as products (plus Greek characters preserved and VAT columns found), not by
-  Tesseract confidence alone. The better product text is spliced back into the full receipt, so the
-  layout anchors and totals are never lost. The OCR pass never rewrites a product name or price; only
+  Tesseract confidence alone. Alternative product text is spliced back into the full receipt, so the
+  layout anchors and totals are retained. For unedited OCR text, the server compares template parses
+  against the printed total and rejects alternatives that lose recognized lines or barcodes. The OCR
+  pass never rewrites a product name or price; only
   numeric look-alikes (`O`/`Θ`/`Β`, missing decimals) are repaired in the parser.
 - Barcode decoding uses `@zxing/browser`. The camera API requires HTTPS or localhost.
 - Receipt scans reuse the same browser OCR. A local line parser (`server/services/receipt-local.ts`)
   drops totals, tax and payment lines, then reads quantity/unit/price from the remaining lines. AI can
-  replace that draft when configured. Merchant names are resolved against `vendor_catalog`
+  replace that draft when explicitly requested. Merchant names are resolved against `vendor_catalog`
   (`server/services/vendors.ts`), which is seeded on boot and keyed by country; Greece is the first
   catalogue and adding another country is data-only.
 - Known layouts use deterministic templates (`server/services/receipt-templates.ts`). The built-in

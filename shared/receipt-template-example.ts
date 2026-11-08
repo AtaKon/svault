@@ -66,7 +66,7 @@ export const SKLAVENITIS_TEMPLATE_RULES: ReceiptTemplateRules = {
   },
   product: {
     pattern:
-      "^(?!ΕΚΠΤΩΣΗ)(?<name>[\\p{L}][\\p{L}\\p{N} .,%/&+*()'\\-–]*?)(?:\\s+(?<total>-?\\d{1,4}[.,]\\d{2})\\s*(?:€|EUR)?(?:\\s+(?<rate>\\d{1,2}(?:[.,]\\d+)?)\\s*%)?)?\\s*$",
+      "^(?!ΕΚΠΤΩΣΗ)(?<name>[\\p{L}][\\p{L}\\p{N} .,%/&+*()'\"“”\\-–]*?)(?:\\s+(?<total>-?\\d{1,4}[.,]\\d{2})\\s*(?:€|EUR)?(?:\\s+(?<rate>\\d{1,2}(?:[.,]\\d+)?)\\s*%)?)?\\s*$",
     ignore: [
       "^ΕΛΛΗΝΙΚΕΣ(?:\\s|$)",
       "^ΣΚΛΑΒΕΝΙΤΗΣ(?:\\s|$)",
@@ -103,4 +103,10 @@ export const SKLAVENITIS_TEMPLATE_RULES: ReceiptTemplateRules = {
     ],
   },
   total: { pattern: "^ΣΥΝΟΛΟ(?!\\s+ΕΚΠΤΩΣΕΩΝ)(?=\\s|$)" },
+};
+
+/** My market uses the same two-line quantity layout, without barcode lines. */
+export const MY_MARKET_TEMPLATE_RULES: ReceiptTemplateRules = {
+  ...SKLAVENITIS_TEMPLATE_RULES,
+  keywords: ["MY MARKET", "ΜΕΤΡΟ ΑΕΒΕ"],
 };

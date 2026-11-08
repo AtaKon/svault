@@ -7,7 +7,7 @@ import { Badge, Button, Card, Field, Input, PageHeader, Select, Sheet, Spinner, 
 import { Icon } from "@/components/icons";
 import { useToast } from "@/components/toast";
 import { ocrImage } from "@/ocr";
-import { mergeOcrTexts } from "@/ocr-merge";
+import { mergeOcrCandidates, mergeOcrTexts } from "@/ocr-merge";
 import { scanDocument } from "@/document-scan";
 import { stitchImages } from "@/image-stitch";
 import { money, aiCostLabel, receiptTemplateLabel, relativeTime, shortDate, todayInput } from "@/format";
@@ -70,6 +70,7 @@ interface ReceiptPage {
   url: string;
   trimmed: boolean;
   text: string;
+  candidates?: string[];
   status: "queued" | "reading" | "done" | "error";
   /** The page photo on the server, sent to the vision model on its own. */
   uploadedPath: string | null;
@@ -84,6 +85,7 @@ interface SavedDraft {
     name: string;
     trimmed: boolean;
     text: string;
+    candidates?: string[];
     status: ReceiptPage["status"];
     uploadedPath: string | null;
   }[];
@@ -347,6 +349,7 @@ export function ReceiptScanPage() {
       name: page.file.name,
       trimmed: page.trimmed,
       text: page.text,
+      candidates: page.candidates,
       status: page.status,
       uploadedPath: page.uploadedPath,
     })),
@@ -510,6 +513,7 @@ export function ReceiptScanPage() {
     setOcrError(null);
     patchPage(key, { status: "reading" });
     try {
+      let candidates: string[] = [];
       const result = await ocrImage(
         page.file,
         (progress, status) => {
@@ -518,10 +522,10 @@ export function ReceiptScanPage() {
             ? `${t("Page {page} of {count}", { page: index + 1, count })} · ${t(status)}`
             : t(status));
         },
-        { mode: "receipt" },
+        { mode: "receipt", onCandidates: (values) => { candidates = values; } },
       );
       const recognised = result.trim();
-      patchPage(key, { text: recognised, status: "done" });
+      patchPage(key, { text: recognised, candidates, status: "done" });
       if (!recognised) {
         setOcrError(
           t("Page {page} had no detectable text. Try a sharper, flatter photo or type the lines manually.", { page: index + 1 }),
@@ -610,10 +614,10 @@ export function ReceiptScanPage() {
       for (let offset = 0; offset < files.length; offset++) {
         const file = files[offset];
         try {
-          const prepared = await prepareImage(file, { maxSize: 2800, quality: 0.92 });
+          const prepared = await prepareImage(file, { maxSize: 4000, quality: 0.92 });
           // Straighten each shot on its own before OCR: a combined photo would
           // confuse the corner finder and blur the seam.
-          const scan = await scanDocument(prepared);
+          const scan = await scanDocument(prepared, { maxSize: 4000 });
           const page: ReceiptPage = {
             key: newKey("page"),
             file: scan.file,
@@ -704,15 +708,19 @@ export function ReceiptScanPage() {
     }
     setBusy(true);
     try {
+      const currentPages = pagesRef.current;
+      const alternatives = mergeOcrCandidates(currentPages, text);
       const data = await api<ReceiptScanResponse>(`/api/houses/${house.id}/receipts/scan`, {
         method: "POST",
         body: {
           text,
+          ...(alternatives.length ? { candidates: alternatives } : {}),
           ...(uploadedPath ? { image: uploadedPath } : {}),
           ...(pageImages.length ? { images: pageImages } : {}),
           ...(preferAi ? { preferAi: true } : {}),
         },
       });
+      if (data.selectedText != null && data.selectedText !== text) setText(data.selectedText);
       applyScan(data);
       if (!data.draft.lines.length) {
         toast.push(t("No product lines found — add them by hand below."));
@@ -1028,6 +1036,7 @@ export function ReceiptScanPage() {
             url: URL.createObjectURL(file),
             trimmed: page.trimmed,
             text: page.text,
+            candidates: page.candidates,
             // OCR that was interrupted by the reload can be re-run per page.
             status: page.status === "done" ? "done" : page.text ? "done" : "error",
             uploadedPath: alive ? page.uploadedPath : null,
@@ -1450,6 +1459,14 @@ export function ReceiptScanPage() {
                 )}
               </div>
               {warning && <p className="rounded-xl bg-raised px-3 py-2 text-[11px] leading-relaxed text-muted">{t(warning)}</p>}
+              {provider && aiAvailable && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button type="button" size="sm" variant="secondary" icon="sparkles" loading={busy} onClick={() => void readReceipt(true)}>
+                    {t("Re-read with AI")}
+                  </Button>
+                  <span className="text-[11px] text-muted">{t("Re-reading replaces the current receipt details and line edits.")}</span>
+                </div>
+              )}
               <Field label={t("Shop")} hint={t("starts a new shop if unknown")}>
                 <Input
                   value={vendorName}
@@ -1568,6 +1585,12 @@ export function ReceiptScanPage() {
                 <div className="space-y-2">
                   {lines.map((line) => {
                     const check = line.include ? validation[line.key] : undefined;
+                    const unitPrice = numberOrNull(line.unitPrice);
+                    const lineTotal = numberOrNull(line.lineTotal);
+                    const quantity = numberOrNull(line.quantity);
+                    const missingPrice = Boolean(provider && line.include && line.description.trim() && unitPrice == null && lineTotal == null);
+                    const priceMismatch = Boolean(provider && line.include && quantity != null && quantity > 0 &&
+                      unitPrice != null && lineTotal != null && Math.abs(quantity * unitPrice - lineTotal) > 0.03);
                     const suggestion =
                       !line.itemId && line.suggestedItemId
                         ? { id: line.suggestedItemId, name: line.suggestedItemName ?? line.description, unit: line.suggestedItemUnit ?? "" }
@@ -1582,6 +1605,8 @@ export function ReceiptScanPage() {
                             ? "border-line/60 bg-raised/40 opacity-70"
                             : check?.error
                               ? "border-danger/60 bg-surface"
+                              : missingPrice || priceMismatch
+                                ? "border-warn/60 bg-surface"
                               : "border-line bg-surface",
                         )}
                       >
@@ -1756,6 +1781,8 @@ export function ReceiptScanPage() {
                               />
                             </div>
                             {check?.error && <p className="text-[11px] leading-snug text-danger">{check.error}</p>}
+                            {missingPrice && <p className="text-[11px] text-warn">{t("Price not recognised — check this line.")}</p>}
+                            {priceMismatch && <p className="text-[11px] text-warn">{t("Quantity and unit price do not match this line total.")}</p>}
                             {line.expanded && (
                               <div className="grid grid-cols-1 gap-2 rounded-lg bg-raised p-2 min-[360px]:grid-cols-2">
                                 <Field label={t("Place")}>
@@ -1955,8 +1982,11 @@ function ReconciliationBar({
               {t("Gap")} {money(Math.abs(difference), currency)}
               {savings > 0 ? t(" after {amount} savings", { amount: money(savings, currency) }) : ""} {t("— check for missing or misread lines.")}</span>
             {canReRead && (
-              <Button size="sm" variant="secondary" icon="sparkles" loading={rereading} onClick={onReRead}>
-                {t("Re-read with AI")}</Button>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button size="sm" variant="secondary" icon="sparkles" loading={rereading} onClick={onReRead}>
+                  {t("Re-read with AI")}</Button>
+                <span>{t("Re-reading replaces the current receipt details and line edits.")}</span>
+              </div>
             )}
           </div>
         )}
