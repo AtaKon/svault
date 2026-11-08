@@ -144,7 +144,13 @@ async function billAccess(req: Request, minRole: "viewer" | "member" = "viewer")
   return { bill, houseId: bill.house_id as string };
 }
 async function deleteDocument(filename?: string | null) {
-  if (filename) await fs.promises.rm(uploadPath("bills", filename), { force: true }).catch(() => undefined);
+  if (!filename) return;
+  try {
+    const referenced = await get("SELECT 1 FROM bills WHERE document = ? LIMIT 1", [filename]);
+    if (!referenced) await fs.promises.rm(uploadPath("bills", filename), { force: true });
+  } catch {
+    // Keep the file if the database cannot confirm it is unreferenced.
+  }
 }
 async function validatePeople(houseId: string, paidBy: string | null | undefined, splitWith: string[]) {
   const members = await all<{ user_id: string }>("SELECT user_id FROM house_members WHERE house_id = ?", [houseId]);
@@ -162,10 +168,9 @@ billRoutes.get("/:houseId/bills", handler(async (req, res) => {
 
 billRoutes.post("/:houseId/bills", requireHouseBillMember, pdfUpload.single("document"), verifyPdf, handler(async (req, res) => {
   const filename = req.file?.filename ?? null;
-  let created = false;
+  const houseId = String(req.params.houseId);
   let id: string | null = null;
   try {
-    const houseId = String(req.params.houseId);
     const body = parseBody(input, req.body);
     const house = await get<any>("SELECT currency FROM houses WHERE id = ?", [houseId]);
     const currency = String(house?.currency ?? "EUR").toUpperCase();
@@ -185,22 +190,29 @@ billRoutes.post("/:houseId/bills", requireHouseBillMember, pdfUpload.single("doc
       id, houseId, body.name, body.billType, body.category, body.category === "to_split" && body.ledgerConfirmed === true ? 1 : 0, body.amount, currency,
       body.dueDate || null, paidBy, JSON.stringify(people), filename, body.notes || null, req.user!.id, now(),
     ]);
-    created = true;
     res.status(201).json(serialize(await requireBillRow(id, houseId)));
   } catch (error) {
-    if (!created) {
-      discardUploads(req);
-    } else if (filename && id) {
-      // Roll back the row if a post-insert read/serialization failed. If another
-      // request already changed it, keep the file while any bill still refers to it.
+    if (id && !res.headersSent) {
+      // If the insert committed but its follow-up read failed transiently, turn
+      // the saved row into a successful response instead of inviting a duplicate.
       try {
-        await run("DELETE FROM bills WHERE id = ? AND document = ?", [id, filename]);
-        const stillReferenced = await get("SELECT 1 FROM bills WHERE document = ? LIMIT 1", [filename]);
-        if (!stillReferenced) discardUploads(req);
+        const persisted = await billRow(id, houseId);
+        if (persisted) {
+          res.status(201).json(serialize(persisted));
+          return;
+        }
       } catch {
-        // Keep the file if the database cannot confirm that no row refers to it.
+        // Continue with conditional rollback and reference-safe file cleanup.
+      }
+      try {
+        if (filename) await run("DELETE FROM bills WHERE id = ? AND document = ?", [id, filename]);
+        else await run("DELETE FROM bills WHERE id = ?", [id]);
+      } catch {
+        // Reference-safe cleanup below keeps the file if the row still points to it.
       }
     }
+    if (filename) await deleteDocument(filename);
+    else discardUploads(req);
     throw error;
   }
 }));
@@ -242,18 +254,25 @@ billRoutes.post("/:houseId/bills/:billId/document", requireBillDocumentMember, p
     // can still fail after Multer has written the new PDF.
     current = await billRow(String(req.params.billId), houseId);
   } catch (error) {
-    discardUploads(req);
+    await deleteDocument(req.file?.filename);
     throw error;
   }
-  if (!current) { discardUploads(req); throw new ApiError(404, "Bill not found"); }
+  if (!current) { await deleteDocument(req.file?.filename); throw new ApiError(404, "Bill not found"); }
   if (!req.file) throw new ApiError(400, "Choose a PDF file");
   let updated: BillRow | undefined;
   try {
-    await run("UPDATE bills SET document = ? WHERE id = ?", [req.file.filename, current.id]);
+    const result = await run(`UPDATE bills SET document = ? WHERE id = ? AND house_id = ?
+      AND (document = ? OR (document IS NULL AND ? IS NULL))`, [
+      req.file.filename, current.id, houseId, current.document, current.document,
+    ]);
+    if (result.changes !== 1) throw new ApiError(409, "The bill document changed during upload. Try again.");
     updated = await billRow(current.id, houseId);
-    if (!updated || updated.document !== req.file.filename) throw new ApiError(404, "Bill not found");
+    if (!updated || updated.document !== req.file.filename) throw new ApiError(409, "The bill document changed during upload. Try again.");
   } catch (error) {
-    discardUploads(req);
+    // Ref-check both names: the new upload may already be committed, while the
+    // previous document may have become unreferenced after a concurrent replace.
+    await deleteDocument(req.file.filename);
+    await deleteDocument(current.document);
     throw error;
   }
   await deleteDocument(current.document);

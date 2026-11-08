@@ -4718,6 +4718,32 @@ describe("insights, household split and admin console", () => {
     assert.ok(archivedBillPdf, "house backups include bill PDFs stored under the uploads tree");
     assert.deepEqual(archivedBillPdf.data, Buffer.from("%PDF-1.7\n% bill fixture"), "the archive contains the PDF bytes");
 
+    const replacement = await request(`/api/houses/${billHouse}/bills/${accepted.data.id}/document`, {
+      method: "POST",
+      body: form(new Blob(["%PDF-1.7\n% replacement fixture"], { type: "application/pdf" }), "Replacement PDF"),
+    });
+    assert.equal(replacement.status, 200);
+    const replacementDocument = (await get<{ document: string }>("SELECT document FROM bills WHERE id = ?", [accepted.data.id]))?.document;
+    assert.ok(replacementDocument);
+    assert.ok(files().includes(replacementDocument));
+    assert.ok(!files().includes(addedFile), "a successful replacement removes the previous unreferenced PDF");
+
+    const beforeConcurrentReplacement = files();
+    const concurrentDocuments = await Promise.all([
+      request(`/api/houses/${billHouse}/bills/${accepted.data.id}/document`, {
+        method: "POST", body: form(pdf, "Concurrent replacement A"),
+      }),
+      request(`/api/houses/${billHouse}/bills/${accepted.data.id}/document`, {
+        method: "POST", body: form(pdf, "Concurrent replacement B"),
+      }),
+    ]);
+    assert.ok(concurrentDocuments.every((result) => result.status === 200 || result.status === 409));
+    const finalDocument = (await get<{ document: string }>("SELECT document FROM bills WHERE id = ?", [accepted.data.id]))?.document;
+    assert.ok(finalDocument);
+    const concurrentFiles = files().filter((file) => !beforeConcurrentReplacement.includes(file));
+    assert.deepEqual(concurrentFiles, [finalDocument], "only the document referenced by the bill remains after concurrent replaces");
+    assert.ok(!files().includes(replacementDocument), "the replaced PDF is removed after concurrent updates settle");
+
     await run("UPDATE house_members SET role = 'viewer' WHERE house_id = ? AND user_id = ?", [billHouse, secondUserId]);
     const viewerPdf = await fetch(base + accepted.data.document, { headers: { cookie: secondUserCookie } });
     assert.equal(viewerPdf.status, 200, "viewers can read a bill PDF");
@@ -4733,6 +4759,9 @@ describe("insights, household split and admin console", () => {
 
     const otherHouse = await request("/api/houses", { method: "POST", body: { name: "Other Utility House", currency: "GBP" } });
     assert.equal(otherHouse.status, 201);
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
+      otherHouse.data.id, secondUserId, "member", new Date().toISOString(),
+    ]);
     const otherBill = await request(`/api/houses/${otherHouse.data.id}/bills`, {
       method: "POST",
       body: { name: "Private house bill", amount: 2, billType: "water", category: "personal" },
@@ -4827,7 +4856,7 @@ describe("insights, household split and admin console", () => {
     await run("UPDATE bills SET document = ? WHERE id = ?", ["../outside.pdf", accepted.data.id]);
     const traversalDocument = await fetch(base + accepted.data.document, { headers: { cookie } });
     assert.equal(traversalDocument.status, 404, "stored document names cannot traverse outside the bill upload directory");
-    await run("UPDATE bills SET document = ? WHERE id = ?", [addedFile, accepted.data.id]);
+    await run("UPDATE bills SET document = ? WHERE id = ?", [finalDocument, accepted.data.id]);
     assert.equal((await request(`/uploads/bills/${addedFile}`)).status, 404);
 
     const ledger = await request(`/api/houses/${billHouse}/insights/household`);
@@ -4875,7 +4904,7 @@ describe("insights, household split and admin console", () => {
         method: "POST",
         body: form(pdf),
       });
-      assert.equal(racedUpload.status, 404);
+      assert.equal(racedUpload.status, 409);
       assert.deepEqual(files(), beforeConcurrentDelete, "an upload must be cleaned if its bill disappears during the update");
     } finally {
       await run("DROP TRIGGER delete_bill_after_document_update");
@@ -4891,7 +4920,7 @@ describe("insights, household split and admin console", () => {
         method: "POST",
         body: form(pdf),
       });
-      assert.equal(mismatchedUpload.status, 404);
+      assert.equal(mismatchedUpload.status, 409);
       assert.deepEqual(files(), beforeMismatchedUpdate, "a replaced row must discard the unadopted upload");
       assert.equal((await get<{ document: string }>("SELECT document FROM bills WHERE id = ?", [accepted.data.id]))?.document, oldDocument,
         "a failed replacement preserves the previous document reference");
@@ -4900,9 +4929,6 @@ describe("insights, household split and admin console", () => {
       await run("DROP TRIGGER restore_old_document_after_update");
     }
 
-    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
-      otherHouse.data.id, secondUserId, "member", new Date().toISOString(),
-    ]);
     const nullPayerBill = await request(`/api/houses/${otherHouse.data.id}/bills`, {
       method: "POST",
       body: { name: "Former payer fixture", amount: 6, billType: "water", category: "to_split", ledgerConfirmed: true, paidBy: secondUserId, splitWith: [ownerId, secondUserId] },
