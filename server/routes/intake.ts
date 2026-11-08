@@ -241,7 +241,7 @@ intakeRoutes.post(
 
     res.json({
       provider,
-      aiAvailable: cfg.enabled,
+      aiAvailable: Boolean(cfg.enabled && (rawText || (body.image && hasVisionModel))),
       ...(candidateSelected ? { selectedText: rawText } : {}),
       warning,
       vendorName: draft.vendorName ?? null,

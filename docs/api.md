@@ -395,6 +395,8 @@ edited. A matched template compares them against the original total and keeps an
 its arithmetic improves without reducing line or priced-line counts or losing recognized barcodes. When chosen, `selectedText`
 contains the text used. The original total anchors the comparison, so a different total in an alternative
 is not selected automatically. `warning` calls out uncertainties; matching arithmetic does not verify names.
+`selectedText` is present only when a candidate was selected; `aiAvailable` indicates that the current
+scan has an enabled AI provider and usable text or vision input.
 `preferAi: true` (the "Re-read with AI" button) explicitly requests AI and uses its draft when it finds
 lines. This also applies to bulk receipt intake.
 

@@ -2,7 +2,7 @@ type OcrMode = "recipe" | "receipt";
 
 export interface OcrOptions {
   mode?: OcrMode;
-  /** Complete alternative readings, in addition to the normal result. */
+  /** Complete readings, called when a product region was found and additional passes succeeded. */
   onCandidates?: (texts: string[]) => void;
 }
 

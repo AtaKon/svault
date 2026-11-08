@@ -546,9 +546,13 @@ receiptRoutes.post(
     } else if (body.preferAi && canUseAi) {
       try {
         const ai = await readWithAi("requested");
-        draft = ai.draft;
-        provider = "ai";
-        if (ai.imageWarning) warnings.push(ai.imageWarning);
+        if (ai.draft.lines.length) {
+          draft = ai.draft;
+          provider = "ai";
+          if (ai.imageWarning) warnings.push(ai.imageWarning);
+        } else {
+          warnings.push("AI did not find any product lines, so the local result was kept.");
+        }
       } catch (err) {
         warnings.push(`AI cleanup failed, kept the locally parsed version. ${err instanceof Error ? err.message : ""}`.trim());
       }
@@ -640,7 +644,7 @@ receiptRoutes.post(
       warning: warnings.length ? warnings.join(" ") : null,
       aiCost,
       scanId: scan.id,
-      aiAvailable: cfg.enabled,
+      aiAvailable: canUseAi,
       reconciliation: draftReconciliation(draft),
       ...(candidateSelected ? { selectedText: rawText } : {}),
       draft,

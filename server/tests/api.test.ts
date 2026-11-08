@@ -4094,6 +4094,29 @@ describe("receipt scan fixes", () => {
     const ai = await request(`/api/houses/${aiHouse}/intake/parse`, { method: "POST", body: { text, preferAi: true } });
     assert.equal(ai.data.provider, "ai");
     assert.equal(fixAiRequests.length, 1);
+    fixReceiptPayload = { lines: [] };
+    const empty = await request(`/api/houses/${aiHouse}/intake/parse`, { method: "POST", body: { text, preferAi: true } });
+    assert.equal(empty.data.provider, "local");
+    assert.ok(empty.data.rows.length > 0);
+    assert.match(empty.data.warning, /local result was kept/);
+  });
+
+  it("keeps generic local receipt lines when an AI re-read finds none", async () => {
+    fixReceiptPayload = { lines: [] };
+    const result = await request(`/api/houses/${aiHouse}/receipts/scan`, {
+      method: "POST", body: { text: "CORNER MARKET\nTea 2.00\nTOTAL 2.00", preferAi: true },
+    });
+    assert.equal(result.data.provider, "local");
+    assert.ok(result.data.draft.lines.length > 0);
+    assert.match(result.data.warning, /local result was kept/);
+  });
+
+  it("does not offer an AI reread for image-only input without a vision model", async () => {
+    const image = await uploadReceiptPng(aiHouse);
+    const receipt = await request(`/api/houses/${aiHouse}/receipts/scan`, { method: "POST", body: { image } });
+    const intake = await request(`/api/houses/${aiHouse}/intake/parse`, { method: "POST", body: { image } });
+    assert.equal(receipt.data.aiAvailable, false);
+    assert.equal(intake.data.aiAvailable, false);
   });
 
   it("sends every page photo to the vision model with its real mime type", async () => {

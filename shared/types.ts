@@ -548,7 +548,7 @@ export interface ReceiptScanResponse {
   aiCost: number | null;
   /** Short-lived server record holding the scan's provenance; pass it to the import. */
   scanId: string;
-  /** True when the house has an AI provider configured (enables "Re-read with AI"). */
+  /** True when an AI provider and usable text or vision input are available for this scan. */
   aiAvailable: boolean;
   reconciliation: ReceiptReconciliation;
   /** OCR text selected from the supplied local candidates. */
