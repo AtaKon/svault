@@ -113,7 +113,7 @@ const { LIDL_TEMPLATE_RULES, SKLAVENITIS_TEMPLATE_RULES } = await import("../../
 const { convert, pricePerUnit } = await import("../units.js");
 const { parseOffNutrition } = await import("../services/nutrition.js");
 const { createPosoKaneiClient, PosoKaneiUnavailableError } = await import("../services/posokanei.js");
-const { RateLimitError, limiters } = await import("../rate-limit.js");
+const { RateLimitError, RateLimiter, limiters } = await import("../rate-limit.js");
 const { createShoppingOffersHandler, posoKaneiUnavailableApiError } = await import("../routes/insights.js");
 const { parseCsv, parseCsvNumber } = await import("../services/csv.js");
 const { totpCode, verifyTotp, generateTotpSecret, generateBackupCodes } = await import("../services/totp.js");
@@ -5215,6 +5215,37 @@ describe("insights, household split and admin console", () => {
   });
 });
 
+describe("rate limiter refunds", () => {
+  it("decrements reservations, deletes empty buckets and ignores missing buckets", () => {
+    const previousEnabled = process.env.SV_RATE_LIMIT;
+    const previousRule = process.env.SV_RATE_LIMIT_REFUND_TEST;
+    const limiter = new RateLimiter("REFUND_TEST", { max: 2, windowMs: 60_000 });
+    const key = "rate-limit-refund-test";
+    process.env.SV_RATE_LIMIT = "on";
+    process.env.SV_RATE_LIMIT_REFUND_TEST = "2/60";
+    limiter.reset(key);
+    try {
+      assert.equal(limiter.hit(key), 0);
+      assert.equal(limiter.hit(key), 0);
+      limiter.refund(key);
+      assert.equal(limiter.hit(key), 0, "a refunded reservation can be used again");
+      assert.ok(limiter.hit(key) > 0, "the configured maximum still rejects the next hit");
+      limiter.refund(key);
+      limiter.refund(key);
+      limiter.refund(key);
+      assert.equal(limiter.blocked(key), 0, "refunding the remaining count removes the bucket");
+      limiter.refund("missing-key");
+      assert.equal(limiter.blocked("missing-key"), 0, "refunding a missing bucket is a no-op");
+    } finally {
+      limiter.reset(key);
+      if (previousEnabled === undefined) delete process.env.SV_RATE_LIMIT;
+      else process.env.SV_RATE_LIMIT = previousEnabled;
+      if (previousRule === undefined) delete process.env.SV_RATE_LIMIT_REFUND_TEST;
+      else process.env.SV_RATE_LIMIT_REFUND_TEST = previousRule;
+    }
+  });
+});
+
 describe("PosoKanei price lookup client", () => {
   const userId = "posokanei-test-user";
   const product = {
@@ -5258,13 +5289,25 @@ describe("PosoKanei price lookup client", () => {
 
   it("negative-caches unknown barcodes", async () => {
     let calls = 0;
+    let userSlots = 0;
+    let globalSlots = 0;
     const client = createPosoKaneiClient(async () => {
       calls++;
       return new Response(null, { status: 404 });
-    }, () => {});
+    }, () => {
+      userSlots++;
+      return () => { userSlots--; };
+    }, () => {
+      globalSlots++;
+      return () => { globalSlots--; };
+    });
     assert.deepEqual(await client.lookupPosoKaneiBarcode("12345679", userId), []);
+    assert.equal(userSlots, 1, "a completed unknown-barcode lookup consumes the initiating user's slot");
+    assert.equal(globalSlots, 1, "a completed unknown-barcode lookup consumes one instance slot");
     assert.deepEqual(await client.lookupPosoKaneiBarcode("12345679", userId), []);
     assert.equal(calls, 1, "the unknown barcode is cached for the same user");
+    assert.equal(userSlots, 1, "same-user negative-cache hits do not consume another slot");
+    assert.equal(globalSlots, 1);
     assert.deepEqual(await client.lookupPosoKaneiBarcode("12345679", "another-user"), []);
     assert.equal(calls, 2, "negative cache entries are not shared across users");
   });
