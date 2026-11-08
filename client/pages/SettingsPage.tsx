@@ -202,7 +202,7 @@ function PriceLookupTab({ house, onSave }: { house: House; onSave: (patch: Recor
         </Button>
       </Card>
       <Card className="p-4 text-[11px] leading-relaxed text-muted">
-        {t("Lookups run only when a member presses Check offers on a shopping line. SVault sends the item's barcode to the PosoKanei service over HTTPS. Results are cached and rate limited; no store accounts, location, or purchase history are sent. PosoKanei's API is undocumented and may change or become unavailable. Offers are informational and may not reflect local availability or checkout prices.")}
+        {t("Lookups run only when a member presses Check offers on a shopping line. SVault sends the item's barcode to the PosoKanei service over HTTPS. Results are cached and rate limited; cached results and requests sharing an in-progress lookup do not use your per-user quota. No store accounts, location, or purchase history are sent. PosoKanei's API is undocumented and may change or become unavailable. Offers are informational and may not reflect local availability or checkout prices.")}
       </Card>
     </div>
   );

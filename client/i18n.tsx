@@ -30,6 +30,7 @@ const EL: Record<string, string> = {
   "Link this shopping line to an inventory item first": "Σύνδεσε πρώτα αυτή τη γραμμή με ένα αντικείμενο αποθέματος",
   "Add a valid barcode to this inventory item first": "Πρόσθεσε πρώτα έναν έγκυρο γραμμωτό κώδικα σε αυτό το αντικείμενο",
   "Price lookup limit reached. Try again later.": "Έφτασες το όριο αναζήτησης τιμών. Δοκίμασε ξανά αργότερα.",
+  "Too many price lookup requests. Try again later.": "Υπερβολικά πολλά αιτήματα αναζήτησης τιμών. Δοκίμασε ξανά αργότερα.",
   "External price lookup is unavailable. Try again later.": "Η εξωτερική αναζήτηση τιμών δεν είναι διαθέσιμη. Δοκίμασε ξανά αργότερα.",
   "PosoKanei asked SVault to slow down. Try again later.": "Το PosoKanei ζήτησε να μειωθούν τα αιτήματα. Δοκίμασε ξανά αργότερα.",
   "Meal plan": "Πλάνο γευμάτων",
