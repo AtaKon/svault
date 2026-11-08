@@ -17,8 +17,10 @@
 import { readFile } from "node:fs/promises";
 
 const MARKER = "<!-- svault-ai-review -->";
-const MAX_DIFF_CHARS = 60_000;
-const RETRY_DIFF_CHARS = 30_000;
+// Large PRs need the whole diff: DeepSeek v4.1 Flash handles ~128k tokens, and
+// 380k characters keeps the current contribution PR under the context limit.
+const MAX_DIFF_CHARS = 380_000;
+const RETRY_DIFF_CHARS = 300_000;
 const MAX_COMMENT_CHARS = 60_000;
 
 const token = process.env.GITHUB_TOKEN;
