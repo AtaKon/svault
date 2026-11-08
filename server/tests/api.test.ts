@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { splitAmountEvenly } from "../../shared/bill-splitting.js";
 import { BILL_TYPE_LABELS, BILL_TYPE_VALUES } from "../../shared/bill-types.js";
-import { POSTGRES_TABLE_ORDER } from "../database/postgres-schema.js";
+import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA, POSTGRES_TABLE_ORDER } from "../database/postgres-schema.js";
 
 const dataDir = mkdtempSync(path.join(tmpdir(), "svault-test-"));
 process.env.DATA_DIR = dataDir;
@@ -103,7 +103,7 @@ await new Promise<void>((resolve) => {
 });
 
 const { app } = await import("../index.js");
-const { closeDb, get, run } = await import("../db.js");
+const { all, closeDb, get, initDb, run } = await import("../db.js");
 const { discardUploads } = await import("../upload.js");
 const { heuristicRecipe, parseIngredientLine, localIdeas } = await import("../services/recipe-local.js");
 const { heuristicReceipt } = await import("../services/receipt-local.js");
@@ -4924,6 +4924,15 @@ describe("insights, household split and admin console", () => {
   it("restores bill rows only after their user and house foreign keys", () => {
     assert.ok(POSTGRES_TABLE_ORDER.indexOf("users") < POSTGRES_TABLE_ORDER.indexOf("bills"));
     assert.ok(POSTGRES_TABLE_ORDER.indexOf("houses") < POSTGRES_TABLE_ORDER.indexOf("bills"));
+    assert.ok(POSTGRES_TABLE_ORDER.indexOf("house_members") < POSTGRES_TABLE_ORDER.indexOf("bills"));
+  });
+
+  it("keeps PostgreSQL fresh and upgraded ledger confirmation defaults aligned", () => {
+    assert.match(POSTGRES_SCHEMA, /ledger_confirmed INTEGER NOT NULL DEFAULT 0/);
+    const migration = POSTGRES_MIGRATIONS.find((statement) => statement.includes("information_schema.columns") && statement.includes("ledger_confirmed"));
+    assert.ok(migration);
+    assert.match(migration, /ledger_confirmed INTEGER NOT NULL DEFAULT 0/);
+    assert.match(migration, /UPDATE bills SET ledger_confirmed = 1 WHERE category = 'to_split'/);
   });
 
   it("imports receipts that feed spend, price alerts and the household split", async () => {
@@ -5404,5 +5413,35 @@ describe("insights, household split and admin console", () => {
     const revoked = await request(`/api/tokens/${created.data.id}`, { method: "DELETE" });
     assert.equal(revoked.status, 200);
     assert.equal((await request("/api/houses", { auth: "", headers: bearer })).status, 401);
+  });
+});
+
+describe("bill ledger confirmation migration", () => {
+  it("uses a false default and preserves existing shared bills when adding the column", async () => {
+    const columnsBefore = await all<{ name: string; dflt_value: string | null }>("PRAGMA table_info(bills)");
+    assert.equal(columnsBefore.find((column) => column.name === "ledger_confirmed")?.dflt_value, "0");
+
+    const createdHouse = await request("/api/houses", {
+      method: "POST",
+      body: { name: "Legacy bill migration fixture", currency: "EUR" },
+    });
+    const oldBill = await request(`/api/houses/${createdHouse.data.id}/bills`, {
+      method: "POST",
+      body: { name: "Existing shared bill", amount: 12, category: "to_split", ledgerConfirmed: true },
+    });
+    assert.equal(oldBill.status, 201);
+
+    await run("ALTER TABLE bills DROP COLUMN ledger_confirmed");
+    await closeDb();
+    await initDb();
+
+    const columnsAfter = await all<{ name: string; dflt_value: string | null }>("PRAGMA table_info(bills)");
+    assert.equal(columnsAfter.find((column) => column.name === "ledger_confirmed")?.dflt_value, "0");
+    const migrated = await get<{ ledger_confirmed: number }>("SELECT ledger_confirmed FROM bills WHERE id = ?", [oldBill.data.id]);
+    assert.equal(migrated?.ledger_confirmed, 1, "existing shared bills retain their previous ledger inclusion");
+    const ledger = await request(`/api/houses/${createdHouse.data.id}/insights/household`);
+    assert.equal(ledger.data.balances[0].paid, 12);
+    assert.equal(ledger.data.balances[0].share, 12);
+    assert.equal(ledger.data.balances[0].balance, 0);
   });
 });

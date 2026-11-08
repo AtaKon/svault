@@ -662,7 +662,16 @@ export const POSTGRES_MIGRATIONS: string[] = [
     created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
     created_at TEXT NOT NULL
   )`,
-  "ALTER TABLE bills ADD COLUMN IF NOT EXISTS ledger_confirmed INTEGER NOT NULL DEFAULT 1",
+  `DO $$
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = current_schema() AND table_name = 'bills' AND column_name = 'ledger_confirmed'
+    ) THEN
+      ALTER TABLE bills ADD COLUMN ledger_confirmed INTEGER NOT NULL DEFAULT 0;
+      UPDATE bills SET ledger_confirmed = 1 WHERE category = 'to_split';
+    END IF;
+  END $$`,
   "CREATE INDEX IF NOT EXISTS bills_house ON bills(house_id, due_date, created_at)",
 ];
 

@@ -70,7 +70,9 @@ export class SqliteDriver implements DatabaseDriver {
     const ensureColumn = (table: string, column: string, definition: string) => {
       if (!columns(table).some((entry) => entry.name === column)) {
         conn.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+        return true;
       }
+      return false;
     };
     const runLocal = (sql: string, params: unknown[] = []) =>
       conn.prepare(sql).run(...normaliseParams(params));
@@ -97,8 +99,11 @@ export class SqliteDriver implements DatabaseDriver {
     ensureColumn("receipts", "savings", "REAL");
     ensureColumn("receipts", "paid_by", "TEXT REFERENCES users(id) ON DELETE SET NULL");
     ensureColumn("receipts", "split_with", "TEXT NOT NULL DEFAULT '[]'");
-    // Preserve existing shared bills when upgrading from the earlier bills schema.
-    ensureColumn("bills", "ledger_confirmed", "INTEGER NOT NULL DEFAULT 1");
+    // Fresh rows default to unconfirmed; preserve the old ledger behavior for
+    // shared bills that predate the acknowledgement column.
+    if (ensureColumn("bills", "ledger_confirmed", "INTEGER NOT NULL DEFAULT 0")) {
+      runLocal("UPDATE bills SET ledger_confirmed = 1 WHERE category = 'to_split'");
+    }
     ensureColumn("receipt_lines", "raw_description", "TEXT");
     ensureColumn("receipt_lines", "tax_rate", "REAL");
     ensureColumn("receipt_lines", "discount", "REAL");
