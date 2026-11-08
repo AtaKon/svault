@@ -45,6 +45,7 @@ export type IconName =
   | "key"
   | "filter"
   | "cup"
+  | "star"
   | "wifi"
   | "receipt"
   | "store";
@@ -249,6 +250,9 @@ const PATHS: Record<IconName, ReactNode> = {
       <path d="M6 3h12l-1.5 15.5a2 2 0 0 1-2 1.5h-5a2 2 0 0 1-2-1.5Z" />
       <path d="M5 8h14" />
     </>
+  ),
+  star: (
+    <path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9Z" />
   ),
   wifi: (
     <>
