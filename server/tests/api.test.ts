@@ -1089,6 +1089,7 @@ describe("inventory and stock", () => {
   it("validates stock updates", async () => {
     const res = await request(`/api/items/${itemId}/stock`, { method: "POST", body: { action: "add", quantity: -1 } });
     assert.equal(res.status, 400);
+    assert.equal(res.data.error, "Invalid request");
   });
 });
 
@@ -1154,7 +1155,54 @@ describe("OpenFoodFacts links and shared catalogue", () => {
     const res = await request("/api/catalog/search?q=feta&online=0");
     assert.equal(res.status, 200);
     assert.equal(res.data.online, false);
+    assert.equal(res.data.warning, null);
+    assert.equal(res.data.warningCode, null);
     assert.ok(res.data.products.some((product: any) => product.code === fetaCode));
+  });
+
+  it("returns a stable code and human-readable warning for an empty online search", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).startsWith("https://search.openfoodfacts.org/")) {
+        return Promise.resolve(new Response(JSON.stringify({ hits: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }));
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+
+    try {
+      const res = await request("/api/catalog/search?q=svault-warning-contract-unique&online=1");
+      assert.equal(res.status, 200);
+      assert.equal(res.data.warningCode, "NOTHING_FOUND");
+      assert.equal(res.data.warning, "Nothing found on OpenFoodFacts. Check the name or paste a barcode.");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("does not warn when an online search has cached matches", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).startsWith("https://search.openfoodfacts.org/")) {
+        return Promise.resolve(new Response(JSON.stringify({ hits: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }));
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+
+    try {
+      const res = await request("/api/catalog/search?q=feta&online=1");
+      assert.equal(res.status, 200);
+      assert.equal(res.data.warning, null);
+      assert.equal(res.data.warningCode, null);
+      assert.ok(res.data.products.length > 0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("resolves a cached product for an unknown barcode", async () => {

@@ -219,7 +219,10 @@ export interface OffLinkResult {
 export interface OffSearchResult {
   products: OffProduct[];
   online: boolean;
+  /** @deprecated Retained for consumers of the original API; clients should localize warningCode. */
   warning: string | null;
+  /** Stable code for clients that have localized warning copy (currently `NOTHING_FOUND`). */
+  warningCode: string | null;
 }
 
 export interface CatalogMapping {

@@ -86,7 +86,9 @@ export function AppShell() {
           Notification.permission === "granted"
         ) {
           new Notification("SVault", {
-            body: fresh.length === 1 ? t(fresh[0].title) : t("{count} new reminders", { count: fresh.length }),
+            body: fresh.length === 1
+              ? t("Reminder: {title}", { title: fresh[0].title })
+              : t("{count} new reminders", { count: fresh.length }),
           });
         }
         notificationsPrimed.current = true;
@@ -428,7 +430,7 @@ function NewHouseSheet({
         <div className="grid grid-cols-2 gap-3">
           <Field label={t("Type")}>
             <Select value={kind} onChange={(e) => setKind(e.target.value)}>
-              <option value="home">{t("home")}</option>
+              <option value="home">{t("House")}</option>
               <option value="cabin">{t("Cabin")}</option>
               <option value="apartment">{t("Apartment")}</option>
               <option value="garage">{t("Garage / storage")}</option>

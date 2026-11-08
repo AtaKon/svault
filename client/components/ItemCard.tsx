@@ -59,7 +59,7 @@ export function ItemCard({
       setCurrent(detail);
       onUpdated?.(detail);
     } catch (err) {
-      toast.error(err instanceof Error ? t(err.message) : t("Could not update stock"));
+      toast.error(err instanceof Error ? err.message : t("Could not update stock"));
     } finally {
       setBusy(null);
     }
@@ -133,6 +133,7 @@ export function ItemCard({
         <div className="flex items-center gap-1">
           <button
             aria-label={t("Remove one {item}", { item: item.name })}
+            aria-busy={busy === "remove" || undefined}
             className="flex h-8 w-8 items-center justify-center rounded-lg border border-line bg-surface text-muted transition-colors hover:border-danger/40 hover:text-danger disabled:opacity-40"
             disabled={busy !== null || current.quantity <= 0}
             onClick={() => void step("remove")}
@@ -141,6 +142,7 @@ export function ItemCard({
           </button>
           <button
             aria-label={t("Add one {item}", { item: item.name })}
+            aria-busy={busy === "add" || undefined}
             className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-soft text-brand transition-colors hover:brightness-95 disabled:opacity-40"
             disabled={busy !== null}
             onClick={() => void step("add")}
@@ -165,6 +167,14 @@ const ACTIONS = [
 ] as const;
 
 type StockAction = (typeof ACTIONS)[number]["value"];
+
+const STOCK_SUCCESS_MESSAGES = {
+  add: "Stock added",
+  set: "Stock counted",
+  remove: "Stock removed",
+  waste: "Waste recorded",
+  move: "Stock moved",
+} satisfies Record<StockAction, string>;
 
 export function StockDialog({
   open,
@@ -279,10 +289,10 @@ export function StockDialog({
       }
       const detail = await api<ItemDetail>(`/api/items/${item.id}/stock`, { method: "POST", body });
       onUpdated(detail);
-      toast.success(t(action === "add" ? "Stock added" : action === "set" ? "Stock counted" : "Stock updated"));
+      toast.success(t(STOCK_SUCCESS_MESSAGES[action]));
       onClose();
     } catch (err) {
-      toast.error(err instanceof Error ? t(err.message) : t("Could not update stock"));
+      toast.error(err instanceof Error ? err.message : t("Could not update stock"));
     } finally {
       setBusy(false);
     }

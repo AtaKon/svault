@@ -104,7 +104,7 @@ export function BarcodeScanner({
             ) : (
               <>
                 <Spinner size={24} />
-                <p className="text-xs">{t("Starting camera…")}</p>
+                <p role="status" className="text-xs">{t("Starting camera…")}</p>
               </>
             )}
           </div>

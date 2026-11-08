@@ -64,9 +64,16 @@ export function OffProductPicker({
       }
       const data = await api<OffSearchResult>(`/api/catalog/search?q=${encodeURIComponent(q)}&online=1`);
       setProducts(data.products);
-      setWarning(data.warning ? t(data.warning) : null);
+      const warning = data.warningCode === "NOTHING_FOUND"
+        ? t("Nothing found on OpenFoodFacts. Check the name or paste a barcode.")
+        : data.warning
+          ? t("OpenFoodFacts search warning: {message}", { message: data.warning })
+          : data.warningCode
+            ? t("OpenFoodFacts search returned a warning")
+            : null;
+      setWarning(warning);
     } catch (err) {
-      setWarning(err instanceof Error ? t(err.message) : t("Could not search OpenFoodFacts"));
+      setWarning(err instanceof Error ? err.message : t("Could not search OpenFoodFacts"));
       setProducts([]);
     } finally {
       setBusy(false);
@@ -99,10 +106,10 @@ export function OffProductPicker({
         </Button>
       </form>
 
-      {warning && <p className="mt-3 rounded-xl bg-warn-soft px-3 py-2 text-[11px] text-warn">{t(warning)}</p>}
+      {warning && <p className="mt-3 rounded-xl bg-warn-soft px-3 py-2 text-[11px] text-warn">{warning}</p>}
 
       {busy && (
-        <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted">
+        <div role="status" className="flex items-center justify-center gap-2 py-8 text-sm text-muted">
           <Spinner size={16} /> {t("Looking up OpenFoodFacts…")}
         </div>
       )}

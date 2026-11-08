@@ -178,7 +178,7 @@ export function ScanPage() {
       ) : null}
 
       {busy && !result && (
-        <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted">
+        <div role="status" className="flex items-center justify-center gap-2 py-6 text-sm text-muted">
           <Spinner size={16} /> {t("Looking up barcode…")}
         </div>
       )}

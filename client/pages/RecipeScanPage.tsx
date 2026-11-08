@@ -212,7 +212,7 @@ export function RecipeScanPage() {
               <div className="flex items-center justify-between gap-2">
                 <h2 className="font-display text-lg">{t("Recognised text")}</h2>
                 {ocrRunning && (
-                  <span className="flex items-center gap-1.5 text-[11px] text-muted">
+                  <span role="status" className="flex items-center gap-1.5 text-[11px] text-muted">
                     <Spinner size={12} /> {Math.round(ocrProgress * 100)}%
                   </span>
                 )}
