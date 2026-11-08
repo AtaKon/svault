@@ -4819,6 +4819,25 @@ describe("insights, household split and admin console", () => {
     assert.equal(ledger.status, 200);
     assert.equal(ledger.data.balances.find((row: any) => row.userId === ownerId).balance, 5);
     assert.equal(ledger.data.balances.find((row: any) => row.userId === secondUserId).balance, -5);
+    const payerOutsideSplit = await request(`/api/houses/${billHouse}/bills`, {
+      method: "POST",
+      body: {
+        name: "Payer outside participant list",
+        amount: 9,
+        billType: "water",
+        category: "to_split",
+        ledgerConfirmed: true,
+        paidBy: ownerId,
+        splitWith: [secondUserId],
+      },
+    });
+    assert.equal(payerOutsideSplit.status, 201);
+    const payerOutsideLedger = await request(`/api/houses/${billHouse}/insights/household`);
+    assert.equal(payerOutsideLedger.data.balances.find((row: any) => row.userId === ownerId).balance, 14);
+    assert.equal(payerOutsideLedger.data.balances.find((row: any) => row.userId === secondUserId).balance, -14);
+    assert.equal(payerOutsideLedger.data.balances.reduce((sum: number, row: any) => sum + row.balance, 0), 0,
+      "the payer may be outside splitWith while household balances still reconcile");
+    assert.equal((await request(`/api/bills/${payerOutsideSplit.data.id}`, { method: "DELETE" })).status, 200);
     const personalBill = await request(`/api/houses/${billHouse}/bills`, {
       method: "POST",
       body: { name: "Personal utility bill", amount: 25, billType: "electricity", category: "personal" },

@@ -169,6 +169,7 @@ billRoutes.get("/:houseId/bills", handler(async (req, res) => {
 billRoutes.post("/:houseId/bills", requireHouseBillMember, pdfUpload.single("document"), verifyPdf, handler(async (req, res) => {
   const filename = req.file?.filename ?? null;
   const houseId = String(req.params.houseId);
+  let inserted = false;
   try {
     const body = parseBody(input, req.body);
     const house = await get<any>("SELECT currency FROM houses WHERE id = ?", [houseId]);
@@ -190,6 +191,7 @@ billRoutes.post("/:houseId/bills", requireHouseBillMember, pdfUpload.single("doc
       id, houseId, body.name, body.billType, body.category, body.category === "to_split" && body.ledgerConfirmed === true ? 1 : 0, body.amount, currency,
       body.dueDate || null, paidBy, JSON.stringify(people), filename, body.notes || null, req.user!.id, createdAt,
     ]);
+    inserted = true;
     // Return the validated insert values directly; a post-insert read is both
     // unnecessary and unsafe to compensate-delete after an ambiguous DB error.
     res.status(201).json(serialize({
@@ -210,9 +212,12 @@ billRoutes.post("/:houseId/bills", requireHouseBillMember, pdfUpload.single("doc
     }));
   } catch (error) {
     // The insert may have committed even if the driver reported an error;
-    // deleteDocument removes the file only when no bill references it.
-    if (filename) await deleteDocument(filename);
-    else discardUploads(req);
+    // never clean up a file after a confirmed insert, even if response work fails.
+    if (filename) {
+      if (!inserted) await deleteDocument(filename);
+    } else {
+      discardUploads(req);
+    }
     throw error;
   }
 }));

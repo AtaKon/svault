@@ -649,6 +649,7 @@ export const POSTGRES_MIGRATIONS: string[] = [
   // an existing bills table created before ledger_confirmed was introduced.
   `DO $$
   BEGIN
+    LOCK TABLE bills IN ACCESS EXCLUSIVE MODE;
     IF NOT EXISTS (
       SELECT 1 FROM information_schema.columns
       WHERE table_schema = current_schema() AND table_name = 'bills' AND column_name = 'ledger_confirmed'
