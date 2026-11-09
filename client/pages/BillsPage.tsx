@@ -89,7 +89,7 @@ function BillMetricsEditor({ bill, save }: { bill: UtilityBill; save: (data: Rec
       {fields.map(([key, label]) => <Field key={key} label={t(label)} className="w-40"><Input type="number" min={key.startsWith("consumption") ? "0.001" : "0"} step={key.startsWith("consumption") ? "0.001" : "0.01"} value={values[key]} onChange={event => setValues(current => ({ ...current, [key]: event.target.value }))} /></Field>)}
       <Button type="submit" size="sm">{t("Save")}</Button>
     </form>
-    <p className="mt-2 text-xs text-muted">{t("Review extracted values against the bill. Leave unknown fields empty.")}</p>
+    <p className="mt-2 text-xs text-muted">{t("Review extracted values against the bill. Leave unknown fields empty.")} {t("Use a decimal point or comma without thousands separators; 1.234 means one and 234 thousandths.")}</p>
   </details>;
 }
 
@@ -105,7 +105,7 @@ function UsageHistory({ bills }: { bills: UtilityBill[] }) {
   };
   return <Card className="p-4 sm:p-5">
     <h2 className="font-display text-xl">{t("Energy cost and tax history")}</h2>
-    <p className="mt-1 text-xs text-muted">{t("Cost per unit is the full bill total divided by consumption, including fees and taxes. Increases compare billed amounts with the previous bill of the same name and type; usage and billing periods may differ. Bills without a due date use their creation date. State charges include VAT; the included taxes can vary by bill.")}</p>
+    <p className="mt-1 text-xs text-muted">{t("Cost per unit is the recorded bill amount divided by consumption. Enter the total payable to include taxes and fees. Tax amounts shown separately are not added again. Increases compare bills of the same name and type; usage and billing periods may differ. Bills without a due date use their creation date; bills on the same date are ordered by creation time. State charges include VAT and may vary by bill.")}</p>
     <div className="mt-3 overflow-x-auto"><table className="w-full min-w-[700px] text-left text-xs">
       <thead className="text-muted"><tr><th className="py-2 pr-3">{t("Bill")}</th><th className="py-2 pr-3">{t("Date")}</th><th className="py-2 pr-3">{t("Cost / kWh")}</th><th className="py-2 pr-3">{t("Cost / m³")}</th><th className="py-2 pr-3">{t("Municipal charges")}</th><th className="py-2">{t("State taxes and fees (including VAT)")}</th></tr></thead>
       <tbody className="divide-y divide-line">{history.map(({ bill, metrics, prior, perKwh, perM3 }) => <tr key={bill.id}>
@@ -443,7 +443,7 @@ export function BillsPage() {
         <div className="flex items-center gap-2"><Icon name="plus" size={17} className="text-brand"/><h2 className="font-display text-lg">{t("Add a bill")}</h2></div>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
           <Field label={t("Bill name")} required><Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("Electricity, internet, rent…")} required /></Field>
-          <Field label={t("Bill type")}><Select value={billType} onChange={(e) => { setBillType(e.target.value as UtilityBill["billType"]); setBillTypeTouched(true); metricsTouched.current.clear(); setDraftMetrics({ consumptionKwh: "", consumptionM3: "", municipalCharges: "", stateCharges: "" }); if (e.target.value !== "electricity") { setContractColor(null); setContractColorTouched(false); } }}>{BILL_TYPES.map((type) => <option key={type.value} value={type.value}>{t(type.label)}</option>)}</Select></Field>
+          <Field label={t("Bill type")}><Select value={billType} onChange={(e) => { setBillType(e.target.value as UtilityBill["billType"]); setBillTypeTouched(true); if (e.target.value !== "electricity") { setContractColor(null); setContractColorTouched(false); } }}>{BILL_TYPES.map((type) => <option key={type.value} value={type.value}>{t(type.label)}</option>)}</Select></Field>
           <Field label={t("Amount")} required><Input type="number" min="0.01" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" required /></Field>
           <Field label={t("Category")}><Select value={category} onChange={(e) => { setCategory(e.target.value as UtilityBill["category"]); setLedgerConfirmed(false); }}><option value="to_split">{t("To be split")}</option><option value="personal">{t("Personal")}</option></Select></Field>
           <Field label={t("Due date")}><Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} /></Field>
@@ -452,6 +452,7 @@ export function BillsPage() {
         {(billType === "electricity" || billType === "natural_gas") && <div className="flex flex-wrap items-end gap-3">
           {([ ["consumptionKwh", "Consumption (kWh)"], ...(billType === "natural_gas" ? [["consumptionM3", "Consumption (m³)"]] : []), ["municipalCharges", "Municipal charges"], ["stateCharges", "State taxes and fees (including VAT)"] ] as Array<[keyof typeof draftMetrics, string]>).map(([key, label]) => <Field key={key} label={t(label)} className="w-40"><Input type="number" min={key.startsWith("consumption") ? "0.001" : "0"} step={key.startsWith("consumption") ? "0.001" : "0.01"} value={draftMetrics[key]} onChange={event => { const value = event.target.value; metricsTouched.current.add(key); setDraftMetrics(current => ({ ...current, [key]: value })); }}/></Field>)}
         </div>}
+        {(billType === "electricity" || billType === "natural_gas") && <p className="text-xs text-muted">{t("Use a decimal point or comma without thousands separators; 1.234 means one and 234 thousandths.")}</p>}
         {category === "to_split" && <div className="grid gap-4 sm:grid-cols-2">
           <Field label={t("Paid by")}><Select value={paidBy} onChange={(e) => setPaidBy(e.target.value)}>{household?.members.map((member) => <option key={member.userId} value={member.userId}>{member.name}</option>)}</Select></Field>
           <Field label={t("Split between")} hint={t("Equal shares")}><div className="flex flex-wrap gap-2">{household?.members.map((member) => <label key={member.userId} className="flex cursor-pointer items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2 text-sm"><input type="checkbox" checked={splitWith.includes(member.userId)} onChange={(event) => { if (!event.target.checked && splitWith.length === 1) { toast.error(t("Select at least one person to split the bill.")); return; } setSplitWith((current) => event.target.checked ? [...current, member.userId] : current.filter((id) => id !== member.userId)); }} />{member.name}</label>)}</div></Field>

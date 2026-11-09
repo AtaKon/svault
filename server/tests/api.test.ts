@@ -618,6 +618,8 @@ describe("energy history", () => {
     const latest = history.find((entry: any) => entry.bill.id === "b")!;
     assert.equal(latest.perKwh, 0.15);
     assert.equal(latest.perM3, 1.5);
+    const electric = billHistory([{ ...base, billType: "electricity" }])[0];
+    assert.equal(electric.perM3, null, "gas quantities are hidden if the bill is temporarily changed to electricity");
     assert.equal(latest.prior?.stateCharges, 6);
     assert.equal(latest.metrics.municipalCharges, null);
     assert.equal(history.find((entry: any) => entry.bill.id === "c")?.prior, undefined);
@@ -641,6 +643,7 @@ describe("energy history", () => {
     assert.equal(result.stateCharges, 7.66);
     assert.equal(result.consumptionM3, null);
     assert.equal(extractBillMetrics({ billType: "electricity", ocrText: "zenith.gr\nΔΗΜΟΣ ΘΕΣΣΑΛΟΝΙΚΗΣ 13,65" }).municipalCharges, 13.65);
+    assert.equal(extractBillMetrics({ billType: "electricity", ocrText: "Other supplier\nΔΗΜΟΣ ΘΕΣΣΑΛΟΝΙΚΗΣ 13,65" }).municipalCharges, null);
   });
 });
 
@@ -6674,18 +6677,30 @@ describe("insights, household split and admin console", () => {
     assert.equal(gasColor.status, 400);
     const changedType = await request(`/api/bills/${colorBill.data.id}`, { method: "PATCH", body: { billType: "natural_gas" } });
     assert.equal(changedType.data.contractColor, null);
-    assert.equal(changedType.data.consumptionKwh, null);
-    assert.equal(changedType.data.municipalCharges, null);
+    assert.equal(changedType.data.consumptionKwh, 149.5);
+    assert.equal(changedType.data.municipalCharges, 13.65);
     const gasUsage = await request(`/api/bills/${colorBill.data.id}`, { method: "PATCH", body: { consumptionM3: 104.96, consumptionKwh: 1218.65 } });
     assert.equal(gasUsage.data.consumptionM3, 104.96);
     const electricityAgain = await request(`/api/bills/${colorBill.data.id}`, { method: "PATCH", body: { billType: "electricity" } });
-    assert.equal(electricityAgain.data.consumptionM3, null);
-    assert.equal(electricityAgain.data.consumptionKwh, null);
+    assert.equal(electricityAgain.data.consumptionM3, 104.96, "retain gas usage if the type is corrected again");
+    assert.equal(electricityAgain.data.consumptionKwh, 1218.65);
     const gasAgain = await request(`/api/bills/${colorBill.data.id}`, { method: "PATCH", body: { billType: "natural_gas" } });
     assert.equal(gasAgain.status, 200);
+    assert.equal(gasAgain.data.consumptionM3, 104.96);
+    const mixedUpdate = await request(`/api/bills/${colorBill.data.id}`, { method: "PATCH", body: { billType: "electricity", consumptionKwh: 777 } });
+    assert.equal(mixedUpdate.data.consumptionKwh, 777);
+    assert.equal(mixedUpdate.data.consumptionM3, 104.96);
+    assert.equal((await request(`/api/bills/${colorBill.data.id}`, { method: "PATCH", body: { billType: "natural_gas", consumptionM3: 50 } })).data.consumptionKwh, 777);
     const groupedUsage = await request(`/api/bills/${colorBill.data.id}`, { method: "PATCH", body: { consumptionKwh: "1.234,5", consumptionM3: "1,234" } });
     assert.equal(groupedUsage.data.consumptionKwh, 1234.5);
     assert.equal(groupedUsage.data.consumptionM3, 1.234);
+    const decimalTests: Array<[unknown, number | null]> = [["1.234", 1.234], ["1,234", 1.234], ["1234.5", 1234.5], ["1.234,5", 1234.5], ["1,234.5", null], ["0", null], ["0.0001", null], ["1e3", null], [" 12 ", 12]];
+    for (const [value, expected] of decimalTests) {
+      const response = await request(`/api/bills/${colorBill.data.id}`, { method: "PATCH", body: { consumptionKwh: value } });
+      assert.equal(response.status, expected == null ? 400 : 200, `consumption ${value}`);
+      if (expected != null) assert.equal(response.data.consumptionKwh, expected);
+    }
+    assert.equal((await request(`/api/houses/${billHouse}/bills`, { method: "POST", body: { name: "Water", amount: 1, billType: "water", consumptionKwh: 20 } })).status, 400);
     assert.equal((await request(`/api/bills/${colorBill.data.id}`, { method: "PATCH", body: { consumptionKwh: "1.23,45" } })).status, 400);
     assert.equal((await request(`/api/bills/${colorBill.data.id}`, { method: "PATCH", body: { contractColor: "blue" } })).status, 400);
     assert.equal((await request(`/api/houses/${billHouse}/bills`, { method: "POST", body: { name: "Gas", amount: 1, billType: "natural_gas", contractColor: "blue" } })).status, 400);

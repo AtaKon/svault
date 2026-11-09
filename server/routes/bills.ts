@@ -149,7 +149,7 @@ const optionalConsumption = z.preprocess((value) => {
   if (typeof value === "string") {
     const text = value.trim();
     // Commas are decimal separators; dots are grouping separators only when
-    // followed by a comma. Thus 1,234 means 1.234, while 1.234,5 is 1234.5.
+    // followed by a comma. Plain 1.234 or 1,234 means 1.234; 1.234,5 means 1234.5.
     if (/^\d+(?:[.,]\d{1,3})?$/.test(text)) return Number(text.replace(",", "."));
     if (/^\d{1,3}(?:\.\d{3})+,\d{1,3}$/.test(text)) return Number(text.replace(/\./g, "").replace(",", "."));
   }
@@ -369,6 +369,8 @@ billRoutes.post("/:houseId/bills", requireHouseBillMember, billUpload.single("do
   try {
     const body = parseBody(input, req.body);
     if (body.contractColor && body.billType !== "electricity") throw new ApiError(400, "Contract color is only available for electricity bills");
+    if (body.billType !== "electricity" && body.billType !== "natural_gas" && [body.consumptionKwh, body.consumptionM3, body.municipalCharges, body.stateCharges].some(value => value != null)) throw new ApiError(400, "Energy metrics are only available for electricity and gas bills");
+    if (body.billType !== "natural_gas" && body.consumptionM3 != null) throw new ApiError(400, "Cubic meter consumption is only available for gas bills");
     const house = await get<any>("SELECT currency FROM houses WHERE id = ?", [houseId]);
     const currency = String(house?.currency ?? "EUR").toUpperCase();
     if (body.currency && body.currency.toUpperCase() !== currency) {
@@ -438,8 +440,9 @@ singleBillRoutes.patch("/:billId", handler(async (req, res) => {
   const body = parseBody(patchInput, req.body);
   const nextBillType = body.billType ?? current.bill_type;
   if (body.contractColor && nextBillType !== "electricity") throw new ApiError(400, "Contract color is only available for electricity bills");
+  if (nextBillType !== "electricity" && nextBillType !== "natural_gas" && [body.consumptionKwh, body.consumptionM3, body.municipalCharges, body.stateCharges].some(value => value != null)) throw new ApiError(400, "Energy metrics are only available for electricity and gas bills");
+  if (nextBillType !== "natural_gas" && body.consumptionM3 != null) throw new ApiError(400, "Cubic meter consumption is only available for gas bills");
   const contractColor = nextBillType !== "electricity" ? null : body.contractColor === undefined ? current.contract_color : body.contractColor;
-  const typeChanged = nextBillType !== current.bill_type;
   const category = body.category ?? current.category;
   if (current.category !== "to_split" && category === "to_split" && body.ledgerConfirmed !== true) {
     throw new ApiError(400, "Confirm this bill is not also recorded as a purchase receipt");
@@ -475,10 +478,10 @@ singleBillRoutes.patch("/:billId", handler(async (req, res) => {
   await run(`UPDATE bills SET name = ?, bill_type = ?, contract_color = ?, consumption_kwh = ?, consumption_m3 = ?, municipal_charges = ?, state_charges = ?, category = ?, ledger_confirmed = ?, amount = ?, due_date = ?, paid_by = ?, split_with = ?, notes = ?,
     subtotal = ?, tax_total = ?, breakdown = ?, ocr_text = ?, source = ? WHERE id = ?`, [
     body.name ?? current.name, nextBillType ?? "other", contractColor ?? null,
-    body.consumptionKwh === undefined ? (typeChanged ? null : current.consumption_kwh) : body.consumptionKwh,
-    body.consumptionM3 === undefined ? (typeChanged ? null : current.consumption_m3) : body.consumptionM3,
-    body.municipalCharges === undefined ? (typeChanged ? null : current.municipal_charges) : body.municipalCharges,
-    body.stateCharges === undefined ? (typeChanged ? null : current.state_charges) : body.stateCharges,
+    body.consumptionKwh === undefined ? current.consumption_kwh : body.consumptionKwh,
+    body.consumptionM3 === undefined ? current.consumption_m3 : body.consumptionM3,
+    body.municipalCharges === undefined ? current.municipal_charges : body.municipalCharges,
+    body.stateCharges === undefined ? current.state_charges : body.stateCharges,
     category, ledgerConfirmed ? 1 : 0, body.amount ?? current.amount,
     body.dueDate === undefined ? current.due_date : body.dueDate || null, paidBy ?? null, JSON.stringify(people),
     body.notes === undefined ? current.notes : body.notes || null,

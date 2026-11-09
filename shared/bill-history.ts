@@ -57,6 +57,6 @@ export function billHistory(bills: UtilityBill[]) {
     const prior = previous.get(key);
     previous.set(key, metrics);
     return { bill, metrics, prior, perKwh: metrics.consumptionKwh && metrics.consumptionKwh > 0 ? bill.amount / metrics.consumptionKwh : null,
-      perM3: metrics.consumptionM3 && metrics.consumptionM3 > 0 ? bill.amount / metrics.consumptionM3 : null };
+      perM3: bill.billType === "natural_gas" && metrics.consumptionM3 && metrics.consumptionM3 > 0 ? bill.amount / metrics.consumptionM3 : null };
   }).reverse();
 }
