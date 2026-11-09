@@ -285,13 +285,19 @@ export function checkRepository(repositoryRoot = root): {
   for (const file of walk(path.join(repositoryRoot, "client"))) {
     if (file.endsWith("i18n.tsx")) continue;
     const source = fs.readFileSync(file, "utf8");
+    // Only files using the i18n hook contribute keys; this avoids treating an
+    // unrelated local helper named `t` as a translation call.
+    if (!/useI18n/.test(source)) continue;
     clientKeys.push(...extractClientKeys(source, path.relative(repositoryRoot, file)));
   }
 
   const serverMessages: TranslationEntry[] = [];
   for (const file of walk(path.join(repositoryRoot, "server"))) {
+    const relative = path.relative(repositoryRoot, file);
+    // Test fixtures are not production messages.
+    if (relative.startsWith(`server${path.sep}tests${path.sep}`) || /\.test\.ts$/.test(file)) continue;
     const source = fs.readFileSync(file, "utf8");
-    serverMessages.push(...extractServerMessages(source, path.relative(repositoryRoot, file)));
+    serverMessages.push(...extractServerMessages(source, relative));
   }
 
   return {

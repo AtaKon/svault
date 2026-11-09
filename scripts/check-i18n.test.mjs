@@ -183,11 +183,19 @@ test("checkRepository passes on the repository and fails on a fixture", () => {
   const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "svault-i18n-"));
   try {
     fs.mkdirSync(path.join(fixture, "client"), { recursive: true });
-    fs.mkdirSync(path.join(fixture, "server"), { recursive: true });
+    fs.mkdirSync(path.join(fixture, "server/tests"), { recursive: true });
     fs.writeFileSync(path.join(fixture, "client/i18n.tsx"), 'const EL = { Present: "ok" };');
     fs.writeFileSync(
       path.join(fixture, "client/page.tsx"),
-      'const a = t("Present");\nconst b = t("Missing key");',
+      'const { t } = useI18n();\nconst a = t("Present");\nconst b = t("Missing key");',
+    );
+    fs.writeFileSync(
+      path.join(fixture, "client/helper.ts"),
+      'function t(value: string) { return value; }\nconst ignored = t("Ignore helper");',
+    );
+    fs.writeFileSync(
+      path.join(fixture, "server/tests/api.test.ts"),
+      'throw new ApiError(400, "Ignore test fixture");',
     );
     assert.deepEqual(checkRepository(fixture).missing.map((entry) => entry.key), ["Missing key"]);
   } finally {
@@ -254,4 +262,12 @@ test("substitutes dynamic placeholders at runtime", () => {
   assert.ok(matcher);
   assert.deepEqual(matchDynamicTranslation("Queued 3 contributions", matcher), { count: "3" });
   assert.equal(matchDynamicTranslation("No match", matcher), null);
+});
+
+test("counts multiple literal brace groups with interpolations", () => {
+  const messages = extractServerMessages("throw new ApiError(400, `Bad ${first} and {x}{y} and ${second}`);");
+  assert.deepEqual(
+    findMissing(new Set(["Bad {a} and {x}{y} and {b}"]), messages),
+    [],
+  );
 });
