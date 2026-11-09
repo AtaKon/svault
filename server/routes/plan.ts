@@ -41,6 +41,9 @@ function ideaTitle(row: any, index: number | null) {
 }
 
 async function serializeEntry(row: any): Promise<MealPlanEntry> {
+  // Read-only and tolerant of legacy values: missing recipe/idea rows fall
+  // back to the stored title, invalid slots default to dinner and non-numeric
+  // servings serialize as null. Only DB failures reject.
   let recipe: MealPlanEntry["recipe"] = null;
   let idea: MealPlanEntry["idea"] = null;
   if (row.recipe_id) {

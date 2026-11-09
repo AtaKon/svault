@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { buildDynamicMatcher, isDynamicTranslationKey } from "../shared/i18n.ts";
+import { buildDynamicMatcher, isDynamicTranslationKey, matchDynamicTranslation } from "../shared/i18n.ts";
 import {
   checkRepository,
   extractClientKeys,
@@ -247,4 +247,11 @@ test("classifies same-shape but unusable dynamic keys as unmatchable", () => {
   const missing = findMissing(new Set(["{a} {b}"]), messages);
   assert.equal(missing.length, 1);
   assert.equal(missing[0].reason, "unmatchable");
+});
+
+test("substitutes dynamic placeholders at runtime", () => {
+  const matcher = buildDynamicMatcher("Queued {count} contributions");
+  assert.ok(matcher);
+  assert.deepEqual(matchDynamicTranslation("Queued 3 contributions", matcher), { count: "3" });
+  assert.equal(matchDynamicTranslation("No match", matcher), null);
 });

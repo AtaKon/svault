@@ -29,3 +29,17 @@ export function buildDynamicMatcher(key: string): { regex: RegExp; names: string
   }
   return { regex: new RegExp("^" + pattern + "$"), names };
 }
+
+/** Extract named values when a runtime string matches a dynamic translation. */
+export function matchDynamicTranslation(
+  key: string,
+  matcher: { regex: RegExp; names: string[] },
+): Record<string, string> | null {
+  const match = matcher.regex.exec(key);
+  if (!match) return null;
+  const values: Record<string, string> = {};
+  matcher.names.forEach((name, index) => {
+    values[name] = match[index + 1] ?? "";
+  });
+  return values;
+}

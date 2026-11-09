@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { api } from "./api";
 import { useAuth } from "./state";
 import { setFormatLocale } from "./format";
-import { buildDynamicMatcher } from "@shared/i18n";
+import { buildDynamicMatcher, matchDynamicTranslation } from "@shared/i18n";
 
 export type Language = "en" | "el";
 
@@ -2617,12 +2617,12 @@ export function I18nProvider({ children }: { children: ReactNode }) {
       let template = language === "el" ? EL[key] : undefined;
       if (language === "el" && template === undefined) {
         for (const entry of DYNAMIC_EL) {
-          const match = entry.regex.exec(key);
-          if (!match) continue;
+          const values = matchDynamicTranslation(key, entry);
+          if (!values) continue;
           template = entry.value;
-          entry.names.forEach((name, index) => {
-            template = template!.replaceAll("{" + name + "}", match[index + 1] ?? "");
-          });
+          for (const [name, value] of Object.entries(values)) {
+            template = template!.replaceAll("{" + name + "}", value);
+          }
           break;
         }
       }

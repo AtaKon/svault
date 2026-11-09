@@ -4594,6 +4594,30 @@ describe("weekly meal planner", () => {
     assert.equal(dashboard.data.plan.week, currentWeek.data.entries.length);
   });
 
+  it("serializes malformed legacy rows without failing the week", async () => {
+    const initial = await request(`/api/houses/${houseId}/plan`);
+    assert.equal(initial.status, 200);
+    const weekStart = initial.data.weekStart;
+    const entry = await request(`/api/houses/${houseId}/plan`, {
+      method: "POST",
+      body: { day: weekStart, slot: "snack", title: "Legacy row", servings: 1 },
+    });
+    assert.equal(entry.status, 201);
+    await run("UPDATE meal_plan_entries SET slot = ?, servings = ? WHERE id = ?", [
+      "brunch",
+      "not-a-number",
+      entry.data.id,
+    ]);
+
+    const week = await request(`/api/houses/${houseId}/plan?week=${weekStart}`);
+    assert.equal(week.status, 200);
+    const row = week.data.entries.find((item: any) => item.id === entry.data.id);
+    assert.ok(row);
+    assert.equal(row.slot, "dinner");
+    assert.equal(row.servings, null);
+    assert.equal(row.title, "Legacy row");
+  });
+
 });
 
 describe("bulk intake", () => {
