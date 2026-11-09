@@ -111,7 +111,7 @@ const verifyBillDocument: RequestHandler = (req, _res, next) => {
 };
 
 // Scaled comparison keeps values near 1e9 valid while still rejecting 1.005.
-const twoDecimals = (value: number) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-4;
+const twoDecimals = (value: number) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-6;
 const optionalMoney = z.preprocess(
   // Keep undefined (field omitted) distinct from an explicit clear (null/"").
   // Booleans and objects are rejected instead of being coerced to 0/1.
@@ -154,11 +154,11 @@ const breakdownInput = z.preprocess(
     if (typeof value !== "string") return value;
     try { return JSON.parse(value); } catch { return value; }
   },
-  z.array(breakdownLineInput).max(100),
+  z.array(breakdownLineInput).max(100).nullable(),
 ).optional();
 
 /** Normalise a breakdown that Zod has already validated. */
-function sanitizeBreakdown(value: z.infer<typeof breakdownLineInput>[] | undefined): BillBreakdownLine[] {
+function sanitizeBreakdown(value: z.infer<typeof breakdownLineInput>[] | null | undefined): BillBreakdownLine[] {
   const parsed = value ?? [];
   const rounded = (number: number | null | undefined, scale: number): number | null => {
     if (number == null) return null;
@@ -414,16 +414,17 @@ singleBillRoutes.patch("/:billId", handler(async (req, res) => {
   if (body.paidBy === undefined && paidBy && !memberIds.has(paidBy)) paidBy = null;
   const people = await validatePeople(houseId, paidBy, splitWith);
   const storedBreakdown = parseJson<unknown>(current.breakdown, []);
-  const breakdown = body.breakdown === undefined
+  const providedBreakdown = body.breakdown === undefined ? undefined : body.breakdown ?? [];
+  const breakdown = providedBreakdown === undefined
     ? normalizeStoredBreakdown(storedBreakdown)
-    : sanitizeBreakdown(body.breakdown);
+    : sanitizeBreakdown(providedBreakdown);
   // Derive provenance from the effective OCR data. Clients may send `source`
   // for compatibility, but it is ignored; legacy values are normalised too.
   const nextOcrText = body.ocrText === undefined ? current.ocr_text : body.ocrText?.trim() || null;
-  const source = body.breakdown !== undefined || body.ocrText !== undefined
+  const source = providedBreakdown !== undefined || body.ocrText !== undefined
     ? derivedSource(breakdown, nextOcrText)
     : (current.source === "scan" ? "scan" : "manual");
-  const clearScanTotals = body.breakdown !== undefined && breakdown.length === 0;
+  const clearScanTotals = providedBreakdown !== undefined && breakdown.length === 0;
   const nextSubtotal = body.subtotal === undefined ? (clearScanTotals ? null : current.subtotal) : body.subtotal;
   const nextTaxTotal = body.taxTotal === undefined ? (clearScanTotals ? null : current.tax_total) : body.taxTotal;
   await run(`UPDATE bills SET name = ?, bill_type = ?, category = ?, ledger_confirmed = ?, amount = ?, due_date = ?, paid_by = ?, split_with = ?, notes = ?,

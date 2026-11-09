@@ -13,7 +13,6 @@ import { ocrImage } from "./ocr";
 
 export interface BillScanResult {
   text: string;
-  pages: number;
   usedOcr: boolean;
   result: BillParseResult;
 }
@@ -44,7 +43,7 @@ function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob | null> {
 async function readPdf(
   file: File,
   onProgress: (progress: number, status: string) => void,
-): Promise<{ text: string; pages: number; usedOcr: boolean }> {
+): Promise<{ text: string; usedOcr: boolean }> {
   const pdfjs = await loadPdfjs();
   const data = new Uint8Array(await file.arrayBuffer());
   const pdf = await pdfjs.getDocument({ data }).promise;
@@ -94,7 +93,7 @@ async function readPdf(
         .slice(0, MAX_OCR_PAGES);
       if (!missing.length) {
         onProgress(1, "Text read from the PDF");
-        return { text: extracted, pages: pdf.numPages, usedOcr: false };
+        return { text: extracted, usedOcr: false };
       }
       for (let index = 0; index < missing.length; index++) {
         const pageNumber = missing[index];
@@ -102,7 +101,7 @@ async function readPdf(
         if (text) pages[pageNumber - 1] = text;
       }
       onProgress(1, "Bill read");
-      return { text: pages.join("\n\n").trim(), pages: pdf.numPages, usedOcr: true };
+      return { text: pages.join("\n\n").trim(), usedOcr: true };
     }
 
     // A scanned PDF has little or no text layer, so render and OCR each page.
@@ -116,7 +115,7 @@ async function readPdf(
       );
       if (text) texts.push(text);
     }
-    return { text: texts.join("\n\n").trim(), pages: pdf.numPages, usedOcr: true };
+    return { text: texts.join("\n\n").trim(), usedOcr: true };
   } finally {
     // destroy() also tears down the pdf.js worker; never mask the original error.
     try { await pdf.destroy(); } catch { /* ignore cleanup failures */ }
@@ -139,6 +138,6 @@ export async function scanBillFile(
     { mode: "bill" },
   );
   onProgress(1, "Bill read");
-  return { text, pages: 1, usedOcr: true, result: parseBillText(text, options) };
+  return { text, usedOcr: true, result: parseBillText(text, options) };
 }
 

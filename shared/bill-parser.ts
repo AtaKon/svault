@@ -582,7 +582,12 @@ export function parseBillText(rawText: string, options: { currency?: string | nu
   // Remove duplicate charges that OCR may repeat across page breaks.
   const seen = new Set<string>();
   const linesOut = breakdown.filter((line) => {
-    const key = `${line.kind}|${fold(line.description)}|${line.amount ?? ""}|${line.quantity ?? ""}|${line.unit ?? ""}`;
+    // Tax rows are sometimes repeated in a summary block with a different
+    // label; dedupe them by rate and amount rather than description.
+    // A summary VAT row often repeats the amount without the rate.
+    const key = line.kind === "tax"
+      ? `tax|${line.amount ?? ""}`
+      : `${line.kind}|${fold(line.description)}|${line.amount ?? ""}|${line.quantity ?? ""}|${line.unit ?? ""}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;

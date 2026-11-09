@@ -862,6 +862,12 @@ describe("bill text parsing", () => {
     assert.equal(parseBillText("ΔΕΗ\nΠροσφορά $\nΣΥΝΟΛΟ 10,00").currency, null);
   });
 
+  it("deduplicates a repeated summary VAT row", () => {
+    const result = parseBillText("VAT 24% 24,00\nΣΥΝΟΛΟ ΦΠΑ 24,00");
+    assert.equal(result.lines.filter((line) => line.kind === "tax").length, 1);
+    assert.equal(result.taxTotal, 24);
+  });
+
   it("removes a grouped quantity token before price reconciliation", () => {
     const result = parseBillText("Κατανάλωση 1,234 kWh 0,15 185,10");
     const line = result.lines[0];
@@ -6677,6 +6683,12 @@ describe("insights, household split and admin console", () => {
     });
     assert.equal(clearedByBreakdown.data.subtotal, null, "clearing the breakdown clears its subtotal");
     assert.equal(clearedByBreakdown.data.taxTotal, null, "clearing the breakdown clears its tax total");
+    const nullBreakdown = await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { breakdown: null },
+    });
+    assert.equal(nullBreakdown.status, 200, "null breakdown is accepted as a clear");
+    assert.deepEqual(nullBreakdown.data.breakdown, []);
     const invalidBreakdown = await request(`/api/bills/${accepted.data.id}`, {
       method: "PATCH",
       body: { breakdown: [{ description: "", kind: "charge", amount: 1 }] },

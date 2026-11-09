@@ -107,13 +107,13 @@ export class PostgresDriver implements DatabaseDriver {
     } finally {
       client.release();
     }
-    await this.pool.query(POSTGRES_SCHEMA);
     // CREATE TABLE IF NOT EXISTS does not add columns to existing installations.
-    // Apply every migration in one transaction so a failed backfill/constraint
-    // cannot leave the schema half-upgraded.
+    // Apply the base schema and every migration in one transaction so a failed
+    // backfill/constraint cannot leave the database half-upgraded.
     const migrationClient = await this.pool.connect();
     try {
       await migrationClient.query("BEGIN");
+      await migrationClient.query(POSTGRES_SCHEMA);
       for (const statement of POSTGRES_MIGRATIONS) await migrationClient.query(statement);
       // Keep the version write in the same transaction as the schema changes.
       await migrationClient.query(
