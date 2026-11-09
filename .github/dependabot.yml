@@ -23,6 +23,11 @@ updates:
       - dependency-name: typescript
         update-types:
           - version-update:semver-major
+      # pdf.js 6 removed document.destroy(); the scanner needs a dedicated
+      # migration and bundled-worker verification before a major bump.
+      - dependency-name: pdfjs-dist
+        update-types:
+          - version-update:semver-major
 
   - package-ecosystem: github-actions
     directory: /
