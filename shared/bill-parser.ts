@@ -285,9 +285,6 @@ function detectDueDate(lines: string[]): string | null {
         const dueDate = parseDateText(lines[index].slice(afterLabel));
         if (dueDate) return dueDate;
       }
-      // The line carried an issue label too; falling through to the next line
-      // risks picking up an adjacent issue date, so leave it unset.
-      continue;
     } else {
       const sameLine = parseDateText(lines[index]);
       if (sameLine) return sameLine;
@@ -356,8 +353,7 @@ function taxAmount(values: number[], rate: number | null): { amount: number | nu
     const [base, tax, gross] = values.slice(-3);
     if (rate != null &&
       Math.abs(base + tax - gross) <= 0.03 &&
-      (Math.abs(base * rate / 100 - tax) <= Math.max(0.03, tax * 0.02) ||
-        Math.abs(tax * rate / 100 - base) <= Math.max(0.03, base * 0.02))) {
+      Math.abs(base * rate / 100 - tax) <= Math.max(0.03, tax * 0.02)) {
       return { amount: tax, base };
     }
     // Three values are normally net/tax/gross, but guessing the middle column

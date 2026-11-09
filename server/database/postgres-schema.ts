@@ -810,6 +810,7 @@ export const POSTGRES_MIGRATIONS: string[] = [
         WHERE conname = 'bills_source_check' AND conrelid = to_regclass('bills')
       ) THEN
       UPDATE bills SET source = 'manual' WHERE source IS NULL OR source NOT IN ('manual', 'scan');
+      ALTER TABLE bills ALTER COLUMN source SET NOT NULL;
       ALTER TABLE bills ADD CONSTRAINT bills_source_check CHECK (source IN ('manual', 'scan'));
     END IF;
   END $$`,

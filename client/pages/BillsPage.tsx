@@ -241,7 +241,6 @@ export function BillsPage() {
         if (subtotal.trim()) data.set("subtotal", subtotal);
         if (taxTotal.trim()) data.set("taxTotal", taxTotal);
         if (ocrText) data.set("ocrText", ocrText);
-        if (scanned || breakdown.length || ocrText) data.set("source", "scan");
       }
       await api<UtilityBill>(`/api/houses/${house.id}/bills`, { method: "POST", body: data });
       setName(""); setAmount(""); setDueDate(""); setNotes(""); setFile(null);
@@ -293,14 +292,13 @@ export function BillsPage() {
         return;
       }
       const scan = await scanBillFile(saved, (progress) => setReadingProgress(progress), { currency: bill.currency });
-      if (!scan.result.lines.length && scan.result.subtotal == null && scan.result.taxTotal == null) {
+      if (!scan.result.lines.length && scan.result.subtotal == null &&
+        scan.result.taxTotal == null && scan.result.total == null) {
         toast.error(t("No new breakdown was recognised; the saved bill was left unchanged."));
         return;
       }
-      const body: Record<string, unknown> = {
-        ocrText: scan.text.slice(0, 50_000),
-        source: "scan",
-      };
+      // Provenance is derived server-side from the OCR data sent here.
+      const body: Record<string, unknown> = { ocrText: scan.text.slice(0, 50_000) };
       // Partial re-reads preserve stored values: only send what was found, so
       // a total-only read cannot erase an existing line breakdown.
       if (scan.result.lines.length) body.breakdown = scan.result.lines.slice(0, 100);
@@ -354,7 +352,7 @@ export function BillsPage() {
             <Icon name="upload" size={19} className="text-muted" />
             <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-sm text-muted">
               <span>{file?.name ?? t("Drop a PDF or photo here or browse")}</span>
-              <input type="file" accept={DOCUMENT_ACCEPT} className="sr-only" disabled={readingBillId != null} onChange={(event) => { chooseFile(event.target.files?.[0] ?? null); event.target.value = ""; }} />
+              <input type="file" accept={DOCUMENT_ACCEPT} className="sr-only" disabled={readingBillId != null || scanning} onChange={(event) => { chooseFile(event.target.files?.[0] ?? null); event.target.value = ""; }} />
             </label>
             {file && !scanning && <Button type="button" size="sm" variant="ghost" onClick={() => { setFile(null); clearBreakdown(); }}>{t("Remove")}</Button>}
           </div>

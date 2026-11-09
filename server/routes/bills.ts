@@ -361,7 +361,7 @@ billRoutes.post("/:houseId/bills", requireHouseBillMember, billUpload.single("do
       subtotal: body.subtotal ?? null,
       tax_total: body.taxTotal ?? null,
       breakdown: JSON.stringify(breakdown),
-      ocr_text: body.ocrText || null,
+      ocr_text: body.ocrText?.trim() || null,
       source: derivedSource(breakdown, body.ocrText),
       created_at: now(),
     };
@@ -417,7 +417,7 @@ singleBillRoutes.patch("/:billId", handler(async (req, res) => {
     : sanitizeBreakdown(body.breakdown);
   // Derive provenance from the effective OCR data. Clients may send `source`
   // for compatibility, but it is ignored; legacy values are normalised too.
-  const nextOcrText = body.ocrText === undefined ? current.ocr_text : body.ocrText;
+  const nextOcrText = body.ocrText === undefined ? current.ocr_text : body.ocrText?.trim() || null;
   const source = body.breakdown !== undefined || body.ocrText !== undefined
     ? derivedSource(breakdown, nextOcrText)
     : (current.source === "scan" ? "scan" : "manual");
@@ -429,7 +429,7 @@ singleBillRoutes.patch("/:billId", handler(async (req, res) => {
     body.subtotal === undefined ? current.subtotal : body.subtotal,
     body.taxTotal === undefined ? current.tax_total : body.taxTotal,
     JSON.stringify(breakdown),
-    body.ocrText === undefined ? current.ocr_text : body.ocrText || null,
+    nextOcrText,
     source,
     current.id,
   ]);
