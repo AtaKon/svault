@@ -109,6 +109,7 @@ const { discardUploads } = await import("../upload.js");
 const { heuristicRecipe, parseIngredientLine, localIdeas } = await import("../services/recipe-local.js");
 const { heuristicReceipt } = await import("../services/receipt-local.js");
 const { billLinesTotal, parseBillNumber, parseBillText } = await import("../../shared/bill-parser.js");
+const { billHistory, extractBillMetrics } = await import("../../shared/bill-history.js");
 const { documentMime, fetchBillFile, isBillPdf, pdfItemsToText } = await import("../../shared/bill-document.js");
 const { parseLidlReceipt } = await import("../services/receipt-lidl.js");
 const { parseSklavenitisReceipt } = await import("../services/receipt-sklavenitis.js");
@@ -602,6 +603,25 @@ describe("receipt text parsing", () => {
     assert.equal(draft.total, 4);
     assert.equal(draft.savings, 1);
     assert.equal(draft.lines.length, 1);
+  });
+});
+
+describe("energy history", () => {
+  it("extracts identifiable Zenith usage and separate charges", () => {
+    assert.deepEqual(extractBillMetrics({ billType: "electricity", ocrText: "www.zenith.gr\nΎψοςκατανάλωσης 149 kWh\nΔΗΜΟΣ ΘΕΣΣΑΛΟΝΙΚΗΣ 13,65€\nΦόροι - τέλη 3,03 €" }), { consumptionKwh: 149, consumptionM3: null, municipalCharges: 13.65, stateCharges: 3.03 });
+    assert.deepEqual(extractBillMetrics({ billType: "natural_gas", ocrText: "ZeniΘ\n07/03/2026 15/05/2026 14.428 14.533 105 0,99961 104,96 1.218,65\nΑξία Φ.Π.Α. 7,66" }), { consumptionKwh: 1218.65, consumptionM3: 104.96, municipalCharges: null, stateCharges: 7.66 });
+    assert.deepEqual(extractBillMetrics({ billType: "natural_gas", ocrText: "Άλλος πάροχος 100 kWh" }), { consumptionKwh: null, consumptionM3: null, municipalCharges: null, stateCharges: null });
+  });
+  it("compares only matching bills with distinct due dates and keeps unknowns unknown", () => {
+    const base = { id: "a", name: "Zenith", billType: "natural_gas", currency: "EUR", dueDate: "2026-01-01", createdAt: "2026-01-01", amount: 120, consumptionKwh: 1000, consumptionM3: 100, municipalCharges: 10, stateCharges: 6 } as any;
+    const history = billHistory([base, { ...base, id: "b", dueDate: "2026-02-01", amount: 150, stateCharges: 9, municipalCharges: null }, { ...base, id: "c", name: "Other", dueDate: "2026-03-01" }]);
+    const latest = history.find((entry: any) => entry.bill.id === "b")!;
+    assert.equal(latest.perKwh, 0.15);
+    assert.equal(latest.perM3, 1.5);
+    assert.equal(latest.prior?.stateCharges, 6);
+    assert.equal(latest.metrics.municipalCharges, null);
+    assert.equal(history.find((entry: any) => entry.bill.id === "c")?.prior, undefined);
+    assert.equal(billHistory([base, { ...base, id: "d", dueDate: null }]).find((entry: any) => entry.bill.id === "d")?.prior, undefined);
   });
 });
 
@@ -6615,10 +6635,16 @@ describe("insights, household split and admin console", () => {
     assert.equal((await request(`/api/bills/${personalWithParticipants.data.id}`, { method: "DELETE" })).status, 200);
 
     const colorBill = await request(`/api/houses/${billHouse}/bills`, {
-      method: "POST", body: { name: "Electricity color", amount: 10, billType: "electricity", contractColor: "blue", notes: "Keep my notes" },
+      method: "POST", body: { name: "Electricity color", amount: 10, billType: "electricity", contractColor: "blue", consumptionKwh: 149.5, municipalCharges: 13.65, stateCharges: 3.03, notes: "Keep my notes" },
     });
     assert.equal(colorBill.status, 201);
     assert.equal(colorBill.data.contractColor, "blue");
+    assert.equal(colorBill.data.consumptionKwh, 149.5);
+    assert.equal(colorBill.data.municipalCharges, 13.65);
+    assert.equal((await request(`/api/bills/${colorBill.data.id}`, { method: "PATCH", body: { consumptionKwh: -1 } })).status, 400);
+    assert.equal((await request(`/api/bills/${colorBill.data.id}`, { method: "PATCH", body: { stateCharges: true } })).status, 400);
+    const clearedMetric = await request(`/api/bills/${colorBill.data.id}`, { method: "PATCH", body: { stateCharges: null } });
+    assert.equal(clearedMetric.data.stateCharges, null);
     const listedColor = (await request(`/api/houses/${billHouse}/bills`)).data.find((bill: any) => bill.id === colorBill.data.id);
     assert.equal(listedColor.contractColor, "blue");
     assert.equal(listedColor.notes, "Keep my notes");
@@ -6629,6 +6655,8 @@ describe("insights, household split and admin console", () => {
     assert.equal(gasColor.status, 400);
     const changedType = await request(`/api/bills/${colorBill.data.id}`, { method: "PATCH", body: { billType: "natural_gas" } });
     assert.equal(changedType.data.contractColor, null);
+    assert.equal(changedType.data.consumptionKwh, null);
+    assert.equal(changedType.data.municipalCharges, null);
     assert.equal((await request(`/api/bills/${colorBill.data.id}`, { method: "PATCH", body: { contractColor: "blue" } })).status, 400);
     assert.equal((await request(`/api/houses/${billHouse}/bills`, { method: "POST", body: { name: "Gas", amount: 1, billType: "natural_gas", contractColor: "blue" } })).status, 400);
     assert.equal((await request(`/api/bills/${colorBill.data.id}`, { method: "DELETE" })).status, 200);

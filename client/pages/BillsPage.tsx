@@ -7,6 +7,7 @@ import { useToast } from "@/components/toast";
 import { money, qty, shortDate } from "@/format";
 import { useI18n } from "@/i18n";
 import { BILL_TYPE_LABELS, BILL_TYPE_VALUES } from "@shared/bill-types";
+import { billHistory, billMetrics, extractBillMetrics } from "@shared/bill-history";
 import { splitAmountEvenly } from "@shared/bill-splitting";
 import { ELECTRICITY_CONTRACT_COLORS } from "@shared/types";
 import type { BillBreakdownLine, BillParseResult, UtilityBill } from "@shared/types";
@@ -60,6 +61,58 @@ function BreakdownTable({ lines, currency }: { lines: BillBreakdownLine[]; curre
   </div>;
 }
 
+function BillMetricsEditor({ bill, save }: { bill: UtilityBill; save: (data: Record<string, number | null>) => Promise<void> }) {
+  const { t } = useI18n();
+  const metrics = billMetrics(bill);
+  const [values, setValues] = useState(() => ({
+    consumptionKwh: metrics.consumptionKwh?.toString() ?? "",
+    consumptionM3: metrics.consumptionM3?.toString() ?? "",
+    municipalCharges: metrics.municipalCharges?.toString() ?? "",
+    stateCharges: metrics.stateCharges?.toString() ?? "",
+  }));
+  const fields = [
+    ["consumptionKwh", "Consumption (kWh)"],
+    ...(bill.billType === "natural_gas" ? [["consumptionM3", "Consumption (m³)"]] : []),
+    ["municipalCharges", "Municipal charges"], ["stateCharges", "State taxes and fees"],
+  ] as Array<[keyof typeof values, string]>;
+  return <details className="mt-3 border-t border-line pt-3">
+    <summary className="cursor-pointer text-sm font-medium text-brand">{t("Consumption and taxes")}</summary>
+    <form className="mt-3 flex flex-wrap items-end gap-3" onSubmit={(event) => {
+      event.preventDefault();
+      const payload: Record<string, number | null> = {};
+      for (const [key] of fields) payload[key] = values[key] === "" ? null : Number(values[key]);
+      void save(payload);
+    }}>
+      {fields.map(([key, label]) => <Field key={key} label={t(label)} className="w-40"><Input type="number" min={key.startsWith("consumption") ? "0.001" : "0"} step={key.startsWith("consumption") ? "0.001" : "0.01"} value={values[key]} onChange={event => setValues(current => ({ ...current, [key]: event.target.value }))} /></Field>)}
+      <Button type="submit" size="sm">{t("Save")}</Button>
+    </form>
+    <p className="mt-2 text-xs text-muted">{t("Review extracted values against the bill. Leave unknown fields empty.")}</p>
+  </details>;
+}
+
+function UsageHistory({ bills }: { bills: UtilityBill[] }) {
+  const { t } = useI18n();
+  const history = billHistory(bills);
+  if (!history.length) return null;
+  const change = (value: number | null, previous: number | null | undefined, currency: string) => {
+    if (value == null) return "—";
+    const increase = previous != null && value > previous + 0.005;
+    return <>{money(value, currency)}{increase && <span className="ml-1 text-danger">↑ {money(value - previous!, currency)}</span>}</>;
+  };
+  return <Card className="p-4 sm:p-5">
+    <h2 className="font-display text-xl">{t("Energy cost and tax history")}</h2>
+    <p className="mt-1 text-xs text-muted">{t("Cost per unit is the full bill total divided by consumption, including fees and taxes. Increases compare billed amounts with the previous bill of the same name and type; usage and billing periods may differ.")}</p>
+    <div className="mt-3 overflow-x-auto"><table className="w-full min-w-[700px] text-left text-xs">
+      <thead className="text-muted"><tr><th className="py-2 pr-3">{t("Bill")}</th><th className="py-2 pr-3">{t("Due date")}</th><th className="py-2 pr-3">{t("Cost / kWh")}</th><th className="py-2 pr-3">{t("Cost / m³")}</th><th className="py-2 pr-3">{t("Municipal charges")}</th><th className="py-2">{t("State taxes and fees")}</th></tr></thead>
+      <tbody className="divide-y divide-line">{history.map(({ bill, metrics, prior, perKwh, perM3 }) => <tr key={bill.id}>
+        <td className="py-2 pr-3">{bill.name} · {t(BILL_TYPE_LABELS[bill.billType])}</td><td className="py-2 pr-3">{bill.dueDate ? shortDate(bill.dueDate) : shortDate(bill.createdAt)}</td>
+        <td className="py-2 pr-3">{perKwh == null ? "—" : money(perKwh, bill.currency)}</td><td className="py-2 pr-3">{perM3 == null ? "—" : money(perM3, bill.currency)}</td>
+        <td className="py-2 pr-3">{change(metrics.municipalCharges, prior?.municipalCharges, bill.currency)}</td><td className="py-2">{change(metrics.stateCharges, prior?.stateCharges, bill.currency)}</td>
+      </tr>)}</tbody>
+    </table></div>
+  </Card>;
+}
+
 export function BillsPage() {
   const { t } = useI18n();
   const { house } = useHouse();
@@ -75,6 +128,8 @@ export function BillsPage() {
   const [billTypeTouched, setBillTypeTouched] = useState(false);
   const [contractColor, setContractColor] = useState<UtilityBill["contractColor"]>(null);
   const [contractColorTouched, setContractColorTouched] = useState(false);
+  const [draftMetrics, setDraftMetrics] = useState({ consumptionKwh: "", consumptionM3: "", municipalCharges: "", stateCharges: "" });
+  const metricScanSnapshot = useRef<Record<string, string>>({});
   const [category, setCategory] = useState<UtilityBill["category"]>("to_split");
   const [ledgerConfirmed, setLedgerConfirmed] = useState(false);
   const [dueDate, setDueDate] = useState("");
@@ -152,6 +207,16 @@ export function BillsPage() {
     setAmount(nextAmount);
     setDueDate(nextDueDate);
     setBillType(nextType);
+    if (result.billType === nextType && (nextType === "electricity" || nextType === "natural_gas")) {
+      const found = extractBillMetrics({ billType: nextType, ocrText: text });
+      setDraftMetrics(current => {
+        const next = { ...current };
+        for (const key of ["consumptionKwh", "consumptionM3", "municipalCharges", "stateCharges"] as const) {
+          if (!current[key] || current[key] === metricScanSnapshot.current[key]) { next[key] = found[key]?.toString() ?? ""; metricScanSnapshot.current[key] = next[key]; } else { delete metricScanSnapshot.current[key]; }
+        }
+        return next;
+      });
+    }
     const applyColor = !contractColorTouched && nextType === "electricity";
     if (nextType !== "electricity") setContractColor(null);
     else if (applyColor) setContractColor(result.contractColor);
@@ -215,6 +280,7 @@ export function BillsPage() {
     setOcrText("");
     setScanned(false);
     setScanSnapshot(null);
+    metricScanSnapshot.current = {};
   };
 
   const save = async (event: React.FormEvent) => {
@@ -235,6 +301,7 @@ export function BillsPage() {
       data.set("billType", billType);
       if (billType === "electricity" && contractColor) data.set("contractColor", contractColor);
       data.set("amount", String(numericAmount));
+      if (billType === "electricity" || billType === "natural_gas") for (const [key, value] of Object.entries(draftMetrics)) if (value && (key !== "consumptionM3" || billType === "natural_gas")) data.set(key, value);
       data.set("category", category);
       data.set("ledgerConfirmed", String(ledgerConfirmed));
       data.set("currency", house.currency || "EUR");
@@ -254,6 +321,7 @@ export function BillsPage() {
       await api<UtilityBill>(`/api/houses/${house.id}/bills`, { method: "POST", body: data });
       setName(""); setAmount(""); setDueDate(""); setNotes(""); setFile(null);
       setLedgerConfirmed(false);
+      setDraftMetrics({ consumptionKwh: "", consumptionM3: "", municipalCharges: "", stateCharges: "" });
       setBillTypeTouched(false); setContractColor(null); setContractColorTouched(false);
       clearBreakdown();
       toast.success(t("Bill added"));
@@ -319,12 +387,18 @@ export function BillsPage() {
         !window.confirm(t("Replace the saved breakdown with the newly recognised values?"))) {
         return;
       }
+      const extracted = extractBillMetrics({ billType: bill.billType, ocrText: scan.text });
       // Provenance is derived server-side from the OCR data sent here.
       const body: Record<string, unknown> = { ocrText: scan.text.slice(0, 50_000) };
       // Partial re-reads preserve stored values: only send what was found, so
       // a total-only read cannot erase an existing line breakdown.
       if (bill.billType === "electricity" && scan.result.contractColor && !bill.contractColor) {
         body.contractColor = scan.result.contractColor;
+      }
+      if (bill.billType === scan.result.billType) {
+        for (const key of ["consumptionKwh", "consumptionM3", "municipalCharges", "stateCharges"] as const) {
+          if (bill[key] == null && extracted[key] != null) body[key] = extracted[key];
+        }
       }
       if (scan.result.lines.length) body.breakdown = scan.result.lines.slice(0, 100);
       if (scan.result.subtotal != null) body.subtotal = scan.result.subtotal;
@@ -365,12 +439,15 @@ export function BillsPage() {
         <div className="flex items-center gap-2"><Icon name="plus" size={17} className="text-brand"/><h2 className="font-display text-lg">{t("Add a bill")}</h2></div>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
           <Field label={t("Bill name")} required><Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("Electricity, internet, rent…")} required /></Field>
-          <Field label={t("Bill type")}><Select value={billType} onChange={(e) => { setBillType(e.target.value as UtilityBill["billType"]); setBillTypeTouched(true); if (e.target.value !== "electricity") { setContractColor(null); setContractColorTouched(false); } }}>{BILL_TYPES.map((type) => <option key={type.value} value={type.value}>{t(type.label)}</option>)}</Select></Field>
+          <Field label={t("Bill type")}><Select value={billType} onChange={(e) => { setBillType(e.target.value as UtilityBill["billType"]); setBillTypeTouched(true); metricScanSnapshot.current = {}; setDraftMetrics({ consumptionKwh: "", consumptionM3: "", municipalCharges: "", stateCharges: "" }); if (e.target.value !== "electricity") { setContractColor(null); setContractColorTouched(false); } }}>{BILL_TYPES.map((type) => <option key={type.value} value={type.value}>{t(type.label)}</option>)}</Select></Field>
           <Field label={t("Amount")} required><Input type="number" min="0.01" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" required /></Field>
           <Field label={t("Category")}><Select value={category} onChange={(e) => { setCategory(e.target.value as UtilityBill["category"]); setLedgerConfirmed(false); }}><option value="to_split">{t("To be split")}</option><option value="personal">{t("Personal")}</option></Select></Field>
           <Field label={t("Due date")}><Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} /></Field>
         </div>
         {billType === "electricity" && <Field label={t("Electricity contract color")} className="sm:max-w-52"><Select value={contractColor ?? ""} onChange={(e) => { setContractColor((e.target.value || null) as UtilityBill["contractColor"]); setContractColorTouched(true); }}><option value="">{t("Not specified")}</option>{ELECTRICITY_CONTRACT_COLORS.map((color) => <option key={color} value={color}>{t(CONTRACT_COLOR_LABELS[color])}</option>)}</Select></Field>}
+        {(billType === "electricity" || billType === "natural_gas") && <div className="flex flex-wrap items-end gap-3">
+          {([ ["consumptionKwh", "Consumption (kWh)"], ...(billType === "natural_gas" ? [["consumptionM3", "Consumption (m³)"]] : []), ["municipalCharges", "Municipal charges"], ["stateCharges", "State taxes and fees"] ] as Array<[keyof typeof draftMetrics, string]>).map(([key, label]) => <Field key={key} label={t(label)} className="w-40"><Input type="number" min={key.startsWith("consumption") ? "0.001" : "0"} step={key.startsWith("consumption") ? "0.001" : "0.01"} value={draftMetrics[key]} onChange={event => setDraftMetrics(current => ({ ...current, [key]: event.target.value }))}/></Field>)}
+        </div>}
         {category === "to_split" && <div className="grid gap-4 sm:grid-cols-2">
           <Field label={t("Paid by")}><Select value={paidBy} onChange={(e) => setPaidBy(e.target.value)}>{household?.members.map((member) => <option key={member.userId} value={member.userId}>{member.name}</option>)}</Select></Field>
           <Field label={t("Split between")} hint={t("Equal shares")}><div className="flex flex-wrap gap-2">{household?.members.map((member) => <label key={member.userId} className="flex cursor-pointer items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2 text-sm"><input type="checkbox" checked={splitWith.includes(member.userId)} onChange={(event) => { if (!event.target.checked && splitWith.length === 1) { toast.error(t("Select at least one person to split the bill.")); return; } setSplitWith((current) => event.target.checked ? [...current, member.userId] : current.filter((id) => id !== member.userId)); }} />{member.name}</label>)}</div></Field>
@@ -411,6 +488,7 @@ export function BillsPage() {
       </form>
     </Card>
 
+    <UsageHistory bills={bills} />
     <section className="space-y-3">
       <div className="flex items-end justify-between gap-3"><div><div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">{t("Bill history")}</div><h2 className="mt-1 font-display text-xl">{t("Your household bills")}</h2></div><Badge>{bills.length} {t("bills")}</Badge></div>
       {loading ? <div className="space-y-3"><Skeleton className="h-28"/><Skeleton className="h-28"/></div> : bills.length === 0 ? <EmptyState icon="receipt" title={t("No bills yet")} body={t("Add a bill manually or attach a PDF or photo to start your household ledger.")} /> : <div className="space-y-3">{bills.map((bill) => {
@@ -428,6 +506,7 @@ export function BillsPage() {
             <summary className="cursor-pointer text-sm font-medium text-brand">{t("Bill breakdown")} · {bill.breakdown.length}</summary>
             <BreakdownTable lines={bill.breakdown} currency={bill.currency} />
           </details>}
+          {(bill.billType === "electricity" || bill.billType === "natural_gas") && <BillMetricsEditor key={`${bill.id}-${bill.consumptionKwh}-${bill.consumptionM3}-${bill.municipalCharges}-${bill.stateCharges}`} bill={bill} save={(data) => patchBill(bill, data)} />}
           <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-line pt-3">
             {bill.billType === "electricity" && <Field label={t("Electricity contract color")} className="w-44"><Select value={bill.contractColor ?? ""} onChange={(e) => void patchBill(bill, { contractColor: e.target.value || null })}><option value="">{t("Not specified")}</option>{ELECTRICITY_CONTRACT_COLORS.map((color) => <option key={color} value={color}>{t(CONTRACT_COLOR_LABELS[color])}</option>)}</Select></Field>}
             <Field label={t("Category")} className="w-44"><Select value={bill.category} onChange={(e) => changeCategory(bill, e.target.value as UtilityBill["category"])}><option value="to_split">{t("To be split")}</option><option value="personal">{t("Personal")}</option></Select></Field>
