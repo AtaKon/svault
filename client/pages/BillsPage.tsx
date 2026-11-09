@@ -50,7 +50,7 @@ function BreakdownTable({ lines, currency }: { lines: BillBreakdownLine[]; curre
           <td className="whitespace-nowrap py-1.5 pr-3">{line.quantity != null ? `${qty(line.quantity)}${line.unit ? ` ${line.unit}` : ""}` : "—"}</td>
           <td className="whitespace-nowrap py-1.5 pr-3">{line.unitPrice != null ? money(line.unitPrice, currency) : "—"}</td>
           <td className="whitespace-nowrap py-1.5 text-right font-medium">
-            {line.kind === "discount" || line.kind === "credit" ? "−" : ""}{money(line.amount, currency)}
+            {line.amount == null ? "—" : <>{line.kind === "discount" || line.kind === "credit" ? "−" : ""}{money(line.amount, currency)}</>}
           </td>
         </tr>)}
       </tbody>
@@ -208,7 +208,6 @@ export function BillsPage() {
     setOcrText("");
     setScanned(false);
     setScanSnapshot(null);
-    setBillTypeTouched(false);
   };
 
   const save = async (event: React.FormEvent) => {

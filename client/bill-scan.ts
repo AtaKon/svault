@@ -89,12 +89,12 @@ async function readPdf(
       // A hybrid PDF can have a text cover page and scanned invoice pages;
       // OCR only the pages whose text layer is effectively empty.
       const missing = pages
-        .map((text, index) => meaningful(text) < 20 ? index + 1 : 0)
+        .map((text, index) => meaningful(text) < 20 || !/\d/.test(text) ? index + 1 : 0)
         .filter((pageNumber) => pageNumber > 0)
         .slice(0, MAX_OCR_PAGES);
       if (!missing.length) {
         onProgress(1, "Text read from the PDF");
-        return { text: extracted, pages: textPages, usedOcr: false };
+        return { text: extracted, pages: pdf.numPages, usedOcr: false };
       }
       for (let index = 0; index < missing.length; index++) {
         const pageNumber = missing[index];
@@ -102,7 +102,7 @@ async function readPdf(
         if (text) pages[pageNumber - 1] = text;
       }
       onProgress(1, "Bill read");
-      return { text: pages.join("\n\n").trim(), pages: textPages, usedOcr: true };
+      return { text: pages.join("\n\n").trim(), pages: pdf.numPages, usedOcr: true };
     }
 
     // A scanned PDF has little or no text layer, so render and OCR each page.
@@ -116,7 +116,7 @@ async function readPdf(
       );
       if (text) texts.push(text);
     }
-    return { text: texts.join("\n\n").trim(), pages: ocrPages, usedOcr: true };
+    return { text: texts.join("\n\n").trim(), pages: pdf.numPages, usedOcr: true };
   } finally {
     // destroy() also tears down the pdf.js worker; never mask the original error.
     try { await pdf.destroy(); } catch { /* ignore cleanup failures */ }

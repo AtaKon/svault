@@ -110,6 +110,7 @@ const verifyBillDocument: RequestHandler = (req, _res, next) => {
   next();
 };
 
+// Scaled comparison keeps values near 1e9 valid while still rejecting 1.005.
 const twoDecimals = (value: number) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-4;
 const optionalMoney = z.preprocess(
   // Keep undefined (field omitted) distinct from an explicit clear (null/"").
