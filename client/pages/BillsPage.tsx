@@ -96,6 +96,8 @@ export function BillsPage() {
   const [readingBillId, setReadingBillId] = useState<string | null>(null);
   const [readingProgress, setReadingProgress] = useState(0);
   const scanRun = useRef(0);
+  const readRun = useRef(0);
+  useEffect(() => () => { scanRun.current++; readRun.current++; }, []);
 
   const load = useCallback(async () => {
     try {
@@ -283,17 +285,24 @@ export function BillsPage() {
   };
   const readSavedBill = async (bill: UtilityBill) => {
     if (!bill.document || readingBillId) return;
+    const run = readRun.current + 1;
+    readRun.current = run;
     setReadingBillId(bill.id);
     setReadingProgress(0);
     try {
       const saved = await fetchBillFile(bill.document, bill.name);
+      if (run !== readRun.current) return;
       if (!saved) {
         toast.error(t("Could not read the bill document"));
         return;
       }
-      const scan = await scanBillFile(saved, (progress) => setReadingProgress(progress), { currency: bill.currency });
-      if (!scan.result.lines.length && scan.result.subtotal == null &&
-        scan.result.taxTotal == null && scan.result.total == null) {
+      const scan = await scanBillFile(
+        saved,
+        (progress) => { if (run === readRun.current) setReadingProgress(progress); },
+        { currency: bill.currency },
+      );
+      if (run !== readRun.current) return;
+      if (!scan.result.lines.length && scan.result.subtotal == null && scan.result.taxTotal == null) {
         toast.error(t("No new breakdown was recognised; the saved bill was left unchanged."));
         return;
       }
@@ -305,14 +314,18 @@ export function BillsPage() {
       if (scan.result.subtotal != null) body.subtotal = scan.result.subtotal;
       if (scan.result.taxTotal != null) body.taxTotal = scan.result.taxTotal;
       await api(`/api/bills/${bill.id}`, { method: "PATCH", body });
+      if (run !== readRun.current) return;
       toast.success(t("Bill breakdown updated"));
       await load();
     } catch (error) {
+      if (run !== readRun.current) return;
       if (import.meta.env.DEV) console.error("[bill-scan]", error);
       toast.error(t("Could not read the bill document"));
     } finally {
-      setReadingBillId(null);
-      setReadingProgress(0);
+      if (run === readRun.current) {
+        setReadingBillId(null);
+        setReadingProgress(0);
+      }
     }
   };
   const dropFile = (event: DragEvent<HTMLDivElement>) => {

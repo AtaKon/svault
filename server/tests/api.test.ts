@@ -6397,7 +6397,6 @@ describe("insights, household split and admin console", () => {
       fields.set("subtotal", "8.40");
       fields.set("taxTotal", "1.60");
       fields.set("ocrText", "Κατανάλωση 100 kWh 0,084 8,40\nΦΠΑ 19% 1,60");
-      fields.set("source", "scan");
       fields.set("breakdown", JSON.stringify([
         { description: "Κατανάλωση", kind: "charge", quantity: 100, unit: "kWh", unitPrice: 0.084, amount: 8.4, taxRate: null },
         { description: "ΦΠΑ", kind: "tax", quantity: null, unit: null, unitPrice: null, amount: 1.6, taxRate: 19 },
@@ -6573,7 +6572,6 @@ describe("insights, household split and admin console", () => {
         subtotal: 7.5,
         taxTotal: 2.5,
         ocrText: "updated bill text",
-        source: "scan",
         breakdown: [
           { description: "Energy", kind: "charge", quantity: 50, unit: "kWh", unitPrice: 0.15, amount: 7.5, taxRate: null },
           { description: "VAT", kind: "tax", quantity: null, unit: null, unitPrice: null, amount: 2.5, taxRate: 20 },
@@ -6594,7 +6592,7 @@ describe("insights, household split and admin console", () => {
     assert.equal(stringMoneyPatch.data.taxTotal, 2.5);
     const partialPatch = await request(`/api/bills/${accepted.data.id}`, {
       method: "PATCH",
-      body: { ocrText: "partial read", source: "scan" },
+      body: { ocrText: "partial read" },
     });
     assert.equal(partialPatch.status, 200);
     assert.equal(partialPatch.data.breakdown.length, 2, "omitting breakdown preserves the stored lines");
@@ -6644,7 +6642,7 @@ describe("insights, household split and admin console", () => {
     assert.equal(cleared.data.source, "manual", "clearing OCR fields returns provenance to manual");
     const sourceScan = await request(`/api/bills/${accepted.data.id}`, {
       method: "PATCH",
-      body: { ocrText: "source scan text", source: "manual" },
+      body: { ocrText: "source scan text" },
     });
     assert.equal(sourceScan.status, 200);
     assert.equal(sourceScan.data.source, "scan", "provenance is derived from stored OCR data, not the client flag");
@@ -6819,7 +6817,7 @@ describe("insights, household split and admin console", () => {
       method: "POST",
       body: {
         name: "Scan-only totals", billType: "water", amount: 10, category: "personal",
-        subtotal: 9, taxTotal: 1, ocrText: "recognised bill text", source: "scan",
+        subtotal: 9, taxTotal: 1, ocrText: "recognised bill text",
       },
     });
     assert.equal(scanOnly.status, 201);
@@ -6863,7 +6861,7 @@ describe("insights, household split and admin console", () => {
     const personalPatch = await request(`/api/bills/${manualWithBreakdown.data.id}`, {
       method: "PATCH",
       body: {
-        subtotal: 4, taxTotal: 1, ocrText: "personal read", source: "scan",
+        subtotal: 4, taxTotal: 1, ocrText: "personal read",
         breakdown: [{ description: "Charge", kind: "charge", amount: 5, taxRate: null }],
       },
     });

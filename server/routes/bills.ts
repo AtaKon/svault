@@ -224,7 +224,6 @@ const input = z.object({
   taxTotal: optionalMoney,
   breakdown: breakdownInput,
   ocrText: z.string().max(50_000).nullable().optional(),
-  source: z.enum(["manual", "scan"]).optional(),
 });
 const patchInput = z.object({
   name: input.shape.name.optional(),
@@ -240,7 +239,6 @@ const patchInput = z.object({
   taxTotal: optionalMoney,
   breakdown: breakdownInput,
   ocrText: z.string().max(50_000).nullable().optional(),
-  source: z.enum(["manual", "scan"]).optional(),
 }).strict();
 
 /** Provenance is derived from the stored OCR data, never trusted from clients. */

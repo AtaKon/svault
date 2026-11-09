@@ -115,6 +115,11 @@ export class PostgresDriver implements DatabaseDriver {
     try {
       await migrationClient.query("BEGIN");
       for (const statement of POSTGRES_MIGRATIONS) await migrationClient.query(statement);
+      // Keep the version write in the same transaction as the schema changes.
+      await migrationClient.query(
+        "INSERT INTO schema_meta (key, value) VALUES ('version', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+        ["4"],
+      );
       await migrationClient.query("COMMIT");
     } catch (error) {
       try { await migrationClient.query("ROLLBACK"); } catch { /* original error wins */ }
@@ -122,10 +127,6 @@ export class PostgresDriver implements DatabaseDriver {
     } finally {
       migrationClient.release();
     }
-    await this.pool.query(
-      "INSERT INTO schema_meta (key, value) VALUES ('version', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-      ["3"],
-    );
     await applyPendingPostgresRestore(this.pool);
   }
 
