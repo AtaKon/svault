@@ -94,6 +94,7 @@ const EL: Record<string, string> = {
   "Reading the bill file…": "Ανάγνωση του αρχείου λογαριασμού…",
   "Drop the bill PDF or photo to fill the amount, taxes and unit prices automatically.": "Σύρε το PDF ή τη φωτογραφία του λογαριασμού για να συμπληρωθούν αυτόματα το ποσό, οι φόροι και οι τιμές μονάδας.",
   "Detected breakdown": "Ανάλυση που εντοπίστηκε",
+  "A new scan replaces these lines.": "Μια νέα σάρωση αντικαθιστά αυτές τις γραμμές.",
   "Charges": "Χρεώσεις",
   "Breakdown total": "Σύνολο ανάλυσης",
   "Subtotal": "Υποσύνολο",

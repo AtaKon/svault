@@ -703,6 +703,7 @@ describe("bill text parsing", () => {
     assert.equal(parseBillNumber("1,234", { thousands: false }), 1.234);
     assert.equal(parseBillNumber("1.234.567,00"), 1234567);
     assert.equal(parseBillNumber("1,234,567"), 1234567);
+    assert.equal(parseBillNumber("1.234,5", { thousands: false }), 1234.5);
     assert.equal(parseBillNumber("1,2,3.45"), null);
     assert.equal(parseBillNumber("1,2,3"), null);
     assert.equal(parseBillNumber("0,123"), 0.123);
@@ -743,6 +744,10 @@ describe("bill text parsing", () => {
       parseBillText("ΔΕΗ\n(έκδοση 01/10/2026) ΛΗΞΗ 20/10/2026").dueDate,
       "2026-10-20",
     );
+    assert.equal(
+      parseBillText("ΔΕΗ\nΈκδοση 01/03/2024 Λήξη 15/03/2024").dueDate,
+      "2024-03-15",
+    );
   });
 
   it("prefers a strong supplier signal over generic keyword counts", () => {
@@ -761,6 +766,24 @@ describe("bill text parsing", () => {
     const result = parseBillText("VAT 24% 100.00 20.00 130.00");
     assert.equal(result.lines.some((line) => line.kind === "tax"), false);
     assert.equal(result.taxTotal, null);
+    const twoValuesNoRate = parseBillText("VAT 100,00 24,00");
+    assert.equal(twoValuesNoRate.lines.some((line) => line.kind === "tax"), false);
+  });
+
+  it("skips a lone unit price instead of inventing an amount", () => {
+    const result = parseBillText("Κατανάλωση 100 kWh 0,15");
+    assert.equal(result.lines.length, 0);
+  });
+
+  it("subtracts credits from an inferred subtotal", () => {
+    const result = parseBillText("Credit -5,00\nΧρέωση 20,00");
+    assert.equal(result.subtotal, 15);
+    assert.equal(billLinesTotal(result.lines), 15);
+  });
+
+  it("strips impossible dates instead of treating their digits as money", () => {
+    const result = parseBillText("Χρέωση 31/02/2024 10,00");
+    assert.equal(result.lines[0]?.amount, 10);
   });
 
   it("does not overwrite a lone tax line when a discount changes the base", () => {
@@ -852,6 +875,8 @@ describe("bill text parsing", () => {
       assert.equal(documentMime(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).buffer), "image/png");
       assert.equal(documentMime(new TextEncoder().encode("RIFF0000WEBP").buffer), "image/webp");
       assert.equal(documentMime(new Uint8Array([]).buffer), null);
+      assert.equal(documentMime(new Uint8Array([0xff]).buffer), null);
+      assert.equal(documentMime(new Uint8Array([0x89, 0x50]).buffer), null);
       globalThis.fetch = (async () => new Response("missing", { status: 404 })) as typeof fetch;
       assert.equal(await fetchBillFile("/api/houses/x/bills/y/document", "bill"), null);
       globalThis.fetch = (async () => new Response("<html>error</html>", {
@@ -6518,6 +6543,20 @@ describe("insights, household split and admin console", () => {
     });
     assert.equal(whitespaceMoney.status, 200);
     assert.equal(whitespaceMoney.data.subtotal, null, "whitespace-only money clears instead of becoming zero");
+    assert.equal((await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { subtotal: "1e3" },
+    })).status, 400, "scientific notation is rejected");
+    assert.equal((await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { subtotal: "0x10" },
+    })).status, 400, "hex notation is rejected");
+    const commaMoney = await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { subtotal: " 1,50 " },
+    });
+    assert.equal(commaMoney.status, 200);
+    assert.equal(commaMoney.data.subtotal, 1.5, "comma decimals are accepted from multipart-style strings");
     const cleared = await request(`/api/bills/${accepted.data.id}`, {
       method: "PATCH",
       body: { subtotal: null, taxTotal: null, ocrText: null, breakdown: [] },
@@ -6716,6 +6755,11 @@ describe("insights, household split and admin console", () => {
     });
     assert.equal(corruptPatch.status, 200);
     assert.deepEqual(corruptPatch.data.breakdown, [], "an unrelated PATCH normalizes corrupt stored JSON");
+    await run("UPDATE bills SET breakdown = ? WHERE id = ?", [
+      JSON.stringify([{ description: "Bad line", kind: "charge", amount: -5 }]), scanOnly.data.id,
+    ]);
+    const negativeLine = (await request(`/api/houses/${billHouse}/bills`)).data.find((bill: any) => bill.id === scanOnly.data.id);
+    assert.deepEqual(negativeLine.breakdown, [], "negative stored amounts are dropped on read");
     assert.equal((await request(`/api/bills/${scanOnly.data.id}`, {
       method: "PATCH",
       body: { subtotal: 1.005 },

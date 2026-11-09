@@ -93,9 +93,11 @@ const verifyBillDocument: RequestHandler = (req, _res, next) => {
     // Store the extension that matches the real content, not the uploaded name.
     const canonical = `.${{ pdf: "pdf", jpeg: "jpg", png: "png", webp: "webp" }[kind]}`;
     const nextName = `${req.file.filename.replace(/\.[^.]+$/, "")}${canonical}`;
-    fs.renameSync(req.file.path, path.join(billDir, nextName));
+    const nextPath = path.join(billDir, nextName);
+    fs.renameSync(req.file.path, nextPath);
     req.file.filename = nextName;
-    req.file.path = path.join(billDir, nextName);
+    req.file.path = nextPath;
+    req.file.destination = billDir;
   } catch (error) {
     discardUploads(req);
     return next(error instanceof ApiError ? error : new ApiError(400, "That file is not a valid PDF or image"));
@@ -110,8 +112,15 @@ const optionalMoney = z.preprocess(
   (value) => {
     if (value === undefined) return undefined;
     if (value == null) return null;
-    if (typeof value === "string") return value.trim() === "" ? null : value;
     if (typeof value === "number") return value;
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (!trimmed) return null;
+      // Reject scientific/hex notation and more than two decimals; accept a
+      // comma decimal because multipart clients may use one.
+      if (!/^[+-]?\d+(?:[.,]\d{1,2})?$/.test(trimmed)) return Number.NaN;
+      return trimmed.replace(",", ".");
+    }
     return Number.NaN;
   },
   z.coerce.number().finite().min(0).max(1_000_000_000)
@@ -160,6 +169,32 @@ function sanitizeBreakdown(value: z.infer<typeof breakdownLineInput>[] | undefin
     amount: rounded(line.amount, 2),
     taxRate: rounded(line.taxRate, 2),
   }));
+}
+
+/** Tolerant read-side normaliser for legacy or hand-edited stored JSON. */
+function normalizeStoredBreakdown(value: unknown): BillBreakdownLine[] {
+  const parsed = typeof value === "string" ? parseJson<unknown>(value, []) : value;
+  if (!Array.isArray(parsed)) return [];
+  const kinds = new Set<BillBreakdownLine["kind"]>(["charge", "tax", "discount", "credit"]);
+  const number = (input: unknown, scale: number): number | null => {
+    const parsedNumber = typeof input === "number" ? input : Number(input);
+    if (input == null || !Number.isFinite(parsedNumber) || parsedNumber < 0) return null;
+    const factor = 10 ** scale;
+    return Math.round(parsedNumber * factor) / factor;
+  };
+  return parsed
+    .filter((line): line is Record<string, unknown> => Boolean(line) && typeof line === "object")
+    .slice(0, 100)
+    .map((line) => ({
+      description: String(line.description ?? "").trim().slice(0, 160),
+      kind: kinds.has(line.kind as BillBreakdownLine["kind"]) ? line.kind as BillBreakdownLine["kind"] : "charge",
+      quantity: number(line.quantity, 3),
+      unit: typeof line.unit === "string" && line.unit.trim() ? line.unit.trim().slice(0, 20) : null,
+      unitPrice: number(line.unitPrice, 4),
+      amount: number(line.amount, 2),
+      taxRate: number(line.taxRate, 2),
+    }))
+    .filter((line) => line.description.length > 0 && line.amount != null);
 }
 
 const input = z.object({
@@ -217,7 +252,7 @@ function serialize(row: BillRow): UtilityBill {
     notes: row.notes ?? null,
     subtotal: row.subtotal == null ? null : Number(row.subtotal),
     taxTotal: row.tax_total == null ? null : Number(row.tax_total),
-    breakdown: Array.isArray(parsedBreakdown) ? parsedBreakdown as BillBreakdownLine[] : [],
+    breakdown: normalizeStoredBreakdown(parsedBreakdown),
     ocrText: row.ocr_text ?? null,
     source: row.source === "scan" ? "scan" : "manual",
     createdAt: row.created_at,
@@ -369,7 +404,7 @@ singleBillRoutes.patch("/:billId", handler(async (req, res) => {
   const people = await validatePeople(houseId, paidBy, splitWith);
   const storedBreakdown = parseJson<unknown>(current.breakdown, []);
   const breakdown = body.breakdown === undefined
-    ? Array.isArray(storedBreakdown) ? storedBreakdown as BillBreakdownLine[] : []
+    ? normalizeStoredBreakdown(storedBreakdown)
     : sanitizeBreakdown(body.breakdown);
   // Coerce legacy/non-enum values so a NOT VALID constraint cannot fail the
   // update just because an old row predates the source column.

@@ -70,9 +70,9 @@ async function readPdf(
       canvas.height = Math.max(1, Math.ceil(viewport.height));
       const context = canvas.getContext("2d");
       if (!context) continue;
-      // pdf.js v5 requires `canvas` in RenderParameters; pass null with the
-      // explicit context so the call also works on older pdfjs versions.
-      await page.render({ canvas: null, canvasContext: context, viewport }).promise;
+      // v5 requires the canvas element; the context keeps older pdfjs builds
+      // working with the same call.
+      await page.render({ canvas, canvasContext: context, viewport }).promise;
 
       const blob = await canvasToBlob(canvas);
       canvas.width = 0;

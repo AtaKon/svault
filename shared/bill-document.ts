@@ -72,6 +72,7 @@ export function pdfItemsToText(items: unknown[]): string {
 
 /** Detect a stored bill document from its bytes, independent of headers. */
 export function documentMime(buffer: ArrayBuffer): string | null {
+  if (buffer.byteLength < 2) return null;
   const bytes = new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 12));
   const ascii = (start: number, end: number) => String.fromCharCode(...bytes.subarray(start, end));
   if (ascii(0, 5) === "%PDF-") return "application/pdf";

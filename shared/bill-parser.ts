@@ -190,10 +190,9 @@ function numbersIn(line: string): NumberToken[] {
   // A dotted pair such as 100.00 is money, so dotted runs are stripped only
   // when they form a real date. This also keeps 1.234.567,00 intact.
   const source = compactThousands(line)
-    .replace(
-      /\b(?:\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[./-]\d{1,2}[./-]\d{2,4})\b/g,
-      (match) => parseDateText(match) ? " " : match,
-    )
+    // Strip any date-shaped run, valid or not; this also removes impossible
+    // dates such as 31/02/2024 instead of turning them into money tokens.
+    .replace(/\b(?:\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[./-]\d{1,2}[./-]\d{2,4})\b/g, " ")
     .replace(/\b\d{1,2}\/(?:19|20)\d{2}\b/g, " ");
   const tokens: NumberToken[] = [];
   const pattern = /[-+]?\d[\d.,]*/g;
@@ -337,6 +336,10 @@ function taxAmount(values: number[], rate: number | null): { amount: number | nu
     // when the rate does not reconcile risks recording the gross as tax.
     return { amount: null, base: null };
   }
+  if (values.length === 2 && rate == null) {
+    // Two values without a printed rate are ambiguous; do not guess the gross.
+    return { amount: null, base: null };
+  }
   if (rate != null) {
     for (let index = values.length - 2; index >= 0; index--) {
       const base = values[index];
@@ -403,7 +406,11 @@ function chargeLine(line: string): BillBreakdownLine | null {
         amount = last.value;
       }
     } else if (candidates.length === 1) {
-      amount = candidates[0].value;
+      const value = candidates[0].value;
+      // A small number after a large quantity is usually the unit price; the
+      // printed amount is elsewhere, so skip instead of inventing both.
+      if (value < 1 && quantity >= 10) return null;
+      amount = value;
       unitPrice = quantity > 0 ? amount / quantity : null;
     }
   } else if (quantity != null && unitPrice != null) {
@@ -426,8 +433,8 @@ function chargeLine(line: string): BillBreakdownLine | null {
   const magnitude = Math.abs(amount);
   if (!(magnitude > 0) || magnitude > 1_000_000) return null;
   // Account and meter numbers are long integers without decimals or a currency.
-  const hasDecimal = tokens.some((token) => token.raw.includes(".") || token.raw.includes(","));
-  if (!hasDecimal && magnitude >= 10_000 && !/[€£$¥]/.test(line)) return null;
+  const hasFraction = tokens.some((token) => /[.,]\d{1,2}$/.test(token.raw));
+  if (!hasFraction && magnitude >= 10_000 && !/[€£$¥]/.test(line)) return null;
 
   return {
     description,
@@ -465,6 +472,7 @@ export function parseBillText(rawText: string, options: { currency?: string | nu
     const numbers = numbersIn(line);
     const money = numbers.filter((token) => !token.percent);
 
+    // Order matters: tax rows first, then subtotals, then grand totals.
     const isGrandWithTax = TOTAL_WITH_TAX.test(folded);
 
     // "Total VAT" and "total stamp duty" are tax rows; "total including VAT"
@@ -523,11 +531,12 @@ export function parseBillText(rawText: string, options: { currency?: string | nu
     return true;
   });
 
-  const charges = linesOut.filter((line) => line.kind === "charge" || line.kind === "credit");
+  const charges = linesOut.filter((line) => line.kind === "charge");
   const discounts = linesOut.filter((line) => line.kind === "discount");
+  const credits = linesOut.filter((line) => line.kind === "credit");
   const taxLines = linesOut.filter((line) => line.kind === "tax");
   const chargeSum = round2(charges.reduce((sum, line) => sum + (line.amount ?? 0), 0));
-  const discountSum = round2(discounts.reduce((sum, line) => sum + (line.amount ?? 0), 0));
+  const discountSum = round2([...discounts, ...credits].reduce((sum, line) => sum + (line.amount ?? 0), 0));
 
   let subtotal = printedSubtotal;
   if (subtotal == null && charges.length) subtotal = round2(chargeSum - discountSum);
@@ -536,7 +545,6 @@ export function parseBillText(rawText: string, options: { currency?: string | nu
   // gross. When the printed total and subtotal are available, use their
   // difference to correct a lone tax line instead of inflating taxTotal.
   // Discounts and credits change the tax base, so never correct those bills.
-  const credits = linesOut.filter((line) => line.kind === "credit");
   if (printedTotal != null && subtotal != null && taxLines.length === 1 && taxLines[0].taxRate != null &&
     discounts.length === 0 && credits.length === 0) {
     const expected = round2(printedTotal - subtotal);

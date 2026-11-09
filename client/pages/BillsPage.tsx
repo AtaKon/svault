@@ -353,7 +353,7 @@ export function BillsPage() {
 
         {breakdown.length > 0 && <div className="rounded-xl border border-line bg-raised/30 p-3 sm:p-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2"><Icon name="receipt" size={16} className="text-brand"/><h3 className="text-sm font-semibold">{t("Detected breakdown")}</h3><Badge>{breakdown.length}</Badge></div>
+            <div className="flex items-center gap-2"><Icon name="receipt" size={16} className="text-brand"/><h3 className="text-sm font-semibold">{t("Detected breakdown")}</h3><Badge>{breakdown.length}</Badge><span className="text-xs text-muted">{t("A new scan replaces these lines.")}</span></div>
             <Button type="button" size="sm" variant="ghost" onClick={clearBreakdown}>{t("Clear")}</Button>
           </div>
           <BreakdownTable lines={breakdown} currency={house.currency || "EUR"} />
