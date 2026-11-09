@@ -1007,7 +1007,7 @@ function MembersTab({
                         setTransferTarget(member);
                         setTransferName("");
                       }}
-                      className="hidden text-[11px] font-medium text-brand hover:underline sm:inline"
+                      className="text-[11px] font-medium text-brand hover:underline"
                     >
                       {t("Make owner")}</button>
                     <Select value={member.role} onChange={(event) => void changeRole(member, event.target.value as Role)} className="h-8 w-[106px] text-[12px]">

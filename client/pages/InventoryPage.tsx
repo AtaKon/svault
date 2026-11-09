@@ -122,11 +122,9 @@ export function InventoryPage() {
             <Button variant="secondary" icon="list" onClick={() => void addLowStock()}>
               {t("Add low stock")}
             </Button>
-            <div className="hidden sm:block">
-              <Button variant="secondary" icon="receipt" onClick={() => navigate("/receipts/scan")}>
-                {t("Receipt")}
-              </Button>
-            </div>
+            <Button variant="secondary" icon="receipt" onClick={() => navigate("/receipts/scan")}>
+              {t("Receipt")}
+            </Button>
             <div className="hidden sm:block">
               <Button variant="secondary" icon="scan" onClick={() => navigate("/scan")}>
                 {t("Scan")}

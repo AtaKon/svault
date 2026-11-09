@@ -16,6 +16,7 @@ const LINKS: { to: string; label: string; description: string; icon: IconName; t
   { to: "/intake", label: "Bulk intake", description: "A receipt or a queue of barcodes", icon: "upload", tint: "bg-brand-soft text-brand" },
   { to: "/ideas", label: "Food ideas", description: "Meals built from your shelves", icon: "sparkles", tint: "bg-warn-soft text-warn" },
   { to: "/receipts", label: "Receipts & shops", description: "Bulk intake and where it came from", icon: "receipt", tint: "bg-brand-soft text-brand" },
+  { to: "/bills", label: "Bills & splitting", description: "Track household bills, attach PDFs, and see who owes what for shared costs.", icon: "receipt", tint: "bg-warn-soft text-warn" },
   { to: "/photos", label: "Photo library", description: "Label photos and export datasets", icon: "image", tint: "bg-brand-soft text-brand" },
   { to: "/recipes", label: "Recipes", description: "The family collection", icon: "book", tint: "bg-raised text-muted" },
   { to: "/notifications", label: "Reminders", description: "Low stock and expiry", icon: "bell", tint: "bg-raised text-muted" },
