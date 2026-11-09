@@ -6614,6 +6614,25 @@ describe("insights, household split and admin console", () => {
     assert.deepEqual(personalWithParticipants.data.splitWith, []);
     assert.equal((await request(`/api/bills/${personalWithParticipants.data.id}`, { method: "DELETE" })).status, 200);
 
+    const colorBill = await request(`/api/houses/${billHouse}/bills`, {
+      method: "POST", body: { name: "Electricity color", amount: 10, billType: "electricity", contractColor: "blue", notes: "Keep my notes" },
+    });
+    assert.equal(colorBill.status, 201);
+    assert.equal(colorBill.data.contractColor, "blue");
+    const listedColor = (await request(`/api/houses/${billHouse}/bills`)).data.find((bill: any) => bill.id === colorBill.data.id);
+    assert.equal(listedColor.contractColor, "blue");
+    assert.equal(listedColor.notes, "Keep my notes");
+    const editedColor = await request(`/api/bills/${colorBill.data.id}`, { method: "PATCH", body: { contractColor: "green" } });
+    assert.equal(editedColor.data.contractColor, "green");
+    assert.equal((await request(`/api/bills/${colorBill.data.id}`, { method: "PATCH", body: { contractColor: "purple" } })).status, 400);
+    const gasColor = await request(`/api/bills/${colorBill.data.id}`, { method: "PATCH", body: { billType: "natural_gas", contractColor: "blue" } });
+    assert.equal(gasColor.status, 400);
+    const changedType = await request(`/api/bills/${colorBill.data.id}`, { method: "PATCH", body: { billType: "natural_gas" } });
+    assert.equal(changedType.data.contractColor, null);
+    assert.equal((await request(`/api/bills/${colorBill.data.id}`, { method: "PATCH", body: { contractColor: "blue" } })).status, 400);
+    assert.equal((await request(`/api/houses/${billHouse}/bills`, { method: "POST", body: { name: "Gas", amount: 1, billType: "natural_gas", contractColor: "blue" } })).status, 400);
+    assert.equal((await request(`/api/bills/${colorBill.data.id}`, { method: "DELETE" })).status, 200);
+
     const accepted = await request(`/api/houses/${billHouse}/bills`, { method: "POST", body: form(pdf) });
     assert.equal(accepted.status, 201, JSON.stringify(accepted.data));
     assert.equal(accepted.data.currency, "GBP");
