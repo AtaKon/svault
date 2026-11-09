@@ -999,6 +999,16 @@ function MembersTab({
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-medium">{member.name}</div>
                   <div className="truncate text-[11px] text-muted">{member.email}</div>
+                  {can("owner") && member.role !== "owner" && (
+                    <button
+                      onClick={() => {
+                        setTransferTarget(member);
+                        setTransferName("");
+                      }}
+                      className="mt-1 text-[11px] font-medium text-brand hover:underline sm:hidden"
+                    >
+                      {t("Make owner")}</button>
+                  )}
                 </div>
                 {can("owner") && member.role !== "owner" ? (
                   <>
@@ -1007,7 +1017,7 @@ function MembersTab({
                         setTransferTarget(member);
                         setTransferName("");
                       }}
-                      className="text-[11px] font-medium text-brand hover:underline"
+                      className="hidden text-[11px] font-medium text-brand hover:underline sm:inline"
                     >
                       {t("Make owner")}</button>
                     <Select value={member.role} onChange={(event) => void changeRole(member, event.target.value as Role)} className="h-8 w-[106px] text-[12px]">

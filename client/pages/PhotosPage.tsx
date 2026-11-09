@@ -165,10 +165,25 @@ export function PhotosPage() {
         subtitle={t("Folders of photos, labelled for training your own vision models.")}
         actions={
           <>
-            <Button variant="secondary" icon="upload" onClick={() => setDatasetOpen(true)} disabled={!can("member")}>
-              {t("Import dataset")}</Button>
-            <Button variant="secondary" icon="image" onClick={() => setReviewOpen(true)}>
-              {t("Review")}</Button>
+            <Button
+              variant="secondary"
+              icon="upload"
+              aria-label={t("Import dataset")}
+              title={t("Import dataset")}
+              onClick={() => setDatasetOpen(true)}
+              disabled={!can("member")}
+            >
+              <span className="hidden sm:inline">{t("Import dataset")}</span>
+            </Button>
+            <Button
+              variant="secondary"
+              icon="image"
+              aria-label={t("Review")}
+              title={t("Review")}
+              onClick={() => setReviewOpen(true)}
+            >
+              <span className="hidden sm:inline">{t("Review")}</span>
+            </Button>
             <div className="hidden sm:block">
               <Button variant="secondary" icon="download" onClick={() => setExportOpen(true)}>
                 {t("Export")}</Button>

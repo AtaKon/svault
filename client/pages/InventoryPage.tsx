@@ -122,8 +122,14 @@ export function InventoryPage() {
             <Button variant="secondary" icon="list" onClick={() => void addLowStock()}>
               {t("Add low stock")}
             </Button>
-            <Button variant="secondary" icon="receipt" onClick={() => navigate("/receipts/scan")}>
-              {t("Receipt")}
+            <Button
+              variant="secondary"
+              icon="receipt"
+              aria-label={t("Receipt")}
+              title={t("Receipt")}
+              onClick={() => navigate("/receipts/scan")}
+            >
+              <span className="hidden sm:inline">{t("Receipt")}</span>
             </Button>
             <div className="hidden sm:block">
               <Button variant="secondary" icon="scan" onClick={() => navigate("/scan")}>
