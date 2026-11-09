@@ -384,7 +384,7 @@ export async function ocrImage(
   // Greek first: receipts and utility bills are mostly Greek, while Latin
   // product names are still covered by the English model. Recipes keep English
   // first for mixed cards.
-  const languages = mode === "recipe" ? ["eng", "ell"] : ["ell", "eng"];
+  const languages = mode === "receipt" || mode === "bill" ? ["ell", "eng"] : ["eng", "ell"];
   const worker = await createWorker(languages.join("+"), 1, {
     workerPath: "/tesseract/worker.min.js",
     corePath: "/tesseract/core",

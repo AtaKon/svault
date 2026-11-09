@@ -79,9 +79,9 @@ const SUPPLIERS: Array<[RegExp, string]> = [
   [/ευδαπ|eydap/, "ΕΥΔΑΠ"],
   [/ευαθ|eyath/, "ΕΥΑΘ"],
   [/κοσμοτε|cosmote/, "Cosmote"],
-  [/βοdaφων|vodafone/, "Vodafone"],
+  [/βονταφον|βοdaφων|vodafone/, "Vodafone"],
   [/\bnova\b|\bwind\b/, "Nova"],
-  [/\bote\b|οτε\b/, "OTE"],
+  [/\bote\b|(?:^|[^α-ω])οτε(?:[^α-ω]|$)/u, "OTE"],
   [/ηρων|heron/, "Ηρών"],
   [/elpedison|ελπεντισον/, "Elpedison"],
   [/protergia|προτεργια/, "Protergia"],
@@ -96,7 +96,7 @@ const STRONG_TYPE_SIGNALS: Array<[BillType, RegExp]> = [
   ["insurance", /(ασφαλιστηριο|ασφαλεια\s+κατοικιας|home\s+insurance)/u],
   ["electricity", /(\bδεη\b|\bδ\.ε\.η\b|\bdei\b|ηρων|heron|elpedison|protergia)/u],
   ["water", /(ευδαπ|eydap|ευαθ|eyath|υδρευση|υδρευσης)/u],
-  ["internet_telecom", /(κοσμοτε|cosmote|vodafone|βοdaφων|\bnova\b|\bwind\b|\bote\b|οτε\b|τηλεπικοινωνι)/u],
+  ["internet_telecom", /(κοσμοτε|cosmote|vodafone|βονταφον|\bnova\b|\bwind\b|\bote\b|(?:^|[^α-ω])οτε(?:[^α-ω]|$)|τηλεπικοινωνι)/u],
   ["natural_gas", /(δεπα|επα\s+αττικη|φυσικο\s+αεριο|φυσικου\s+αεριου)/u],
 ];
 
@@ -105,7 +105,7 @@ const TYPE_KEYWORDS_SOURCE: Array<[BillType, RegExp]> = [
   ["water", /(νερο|υδρευση|υδρευσης|ευδαπ|ευαθ|\bwater\b|\bm3\b|m³)/u],
   ["natural_gas", /(φυσικο\s+αεριο|φυσικου\s+αεριου|δεπα|natural\s+gas|\bgas\b)/u],
   ["heating_oil", /(πετρελαιο|θερμανσης|heating\s+oil|diesel)/u],
-  ["internet_telecom", /(τηλεπικοινωνι|τηλεφωνι|ιντερνετ|internet|broadband|cosmote|vodafone|\bnova\b|\bote\b)/u],
+  ["internet_telecom", /(τηλεπικοινωνι|τηλεφωνι|ιντερνετ|internet|broadband|cosmote|vodafone|\bnova\b|\bote\b|(?:^|[^α-ω])οτε(?:[^α-ω]|$))/u],
   ["rent", /(ενοικιο|μισθωμα|\brent\b|lease)/u],
   ["building_fees", /(κοινοχρηστ|διαχειριση\s+πολυκατοικιας|building\s+fee|common\s+charge)/u],
   ["municipal_fees", /(δημοτικ\p{L}*\s+(?:τελ|φορ)|municipal|δημος|δημου)/u],
@@ -183,6 +183,9 @@ export function parseBillNumber(raw: string, options: { thousands?: boolean } = 
 }
 
 function numbersIn(line: string): NumberToken[] {
+  // Money rows (totals, taxes) carry two decimals, so a three-digit run is
+  // treated as grouped thousands by default; chargeLine re-parses unit-price
+  // candidates with { thousands: false }.
   // Dates, billing periods and meter serials are not money; remove them first.
   // A dotted pair such as 100.00 is money, so dotted runs are stripped only
   // when they form a real date. This also keeps 1.234.567,00 intact.
@@ -314,13 +317,17 @@ function taxAmount(values: number[], rate: number | null): { amount: number | nu
   if (!values.length) return { amount: null, base: null };
   if (values.length === 1) return { amount: values[0], base: null };
 
-  if (rate != null && values.length >= 3) {
+  if (values.length >= 3) {
     const [base, tax, gross] = values.slice(-3);
-    if (Math.abs(base + tax - gross) <= 0.03 &&
+    if (rate != null &&
+      Math.abs(base + tax - gross) <= 0.03 &&
       (Math.abs(base * rate / 100 - tax) <= Math.max(0.03, tax * 0.02) ||
         Math.abs(tax * rate / 100 - base) <= Math.max(0.03, base * 0.02))) {
       return { amount: tax, base };
     }
+    // Three monetary columns are normally net/tax/gross. Even when OCR noise
+    // breaks the rate check, the middle value is safer than the gross total.
+    return { amount: tax, base };
   }
   if (rate != null) {
     for (let index = values.length - 2; index >= 0; index--) {
@@ -382,7 +389,9 @@ function chargeLine(line: string): BillBreakdownLine | null {
         unitPrice = lastPrice;
         amount = previous.value;
       } else {
-        unitPrice = previousPrice;
+        // Neither order reconciles with the quantity; keep the amount but do
+        // not present a made-up unit price.
+        unitPrice = null;
         amount = last.value;
       }
     } else if (candidates.length === 1) {
@@ -518,7 +527,10 @@ export function parseBillText(rawText: string, options: { currency?: string | nu
   // A single-value tax row is ambiguous: it may print the tax, the net or the
   // gross. When the printed total and subtotal are available, use their
   // difference to correct a lone tax line instead of inflating taxTotal.
-  if (printedTotal != null && subtotal != null && taxLines.length === 1 && taxLines[0].taxRate != null) {
+  // Discounts and credits change the tax base, so never correct those bills.
+  const credits = linesOut.filter((line) => line.kind === "credit");
+  if (printedTotal != null && subtotal != null && taxLines.length === 1 && taxLines[0].taxRate != null &&
+    discounts.length === 0 && credits.length === 0) {
     const expected = round2(printedTotal - subtotal);
     const current = taxLines[0].amount ?? 0;
     if (expected > 0 && Math.abs(expected - current) > 0.05) taxLines[0].amount = expected;

@@ -119,6 +119,8 @@ export class SqliteDriver implements DatabaseDriver {
     ensureColumn("bills", "tax_total", "REAL");
     ensureColumn("bills", "breakdown", "TEXT NOT NULL DEFAULT '[]'");
     ensureColumn("bills", "ocr_text", "TEXT");
+    // SQLite cannot add a CHECK constraint in place; upgraded databases rely
+    // on the API's source enum, while fresh installs also enforce it in SQL.
     ensureColumn("bills", "source", "TEXT NOT NULL DEFAULT 'manual'");
     ensureColumn("receipt_lines", "raw_description", "TEXT");
     ensureColumn("receipt_lines", "tax_rate", "REAL");

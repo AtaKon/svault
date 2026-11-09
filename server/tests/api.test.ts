@@ -704,6 +704,8 @@ describe("bill text parsing", () => {
     assert.equal(parseBillNumber("1,234,567"), 1234567);
     assert.equal(parseBillNumber("1,2,3.45"), null);
     assert.equal(parseBillNumber("1,2,3"), null);
+    assert.equal(parseBillNumber("0,123"), 0.123);
+    assert.equal(parseBillNumber("+12,50"), 12.5);
   });
 
   it("keeps large grouped totals while dropping real dates", () => {
@@ -736,6 +738,34 @@ describe("bill text parsing", () => {
     assert.equal(result.subtotal, 100);
     assert.equal(result.taxTotal, 24);
     assert.equal(result.total, 124);
+  });
+
+  it("never records the gross of a malformed three-column tax row", () => {
+    const result = parseBillText("VAT 24% 100.00 20.00 130.00");
+    assert.equal(result.lines.find((line) => line.kind === "tax")?.amount, 20);
+  });
+
+  it("does not overwrite a lone tax line when a discount changes the base", () => {
+    const result = parseBillText([
+      "Subtotal 100.00",
+      "Discount -5.00",
+      "VAT 24% 24.00",
+      "Total 119.00",
+    ].join("\n"));
+    assert.equal(result.taxTotal, 24);
+    assert.equal(result.lines.find((line) => line.kind === "tax")?.amount, 24);
+    assert.equal(result.lines.filter((line) => line.kind === "discount").length, 1);
+  });
+
+  it("does not invent a unit price when the quantity and price disagree", () => {
+    const result = parseBillText("Κατανάλωση 10 kWh 7,00 99,00");
+    assert.equal(result.lines[0]?.amount, 99);
+    assert.equal(result.lines[0]?.unitPrice, null);
+  });
+
+  it("reads folded Greek and Latin supplier names", () => {
+    assert.equal(parseBillText("VODAFONE\nΣΥΝΟΛΟ 10,00").name, "Vodafone");
+    assert.equal(parseBillText("ΒΟΝΤΑΦΟΝ\nΣΥΝΟΛΟ 10,00").name, "Vodafone");
   });
 
   it("uses the printed total to disambiguate a single gross tax value", () => {
@@ -805,6 +835,11 @@ describe("bill text parsing", () => {
       assert.equal(documentMime(new TextEncoder().encode("RIFF0000WEBP").buffer), "image/webp");
       assert.equal(documentMime(new Uint8Array([]).buffer), null);
       globalThis.fetch = (async () => new Response("missing", { status: 404 })) as typeof fetch;
+      assert.equal(await fetchBillFile("/api/houses/x/bills/y/document", "bill"), null);
+      globalThis.fetch = (async () => new Response("<html>error</html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      })) as typeof fetch;
       assert.equal(await fetchBillFile("/api/houses/x/bills/y/document", "bill"), null);
     } finally {
       globalThis.fetch = originalFetch;
@@ -6449,6 +6484,22 @@ describe("insights, household split and admin console", () => {
     assert.equal(stringMoneyPatch.status, 200, "both multipart strings and JSON numbers are accepted");
     assert.equal(stringMoneyPatch.data.subtotal, 7.5);
     assert.equal(stringMoneyPatch.data.taxTotal, 2.5);
+    const partialPatch = await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { ocrText: "partial read", source: "scan" },
+    });
+    assert.equal(partialPatch.status, 200);
+    assert.equal(partialPatch.data.breakdown.length, 2, "omitting breakdown preserves the stored lines");
+    assert.equal((await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { subtotal: true },
+    })).status, 400, "boolean money values are rejected");
+    const whitespaceMoney = await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { subtotal: "  " },
+    });
+    assert.equal(whitespaceMoney.status, 200);
+    assert.equal(whitespaceMoney.data.subtotal, null, "whitespace-only money clears instead of becoming zero");
     const cleared = await request(`/api/bills/${accepted.data.id}`, {
       method: "PATCH",
       body: { subtotal: null, taxTotal: null, ocrText: null, breakdown: [] },
@@ -6557,6 +6608,38 @@ describe("insights, household split and admin console", () => {
     assert.equal(photoResponse.headers.get("content-type"), "image/png");
     assert.equal((await request(`/api/bills/${photoBill.data.id}`, { method: "DELETE" })).status, 200);
 
+    const beforeImageFailure = files();
+    await run(`CREATE TRIGGER reject_bill_insert BEFORE INSERT ON bills
+      WHEN NEW.name = 'Rejected image insert'
+      BEGIN SELECT RAISE(FAIL, 'forced image insert failure'); END`);
+    try {
+      const failedImageInsert = await request(`/api/houses/${billHouse}/bills`, {
+        method: "POST", body: form(png, "Rejected image insert"),
+      });
+      assert.equal(failedImageInsert.status, 500);
+      assert.deepEqual(files(), beforeImageFailure, "a renamed image is removed when the insert fails");
+    } finally {
+      await run("DROP TRIGGER reject_bill_insert");
+    }
+
+    const webp = new Blob([Buffer.from("RIFF0000WEBP")], { type: "image/webp" });
+    const webpBill = await request(`/api/houses/${billHouse}/bills`, { method: "POST", body: form(webp, "WebP bill") });
+    assert.equal(webpBill.status, 201);
+    const webpDocument = (await get<{ document: string }>("SELECT document FROM bills WHERE id = ?", [webpBill.data.id]))?.document;
+    assert.match(webpDocument ?? "", /\.webp$/);
+    const webpResponse = await fetch(base + webpBill.data.document, { headers: { cookie } });
+    assert.equal(webpResponse.headers.get("content-type"), "image/webp");
+    assert.equal((await request(`/api/bills/${webpBill.data.id}`, { method: "DELETE" })).status, 200);
+
+    const wave = new Blob([Buffer.from("RIFF0000WAVE")], { type: "audio/wav" });
+    const beforeWave = files();
+    const waveForm = form(wave, "WAVE masquerading");
+    waveForm.delete("document");
+    waveForm.append("document", wave, "bill.webp");
+    const waveBill = await request(`/api/houses/${billHouse}/bills`, { method: "POST", body: waveForm });
+    assert.equal(waveBill.status, 400, "a non-WebP RIFF file is rejected by the signature check");
+    assert.deepEqual(files(), beforeWave);
+
     const namedForm = (blob: Blob, filename: string, name: string) => {
       const fields = form(blob, name);
       fields.delete("document");
@@ -6598,6 +6681,16 @@ describe("insights, household split and admin console", () => {
     await run("UPDATE bills SET breakdown = ? WHERE id = ?", ["not json", scanOnly.data.id]);
     const tolerantBill = (await request(`/api/houses/${billHouse}/bills`)).data.find((bill: any) => bill.id === scanOnly.data.id);
     assert.deepEqual(tolerantBill.breakdown, [], "the serializer tolerates legacy/corrupt JSON");
+    const corruptPatch = await request(`/api/bills/${scanOnly.data.id}`, {
+      method: "PATCH",
+      body: { notes: "patch around corrupt breakdown" },
+    });
+    assert.equal(corruptPatch.status, 200);
+    assert.deepEqual(corruptPatch.data.breakdown, [], "an unrelated PATCH normalizes corrupt stored JSON");
+    assert.equal((await request(`/api/bills/${scanOnly.data.id}`, {
+      method: "PATCH",
+      body: { subtotal: 1.005 },
+    })).status, 400, "three-decimal money is rejected");
     const manualWithBreakdown = await request(`/api/houses/${billHouse}/bills`, {
       method: "POST",
       body: {

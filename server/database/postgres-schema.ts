@@ -808,7 +808,9 @@ export const POSTGRES_MIGRATIONS: string[] = [
         SELECT 1 FROM pg_constraint
         WHERE conname = 'bills_source_check' AND conrelid = to_regclass('bills')
       ) THEN
-      ALTER TABLE bills ADD CONSTRAINT bills_source_check CHECK (source IN ('manual', 'scan'));
+      -- NOT VALID keeps the migration safe if an older column already holds
+      -- other values; new and updated rows are still enforced.
+      ALTER TABLE bills ADD CONSTRAINT bills_source_check CHECK (source IN ('manual', 'scan')) NOT VALID;
     END IF;
   END $$`,
 ];

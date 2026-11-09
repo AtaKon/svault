@@ -251,17 +251,18 @@ export function BillsPage() {
         return;
       }
       const scan = await scanBillFile(saved, (progress) => setReadingProgress(progress), { currency: bill.currency });
-      if (!scan.result.lines.length && scan.result.total == null) {
+      if (!scan.result.lines.length && scan.result.total == null &&
+        scan.result.subtotal == null && scan.result.taxTotal == null) {
         toast.error(t("No amount or breakdown was recognised in this document."));
         return;
       }
       const body: Record<string, unknown> = {
-        breakdown: scan.result.lines.slice(0, 100),
         ocrText: scan.text.slice(0, 50_000),
         source: "scan",
       };
-      // Omitting a missing subtotal/tax preserves any value already stored;
-      // an explicit null would erase it on a partial re-read.
+      // Partial re-reads preserve stored values: only send what was found, so
+      // a total-only read cannot erase an existing line breakdown.
+      if (scan.result.lines.length) body.breakdown = scan.result.lines.slice(0, 100);
       if (scan.result.subtotal != null) body.subtotal = scan.result.subtotal;
       if (scan.result.taxTotal != null) body.taxTotal = scan.result.taxTotal;
       await api(`/api/bills/${bill.id}`, { method: "PATCH", body });

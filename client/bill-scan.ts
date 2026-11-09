@@ -194,9 +194,10 @@ export async function fetchBillFile(url: string, name: string): Promise<File | n
   const blob = await response.blob();
   const buffer = await blob.arrayBuffer();
   // The authenticated document route sets a real Content-Type, but a proxy or
-  // generic download can strip it. Inspect the bytes before trusting it.
-  const type = documentMime(buffer) ??
-    (blob.type && blob.type !== "application/octet-stream" ? blob.type : null);
+  // generic download can strip it. Inspect the bytes before trusting it, and
+  // only fall back to a supported type (never text/html error pages).
+  const supported = new Set(["application/pdf", "image/jpeg", "image/png", "image/webp"]);
+  const type = documentMime(buffer) ?? (blob.type && supported.has(blob.type) ? blob.type : null);
   if (!type) return null;
   const extension = type === "application/pdf" ? "pdf" : type === "image/png" ? "png" : type === "image/webp" ? "webp" : "jpg";
   return new File([buffer], `${name || "bill"}.${extension}`, { type });

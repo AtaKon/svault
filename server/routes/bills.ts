@@ -105,11 +105,14 @@ const verifyBillDocument: RequestHandler = (req, _res, next) => {
 const twoDecimals = (value: number) => Math.abs(value - Math.round(value * 100) / 100) < 1e-7;
 const optionalMoney = z.preprocess(
   // Keep undefined (field omitted) distinct from an explicit clear (null/"").
-  (value) => value === undefined
-    ? undefined
-    : typeof value === "string" && value.trim() === "" || value == null
-      ? null
-      : value,
+  // Booleans and objects are rejected instead of being coerced to 0/1.
+  (value) => {
+    if (value === undefined) return undefined;
+    if (value == null) return null;
+    if (typeof value === "string") return value.trim() === "" ? null : value;
+    if (typeof value === "number") return value;
+    return Number.NaN;
+  },
   z.coerce.number().finite().min(0).max(1_000_000_000)
     .refine(twoDecimals, "Enter an amount with up to two decimal places")
     .transform((value) => Math.round(value * 100) / 100)
