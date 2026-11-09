@@ -50,17 +50,8 @@ async function readPdf(
       pages.push(pdfItemsToText(content.items));
     }
 
-    const extracted = pages.join("\n").trim();
-    const meaningful = (extracted.match(/[\p{L}\p{N}]/gu) ?? []).length;
-    if (meaningful >= TEXT_LAYER_MIN_CHARS && /\d/.test(extracted)) {
-      onProgress(1, "Text read from the PDF");
-      return { text: extracted, pages: textPages, usedOcr: false };
-    }
-
-    // A scanned PDF has little or no text layer, so render and OCR each page.
-    const ocrPages = Math.min(pdf.numPages, MAX_OCR_PAGES);
-    const texts: string[] = [];
-    for (let pageNumber = 1; pageNumber <= ocrPages; pageNumber++) {
+    const meaningful = (text: string) => (text.match(/[\p{L}\p{N}]/gu) ?? []).length;
+    const ocrPage = async (pageNumber: number, phaseStart: number, phaseSpan: number): Promise<string> => {
       const page = await pdf.getPage(pageNumber);
       const base = page.getViewport({ scale: 1 });
       const scale = Math.min(3, Math.max(1, MAX_PAGE_WIDTH / base.width));
@@ -69,29 +60,58 @@ async function readPdf(
       canvas.width = Math.max(1, Math.ceil(viewport.width));
       canvas.height = Math.max(1, Math.ceil(viewport.height));
       const context = canvas.getContext("2d");
-      if (!context) continue;
+      if (!context) return "";
       // v5 requires the canvas element; the context keeps older pdfjs builds
       // working with the same call.
       await page.render({ canvas, canvasContext: context, viewport }).promise;
-
       const blob = await canvasToBlob(canvas);
       canvas.width = 0;
       canvas.height = 0;
-      if (!blob) continue;
+      if (!blob) return "";
       const image = new File([blob], `bill-page-${pageNumber}.jpg`, { type: "image/jpeg" });
-      const text = await ocrImage(
+      return ocrImage(
         image,
-        (progress, status) => onProgress(
-          0.25 + (((pageNumber - 1) + progress) / ocrPages) * 0.75,
-          status || "Recognising the bill",
-        ),
+        (progress, status) => onProgress(phaseStart + progress * phaseSpan, status || "Recognising the bill"),
         { mode: "bill" },
       );
-      texts.push(text);
+    };
+
+    const extracted = pages.join("\n").trim();
+    if (meaningful(extracted) >= TEXT_LAYER_MIN_CHARS && /\d/.test(extracted)) {
+      // A hybrid PDF can have a text cover page and scanned invoice pages;
+      // OCR only the pages whose text layer is effectively empty.
+      const missing = pages
+        .map((text, index) => meaningful(text) < 20 ? index + 1 : 0)
+        .filter((pageNumber) => pageNumber > 0)
+        .slice(0, MAX_OCR_PAGES);
+      if (!missing.length) {
+        onProgress(1, "Text read from the PDF");
+        return { text: extracted, pages: textPages, usedOcr: false };
+      }
+      for (let index = 0; index < missing.length; index++) {
+        const pageNumber = missing[index];
+        const text = await ocrPage(pageNumber, 0.25 + (index / missing.length) * 0.75, 0.75 / missing.length);
+        if (text) pages[pageNumber - 1] = text;
+      }
+      onProgress(1, "Bill read");
+      return { text: pages.join("\n\n").trim(), pages: textPages, usedOcr: true };
+    }
+
+    // A scanned PDF has little or no text layer, so render and OCR each page.
+    const ocrPages = Math.min(pdf.numPages, MAX_OCR_PAGES);
+    const texts: string[] = [];
+    for (let pageNumber = 1; pageNumber <= ocrPages; pageNumber++) {
+      const text = await ocrPage(
+        pageNumber,
+        0.25 + ((pageNumber - 1) / ocrPages) * 0.75,
+        0.75 / ocrPages,
+      );
+      if (text) texts.push(text);
     }
     return { text: texts.join("\n\n").trim(), pages: ocrPages, usedOcr: true };
   } finally {
-    await pdf.destroy();
+    // destroy() also tears down the pdf.js worker; never mask the original error.
+    await pdf.destroy().catch(() => undefined);
   }
 }
 

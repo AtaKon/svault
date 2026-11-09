@@ -802,7 +802,12 @@ export const POSTGRES_MIGRATIONS: string[] = [
   "ALTER TABLE bills ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manual'",
   // Fresh installs get the CHECK from CREATE TABLE; upgraded databases are
   // backfilled first so the constraint can validate every existing row.
-  "UPDATE bills SET source = 'manual' WHERE source IS NULL OR source NOT IN ('manual', 'scan')",
+  `DO $$
+  BEGIN
+    IF to_regclass('bills') IS NOT NULL THEN
+      UPDATE bills SET source = 'manual' WHERE source IS NULL OR source NOT IN ('manual', 'scan');
+    END IF;
+  END $$`,
   `DO $$
   BEGIN
     IF to_regclass('bills') IS NOT NULL

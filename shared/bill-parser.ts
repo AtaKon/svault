@@ -22,7 +22,7 @@ const TOTAL_WORDS =
 const SUBTOTAL_WORDS = /(υποσυνολο|καθαρη\s+αξια|συνολο\s+χρεωσεων|χρεωσεις\s+συνολο|sub\s*-?\s*total|net\s+(?:amount|total)|total\s+charges)/;
 const TOTAL_WITH_TAX = /(με\s+φπα|συμπεριλαμβανομενου|incl(?:uding)?\s+(?:vat|tax)|(?:vat|tax)\s+incl|with\s+vat)/;
 const CONSUMPTION_ONLY = /(καταναλωσ|consumption|usage)/;
-const NOT_A_TOTAL = /(page|σελιδα|invoice\s+no|receipt\s+no|αριθμ\p{L}*\s+παραστατικου|items|τεμαχια|ποσοτητα|quantity)/u;
+const NOT_A_TOTAL = /(page|σελιδα|invoice\s+no|receipt\s+no|αριθμ\p{L}*\s+παραστατικου|αρ\.?\s+παραστατικου|items|τεμαχια|ποσοτητα|quantity)/u;
 const TAX_WORDS =
   /(φπα|φ\.π\.α|vat|iva|sales\s+tax|χαρτοσημο|δημοτικ\p{L}*\s+(?:τελ|φορ)|(?:^|[^α-ω])(?:ερτ|εφα)(?:[^α-ω]|$)|ε\.φ\.α|(?:^|[^α-ω])φορος(?:[^α-ω]|$)|(?:^|[^α-ω])εισφορα(?:[^α-ω]|$)|(?:^|[^α-ω])tax(?:[^α-ω]|$))/u;
 const TAX_EXCLUDE = /(αφμ|a\.?\s*φ\.?\s*μ|vat\s+(?:no|number|id)|tax\s+(?:id|no|number|office|invoice)|invoice|τιμολογιο|αποδειξη|receipt)/;
@@ -208,7 +208,7 @@ function numbersIn(line: string): NumberToken[] {
 
 /** Prefer a decimal amount over an integer consumption figure on total rows. */
 function moneyValue(tokens: NumberToken[]): number | null {
-  if (!tokens.length) return null;
+  if (!tokens.length || tokens.length >= 3) return null;
   const decimal = [...tokens].reverse().find((token) => /[.,]\d{1,2}$/.test(token.raw));
   return (decimal ?? tokens[tokens.length - 1]).value;
 }
@@ -302,8 +302,10 @@ function detectDueDate(lines: string[]): string | null {
 
 function detectCurrency(text: string): string | null {
   if (/€|\beur\b/i.test(text)) return "EUR";
-  if (/£|\bgbp\b/i.test(text)) return "GBP";
-  if (/\$|\busd\b/i.test(text)) return "USD";
+  // Require a currency-like amount so a stray symbol in a URL or slogan does
+  // not decide the bill currency.
+  if (/£\s?\d|\bgbp\b/i.test(text)) return "GBP";
+  if (/\$\s?\d|\busd\b/i.test(text)) return "USD";
   return null;
 }
 

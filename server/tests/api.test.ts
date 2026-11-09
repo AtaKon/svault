@@ -825,6 +825,16 @@ describe("bill text parsing", () => {
     assert.equal(result.lines.find((line) => line.kind === "tax")?.amount, 24);
   });
 
+  it("rejects ambiguous three-column subtotal/total rows instead of guessing", () => {
+    const result = parseBillText("Subtotal 124.00 100.00 24.00\nTotal 124.00 100.00 24.00");
+    assert.equal(result.subtotal, null);
+    assert.equal(result.total, null);
+  });
+
+  it("does not treat a stray dollar sign as the bill currency", () => {
+    assert.equal(parseBillText("ΔΕΗ\nΠροσφορά $\nΣΥΝΟΛΟ 10,00").currency, null);
+  });
+
   it("parses grouped consumption and a per-unit price on one line", () => {
     const result = parseBillText("Κατανάλωση 1.234 kWh x 0,15 = 185,10");
     const line = result.lines[0];
@@ -891,6 +901,7 @@ describe("bill text parsing", () => {
       assert.equal(documentMime(new Uint8Array([0xff]).buffer), null);
       assert.equal(documentMime(new Uint8Array([0x89, 0x50]).buffer), null);
       assert.equal(documentMime(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d]).buffer), null);
+      assert.equal(documentMime(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0, 0, 0, 0, 0, 0]).buffer), null);
       globalThis.fetch = (async () => new Response("missing", { status: 404 })) as typeof fetch;
       assert.equal(await fetchBillFile("/api/houses/x/bills/y/document", "bill"), null);
       globalThis.fetch = (async () => new Response("<html>error</html>", {
