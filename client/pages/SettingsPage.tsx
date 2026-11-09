@@ -1006,6 +1006,7 @@ function MembersTab({
                   <div className="truncate text-[11px] text-muted">{member.email}</div>
                   {can("owner") && member.role !== "owner" && (
                     <button
+                      type="button"
                       onClick={() => beginTransfer(member)}
                       className="mt-1 text-[11px] font-medium text-brand hover:underline sm:hidden"
                     >
@@ -1015,6 +1016,7 @@ function MembersTab({
                 {can("owner") && member.role !== "owner" ? (
                   <>
                     <button
+                      type="button"
                       onClick={() => beginTransfer(member)}
                       className="hidden text-[11px] font-medium text-brand hover:underline sm:inline"
                     >

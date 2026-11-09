@@ -6,7 +6,7 @@ import {
   extractDictionary,
   extractServerMessages,
   findMissing,
-} from "./check-i18n.mjs";
+} from "./check-i18n.ts";
 
 test("extracts single-line and multi-line t() keys", () => {
   const keys = extractClientKeys(`
@@ -121,4 +121,16 @@ test("excludes ultra-short dynamic keys like {count}d", () => {
   const dictionary = new Set(["{count}d"]);
   const unrelated = { key: "Catalogue sync failed", file: "fixture", line: 1 };
   assert.deepEqual(findMissing(dictionary, [unrelated]), [unrelated]);
+});
+
+test("rejects lossy adjacent-placeholder matches", () => {
+  const messages = extractServerMessages("throw new ApiError(400, `Value: ${one}`);");
+  assert.deepEqual(messages.map((entry) => entry.key), ["Value: {x}"]);
+  assert.equal(findMissing(new Set(["Value: {a}{b}"]), messages).length, 1);
+});
+
+test("flags client template calls that would bypass DYNAMIC_EL", () => {
+  const keys = extractClientKeys("const label = t(`${count}d`);");
+  assert.deepEqual(keys.map((entry) => entry.key), ["{x}d"]);
+  assert.equal(findMissing(new Set(["{count}d"]), keys).length, 1);
 });

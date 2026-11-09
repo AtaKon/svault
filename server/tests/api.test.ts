@@ -4536,6 +4536,10 @@ describe("weekly meal planner", () => {
     assert.equal(week.data.weekStart, "2026-11-02");
     assert.equal(week.data.weekEnd, "2026-11-08");
     assert.equal(week.data.entries.length, 1);
+    assert.equal(week.data.entries[0].day, "2026-11-02");
+    assert.equal(week.data.entries[0].recipeId, recipeId);
+    assert.equal(week.data.entries[0].servings, 4);
+    assert.equal(week.data.entries[0].title, "Plan rice bowl");
 
     const duplicate = await request(`/api/houses/${houseId}/plan/${entry.data.id}/duplicate`, {
       method: "POST",

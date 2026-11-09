@@ -1,24 +1,28 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
-import { buildDynamicMatcher } from "../shared/i18n.ts";
+import ts, { type Node, type SourceFile } from "typescript";
+import { buildDynamicMatcher } from "../shared/i18n";
 
 /**
  * Guards against translation regressions:
  * - every literal/template `t("...")` key used in the client must exist in EL
  * - static server API error messages shown through t(error.message) must exist in EL
- * - interpolated server messages are compared with normalized `{x}` placeholders
+ * - interpolated server messages are matched with the same DYNAMIC_EL matcher as runtime
  * - EL must not contain duplicate keys
  *
- * Dynamic `t(someVariable)` calls are intentionally skipped because their keys
- * cannot be resolved statically.
+ * The server scan is intentionally partial: it understands ApiError,
+ * OffWriteError, notFound/badRequest/forbidden/conflict and
+ * `*.status(...).json({ error|message })`. Other error constructors, `send()`
+ * responses and dynamic `t(someVariable)` client calls are not resolved.
  */
+
+export type TranslationEntry = { key: string; file: string; line: number; kind: "client" | "server" };
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-function walk(dir) {
-  const files = [];
+function walk(dir: string): string[] {
+  const files: string[] = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     if (entry.name === "node_modules") continue;
     const full = path.join(dir, entry.name);
@@ -28,7 +32,7 @@ function walk(dir) {
   return files;
 }
 
-function createSource(file, source) {
+function createSource(file: string, source: string): SourceFile {
   return ts.createSourceFile(
     file,
     source,
@@ -38,21 +42,26 @@ function createSource(file, source) {
   );
 }
 
-function forEachNode(node, callback) {
+function forEachNode(node: Node, callback: (node: Node) => void): void {
   callback(node);
   node.forEachChild((child) => forEachNode(child, callback));
 }
 
-function lineOf(sourceFile, node) {
+function lineOf(sourceFile: SourceFile, node: Node): number {
   return sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
 }
 
-function isStaticString(node) {
+function isStaticString(node: Node): node is ts.StringLiteral | ts.NoSubstitutionTemplateLiteral {
   return ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node);
 }
 
+function propertyName(node: ts.PropertyName): string | null {
+  if (ts.isIdentifier(node) || ts.isStringLiteral(node) || ts.isPrivateIdentifier(node)) return node.text;
+  return null;
+}
+
 /** All string variants for an argument, expanding simple conditional branches. */
-export function stringVariants(node) {
+export function stringVariants(node: Node): string[] {
   if (isStaticString(node)) return [node.text];
   if (ts.isParenthesizedExpression(node)) return stringVariants(node.expression);
   if (ts.isConditionalExpression(node)) {
@@ -65,7 +74,7 @@ export function stringVariants(node) {
     for (const span of node.templateSpans) {
       const values = stringVariants(span.expression);
       if (!values.length) values.push("{x}");
-      const next = [];
+      const next: string[] = [];
       for (const prefix of variants) {
         for (const value of values) next.push(prefix + value + span.literal.text);
       }
@@ -76,9 +85,9 @@ export function stringVariants(node) {
   return [];
 }
 
-export function extractClientKeys(source, file = "fixture.tsx") {
+export function extractClientKeys(source: string, file = "fixture.tsx"): TranslationEntry[] {
   const sourceFile = createSource(file, source);
-  const keys = [];
+  const keys: TranslationEntry[] = [];
   forEachNode(sourceFile, (node) => {
     if (!ts.isCallExpression(node)) return;
     if (!ts.isIdentifier(node.expression) || node.expression.text !== "t") return;
@@ -97,11 +106,11 @@ export function extractClientKeys(source, file = "fixture.tsx") {
 const ERROR_HELPERS = new Set(["notFound", "badRequest", "forbidden", "conflict"]);
 
 /** Walk a chained expression down to any `.status(...)` call. */
-function hasStatusCall(node) {
-  let current = node;
+function hasStatusCall(node: Node): boolean {
+  let current: Node | undefined = node;
   while (current) {
     if (ts.isCallExpression(current)) {
-      const callee = current.expression;
+      const callee: ts.Expression = current.expression;
       if (ts.isPropertyAccessExpression(callee) && callee.name.text === "status") return true;
       current = callee;
       continue;
@@ -120,10 +129,10 @@ function hasStatusCall(node) {
 }
 
 /** Server messages that are later rendered through t(error.message). */
-export function extractServerMessages(source, file = "fixture.ts") {
+export function extractServerMessages(source: string, file = "fixture.ts"): TranslationEntry[] {
   const sourceFile = createSource(file, source);
-  const messages = [];
-  const collect = (argument) => {
+  const messages: TranslationEntry[] = [];
+  const collect = (argument: Node | undefined) => {
     if (!argument) return;
     const variants = stringVariants(argument);
     if (!variants.length) return;
@@ -156,8 +165,8 @@ export function extractServerMessages(source, file = "fixture.ts") {
       if (!body || !ts.isObjectLiteralExpression(body)) return;
       for (const property of body.properties) {
         if (!ts.isPropertyAssignment(property)) continue;
-        const propertyName = ts.isIdentifier(property.name) || ts.isStringLiteral(property.name) ? property.name.text : "";
-        if (propertyName === "error" || propertyName === "message") collect(property.initializer);
+        const name = propertyName(property.name);
+        if (name === "error" || name === "message") collect(property.initializer);
       }
     }
   });
@@ -165,10 +174,13 @@ export function extractServerMessages(source, file = "fixture.ts") {
 }
 
 /** Parse the flat `const EL = { ... }` object without evaluating it. */
-export function extractDictionary(source, file = "i18n.tsx") {
+export function extractDictionary(
+  source: string,
+  file = "i18n.tsx",
+): { dictionary: Set<string>; duplicates: Set<string> } {
   const sourceFile = createSource(file, source);
-  const dictionary = new Set();
-  const duplicates = new Set();
+  const dictionary = new Set<string>();
+  const duplicates = new Set<string>();
   let found = false;
   forEachNode(sourceFile, (node) => {
     if (found || !ts.isVariableDeclaration(node)) return;
@@ -178,7 +190,7 @@ export function extractDictionary(source, file = "i18n.tsx") {
     found = true;
     for (const property of initializer.properties) {
       if (!ts.isPropertyAssignment(property)) continue;
-      const key = ts.isIdentifier(property.name) || ts.isStringLiteral(property.name) ? property.name.text : null;
+      const key = propertyName(property.name);
       if (key == null) continue;
       if (dictionary.has(key)) duplicates.add(key);
       dictionary.add(key);
@@ -188,50 +200,61 @@ export function extractDictionary(source, file = "i18n.tsx") {
   return { dictionary, duplicates };
 }
 
-export function normalizeKey(key) {
+export function normalizeKey(key: string): string {
   return key.replace(/\{[A-Za-z_$][\w$]*\}/g, "{x}");
 }
 
-export function findMissing(dictionary, entries) {
-  const dynamicPatterns = [];
+function placeholderCount(normalizedKey: string): number {
+  return (normalizedKey.match(/\{x\}/g) ?? []).length;
+}
+
+export function findMissing(dictionary: Set<string>, entries: TranslationEntry[]): TranslationEntry[] {
+  const dynamicMatchers: { regex: RegExp; names: string[] }[] = [];
   for (const key of dictionary) {
     const matcher = buildDynamicMatcher(key);
-    if (matcher) dynamicPatterns.push(matcher.regex);
+    if (matcher) dynamicMatchers.push(matcher);
   }
 
-  const missing = [];
+  const missing: TranslationEntry[] = [];
   for (const entry of entries) {
     if (entry.kind === "client") {
       if (!dictionary.has(entry.key)) missing.push(entry);
       continue;
     }
-    const dynamic = normalizeKey(entry.key) !== entry.key || entry.key.includes("{x}");
-    let found;
+
+    const normalized = normalizeKey(entry.key);
+    const dynamic = normalized !== entry.key || entry.key.includes("{x}");
+    let found: boolean;
     if (dynamic) {
-      // Mirror DYNAMIC_EL: substitute a concrete sample into the server message
-      // shape and let the shared matcher decide whether the dictionary covers it.
-      const sample = entry.key.replace(/\{x\}/g, "Sample");
-      found = dynamicPatterns.some((pattern) => pattern.test(sample));
+      const count = placeholderCount(normalized);
+      const sample = normalized.replace(/\{x\}/g, "Sample");
+      // Require the same placeholder count as runtime would substitute, so a
+      // lossy cross-count match is not accepted as a translated message.
+      found = dynamicMatchers.some((matcher) => matcher.names.length === count && matcher.regex.test(sample));
     } else {
-      found = dictionary.has(entry.key) || dynamicPatterns.some((pattern) => pattern.test(entry.key));
+      found = dictionary.has(entry.key) || dynamicMatchers.some((matcher) => matcher.regex.test(entry.key));
     }
     if (!found) missing.push(entry);
   }
   return missing;
 }
 
-export function checkRepository(repositoryRoot = root) {
+export function checkRepository(repositoryRoot = root): {
+  dictionary: Set<string>;
+  duplicates: Set<string>;
+  missing: TranslationEntry[];
+} {
   const i18nSource = fs.readFileSync(path.join(repositoryRoot, "client/i18n.tsx"), "utf8");
   const { dictionary, duplicates } = extractDictionary(i18nSource, "client/i18n.tsx");
 
-  const clientKeys = [];
+  const clientKeys: TranslationEntry[] = [];
   for (const file of walk(path.join(repositoryRoot, "client"))) {
     if (file.endsWith("i18n.tsx")) continue;
     const source = fs.readFileSync(file, "utf8");
     clientKeys.push(...extractClientKeys(source, path.relative(repositoryRoot, file)));
   }
 
-  const serverMessages = [];
+  const serverMessages: TranslationEntry[] = [];
   for (const file of walk(path.join(repositoryRoot, "server"))) {
     const source = fs.readFileSync(file, "utf8");
     serverMessages.push(...extractServerMessages(source, path.relative(repositoryRoot, file)));
@@ -244,7 +267,7 @@ export function checkRepository(repositoryRoot = root) {
   };
 }
 
-function main() {
+function main(): void {
   const repositoryRoot = process.env.SV_I18N_ROOT ? path.resolve(process.env.SV_I18N_ROOT) : root;
   const { dictionary, duplicates, missing } = checkRepository(repositoryRoot);
 
