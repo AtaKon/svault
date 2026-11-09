@@ -45,15 +45,17 @@ export function billMetrics(bill: Pick<UtilityBill, keyof BillMetrics>): BillMet
 
 /** Compare only consecutive bills with matching type, name and currency. */
 export function billHistory(bills: UtilityBill[]) {
+  // Compare and display using the same date. When no due date is available,
+  // creation date is an approximation; creation time and ID break ties.
+  const date = (bill: UtilityBill) => bill.dueDate ?? bill.createdAt.slice(0, 10);
   const sorted = bills.filter(b => b.billType === "electricity" || b.billType === "natural_gas")
-    .slice().sort((a, b) => (a.dueDate ?? a.createdAt).localeCompare(b.dueDate ?? b.createdAt) || a.id.localeCompare(b.id));
-  const previous = new Map<string, { date: string; metrics: BillMetrics }>();
+    .slice().sort((a, b) => date(a).localeCompare(date(b)) || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  const previous = new Map<string, BillMetrics>();
   return sorted.map(bill => {
     const metrics = billMetrics(bill);
     const key = `${bill.billType}|${bill.name.trim().toLocaleLowerCase()}|${bill.currency}`;
-    const last = previous.get(key);
-    const prior = bill.dueDate && last && last.date < bill.dueDate ? last.metrics : undefined;
-    if (bill.dueDate && (!last || last.date < bill.dueDate)) previous.set(key, { date: bill.dueDate, metrics });
+    const prior = previous.get(key);
+    previous.set(key, metrics);
     return { bill, metrics, prior, perKwh: metrics.consumptionKwh && metrics.consumptionKwh > 0 ? bill.amount / metrics.consumptionKwh : null,
       perM3: metrics.consumptionM3 && metrics.consumptionM3 > 0 ? bill.amount / metrics.consumptionM3 : null };
   }).reverse();

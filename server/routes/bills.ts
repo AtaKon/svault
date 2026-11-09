@@ -146,7 +146,13 @@ const optionalConsumption = z.preprocess((value) => {
   if (value === undefined) return undefined;
   if (value == null || value === "") return null;
   if (typeof value === "number") return value;
-  if (typeof value === "string" && /^\d+(?:[.,]\d{1,3})?$/.test(value.trim())) return Number(value.trim().replace(",", "."));
+  if (typeof value === "string") {
+    const text = value.trim();
+    // Commas are decimal separators; dots are grouping separators only when
+    // followed by a comma. Thus 1,234 means 1.234, while 1.234,5 is 1234.5.
+    if (/^\d+(?:[.,]\d{1,3})?$/.test(text)) return Number(text.replace(",", "."));
+    if (/^\d{1,3}(?:\.\d{3})+,\d{1,3}$/.test(text)) return Number(text.replace(/\./g, "").replace(",", "."));
+  }
   return Number.NaN;
 }, z.number().finite().positive().max(1_000_000_000).refine(value => Math.abs(value * 1000 - Math.round(value * 1000)) < 1e-5).nullable().optional());
 
