@@ -81,9 +81,11 @@ export function BillsPage() {
   const [taxTotal, setTaxTotal] = useState("");
   const [breakdown, setBreakdown] = useState<BillBreakdownLine[]>([]);
   const [ocrText, setOcrText] = useState("");
+  const [scanned, setScanned] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [scanProgress, setScanProgress] = useState(0);
   const [readingBillId, setReadingBillId] = useState<string | null>(null);
+  const [readingProgress, setReadingProgress] = useState(0);
 
   const load = useCallback(async () => {
     try {
@@ -117,6 +119,7 @@ export function BillsPage() {
     setTaxTotal(result.taxTotal != null ? result.taxTotal.toFixed(2) : "");
     setBreakdown(result.lines.slice(0, 100));
     setOcrText(text.slice(0, 50_000));
+    setScanned(true);
   };
 
   const readFile = async (nextFile: File) => {
@@ -134,7 +137,8 @@ export function BillsPage() {
       } else {
         toast.success(t("Bill details filled from the file"));
       }
-    } catch {
+    } catch (error) {
+      if (import.meta.env.DEV) console.error("[bill-scan]", error);
       toast.error(t("Could not read the bill file"));
     } finally {
       setScanning(false);
@@ -156,6 +160,7 @@ export function BillsPage() {
     setTaxTotal("");
     setBreakdown([]);
     setOcrText("");
+    setScanned(false);
   };
 
   const save = async (event: React.FormEvent) => {
@@ -183,8 +188,10 @@ export function BillsPage() {
       if (category === "to_split") data.set("splitWith", JSON.stringify(splitWith));
       data.set("notes", notes);
       if (file) data.set("document", file);
-      if (breakdown.length) {
-        data.set("breakdown", JSON.stringify(breakdown));
+      // A short bill may yield a total and taxes but no charge lines, so every
+      // recognised field is persisted even when the breakdown is empty.
+      if (scanned || breakdown.length || subtotal.trim() || taxTotal.trim() || ocrText) {
+        if (breakdown.length) data.set("breakdown", JSON.stringify(breakdown));
         if (subtotal.trim()) data.set("subtotal", subtotal);
         if (taxTotal.trim()) data.set("taxTotal", taxTotal);
         if (ocrText) data.set("ocrText", ocrText);
@@ -231,13 +238,14 @@ export function BillsPage() {
   const readSavedBill = async (bill: UtilityBill) => {
     if (!bill.document || readingBillId) return;
     setReadingBillId(bill.id);
+    setReadingProgress(0);
     try {
       const saved = await fetchBillFile(bill.document, bill.name);
       if (!saved) {
         toast.error(t("Could not read the bill document"));
         return;
       }
-      const scan = await scanBillFile(saved, () => undefined, { currency: bill.currency });
+      const scan = await scanBillFile(saved, (progress) => setReadingProgress(progress), { currency: bill.currency });
       if (!scan.result.lines.length && scan.result.total == null) {
         toast.error(t("No amount or breakdown was recognised in this document."));
         return;
@@ -254,10 +262,12 @@ export function BillsPage() {
       });
       toast.success(t("Bill breakdown updated"));
       await load();
-    } catch {
+    } catch (error) {
+      if (import.meta.env.DEV) console.error("[bill-scan]", error);
       toast.error(t("Could not read the bill document"));
     } finally {
       setReadingBillId(null);
+      setReadingProgress(0);
     }
   };
   const dropFile = (event: DragEvent<HTMLDivElement>) => {
@@ -312,7 +322,7 @@ export function BillsPage() {
           </div>
           <BreakdownTable lines={breakdown} currency={house.currency || "EUR"} />
           <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 border-t border-line pt-2 text-xs text-muted">
-            <span>{t("Charges")}: <strong className="font-medium text-ink">{money(recognisedSum, house.currency || "EUR")}</strong></span>
+            <span>{t("Breakdown total")}: <strong className="font-medium text-ink">{money(recognisedSum, house.currency || "EUR")}</strong></span>
             {subtotal.trim() && Number.isFinite(Number(subtotal)) && <span>{t("Subtotal")}: <strong className="font-medium text-ink">{money(Number(subtotal), house.currency || "EUR")}</strong></span>}
             {taxTotal.trim() && Number.isFinite(Number(taxTotal)) && <span>{t("Tax")}: <strong className="font-medium text-ink">{money(Number(taxTotal), house.currency || "EUR")}</strong></span>}
           </div>
@@ -345,7 +355,7 @@ export function BillsPage() {
             <Field label={t("Category")} className="w-44"><Select value={bill.category} onChange={(e) => changeCategory(bill, e.target.value as UtilityBill["category"])}><option value="to_split">{t("To be split")}</option><option value="personal">{t("Personal")}</option></Select></Field>
             {bill.category === "to_split" && <><Field label={t("Paid by")} className="w-44"><Select value={bill.paidBy ?? ""} onChange={(e) => void patchBill(bill, { paidBy: e.target.value })}>{household?.members.map((member) => <option key={member.userId} value={member.userId}>{member.name}</option>)}</Select></Field><Field label={t("Split between")} className="min-w-[220px] flex-1"><div className="flex flex-wrap gap-2">{household?.members.map((member) => <label key={member.userId} className="flex cursor-pointer items-center gap-1.5 text-xs"><input type="checkbox" checked={bill.splitWith.includes(member.userId)} onChange={(event) => { if (!event.target.checked && bill.splitWith.length === 1) { toast.error(t("Select at least one person to split the bill.")); return; } const next = event.target.checked ? [...bill.splitWith, member.userId] : bill.splitWith.filter((id) => id !== member.userId); void patchBill(bill, { splitWith: next }); }} />{member.name}</label>)}</div></Field></>}
             {bill.document ? <a className="inline-flex items-center gap-2 text-sm font-medium text-brand hover:underline" href={bill.document} target="_blank" rel="noreferrer"><Icon name="receipt" size={16}/>{t("View bill document")}</a> : <label className="inline-flex cursor-pointer items-center gap-2 text-sm font-medium text-brand hover:underline"><Icon name="upload" size={16}/>{t("Attach document")}<input type="file" accept={DOCUMENT_ACCEPT} className="sr-only" onChange={(event) => { const nextFile = event.target.files?.[0]; if (nextFile) void uploadDocument(bill, nextFile); event.target.value = ""; }} /></label>}
-            {bill.document && <Button type="button" size="sm" variant="ghost" icon="scan" loading={readingBillId === bill.id} disabled={readingBillId != null} onClick={() => void readSavedBill(bill)}>{t("Read document")}</Button>}
+            {bill.document && <Button type="button" size="sm" variant="ghost" icon="scan" loading={readingBillId === bill.id} disabled={readingBillId != null} onClick={() => void readSavedBill(bill)}>{t("Read document")}{readingBillId === bill.id ? ` ${Math.round(readingProgress * 100)}%` : ""}</Button>}
           </div>
         </Card>;
       })}</div>}

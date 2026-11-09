@@ -25,6 +25,8 @@ interface PdfTextItem {
 
 /** Most pages OCR'd from one bill. Utility bills are rarely longer. */
 const MAX_OCR_PAGES = 6;
+/** Text-layer extraction is cheap, so long e-bills keep all their pages. */
+const MAX_TEXT_PAGES = 50;
 const TEXT_LAYER_MIN_CHARS = 60;
 const MAX_PAGE_WIDTH = 2200;
 
@@ -42,23 +44,32 @@ export function isSupportedBillFile(file: File): boolean {
 
 /** Group PDF text runs into visual lines, keeping wide label/amount gaps. */
 export function pdfItemsToText(items: unknown[]): string {
-  const lines: Array<{ y: number; parts: Array<{ x: number; width: number; text: string }> }> = [];
+  const runs: Array<{ x: number; y: number; width: number; text: string }> = [];
 
   for (const item of items) {
     if (!item || typeof item !== "object" || !("str" in item) || !("transform" in item)) continue;
     const text = String((item as PdfTextItem).str ?? "").replace(/\s+/g, " ").trim();
     if (!text) continue;
     const transform = (item as PdfTextItem).transform;
-    const x = Number(transform?.[4] ?? 0);
-    const y = Number(transform?.[5] ?? 0);
-    const width = Number((item as PdfTextItem).width ?? 0);
-    const line = lines.find((entry) => Math.abs(entry.y - y) <= 4);
-    if (line) line.parts.push({ x, width, text });
-    else lines.push({ y, parts: [{ x, width, text }] });
+    runs.push({
+      x: Number(transform?.[4] ?? 0),
+      y: Number(transform?.[5] ?? 0),
+      width: Number((item as PdfTextItem).width ?? 0),
+      text,
+    });
+  }
+
+  // Sort once, then group adjacent runs; this keeps large text layers linear
+  // after the sort instead of searching the whole line list for every run.
+  runs.sort((a, b) => b.y - a.y || a.x - b.x);
+  const lines: Array<{ y: number; parts: typeof runs }> = [];
+  for (const run of runs) {
+    const current = lines[lines.length - 1];
+    if (current && Math.abs(current.y - run.y) <= 4) current.parts.push(run);
+    else lines.push({ y: run.y, parts: [run] });
   }
 
   return lines
-    .sort((a, b) => b.y - a.y)
     .map((line) => {
       const parts = line.parts.sort((a, b) => a.x - b.x);
       let result = "";
@@ -91,12 +102,12 @@ async function readPdf(
 
   const data = new Uint8Array(await file.arrayBuffer());
   const pdf = await pdfjs.getDocument({ data }).promise;
-  const pageCount = Math.min(pdf.numPages, MAX_OCR_PAGES);
+  const textPages = Math.min(pdf.numPages, MAX_TEXT_PAGES);
 
   try {
     const pages: string[] = [];
-    for (let pageNumber = 1; pageNumber <= pageCount; pageNumber++) {
-      onProgress(((pageNumber - 1) / pageCount) * 0.25, "Reading the PDF");
+    for (let pageNumber = 1; pageNumber <= textPages; pageNumber++) {
+      onProgress(((pageNumber - 1) / textPages) * 0.25, "Reading the PDF");
       const page = await pdf.getPage(pageNumber);
       const content = await page.getTextContent();
       pages.push(pdfItemsToText(content.items));
@@ -106,12 +117,13 @@ async function readPdf(
     const meaningful = extracted.replace(/[^A-Za-zΑ-Ωα-ω0-9]/g, "").length;
     if (meaningful >= TEXT_LAYER_MIN_CHARS && /\d/.test(extracted)) {
       onProgress(1, "Text read from the PDF");
-      return { text: extracted, pages: pageCount, usedOcr: false };
+      return { text: extracted, pages: textPages, usedOcr: false };
     }
 
     // A scanned PDF has little or no text layer, so render and OCR each page.
+    const ocrPages = Math.min(pdf.numPages, MAX_OCR_PAGES);
     const texts: string[] = [];
-    for (let pageNumber = 1; pageNumber <= pageCount; pageNumber++) {
+    for (let pageNumber = 1; pageNumber <= ocrPages; pageNumber++) {
       const page = await pdf.getPage(pageNumber);
       const base = page.getViewport({ scale: 1 });
       const scale = Math.min(3, Math.max(1, MAX_PAGE_WIDTH / base.width));
@@ -119,7 +131,9 @@ async function readPdf(
       const canvas = document.createElement("canvas");
       canvas.width = Math.max(1, Math.ceil(viewport.width));
       canvas.height = Math.max(1, Math.ceil(viewport.height));
-      await page.render({ canvas, viewport }).promise;
+      const context = canvas.getContext("2d");
+      if (!context) continue;
+      await page.render({ canvas, canvasContext: context, viewport }).promise;
 
       const blob = await canvasToBlob(canvas);
       canvas.width = 0;
@@ -129,14 +143,14 @@ async function readPdf(
       const text = await ocrImage(
         image,
         (progress, status) => onProgress(
-          0.25 + (((pageNumber - 1) + progress) / pageCount) * 0.75,
+          0.25 + (((pageNumber - 1) + progress) / ocrPages) * 0.75,
           status || "Recognising the bill",
         ),
         { mode: "bill" },
       );
       texts.push(text);
     }
-    return { text: texts.join("\n\n").trim(), pages: pageCount, usedOcr: true };
+    return { text: texts.join("\n\n").trim(), pages: ocrPages, usedOcr: true };
   } finally {
     await pdf.destroy();
   }
@@ -161,12 +175,27 @@ export async function scanBillFile(
   return { text, pages: 1, usedOcr: true, result: parseBillText(text, options) };
 }
 
+/** Detect a stored bill document from its bytes, independent of headers. */
+export function documentMime(buffer: ArrayBuffer): string | null {
+  const bytes = new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 12));
+  const ascii = (start: number, end: number) => String.fromCharCode(...bytes.subarray(start, end));
+  if (ascii(0, 5) === "%PDF-") return "application/pdf";
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  if (bytes[0] === 0x89 && ascii(1, 4) === "PNG" && bytes[4] === 0x0d && bytes[5] === 0x0a) return "image/png";
+  if (ascii(0, 4) === "RIFF" && ascii(8, 12) === "WEBP") return "image/webp";
+  return null;
+}
+
 /** Load a saved bill document back into a File so it can be re-read. */
 export async function fetchBillFile(url: string, name: string): Promise<File | null> {
   const response = await fetch(url);
   if (!response.ok) return null;
   const blob = await response.blob();
-  const type = blob.type || (/\.pdf$/i.test(url) ? "application/pdf" : "image/jpeg");
+  const buffer = await blob.arrayBuffer();
+  // The authenticated document route sets a real Content-Type, but a proxy or
+  // generic download can strip it. Inspect the bytes before trusting it.
+  const type = documentMime(buffer) ??
+    (blob.type && blob.type !== "application/octet-stream" ? blob.type : "application/pdf");
   const extension = type === "application/pdf" ? "pdf" : type === "image/png" ? "png" : type === "image/webp" ? "webp" : "jpg";
-  return new File([blob], `${name || "bill"}.${extension}`, { type });
+  return new File([buffer], `${name || "bill"}.${extension}`, { type });
 }

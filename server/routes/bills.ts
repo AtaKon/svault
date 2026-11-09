@@ -50,16 +50,6 @@ const BILL_DOCUMENT_MIME: Record<string, string> = {
   ".webp": "image/webp",
 };
 
-function documentExtension(file: Express.Multer.File): string {
-  const extension = path.extname(file.originalname).toLowerCase();
-  if (extension === ".jpeg") return ".jpg";
-  if (extension === ".pdf" || extension === ".jpg" || extension === ".png" || extension === ".webp") return extension;
-  if (file.mimetype === "application/pdf") return ".pdf";
-  if (file.mimetype === "image/png") return ".png";
-  if (file.mimetype === "image/webp") return ".webp";
-  return ".jpg";
-}
-
 /** Detect a supported bill document from its leading bytes. */
 function documentKind(bytes: Buffer): "pdf" | "jpeg" | "png" | "webp" | null {
   if (bytes.subarray(0, 5).toString("latin1") === "%PDF-") return "pdf";
@@ -73,7 +63,9 @@ function documentKind(bytes: Buffer): "pdf" | "jpeg" | "png" | "webp" | null {
 const billUpload = multer({
   storage: multer.diskStorage({
     destination: (_req, _file, cb) => cb(null, billDir),
-    filename: (_req, file, cb) => cb(null, `${Date.now()}-${randomBytes(8).toString("hex")}${documentExtension(file)}`),
+    // The real extension is chosen from the sniffed content after the upload,
+    // so a misleading client filename can never decide how the file is served.
+    filename: (_req, _file, cb) => cb(null, `${Date.now()}-${randomBytes(8).toString("hex")}.upload`),
   }),
   limits: { fileSize: MAX_UPLOAD_BYTES, files: 1 },
   fileFilter: (_req, file, cb) => {
@@ -99,12 +91,10 @@ const verifyBillDocument: RequestHandler = (req, _res, next) => {
 
     // Store the extension that matches the real content, not the uploaded name.
     const canonical = `.${{ pdf: "pdf", jpeg: "jpg", png: "png", webp: "webp" }[kind]}`;
-    if (path.extname(req.file.filename).toLowerCase() !== canonical) {
-      const nextName = `${req.file.filename.replace(/\.[^.]+$/, "")}${canonical}`;
-      fs.renameSync(req.file.path, path.join(billDir, nextName));
-      req.file.filename = nextName;
-      req.file.path = path.join(billDir, nextName);
-    }
+    const nextName = `${req.file.filename.replace(/\.[^.]+$/, "")}${canonical}`;
+    fs.renameSync(req.file.path, path.join(billDir, nextName));
+    req.file.filename = nextName;
+    req.file.path = path.join(billDir, nextName);
   } catch (error) {
     discardUploads(req);
     return next(error instanceof ApiError ? error : new ApiError(400, "That file is not a valid PDF or image"));
@@ -132,15 +122,19 @@ const breakdownLineInput = z.object({
   amount: z.number().finite().nonnegative().max(1_000_000_000).nullable().optional(),
   taxRate: z.number().finite().min(0).max(100).nullable().optional(),
 }).strict();
-const breakdownInput = z.union([z.string().max(50_000), z.array(breakdownLineInput).max(100)]).optional();
+const breakdownInput = z.preprocess(
+  // Multipart forms send the breakdown as JSON; validate the decoded array so
+  // malformed entries are rejected instead of silently dropped.
+  (value) => {
+    if (typeof value !== "string") return value;
+    try { return JSON.parse(value); } catch { return value; }
+  },
+  z.array(breakdownLineInput).max(100),
+).optional();
 
-/** Accept the JSON string used by multipart forms and normalise every line. */
-function sanitizeBreakdown(value: string | z.infer<typeof breakdownLineInput>[] | undefined): BillBreakdownLine[] {
-  let parsed: unknown = value ?? [];
-  if (typeof parsed === "string") {
-    try { parsed = JSON.parse(parsed); } catch { parsed = []; }
-  }
-  if (!Array.isArray(parsed)) return [];
+/** Normalise a breakdown that Zod has already validated. */
+function sanitizeBreakdown(value: z.infer<typeof breakdownLineInput>[] | undefined): BillBreakdownLine[] {
+  const parsed: unknown[] = value ?? [];
   const rounded = (number: unknown, scale: number): number | null => {
     if (number == null || number === "") return null;
     const parsedNumber = typeof number === "number" ? number : Number(number);
@@ -219,7 +213,9 @@ function serialize(row: BillRow): UtilityBill {
     notes: row.notes ?? null,
     subtotal: row.subtotal == null ? null : Number(row.subtotal),
     taxTotal: row.tax_total == null ? null : Number(row.tax_total),
-    breakdown: parseJson<BillBreakdownLine[]>(row.breakdown, []),
+    breakdown: Array.isArray(parseJson<unknown>(row.breakdown, []))
+      ? parseJson<BillBreakdownLine[]>(row.breakdown, [])
+      : [],
     ocrText: row.ocr_text ?? null,
     source: row.source === "scan" ? "scan" : "manual",
     createdAt: row.created_at,
@@ -320,7 +316,7 @@ billRoutes.post("/:houseId/bills", requireHouseBillMember, billUpload.single("do
       tax_total: body.taxTotal ?? null,
       breakdown: JSON.stringify(breakdown),
       ocr_text: body.ocrText || null,
-      source: body.source ?? (breakdown.length ? "scan" : "manual"),
+      source: body.source ?? "manual",
       created_at: now(),
     };
   } catch (error) {
@@ -369,8 +365,9 @@ singleBillRoutes.patch("/:billId", handler(async (req, res) => {
   let paidBy = body.paidBy === undefined ? current.paid_by : body.paidBy;
   if (body.paidBy === undefined && paidBy && !memberIds.has(paidBy)) paidBy = null;
   const people = await validatePeople(houseId, paidBy, splitWith);
+  const storedBreakdown = parseJson<unknown>(current.breakdown, []);
   const breakdown = body.breakdown === undefined
-    ? parseJson<BillBreakdownLine[]>(current.breakdown, [])
+    ? Array.isArray(storedBreakdown) ? storedBreakdown as BillBreakdownLine[] : []
     : sanitizeBreakdown(body.breakdown);
   await run(`UPDATE bills SET name = ?, bill_type = ?, category = ?, ledger_confirmed = ?, amount = ?, due_date = ?, paid_by = ?, split_with = ?, notes = ?,
     subtotal = ?, tax_total = ?, breakdown = ?, ocr_text = ?, source = ? WHERE id = ?`, [
@@ -403,8 +400,11 @@ billRoutes.post("/:houseId/bills/:billId/document", requireBillDocumentMember, b
   let updated: BillRow | undefined;
   let updateApplied = false;
   try {
-    const result = await run(`UPDATE bills SET document = ? WHERE id = ? AND house_id = ?
-      AND (document = ? OR (document IS NULL AND ? IS NULL))`, [
+    // A new document invalidates the old read: clear the breakdown so stale
+    // text cannot be shown next to the replacement until it is scanned again.
+    const result = await run(`UPDATE bills SET document = ?, subtotal = NULL, tax_total = NULL,
+      breakdown = '[]', ocr_text = NULL, source = 'manual'
+      WHERE id = ? AND house_id = ? AND (document = ? OR (document IS NULL AND ? IS NULL))`, [
       req.file.filename, current.id, houseId, current.document, current.document,
     ]);
     if (result.changes !== 1) throw new ApiError(409, "The bill document changed during upload. Try again.");

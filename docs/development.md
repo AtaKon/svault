@@ -6,7 +6,7 @@ domain types. No workspace tooling, no bundler config beyond Vite, no test frame
 
 ## Prerequisites
 
-- **Node.js 22 or newer** (the server uses `node:sqlite`).
+- **Node.js 22.13 or newer** (the server uses `node:sqlite`; `pdfjs-dist` requires 22.13+).
 - npm 10+.
 - Optional: Docker for testing the production image.
 - Optional: a local Chrome/Edge install for the browser check scripts.

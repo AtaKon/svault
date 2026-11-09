@@ -95,6 +95,7 @@ const EL: Record<string, string> = {
   "Drop the bill PDF or photo to fill the amount, taxes and unit prices automatically.": "Σύρε το PDF ή τη φωτογραφία του λογαριασμού για να συμπληρωθούν αυτόματα το ποσό, οι φόροι και οι τιμές μονάδας.",
   "Detected breakdown": "Ανάλυση που εντοπίστηκε",
   "Charges": "Χρεώσεις",
+  "Breakdown total": "Σύνολο ανάλυσης",
   "Subtotal": "Υποσύνολο",
   "Discount": "Έκπτωση",
   "Credit": "Πίστωση",

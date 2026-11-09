@@ -295,7 +295,7 @@ CREATE TABLE IF NOT EXISTS bills (
   tax_total DOUBLE PRECISION,
   breakdown TEXT NOT NULL DEFAULT '[]',
   ocr_text TEXT,
-  source TEXT NOT NULL DEFAULT 'manual',
+  source TEXT NOT NULL DEFAULT 'manual' CHECK (source IN ('manual', 'scan')),
   created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL
 );

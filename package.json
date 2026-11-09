@@ -5,7 +5,7 @@
   "description": "SVault - home inventory, recipes and vision datasets for every house you own.",
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13.0"
   },
   "scripts": {
     "dev": "concurrently -n api,web -c cyan,magenta \"npm:dev:api\" \"npm:dev:web\"",

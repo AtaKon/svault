@@ -150,7 +150,7 @@ npm test           # 42 API, parser, AI-mock and dataset tests
 npm run typecheck
 ```
 
-Requires **Node 22+**. No native modules: SQLite comes from `node:sqlite`, which keeps the Docker
+Requires **Node 22.13+**. No native modules: SQLite comes from `node:sqlite`, which keeps the Docker
 image small and the install painless.
 
 ## Configuration

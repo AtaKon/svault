@@ -108,8 +108,8 @@ const { all, closeDb, get, initDb, run } = await import("../db.js");
 const { discardUploads } = await import("../upload.js");
 const { heuristicRecipe, parseIngredientLine, localIdeas } = await import("../services/recipe-local.js");
 const { heuristicReceipt } = await import("../services/receipt-local.js");
-const { parseBillNumber, parseBillText } = await import("../../shared/bill-parser.js");
-const { pdfItemsToText } = await import("../../client/bill-scan.js");
+const { billLinesTotal, parseBillNumber, parseBillText } = await import("../../shared/bill-parser.js");
+const { documentMime, fetchBillFile, isBillPdf, pdfItemsToText } = await import("../../client/bill-scan.js");
 const { parseLidlReceipt } = await import("../services/receipt-lidl.js");
 const { parseSklavenitisReceipt } = await import("../services/receipt-sklavenitis.js");
 const { selectReceiptTemplate } = await import("../services/receipt-templates.js");
@@ -681,13 +681,13 @@ describe("bill text parsing", () => {
     assert.equal(result.lines.some((line) => line.description === "Διαχείριση"), false);
   });
 
-  it("keeps PDF text runs on their visual lines", () => {
+  it("keeps PDF text runs on their visual lines, even out of order", () => {
     const text = pdfItemsToText([
-      { str: "Water usage", transform: [1, 0, 0, 1, 10, 700], width: 62 },
+      { str: "9.40", transform: [1, 0, 0, 1, 400, 681], width: 18 },
       { str: "23.13", transform: [1, 0, 0, 1, 400, 700], width: 24 },
       { str: "Standing charge", transform: [1, 0, 0, 1, 10, 681], width: 78 },
-      { str: "9.40", transform: [1, 0, 0, 1, 400, 681], width: 18 },
-      { str: "", transform: [1, 0, 0, 1, 10, 660], width: 0 },
+      { str: "   ", transform: [1, 0, 0, 1, 200, 660], width: 0 },
+      { str: "Water usage", transform: [1, 0, 0, 1, 10, 700], width: 62 },
     ]);
     assert.equal(text, "Water usage   23.13\nStanding charge   9.40");
   });
@@ -698,6 +698,63 @@ describe("bill text parsing", () => {
     assert.equal(parseBillNumber("1 234,56"), 1234.56);
     assert.equal(parseBillNumber("0,1234"), 0.1234);
     assert.equal(parseBillNumber("-12,50"), -12.5);
+    assert.equal(parseBillNumber("1,234"), 1234);
+    assert.equal(parseBillNumber("1,234", { thousands: false }), 1.234);
+  });
+
+  it("keeps three-decimal unit prices from becoming thousands", () => {
+    const result = parseBillText([
+      "ΔΕΗ",
+      "Κατανάλωση 100 kWh 1,234 123,40",
+      "ΣΥΝΟΛΟ 123,40",
+    ].join("\n"));
+    const line = result.lines.find((entry) => entry.description === "Κατανάλωση");
+    assert.equal(line?.unitPrice, 1.234);
+    assert.equal(line?.amount, 123.4);
+    assert.equal(line?.quantity, 100);
+  });
+
+  it("leaves subtotal and tax null when only a printed total exists", () => {
+    const result = parseBillText("Total amount due 45.00");
+    assert.equal(result.total, 45);
+    assert.equal(result.totalInferred, false);
+    assert.equal(result.subtotal, null);
+    assert.equal(result.taxTotal, null);
+    assert.deepEqual(result.lines, []);
+  });
+
+  it("subtracts discounts from the subtotal and keeps them as lines", () => {
+    const result = parseBillText([
+      "Χρέωση 20,00",
+      "Έκπτωση -5,00",
+      "ΣΥΝΟΛΟ 15,00",
+    ].join("\n"));
+    assert.equal(result.subtotal, 15);
+    assert.equal(result.lines.filter((line) => line.kind === "discount").length, 1);
+    assert.equal(billLinesTotal(result.lines), 15);
+  });
+
+  it("routes PDFs by content type or extension and images away from the PDF reader", () => {
+    assert.equal(isBillPdf(new File([], "bill.PDF", { type: "application/octet-stream" })), true);
+    assert.equal(isBillPdf(new File([], "bill.pdf", { type: "" })), true);
+    assert.equal(isBillPdf(new File([], "bill.jpg", { type: "image/jpeg" })), false);
+  });
+
+  it("decodes a saved document from its bytes when the response has no useful type", async () => {
+    const originalFetch = globalThis.fetch;
+    const pdfBytes = new TextEncoder().encode("%PDF-1.7\n% fixture");
+    globalThis.fetch = (async () => new Response(pdfBytes, {
+      status: 200,
+      headers: { "content-type": "application/octet-stream" },
+    })) as typeof fetch;
+    try {
+      const file = await fetchBillFile("/api/houses/x/bills/y/document", "bill");
+      assert.equal(file?.type, "application/pdf");
+      assert.match(file?.name ?? "", /\.pdf$/);
+      assert.equal(documentMime(pdfBytes.buffer as ArrayBuffer), "application/pdf");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
 
@@ -6176,6 +6233,12 @@ describe("insights, household split and admin console", () => {
     assert.equal(invalidPhoto.status, 400);
     assert.deepEqual(files(), before, "an image without a valid signature must be removed");
 
+    const badBreakdownForm = form(pdf, "Invalid breakdown");
+    badBreakdownForm.set("breakdown", JSON.stringify([{ description: "", kind: "charge", amount: 1 }]));
+    const badBreakdown = await request(`/api/houses/${billHouse}/bills`, { method: "POST", body: badBreakdownForm });
+    assert.equal(badBreakdown.status, 400, "malformed multipart breakdown JSON is rejected, not filtered");
+    assert.deepEqual(files(), before, "a rejected breakdown does not leave its upload behind");
+
     const beforeFailedInsert = files();
     await run(`CREATE TRIGGER reject_bill_insert BEFORE INSERT ON bills
       WHEN NEW.name = 'Rejected insert cleanup fixture'
@@ -6325,11 +6388,42 @@ describe("insights, household split and admin console", () => {
     assert.equal(reRead.data.taxTotal, 2.5);
     assert.equal(reRead.data.ocrText, "updated bill text");
     assert.deepEqual(reRead.data.breakdown.map((line: any) => line.description), ["Energy", "VAT"]);
+    const stringMoneyPatch = await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { subtotal: "7.50", taxTotal: "2.50" },
+    });
+    assert.equal(stringMoneyPatch.status, 200, "both multipart strings and JSON numbers are accepted");
+    assert.equal(stringMoneyPatch.data.subtotal, 7.5);
+    assert.equal(stringMoneyPatch.data.taxTotal, 2.5);
     const invalidBreakdown = await request(`/api/bills/${accepted.data.id}`, {
       method: "PATCH",
       body: { breakdown: [{ description: "", kind: "charge", amount: 1 }] },
     });
     assert.equal(invalidBreakdown.status, 400);
+    assert.equal((await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { breakdown: "not-json" },
+    })).status, 400, "a non-array breakdown string is rejected");
+    assert.equal((await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { breakdown: [{ description: "Line", kind: "refund", amount: 1 }] },
+    })).status, 400, "an unknown breakdown kind is rejected");
+    assert.equal((await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: {
+        breakdown: Array.from({ length: 101 }, (_, index) => ({
+          description: `Line ${index}`, kind: "charge", amount: 1,
+        })),
+      },
+    })).status, 400, "more than 100 lines is rejected");
+    assert.equal((await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { source: "other" },
+    })).status, 400, "source is constrained to manual or scan");
+    assert.equal((await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { ocrText: "x".repeat(50_001) },
+    })).status, 400, "OCR text is capped");
     const addedFile = files().find((file) => !before.includes(file));
     assert.ok(addedFile);
     const billBackup = await backupForTest();
@@ -6346,6 +6440,12 @@ describe("insights, household split and admin console", () => {
     assert.ok(replacementDocument);
     assert.ok(files().includes(replacementDocument));
     assert.ok(!files().includes(addedFile), "a successful replacement removes the previous unreferenced PDF");
+    const afterReplacement = (await request(`/api/houses/${billHouse}/bills`)).data.find((bill: any) => bill.id === accepted.data.id);
+    assert.deepEqual(afterReplacement.breakdown, [], "a new document clears the old breakdown");
+    assert.equal(afterReplacement.subtotal, null);
+    assert.equal(afterReplacement.taxTotal, null);
+    assert.equal(afterReplacement.ocrText, null);
+    assert.equal(afterReplacement.source, "manual");
 
     const beforeConcurrentReplacement = files();
     const concurrentDocuments = await Promise.all([
@@ -6363,6 +6463,8 @@ describe("insights, household split and admin console", () => {
     assert.deepEqual(concurrentFiles, [finalDocument], "only the document referenced by the bill remains after concurrent replaces");
     assert.ok(!files().includes(replacementDocument), "the replaced PDF is removed after concurrent updates settle");
 
+    // Signature-only fixture: the server validates stored bytes, while the
+    // client-side PDF/image decode paths are covered by documentMime tests.
     const png = new Blob([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0])], { type: "image/png" });
     const photoBill = await request(`/api/houses/${billHouse}/bills`, { method: "POST", body: form(png, "Photo bill") });
     assert.equal(photoBill.status, 201, "a bill photo is accepted next to PDFs");
@@ -6372,6 +6474,59 @@ describe("insights, household split and admin console", () => {
     assert.equal(photoResponse.status, 200);
     assert.equal(photoResponse.headers.get("content-type"), "image/png");
     assert.equal((await request(`/api/bills/${photoBill.data.id}`, { method: "DELETE" })).status, 200);
+
+    const namedForm = (blob: Blob, filename: string, name: string) => {
+      const fields = form(blob, name);
+      fields.delete("document");
+      fields.append("document", blob, filename);
+      return fields;
+    };
+    const jpeg = new Blob([Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10])], { type: "image/jpeg" });
+    const jpegNamedPdf = await request(`/api/houses/${billHouse}/bills`, {
+      method: "POST", body: namedForm(jpeg, "bill.pdf", "JPEG named PDF"),
+    });
+    assert.equal(jpegNamedPdf.status, 201);
+    const jpegDocument = (await get<{ document: string }>("SELECT document FROM bills WHERE id = ?", [jpegNamedPdf.data.id]))?.document;
+    assert.match(jpegDocument ?? "", /\.jpg$/, "the stored extension follows the sniffed JPEG content");
+    const jpegResponse = await fetch(base + jpegNamedPdf.data.document, { headers: { cookie } });
+    assert.equal(jpegResponse.headers.get("content-type"), "image/jpeg");
+    assert.equal((await request(`/api/bills/${jpegNamedPdf.data.id}`, { method: "DELETE" })).status, 200);
+
+    const pdfNamedJpg = await request(`/api/houses/${billHouse}/bills`, {
+      method: "POST", body: namedForm(pdf, "bill.jpg", "PDF named JPG"),
+    });
+    assert.equal(pdfNamedJpg.status, 201);
+    const pdfDocument = (await get<{ document: string }>("SELECT document FROM bills WHERE id = ?", [pdfNamedJpg.data.id]))?.document;
+    assert.match(pdfDocument ?? "", /\.pdf$/, "the stored extension follows the sniffed PDF content");
+    assert.equal((await request(`/api/bills/${pdfNamedJpg.data.id}`, { method: "DELETE" })).status, 200);
+
+    const scanOnly = await request(`/api/houses/${billHouse}/bills`, {
+      method: "POST",
+      body: {
+        name: "Scan-only totals", billType: "water", amount: 10, category: "personal",
+        subtotal: 9, taxTotal: 1, ocrText: "recognised bill text", source: "scan",
+      },
+    });
+    assert.equal(scanOnly.status, 201);
+    assert.deepEqual(scanOnly.data.breakdown, []);
+    assert.equal(scanOnly.data.subtotal, 9);
+    assert.equal(scanOnly.data.taxTotal, 1);
+    assert.equal(scanOnly.data.ocrText, "recognised bill text");
+    assert.equal(scanOnly.data.source, "scan", "a total-only scan keeps its provenance");
+    await run("UPDATE bills SET breakdown = ? WHERE id = ?", ["not json", scanOnly.data.id]);
+    const tolerantBill = (await request(`/api/houses/${billHouse}/bills`)).data.find((bill: any) => bill.id === scanOnly.data.id);
+    assert.deepEqual(tolerantBill.breakdown, [], "the serializer tolerates legacy/corrupt JSON");
+    const manualWithBreakdown = await request(`/api/houses/${billHouse}/bills`, {
+      method: "POST",
+      body: {
+        name: "Manual breakdown", billType: "water", amount: 5, category: "personal",
+        breakdown: [{ description: "Charge", kind: "charge", amount: 5 }],
+      },
+    });
+    assert.equal(manualWithBreakdown.status, 201);
+    assert.equal(manualWithBreakdown.data.source, "manual", "an unspecified source stays manual");
+    assert.equal((await request(`/api/bills/${manualWithBreakdown.data.id}`, { method: "DELETE" })).status, 200);
+    assert.equal((await request(`/api/bills/${scanOnly.data.id}`, { method: "DELETE" })).status, 200);
 
     await run("UPDATE house_members SET role = 'viewer' WHERE house_id = ? AND user_id = ?", [billHouse, secondUserId]);
     const viewerPdf = await fetch(base + accepted.data.document, { headers: { cookie: secondUserCookie } });

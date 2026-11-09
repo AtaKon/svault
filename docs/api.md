@@ -887,7 +887,7 @@ The Bills page reads the PDF text layer or runs on-device OCR, then sends what i
 | `taxTotal` | number \| null | Sum of the tax lines. |
 | `breakdown` | array \| JSON string | One entry per printed line (up to 100). |
 | `ocrText` | string \| null | Raw text recognised from the document (up to 50,000 chars). |
-| `source` | `manual` \| `scan` | How the bill was entered. Defaults to `scan` when a breakdown is supplied. |
+| `source` | `manual` \| `scan` | How the bill was entered. Defaults to `manual`; the Bills page sends `scan` whenever it filled fields from a document. |
 
 Each `breakdown` entry has `description`, `kind` (`charge`, `tax`, `discount` or `credit`), `quantity`,
 `unit`, `unitPrice`, `amount` and `taxRate`; nullable fields may be omitted. Discounts and credits are

@@ -127,8 +127,14 @@ function compactThousands(line: string): string {
   );
 }
 
-/** Parse both 1.234,56 and 1,234.56, including 4-decimal unit prices. */
-export function parseBillNumber(raw: string): number | null {
+/**
+ * Parse both 1.234,56 and 1,234.56, including 4-decimal unit prices.
+ *
+ * A single separator followed by exactly three digits is ambiguous: `1,234`
+ * may be 1234 (money) or 1.234 (a per-unit price). Callers that know a value is
+ * a unit price pass `{ thousands: false }`; totals keep the money default.
+ */
+export function parseBillNumber(raw: string, options: { thousands?: boolean } = {}): number | null {
   let text = raw.trim().replace(/[^\d.,+-]/g, "");
   if (!/\d/.test(text)) return null;
   let sign = 1;
@@ -150,13 +156,18 @@ export function parseBillNumber(raw: string): number | null {
     const decimals = text.length - lastComma - 1;
     const integer = text.slice(0, lastComma);
     const leadingZero = /^0+$/.test(integer);
-    if (decimals === 3 && integer.length > 0 && integer.length <= 3 && !leadingZero) text = text.replace(",", "");
-    else text = text.replace(",", ".");
+    if (decimals === 3 && integer.length > 0 && integer.length <= 3 && !leadingZero && options.thousands !== false) {
+      text = text.replace(",", "");
+    } else {
+      text = text.replace(",", ".");
+    }
   } else if (lastDot >= 0) {
     const decimals = text.length - lastDot - 1;
     const integer = text.slice(0, lastDot);
     const leadingZero = /^0+$/.test(integer);
-    if (decimals === 3 && integer.length > 0 && integer.length <= 3 && !leadingZero) text = text.replace(".", "");
+    if (decimals === 3 && integer.length > 0 && integer.length <= 3 && !leadingZero && options.thousands !== false) {
+      text = text.replace(".", "");
+    }
   }
 
   const value = Number(text);
@@ -306,40 +317,56 @@ function taxAmount(values: number[], rate: number | null): { amount: number | nu
 
 function chargeLine(line: string): BillBreakdownLine | null {
   const folded = fold(line);
-  const numbers = numbersIn(line).filter((token) => !token.percent);
-  if (!numbers.length) return null;
+  const allTokens = numbersIn(line);
+  const tokens = allTokens.filter((token) => !token.percent);
+  if (!tokens.length) return null;
 
   const quantityMatch = folded.match(CONSUMPTION);
   const explicitUnitPrice = folded.match(EXPLICIT_UNIT_PRICE);
-  const quantity = quantityMatch ? parseBillNumber(quantityMatch[1]) : null;
+  const quantity = quantityMatch ? parseBillNumber(quantityMatch[1], { thousands: false }) : null;
   const unit = quantityMatch ? unitLabel(quantityMatch[2]) : null;
-  let unitPrice = explicitUnitPrice ? parseBillNumber(explicitUnitPrice[1]) : null;
+  let unitPrice = explicitUnitPrice ? parseBillNumber(explicitUnitPrice[1], { thousands: false }) : null;
 
-  const values = numbers.map((token) => token.value);
+  // Unit prices may legitimately have three decimals ("1,234"), unlike the
+  // printed money totals, so they are parsed with the decimal interpretation.
+  const asUnitNumber = (token: NumberToken) => parseBillNumber(token.raw, { thousands: false });
+  const candidates = [...tokens];
   if (quantity != null) {
-    const quantityIndex = values.findIndex((value) => Math.abs(value - quantity) < 1e-9);
-    if (quantityIndex >= 0 && values.length > 1) values.splice(quantityIndex, 1);
+    const quantityIndex = candidates.findIndex((token) => Math.abs((asUnitNumber(token) ?? NaN) - quantity) < 1e-9);
+    if (quantityIndex >= 0 && candidates.length > 1) candidates.splice(quantityIndex, 1);
   }
   if (unitPrice != null) {
-    const priceIndex = values.findIndex((value) => Math.abs(value - unitPrice!) < 1e-9);
-    if (priceIndex >= 0) values.splice(priceIndex, 1);
+    const priceIndex = candidates.findIndex((token) => Math.abs((asUnitNumber(token) ?? NaN) - unitPrice!) < 1e-9);
+    if (priceIndex >= 0) candidates.splice(priceIndex, 1);
   }
-  if (!values.length && !(quantity != null && unitPrice != null)) return null;
+  if (!candidates.length && !(quantity != null && unitPrice != null)) return null;
 
   let amount: number | null = null;
   if (quantity != null && unitPrice == null) {
-    if (values.length >= 2) {
-      const pair = values.slice(-2);
-      unitPrice = pair[0];
-      amount = pair[1];
-    } else if (values.length === 1) {
-      amount = values[0];
+    if (candidates.length >= 2) {
+      const previous = candidates[candidates.length - 2];
+      const last = candidates[candidates.length - 1];
+      const previousPrice = asUnitNumber(previous);
+      const lastPrice = asUnitNumber(last);
+      const tolerance = (value: number) => Math.max(0.05, Math.abs(value) * 0.01);
+      if (previousPrice != null && Math.abs(quantity * previousPrice - last.value) <= tolerance(last.value)) {
+        unitPrice = previousPrice;
+        amount = last.value;
+      } else if (lastPrice != null && Math.abs(quantity * lastPrice - previous.value) <= tolerance(previous.value)) {
+        unitPrice = lastPrice;
+        amount = previous.value;
+      } else {
+        unitPrice = previousPrice;
+        amount = last.value;
+      }
+    } else if (candidates.length === 1) {
+      amount = candidates[0].value;
       unitPrice = quantity > 0 ? amount / quantity : null;
     }
   } else if (quantity != null && unitPrice != null) {
-    amount = values.length ? values[values.length - 1] : quantity * unitPrice;
-  } else if (values.length) {
-    amount = values[values.length - 1];
+    amount = candidates.length ? candidates[candidates.length - 1].value : quantity * unitPrice;
+  } else if (candidates.length) {
+    amount = candidates[candidates.length - 1].value;
   }
   if (amount == null && unitPrice != null && quantity != null) amount = quantity * unitPrice;
   if (amount == null || !Number.isFinite(amount)) return null;
@@ -352,11 +379,11 @@ function chargeLine(line: string): BillBreakdownLine | null {
   if (!/\p{L}{2}/u.test(description) && quantity == null) return null;
 
   const kind = CREDIT_WORDS.test(folded) ? "credit" : DISCOUNT_WORDS.test(folded) ? "discount" : "charge";
-  const rate = numbersIn(line).find((token) => token.percent)?.value ?? null;
+  const rate = allTokens.find((token) => token.percent)?.value ?? null;
   const magnitude = Math.abs(amount);
   if (!(magnitude > 0) || magnitude > 1_000_000) return null;
   // Account and meter numbers are long integers without decimals or a currency.
-  const hasDecimal = numbers.some((token) => token.raw.includes(".") || token.raw.includes(","));
+  const hasDecimal = tokens.some((token) => token.raw.includes(".") || token.raw.includes(","));
   if (!hasDecimal && magnitude >= 10_000 && !/[€£$¥]/.test(line)) return null;
 
   return {

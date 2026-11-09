@@ -20,7 +20,7 @@ simple, but it also means SVault is a single-node application by design.
 - Docker Engine 24+ with the Compose plugin, or Docker Desktop on Windows/macOS.
 - About 200 MB of RAM and 500 MB of disk for the image plus data. Photo datasets grow with uploads.
 - No GPU and no external database.
-- Node.js 22+ only if you run it outside Docker.
+- Node.js 22.13+ only if you run it outside Docker.
 
 ## Quick start with Docker Compose
 
