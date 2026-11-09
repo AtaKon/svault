@@ -1306,6 +1306,10 @@ export interface UtilityBill {
   name: string;
   billType: BillType;
   contractColor: ElectricityContractColor | null;
+  consumptionKwh: number | null;
+  consumptionM3: number | null;
+  municipalCharges: number | null;
+  stateCharges: number | null;
   category: "to_split" | "personal";
   amount: number;
   currency: string;

@@ -24,6 +24,10 @@ interface BillRow {
   name: string;
   bill_type: UtilityBill["billType"];
   contract_color: UtilityBill["contractColor"];
+  consumption_kwh: number | null;
+  consumption_m3: number | null;
+  municipal_charges: number | null;
+  state_charges: number | null;
   category: UtilityBill["category"];
   ledger_confirmed: number | boolean;
   amount: number;
@@ -138,6 +142,20 @@ const optionalMoney = z.preprocess(
     .optional(),
 );
 
+const optionalConsumption = z.preprocess((value) => {
+  if (value === undefined) return undefined;
+  if (value == null || value === "") return null;
+  if (typeof value === "number") return value;
+  if (typeof value === "string") {
+    const text = value.trim();
+    // Commas are decimal separators; dots are grouping separators only when
+    // followed by a comma. Plain 1.234 or 1,234 means 1.234; 1.234,5 means 1234.5.
+    if (/^\d+(?:[.,]\d{1,3})?$/.test(text)) return Number(text.replace(",", "."));
+    if (/^\d{1,3}(?:\.\d{3})+,\d{1,3}$/.test(text)) return Number(text.replace(/\./g, "").replace(",", "."));
+  }
+  return Number.NaN;
+}, z.number().finite().positive().max(1_000_000_000).refine(value => Math.abs(value * 1000 - Math.round(value * 1000)) < 1e-5).nullable().optional());
+
 const breakdownLineInput = z.object({
   description: z.string().trim().min(1).max(160),
   kind: z.enum(["charge", "tax", "discount", "credit"]).default("charge"),
@@ -211,6 +229,10 @@ const input = z.object({
   name: z.string().trim().min(1).max(120).refine((value) => !/[\u0000-\u001f\u007f]/.test(value), "Remove control characters from the bill name"),
   billType: z.enum(BILL_TYPE_VALUES).default("other"),
   contractColor: z.preprocess((value) => value === "" ? null : value, z.enum(ELECTRICITY_CONTRACT_COLORS).nullable().optional()),
+  consumptionKwh: optionalConsumption,
+  consumptionM3: optionalConsumption,
+  municipalCharges: optionalMoney,
+  stateCharges: optionalMoney,
   category: z.enum(["to_split", "personal"]).default("personal"),
   amount: z.coerce.number().finite().positive().max(1_000_000_000)
     .refine(twoDecimals, "Enter an amount with up to two decimal places")
@@ -233,6 +255,10 @@ const patchInput = z.object({
   name: input.shape.name.optional(),
   billType: z.enum(BILL_TYPE_VALUES).optional(),
   contractColor: input.shape.contractColor,
+  consumptionKwh: optionalConsumption,
+  consumptionM3: optionalConsumption,
+  municipalCharges: optionalMoney,
+  stateCharges: optionalMoney,
   category: z.enum(["to_split", "personal"]).optional(),
   amount: input.shape.amount.optional(),
   dueDate: input.shape.dueDate.optional(),
@@ -258,6 +284,10 @@ function serialize(row: BillRow): UtilityBill {
     name: row.name,
     billType: (BILL_TYPE_VALUES as readonly string[]).includes(row.bill_type) ? row.bill_type : "other",
     contractColor: row.bill_type === "electricity" && (ELECTRICITY_CONTRACT_COLORS as readonly string[]).includes(row.contract_color ?? "") ? row.contract_color : null,
+    consumptionKwh: row.consumption_kwh == null ? null : Number(row.consumption_kwh),
+    consumptionM3: row.consumption_m3 == null ? null : Number(row.consumption_m3),
+    municipalCharges: row.municipal_charges == null ? null : Number(row.municipal_charges),
+    stateCharges: row.state_charges == null ? null : Number(row.state_charges),
     category: row.category,
     amount: Number(row.amount),
     currency: row.currency,
@@ -339,6 +369,8 @@ billRoutes.post("/:houseId/bills", requireHouseBillMember, billUpload.single("do
   try {
     const body = parseBody(input, req.body);
     if (body.contractColor && body.billType !== "electricity") throw new ApiError(400, "Contract color is only available for electricity bills");
+    if (body.billType !== "electricity" && body.billType !== "natural_gas" && [body.consumptionKwh, body.consumptionM3, body.municipalCharges, body.stateCharges].some(value => value != null)) throw new ApiError(400, "Energy metrics are only available for electricity and gas bills");
+    if (body.billType !== "natural_gas" && body.consumptionM3 != null) throw new ApiError(400, "Cubic meter consumption is only available for gas bills");
     const house = await get<any>("SELECT currency FROM houses WHERE id = ?", [houseId]);
     const currency = String(house?.currency ?? "EUR").toUpperCase();
     if (body.currency && body.currency.toUpperCase() !== currency) {
@@ -358,6 +390,10 @@ billRoutes.post("/:houseId/bills", requireHouseBillMember, billUpload.single("do
       name: body.name,
       bill_type: body.billType,
       contract_color: body.contractColor ?? null,
+      consumption_kwh: body.consumptionKwh ?? null,
+      consumption_m3: body.consumptionM3 ?? null,
+      municipal_charges: body.municipalCharges ?? null,
+      state_charges: body.stateCharges ?? null,
       category: body.category,
       ledger_confirmed: body.category === "to_split" && body.ledgerConfirmed === true ? 1 : 0,
       amount: body.amount,
@@ -382,9 +418,9 @@ billRoutes.post("/:houseId/bills", requireHouseBillMember, billUpload.single("do
   }
 
   try {
-    await run(`INSERT INTO bills (id, house_id, name, bill_type, contract_color, category, ledger_confirmed, amount, currency, due_date, paid_by, split_with, document, notes, subtotal, tax_total, breakdown, ocr_text, source, created_by, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
-      created.id, created.house_id, created.name, created.bill_type, created.contract_color, created.category, created.ledger_confirmed, created.amount, created.currency,
+    await run(`INSERT INTO bills (id, house_id, name, bill_type, contract_color, consumption_kwh, consumption_m3, municipal_charges, state_charges, category, ledger_confirmed, amount, currency, due_date, paid_by, split_with, document, notes, subtotal, tax_total, breakdown, ocr_text, source, created_by, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+      created.id, created.house_id, created.name, created.bill_type, created.contract_color, created.consumption_kwh, created.consumption_m3, created.municipal_charges, created.state_charges, created.category, created.ledger_confirmed, created.amount, created.currency,
       created.due_date, created.paid_by, created.split_with, created.document, created.notes, created.subtotal, created.tax_total,
       created.breakdown, created.ocr_text, created.source, req.user!.id, created.created_at,
     ]);
@@ -404,6 +440,8 @@ singleBillRoutes.patch("/:billId", handler(async (req, res) => {
   const body = parseBody(patchInput, req.body);
   const nextBillType = body.billType ?? current.bill_type;
   if (body.contractColor && nextBillType !== "electricity") throw new ApiError(400, "Contract color is only available for electricity bills");
+  if (nextBillType !== "electricity" && nextBillType !== "natural_gas" && [body.consumptionKwh, body.consumptionM3, body.municipalCharges, body.stateCharges].some(value => value != null)) throw new ApiError(400, "Energy metrics are only available for electricity and gas bills");
+  if (nextBillType !== "natural_gas" && body.consumptionM3 != null) throw new ApiError(400, "Cubic meter consumption is only available for gas bills");
   const contractColor = nextBillType !== "electricity" ? null : body.contractColor === undefined ? current.contract_color : body.contractColor;
   const category = body.category ?? current.category;
   if (current.category !== "to_split" && category === "to_split" && body.ledgerConfirmed !== true) {
@@ -437,9 +475,14 @@ singleBillRoutes.patch("/:billId", handler(async (req, res) => {
   const clearScanTotals = providedBreakdown !== undefined && breakdown.length === 0;
   const nextSubtotal = body.subtotal === undefined ? (clearScanTotals ? null : current.subtotal) : body.subtotal;
   const nextTaxTotal = body.taxTotal === undefined ? (clearScanTotals ? null : current.tax_total) : body.taxTotal;
-  await run(`UPDATE bills SET name = ?, bill_type = ?, contract_color = ?, category = ?, ledger_confirmed = ?, amount = ?, due_date = ?, paid_by = ?, split_with = ?, notes = ?,
+  await run(`UPDATE bills SET name = ?, bill_type = ?, contract_color = ?, consumption_kwh = ?, consumption_m3 = ?, municipal_charges = ?, state_charges = ?, category = ?, ledger_confirmed = ?, amount = ?, due_date = ?, paid_by = ?, split_with = ?, notes = ?,
     subtotal = ?, tax_total = ?, breakdown = ?, ocr_text = ?, source = ? WHERE id = ?`, [
-    body.name ?? current.name, nextBillType ?? "other", contractColor ?? null, category, ledgerConfirmed ? 1 : 0, body.amount ?? current.amount,
+    body.name ?? current.name, nextBillType ?? "other", contractColor ?? null,
+    body.consumptionKwh === undefined ? current.consumption_kwh : body.consumptionKwh,
+    body.consumptionM3 === undefined ? current.consumption_m3 : body.consumptionM3,
+    body.municipalCharges === undefined ? current.municipal_charges : body.municipalCharges,
+    body.stateCharges === undefined ? current.state_charges : body.stateCharges,
+    category, ledgerConfirmed ? 1 : 0, body.amount ?? current.amount,
     body.dueDate === undefined ? current.due_date : body.dueDate || null, paidBy ?? null, JSON.stringify(people),
     body.notes === undefined ? current.notes : body.notes || null,
     nextSubtotal,
