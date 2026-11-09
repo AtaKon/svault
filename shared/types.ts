@@ -1283,11 +1283,14 @@ export interface BillBreakdownLine {
   taxRate: number | null;
 }
 
+export const ELECTRICITY_CONTRACT_COLORS = ["blue", "green", "yellow", "orange"] as const;
+export type ElectricityContractColor = typeof ELECTRICITY_CONTRACT_COLORS[number];
+
 /** What the bill parser can read from a bill document before the user reviews it. */
 export interface BillParseResult {
   name: string | null;
   billType: BillType | null;
-  contractColor: "blue" | "green" | "yellow" | "orange" | null;
+  contractColor: ElectricityContractColor | null;
   currency: string | null;
   dueDate: string | null;
   total: number | null;
@@ -1302,6 +1305,7 @@ export interface UtilityBill {
   id: string;
   name: string;
   billType: BillType;
+  contractColor: ElectricityContractColor | null;
   category: "to_split" | "personal";
   amount: number;
   currency: string;

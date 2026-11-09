@@ -10,6 +10,7 @@ import { ApiError, handler, parseBody, requireHouse } from "../http.js";
 import { MAX_UPLOAD_BYTES, UPLOAD_DIR } from "../config.js";
 import { uploadPath, discardUploads, sniffImage } from "../upload.js";
 import { BILL_TYPE_VALUES } from "../../shared/bill-types.js";
+import { ELECTRICITY_CONTRACT_COLORS } from "../../shared/types.js";
 import type { BillBreakdownLine, UtilityBill } from "../../shared/types.js";
 
 export const billRoutes = Router();
@@ -22,6 +23,7 @@ interface BillRow {
   house_id: string;
   name: string;
   bill_type: UtilityBill["billType"];
+  contract_color: UtilityBill["contractColor"];
   category: UtilityBill["category"];
   ledger_confirmed: number | boolean;
   amount: number;
@@ -208,6 +210,7 @@ function normalizeStoredBreakdown(value: unknown): BillBreakdownLine[] {
 const input = z.object({
   name: z.string().trim().min(1).max(120).refine((value) => !/[\u0000-\u001f\u007f]/.test(value), "Remove control characters from the bill name"),
   billType: z.enum(BILL_TYPE_VALUES).default("other"),
+  contractColor: z.preprocess((value) => value === "" ? null : value, z.enum(ELECTRICITY_CONTRACT_COLORS).nullable().optional()),
   category: z.enum(["to_split", "personal"]).default("personal"),
   amount: z.coerce.number().finite().positive().max(1_000_000_000)
     .refine(twoDecimals, "Enter an amount with up to two decimal places")
@@ -229,6 +232,7 @@ const input = z.object({
 const patchInput = z.object({
   name: input.shape.name.optional(),
   billType: z.enum(BILL_TYPE_VALUES).optional(),
+  contractColor: input.shape.contractColor,
   category: z.enum(["to_split", "personal"]).optional(),
   amount: input.shape.amount.optional(),
   dueDate: input.shape.dueDate.optional(),
@@ -253,6 +257,7 @@ function serialize(row: BillRow): UtilityBill {
     id: row.id,
     name: row.name,
     billType: (BILL_TYPE_VALUES as readonly string[]).includes(row.bill_type) ? row.bill_type : "other",
+    contractColor: row.bill_type === "electricity" && (ELECTRICITY_CONTRACT_COLORS as readonly string[]).includes(row.contract_color ?? "") ? row.contract_color : null,
     category: row.category,
     amount: Number(row.amount),
     currency: row.currency,
@@ -333,6 +338,7 @@ billRoutes.post("/:houseId/bills", requireHouseBillMember, billUpload.single("do
   let created: BillRow;
   try {
     const body = parseBody(input, req.body);
+    if (body.contractColor && body.billType !== "electricity") throw new ApiError(400, "Contract color is only available for electricity bills");
     const house = await get<any>("SELECT currency FROM houses WHERE id = ?", [houseId]);
     const currency = String(house?.currency ?? "EUR").toUpperCase();
     if (body.currency && body.currency.toUpperCase() !== currency) {
@@ -351,6 +357,7 @@ billRoutes.post("/:houseId/bills", requireHouseBillMember, billUpload.single("do
       house_id: houseId,
       name: body.name,
       bill_type: body.billType,
+      contract_color: body.contractColor ?? null,
       category: body.category,
       ledger_confirmed: body.category === "to_split" && body.ledgerConfirmed === true ? 1 : 0,
       amount: body.amount,
@@ -375,9 +382,9 @@ billRoutes.post("/:houseId/bills", requireHouseBillMember, billUpload.single("do
   }
 
   try {
-    await run(`INSERT INTO bills (id, house_id, name, bill_type, category, ledger_confirmed, amount, currency, due_date, paid_by, split_with, document, notes, subtotal, tax_total, breakdown, ocr_text, source, created_by, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
-      created.id, created.house_id, created.name, created.bill_type, created.category, created.ledger_confirmed, created.amount, created.currency,
+    await run(`INSERT INTO bills (id, house_id, name, bill_type, contract_color, category, ledger_confirmed, amount, currency, due_date, paid_by, split_with, document, notes, subtotal, tax_total, breakdown, ocr_text, source, created_by, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+      created.id, created.house_id, created.name, created.bill_type, created.contract_color, created.category, created.ledger_confirmed, created.amount, created.currency,
       created.due_date, created.paid_by, created.split_with, created.document, created.notes, created.subtotal, created.tax_total,
       created.breakdown, created.ocr_text, created.source, req.user!.id, created.created_at,
     ]);
@@ -395,6 +402,9 @@ billRoutes.post("/:houseId/bills", requireHouseBillMember, billUpload.single("do
 singleBillRoutes.patch("/:billId", handler(async (req, res) => {
   const { houseId, bill: current } = await billAccess(req, "member");
   const body = parseBody(patchInput, req.body);
+  const nextBillType = body.billType ?? current.bill_type;
+  if (body.contractColor && nextBillType !== "electricity") throw new ApiError(400, "Contract color is only available for electricity bills");
+  const contractColor = nextBillType !== "electricity" ? null : body.contractColor === undefined ? current.contract_color : body.contractColor;
   const category = body.category ?? current.category;
   if (current.category !== "to_split" && category === "to_split" && body.ledgerConfirmed !== true) {
     throw new ApiError(400, "Confirm this bill is not also recorded as a purchase receipt");
@@ -427,9 +437,9 @@ singleBillRoutes.patch("/:billId", handler(async (req, res) => {
   const clearScanTotals = providedBreakdown !== undefined && breakdown.length === 0;
   const nextSubtotal = body.subtotal === undefined ? (clearScanTotals ? null : current.subtotal) : body.subtotal;
   const nextTaxTotal = body.taxTotal === undefined ? (clearScanTotals ? null : current.tax_total) : body.taxTotal;
-  await run(`UPDATE bills SET name = ?, bill_type = ?, category = ?, ledger_confirmed = ?, amount = ?, due_date = ?, paid_by = ?, split_with = ?, notes = ?,
+  await run(`UPDATE bills SET name = ?, bill_type = ?, contract_color = ?, category = ?, ledger_confirmed = ?, amount = ?, due_date = ?, paid_by = ?, split_with = ?, notes = ?,
     subtotal = ?, tax_total = ?, breakdown = ?, ocr_text = ?, source = ? WHERE id = ?`, [
-    body.name ?? current.name, body.billType ?? current.bill_type ?? "other", category, ledgerConfirmed ? 1 : 0, body.amount ?? current.amount,
+    body.name ?? current.name, nextBillType ?? "other", contractColor ?? null, category, ledgerConfirmed ? 1 : 0, body.amount ?? current.amount,
     body.dueDate === undefined ? current.due_date : body.dueDate || null, paidBy ?? null, JSON.stringify(people),
     body.notes === undefined ? current.notes : body.notes || null,
     nextSubtotal,

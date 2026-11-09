@@ -115,6 +115,7 @@ export class SqliteDriver implements DatabaseDriver {
         throw error;
       }
     }
+    ensureColumn("bills", "contract_color", "TEXT");
     ensureColumn("bills", "subtotal", "REAL");
     ensureColumn("bills", "tax_total", "REAL");
     ensureColumn("bills", "breakdown", "TEXT NOT NULL DEFAULT '[]'");
@@ -701,6 +702,7 @@ CREATE TABLE IF NOT EXISTS bills (
   house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   bill_type TEXT NOT NULL DEFAULT 'other' CHECK (bill_type IN ('electricity', 'water', 'natural_gas', 'heating_oil', 'internet_telecom', 'rent', 'building_fees', 'municipal_fees', 'insurance', 'other')),
+  contract_color TEXT,
   category TEXT NOT NULL DEFAULT 'personal',
   ledger_confirmed INTEGER NOT NULL DEFAULT 0,
   amount REAL NOT NULL,

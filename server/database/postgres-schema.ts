@@ -282,6 +282,7 @@ CREATE TABLE IF NOT EXISTS bills (
   house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   bill_type TEXT NOT NULL DEFAULT 'other' CHECK (bill_type IN ('electricity', 'water', 'natural_gas', 'heating_oil', 'internet_telecom', 'rent', 'building_fees', 'municipal_fees', 'insurance', 'other')),
+  contract_color TEXT,
   category TEXT NOT NULL DEFAULT 'personal',
   ledger_confirmed INTEGER NOT NULL DEFAULT 0,
   amount DOUBLE PRECISION NOT NULL,
@@ -795,6 +796,7 @@ export const POSTGRES_MIGRATIONS: string[] = [
     END IF;
   END $$`,
   // Bills gained an optional OCR breakdown and printed totals.
+  "ALTER TABLE bills ADD COLUMN IF NOT EXISTS contract_color TEXT",
   "ALTER TABLE bills ADD COLUMN IF NOT EXISTS subtotal DOUBLE PRECISION",
   "ALTER TABLE bills ADD COLUMN IF NOT EXISTS tax_total DOUBLE PRECISION",
   "ALTER TABLE bills ADD COLUMN IF NOT EXISTS breakdown TEXT NOT NULL DEFAULT '[]'",

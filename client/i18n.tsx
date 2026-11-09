@@ -102,6 +102,8 @@ const EL: Record<string, string> = {
   "Credit": "Πίστωση",
   "The recognised lines add up to {lines}, but the bill total is {total}. Check them against the bill.": "Οι γραμμές που αναγνωρίστηκαν αθροίζουν {lines}, αλλά το σύνολο του λογαριασμού είναι {total}. Έλεγξέ τις με τον λογαριασμό.",
   "No amount or breakdown was recognised. Check the file or enter the bill manually.": "Δεν αναγνωρίστηκε ποσό ή ανάλυση. Έλεγξε το αρχείο ή καταχώρισε τον λογαριασμό χειροκίνητα.",
+  "Not specified": "Δεν έχει οριστεί",
+  "Contract color is only available for electricity bills": "Το χρώμα τιμολογίου ισχύει μόνο για λογαριασμούς ηλεκτρικής ενέργειας",
   "Electricity contract color": "Χρώμα τιμολογίου ηλεκτρικής ενέργειας",
   "Blue": "Μπλε",
   "Green": "Πράσινο",

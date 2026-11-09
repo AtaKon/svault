@@ -8,6 +8,7 @@ import { money, qty, shortDate } from "@/format";
 import { useI18n } from "@/i18n";
 import { BILL_TYPE_LABELS, BILL_TYPE_VALUES } from "@shared/bill-types";
 import { splitAmountEvenly } from "@shared/bill-splitting";
+import { ELECTRICITY_CONTRACT_COLORS } from "@shared/types";
 import type { BillBreakdownLine, BillParseResult, UtilityBill } from "@shared/types";
 import { fetchBillFile, isSupportedBillFile } from "@shared/bill-document";
 import { scanBillFile } from "@/bill-scan";
@@ -15,6 +16,7 @@ import { scanBillFile } from "@/bill-scan";
 type Member = { userId: string; name: string; role: string };
 type Household = { currency: string; members: Member[] };
 const BILL_TYPES = BILL_TYPE_VALUES.map((value) => ({ value, label: BILL_TYPE_LABELS[value] }));
+const CONTRACT_COLOR_LABELS = { blue: "Blue", green: "Green", yellow: "Yellow", orange: "Orange" } as const;
 const DOCUMENT_ACCEPT = "application/pdf,image/jpeg,image/png,image/webp,.pdf,.jpg,.jpeg,.png,.webp";
 
 function breakdownSum(lines: BillBreakdownLine[]): number {
@@ -71,6 +73,8 @@ export function BillsPage() {
   const [amount, setAmount] = useState("");
   const [billType, setBillType] = useState<UtilityBill["billType"]>("electricity");
   const [billTypeTouched, setBillTypeTouched] = useState(false);
+  const [contractColor, setContractColor] = useState<UtilityBill["contractColor"]>(null);
+  const [contractColorTouched, setContractColorTouched] = useState(false);
   const [category, setCategory] = useState<UtilityBill["category"]>("to_split");
   const [ledgerConfirmed, setLedgerConfirmed] = useState(false);
   const [dueDate, setDueDate] = useState("");
@@ -90,7 +94,6 @@ export function BillsPage() {
     billType: UtilityBill["billType"] | null;
     amount: string | null;
     dueDate: string | null;
-    notes: string | null;
   } | null>(null);
   const [scanning, setScanning] = useState(false);
   const [scanProgress, setScanProgress] = useState(0);
@@ -149,16 +152,14 @@ export function BillsPage() {
     setAmount(nextAmount);
     setDueDate(nextDueDate);
     setBillType(nextType);
-    const colors = { blue: "Blue", green: "Green", yellow: "Yellow", orange: "Orange" } as const;
-    const scanNotes = result.contractColor ? `${t("Electricity contract color")}: ${t(colors[result.contractColor])}` : "";
-    const applyNotes = canReplace(notes, scanSnapshot?.notes);
-    if (applyNotes && scanNotes) setNotes(scanNotes);
+    const applyColor = !contractColorTouched && nextType === "electricity";
+    if (nextType !== "electricity") setContractColor(null);
+    else if (applyColor) setContractColor(result.contractColor);
     setScanSnapshot({
       name: applyName && scanName ? scanName : null,
       billType: applyType && result.billType ? result.billType : null,
       amount: applyAmount && scanAmount ? scanAmount : null,
       dueDate: applyDueDate && scanDueDate ? scanDueDate : null,
-      notes: applyNotes && scanNotes ? scanNotes : null,
     });
     setSubtotal(result.subtotal != null ? result.subtotal.toFixed(2) : "");
     setTaxTotal(result.taxTotal != null ? result.taxTotal.toFixed(2) : "");
@@ -232,6 +233,7 @@ export function BillsPage() {
       const data = new FormData();
       data.set("name", name.trim());
       data.set("billType", billType);
+      if (billType === "electricity" && contractColor) data.set("contractColor", contractColor);
       data.set("amount", String(numericAmount));
       data.set("category", category);
       data.set("ledgerConfirmed", String(ledgerConfirmed));
@@ -252,7 +254,7 @@ export function BillsPage() {
       await api<UtilityBill>(`/api/houses/${house.id}/bills`, { method: "POST", body: data });
       setName(""); setAmount(""); setDueDate(""); setNotes(""); setFile(null);
       setLedgerConfirmed(false);
-      setBillTypeTouched(false);
+      setBillTypeTouched(false); setContractColor(null); setContractColorTouched(false);
       clearBreakdown();
       toast.success(t("Bill added"));
       await load();
@@ -307,7 +309,7 @@ export function BillsPage() {
         { currency: bill.currency },
       );
       if (run !== readRun.current) return;
-      if (!scan.result.lines.length && scan.result.subtotal == null && scan.result.taxTotal == null && !(scan.result.contractColor && !bill.notes)) {
+      if (!scan.result.lines.length && scan.result.subtotal == null && scan.result.taxTotal == null && !(bill.billType === "electricity" && scan.result.contractColor && !bill.contractColor)) {
         toast.error(t("No new breakdown was recognised; the saved bill was left unchanged."));
         return;
       }
@@ -321,9 +323,8 @@ export function BillsPage() {
       const body: Record<string, unknown> = { ocrText: scan.text.slice(0, 50_000) };
       // Partial re-reads preserve stored values: only send what was found, so
       // a total-only read cannot erase an existing line breakdown.
-      if (scan.result.contractColor && !bill.notes) {
-        const colors = { blue: "Blue", green: "Green", yellow: "Yellow", orange: "Orange" } as const;
-        body.notes = `${t("Electricity contract color")}: ${t(colors[scan.result.contractColor])}`;
+      if (bill.billType === "electricity" && scan.result.contractColor && !bill.contractColor) {
+        body.contractColor = scan.result.contractColor;
       }
       if (scan.result.lines.length) body.breakdown = scan.result.lines.slice(0, 100);
       if (scan.result.subtotal != null) body.subtotal = scan.result.subtotal;
@@ -364,11 +365,12 @@ export function BillsPage() {
         <div className="flex items-center gap-2"><Icon name="plus" size={17} className="text-brand"/><h2 className="font-display text-lg">{t("Add a bill")}</h2></div>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
           <Field label={t("Bill name")} required><Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("Electricity, internet, rent…")} required /></Field>
-          <Field label={t("Bill type")}><Select value={billType} onChange={(e) => { setBillType(e.target.value as UtilityBill["billType"]); setBillTypeTouched(true); }}>{BILL_TYPES.map((type) => <option key={type.value} value={type.value}>{t(type.label)}</option>)}</Select></Field>
+          <Field label={t("Bill type")}><Select value={billType} onChange={(e) => { setBillType(e.target.value as UtilityBill["billType"]); setBillTypeTouched(true); if (e.target.value !== "electricity") { setContractColor(null); setContractColorTouched(false); } }}>{BILL_TYPES.map((type) => <option key={type.value} value={type.value}>{t(type.label)}</option>)}</Select></Field>
           <Field label={t("Amount")} required><Input type="number" min="0.01" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" required /></Field>
           <Field label={t("Category")}><Select value={category} onChange={(e) => { setCategory(e.target.value as UtilityBill["category"]); setLedgerConfirmed(false); }}><option value="to_split">{t("To be split")}</option><option value="personal">{t("Personal")}</option></Select></Field>
           <Field label={t("Due date")}><Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} /></Field>
         </div>
+        {billType === "electricity" && <Field label={t("Electricity contract color")} className="sm:max-w-52"><Select value={contractColor ?? ""} onChange={(e) => { setContractColor((e.target.value || null) as UtilityBill["contractColor"]); setContractColorTouched(true); }}><option value="">{t("Not specified")}</option>{ELECTRICITY_CONTRACT_COLORS.map((color) => <option key={color} value={color}>{t(CONTRACT_COLOR_LABELS[color])}</option>)}</Select></Field>}
         {category === "to_split" && <div className="grid gap-4 sm:grid-cols-2">
           <Field label={t("Paid by")}><Select value={paidBy} onChange={(e) => setPaidBy(e.target.value)}>{household?.members.map((member) => <option key={member.userId} value={member.userId}>{member.name}</option>)}</Select></Field>
           <Field label={t("Split between")} hint={t("Equal shares")}><div className="flex flex-wrap gap-2">{household?.members.map((member) => <label key={member.userId} className="flex cursor-pointer items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2 text-sm"><input type="checkbox" checked={splitWith.includes(member.userId)} onChange={(event) => { if (!event.target.checked && splitWith.length === 1) { toast.error(t("Select at least one person to split the bill.")); return; } setSplitWith((current) => event.target.checked ? [...current, member.userId] : current.filter((id) => id !== member.userId)); }} />{member.name}</label>)}</div></Field>
@@ -427,6 +429,7 @@ export function BillsPage() {
             <BreakdownTable lines={bill.breakdown} currency={bill.currency} />
           </details>}
           <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-line pt-3">
+            {bill.billType === "electricity" && <Field label={t("Electricity contract color")} className="w-44"><Select value={bill.contractColor ?? ""} onChange={(e) => void patchBill(bill, { contractColor: e.target.value || null })}><option value="">{t("Not specified")}</option>{ELECTRICITY_CONTRACT_COLORS.map((color) => <option key={color} value={color}>{t(CONTRACT_COLOR_LABELS[color])}</option>)}</Select></Field>}
             <Field label={t("Category")} className="w-44"><Select value={bill.category} onChange={(e) => changeCategory(bill, e.target.value as UtilityBill["category"])}><option value="to_split">{t("To be split")}</option><option value="personal">{t("Personal")}</option></Select></Field>
             {bill.category === "to_split" && <><Field label={t("Paid by")} className="w-44"><Select value={bill.paidBy ?? ""} onChange={(e) => void patchBill(bill, { paidBy: e.target.value })}>{household?.members.map((member) => <option key={member.userId} value={member.userId}>{member.name}</option>)}</Select></Field><Field label={t("Split between")} className="min-w-[220px] flex-1"><div className="flex flex-wrap gap-2">{household?.members.map((member) => <label key={member.userId} className="flex cursor-pointer items-center gap-1.5 text-xs"><input type="checkbox" checked={bill.splitWith.includes(member.userId)} onChange={(event) => { if (!event.target.checked && bill.splitWith.length === 1) { toast.error(t("Select at least one person to split the bill.")); return; } const next = event.target.checked ? [...bill.splitWith, member.userId] : bill.splitWith.filter((id) => id !== member.userId); void patchBill(bill, { splitWith: next }); }} />{member.name}</label>)}</div></Field></>}
             {bill.document ? <a className="inline-flex items-center gap-2 text-sm font-medium text-brand hover:underline" href={bill.document} target="_blank" rel="noreferrer"><Icon name="receipt" size={16}/>{t("View bill document")}</a> : <label className="inline-flex cursor-pointer items-center gap-2 text-sm font-medium text-brand hover:underline"><Icon name="upload" size={16}/>{t("Attach document")}<input type="file" accept={DOCUMENT_ACCEPT} className="sr-only" onChange={(event) => { const nextFile = event.target.files?.[0]; if (nextFile) void uploadDocument(bill, nextFile); event.target.value = ""; }} /></label>}
