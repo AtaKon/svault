@@ -286,7 +286,11 @@ function detectDueDate(lines: string[]): string | null {
         if (dueDate) return dueDate;
       }
     } else {
-      const sameLine = parseDateText(lines[index]);
+      const { folded: mapped, map } = foldWithIndex(lines[index]);
+      const dueMatch = mapped.match(DATE_LABEL);
+      const sameLine = dueMatch?.index != null
+        ? parseDateText(lines[index].slice(map[dueMatch.index + dueMatch[0].length] ?? lines[index].length))
+        : parseDateText(lines[index]);
       if (sameLine) return sameLine;
     }
     const next = lines[index + 1];
@@ -581,17 +585,21 @@ export function parseBillText(rawText: string, options: { currency?: string | nu
 
   // Remove duplicate charges that OCR may repeat across page breaks.
   const seen = new Set<string>();
-  const linesOut = breakdown.filter((line) => {
-    // Tax rows are sometimes repeated in a summary block with a different
-    // label; dedupe them by rate and amount rather than description.
-    // A summary VAT row often repeats the amount without the rate.
+  const deduped = breakdown.filter((line) => {
     const key = line.kind === "tax"
-      ? `tax|${line.amount ?? ""}`
+      ? `tax|${line.taxRate ?? ""}|${line.amount ?? ""}`
       : `${line.kind}|${fold(line.description)}|${line.amount ?? ""}|${line.quantity ?? ""}|${line.unit ?? ""}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
+  // A summary row may repeat a rated tax line without printing the rate;
+  // drop only that duplicate, not two genuinely distinct equal taxes.
+  const ratedTaxAmounts = new Set(
+    deduped.filter((line) => line.kind === "tax" && line.taxRate != null).map((line) => line.amount),
+  );
+  const linesOut = deduped.filter((line) =>
+    !(line.kind === "tax" && line.taxRate == null && ratedTaxAmounts.has(line.amount)));
 
   const charges = linesOut.filter((line) => line.kind === "charge");
   const discounts = linesOut.filter((line) => line.kind === "discount");

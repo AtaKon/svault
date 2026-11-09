@@ -305,8 +305,10 @@ export function BillsPage() {
         toast.error(t("No new breakdown was recognised; the saved bill was left unchanged."));
         return;
       }
-      if (bill.breakdown.length && scan.result.lines.length &&
-        !window.confirm(t("Replace the saved breakdown with {count} recognised lines?", { count: scan.result.lines.length }))) {
+      const hasStoredScan = bill.breakdown.length > 0 || bill.subtotal != null || bill.taxTotal != null;
+      const foundScan = scan.result.lines.length > 0 || scan.result.subtotal != null || scan.result.taxTotal != null;
+      if (hasStoredScan && foundScan &&
+        !window.confirm(t("Replace the saved breakdown with the newly recognised values?"))) {
         return;
       }
       // Provenance is derived server-side from the OCR data sent here.

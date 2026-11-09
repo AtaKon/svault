@@ -109,7 +109,7 @@ const EL: Record<string, string> = {
   "Could not read the bill document": "Δεν ήταν δυνατή η ανάγνωση του εγγράφου λογαριασμού",
   "No amount or breakdown was recognised in this document.": "Δεν αναγνωρίστηκε ποσό ή ανάλυση σε αυτό το έγγραφο.",
   "No new breakdown was recognised; the saved bill was left unchanged.": "Δεν αναγνωρίστηκε νέα ανάλυση· ο αποθηκευμένος λογαριασμός έμεινε ως έχει.",
-  "Replace the saved breakdown with {count} recognised lines?": "Αντικατάσταση της αποθηκευμένης ανάλυσης με {count} αναγνωρισμένες γραμμές;",
+  "Replace the saved breakdown with the newly recognised values?": "Αντικατάσταση της αποθηκευμένης ανάλυσης με τις νέες αναγνωρισμένες τιμές;",
   "Bill breakdown updated": "Η ανάλυση του λογαριασμού ενημερώθηκε",
   "Add a bill manually or attach a PDF or photo to start your household ledger.": "Πρόσθεσε έναν λογαριασμό ή επισύναψε PDF ή φωτογραφία για να ξεκινήσεις το κοινόχρηστο ταμείο.",
   "Read from file": "Ανάγνωση από αρχείο",
