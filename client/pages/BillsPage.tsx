@@ -90,6 +90,7 @@ export function BillsPage() {
     billType: UtilityBill["billType"] | null;
     amount: string | null;
     dueDate: string | null;
+    notes: string | null;
   } | null>(null);
   const [scanning, setScanning] = useState(false);
   const [scanProgress, setScanProgress] = useState(0);
@@ -148,11 +149,16 @@ export function BillsPage() {
     setAmount(nextAmount);
     setDueDate(nextDueDate);
     setBillType(nextType);
+    const colors = { blue: "Blue", green: "Green", yellow: "Yellow", orange: "Orange" } as const;
+    const scanNotes = result.contractColor ? `${t("Electricity contract color")}: ${t(colors[result.contractColor])}` : "";
+    const applyNotes = canReplace(notes, scanSnapshot?.notes);
+    if (applyNotes && scanNotes) setNotes(scanNotes);
     setScanSnapshot({
       name: applyName && scanName ? scanName : null,
       billType: applyType && result.billType ? result.billType : null,
       amount: applyAmount && scanAmount ? scanAmount : null,
       dueDate: applyDueDate && scanDueDate ? scanDueDate : null,
+      notes: applyNotes && scanNotes ? scanNotes : null,
     });
     setSubtotal(result.subtotal != null ? result.subtotal.toFixed(2) : "");
     setTaxTotal(result.taxTotal != null ? result.taxTotal.toFixed(2) : "");
@@ -174,7 +180,7 @@ export function BillsPage() {
       );
       if (run !== scanRun.current) return;
       const found = scan.result.lines.length > 0 || scan.result.total != null ||
-        scan.result.subtotal != null || scan.result.taxTotal != null;
+        scan.result.subtotal != null || scan.result.taxTotal != null || scan.result.contractColor != null;
       if (found) {
         applyScan(scan.result, scan.text);
         toast.success(t("Bill details filled from the file"));
@@ -301,7 +307,7 @@ export function BillsPage() {
         { currency: bill.currency },
       );
       if (run !== readRun.current) return;
-      if (!scan.result.lines.length && scan.result.subtotal == null && scan.result.taxTotal == null) {
+      if (!scan.result.lines.length && scan.result.subtotal == null && scan.result.taxTotal == null && !(scan.result.contractColor && !bill.notes)) {
         toast.error(t("No new breakdown was recognised; the saved bill was left unchanged."));
         return;
       }
@@ -315,6 +321,10 @@ export function BillsPage() {
       const body: Record<string, unknown> = { ocrText: scan.text.slice(0, 50_000) };
       // Partial re-reads preserve stored values: only send what was found, so
       // a total-only read cannot erase an existing line breakdown.
+      if (scan.result.contractColor && !bill.notes) {
+        const colors = { blue: "Blue", green: "Green", yellow: "Yellow", orange: "Orange" } as const;
+        body.notes = `${t("Electricity contract color")}: ${t(colors[scan.result.contractColor])}`;
+      }
       if (scan.result.lines.length) body.breakdown = scan.result.lines.slice(0, 100);
       if (scan.result.subtotal != null) body.subtotal = scan.result.subtotal;
       if (scan.result.taxTotal != null) body.taxTotal = scan.result.taxTotal;

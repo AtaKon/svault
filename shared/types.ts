@@ -1287,6 +1287,7 @@ export interface BillBreakdownLine {
 export interface BillParseResult {
   name: string | null;
   billType: BillType | null;
+  contractColor: "blue" | "green" | "yellow" | "orange" | null;
   currency: string | null;
   dueDate: string | null;
   total: number | null;

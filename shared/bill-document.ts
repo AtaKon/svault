@@ -33,7 +33,7 @@ export function pdfItemsToText(items: unknown[]): string {
 
   for (const item of items) {
     if (!item || typeof item !== "object" || !("str" in item) || !("transform" in item)) continue;
-    const text = String((item as PdfTextItem).str ?? "").replace(/\s+/g, " ").trim();
+    const text = String((item as PdfTextItem).str ?? "").replace(/\r\n?/g, "\n").replace(/[^\S\n]+/g, " ").trim();
     if (!text) continue;
     const transform = (item as PdfTextItem).transform;
     runs.push({
