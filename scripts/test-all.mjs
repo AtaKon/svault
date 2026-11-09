@@ -10,6 +10,10 @@ const steps = [
 let failed = false;
 for (const args of steps) {
   const result = spawnSync(process.execPath, args, { stdio: "inherit" });
-  if (result.status !== 0) failed = true;
+  if (result.status !== 0) {
+    failed = true;
+    console.error(`\n[test-all] failed: node ${args.join(" ")}\n`);
+  }
 }
+if (failed) console.error("[test-all] one or more steps failed");
 process.exit(failed ? 1 : 0);

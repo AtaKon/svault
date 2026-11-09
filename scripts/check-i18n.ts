@@ -15,6 +15,10 @@ import { buildDynamicMatcher } from "../shared/i18n";
  * OffWriteError, notFound/badRequest/forbidden/conflict and
  * `*.status(...).json({ error })`. Other error constructors, `send()`
  * responses and dynamic `t(someVariable)` client calls are not resolved.
+ *
+ * Interpolated messages that also contain literal brace text are treated as
+ * unsupported: EL reserves braces for placeholders, so such a message cannot
+ * be represented safely and is reported instead of being silently conflated.
  */
 
 export type TranslationEntry = {

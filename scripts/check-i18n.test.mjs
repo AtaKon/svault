@@ -241,3 +241,10 @@ test("keeps literal short dynamic keys available for exact lookup", () => {
   const { dictionary } = extractDictionary(fs.readFileSync(path.join(process.cwd(), "client/i18n.tsx"), "utf8"));
   assert.ok(dictionary.has("{count}d"));
 });
+
+test("classifies same-shape but unusable dynamic keys as unmatchable", () => {
+  const messages = extractServerMessages("throw new ApiError(400, `${first} ${second}`);");
+  const missing = findMissing(new Set(["{a} {b}"]), messages);
+  assert.equal(missing.length, 1);
+  assert.equal(missing[0].reason, "unmatchable");
+});

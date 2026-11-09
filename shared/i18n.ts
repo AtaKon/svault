@@ -8,6 +8,8 @@ export const DYNAMIC_KEY_MIN_LITERAL_LENGTH = 2;
 export function isDynamicTranslationKey(key: string): boolean {
   const placeholders = key.match(/\{[A-Za-z_$][\w$]*\}/g) ?? [];
   if (!placeholders.length) return false;
+  // Trim matters: "{a} {b}" leaves a single space, which trims to length 0 and
+  // is therefore rejected, while "{field}: {message}" keeps ":" (length 1).
   const literalLength = key.replace(/\{[A-Za-z_$][\w$]*\}/g, "").trim().length;
   return literalLength >= DYNAMIC_KEY_MIN_LITERAL_LENGTH || (placeholders.length >= 2 && literalLength >= 1);
 }
