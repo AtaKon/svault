@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type DragEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
 import { api } from "@/api";
 import { useAuth, useHouse } from "@/state";
 import { Badge, Button, Card, EmptyState, Field, Input, PageHeader, Select, Skeleton, Textarea } from "@/components/ui";
@@ -70,6 +70,7 @@ export function BillsPage() {
   const [name, setName] = useState("");
   const [amount, setAmount] = useState("");
   const [billType, setBillType] = useState<UtilityBill["billType"]>("electricity");
+  const [billTypeTouched, setBillTypeTouched] = useState(false);
   const [category, setCategory] = useState<UtilityBill["category"]>("to_split");
   const [ledgerConfirmed, setLedgerConfirmed] = useState(false);
   const [dueDate, setDueDate] = useState("");
@@ -94,6 +95,7 @@ export function BillsPage() {
   const [scanProgress, setScanProgress] = useState(0);
   const [readingBillId, setReadingBillId] = useState<string | null>(null);
   const [readingProgress, setReadingProgress] = useState(0);
+  const scanRun = useRef(0);
 
   const load = useCallback(async () => {
     try {
@@ -131,9 +133,9 @@ export function BillsPage() {
     const applyName = canReplace(name, scanSnapshot?.name);
     const applyAmount = canReplace(amount, scanSnapshot?.amount);
     const applyDueDate = canReplace(dueDate, scanSnapshot?.dueDate);
-    const applyType = scanSnapshot?.billType != null
+    const applyType = !billTypeTouched && (scanSnapshot?.billType != null
       ? billType === scanSnapshot.billType
-      : billType === "electricity";
+      : billType === "electricity");
 
     const nextName = applyName && scanName ? scanName : name;
     const nextAmount = applyAmount && scanAmount ? scanAmount : amount;
@@ -158,14 +160,17 @@ export function BillsPage() {
   };
 
   const readFile = async (nextFile: File) => {
+    const run = scanRun.current + 1;
+    scanRun.current = run;
     setScanning(true);
     setScanProgress(0);
     try {
       const scan = await scanBillFile(
         nextFile,
-        (progress) => setScanProgress(progress),
+        (progress) => { if (run === scanRun.current) setScanProgress(progress); },
         { currency: house.currency || "EUR" },
       );
+      if (run !== scanRun.current) return;
       applyScan(scan.result, scan.text);
       if (!scan.result.lines.length && scan.result.total == null) {
         toast.error(t("No amount or breakdown was recognised. Check the file or enter the bill manually."));
@@ -173,10 +178,11 @@ export function BillsPage() {
         toast.success(t("Bill details filled from the file"));
       }
     } catch (error) {
+      if (run !== scanRun.current) return;
       if (import.meta.env.DEV) console.error("[bill-scan]", error);
       toast.error(t("Could not read the bill file"));
     } finally {
-      setScanning(false);
+      if (run === scanRun.current) setScanning(false);
     }
   };
 
@@ -236,6 +242,7 @@ export function BillsPage() {
       await api<UtilityBill>(`/api/houses/${house.id}/bills`, { method: "POST", body: data });
       setName(""); setAmount(""); setDueDate(""); setNotes(""); setFile(null);
       setLedgerConfirmed(false);
+      setBillTypeTouched(false);
       clearBreakdown();
       toast.success(t("Bill added"));
       await load();
@@ -327,7 +334,7 @@ export function BillsPage() {
         <div className="flex items-center gap-2"><Icon name="plus" size={17} className="text-brand"/><h2 className="font-display text-lg">{t("Add a bill")}</h2></div>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
           <Field label={t("Bill name")} required><Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("Electricity, internet, rent…")} required /></Field>
-          <Field label={t("Bill type")}><Select value={billType} onChange={(e) => setBillType(e.target.value as UtilityBill["billType"])}>{BILL_TYPES.map((type) => <option key={type.value} value={type.value}>{t(type.label)}</option>)}</Select></Field>
+          <Field label={t("Bill type")}><Select value={billType} onChange={(e) => { setBillType(e.target.value as UtilityBill["billType"]); setBillTypeTouched(true); }}>{BILL_TYPES.map((type) => <option key={type.value} value={type.value}>{t(type.label)}</option>)}</Select></Field>
           <Field label={t("Amount")} required><Input type="number" min="0.01" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" required /></Field>
           <Field label={t("Category")}><Select value={category} onChange={(e) => { setCategory(e.target.value as UtilityBill["category"]); setLedgerConfirmed(false); }}><option value="to_split">{t("To be split")}</option><option value="personal">{t("Personal")}</option></Select></Field>
           <Field label={t("Due date")}><Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} /></Field>

@@ -72,7 +72,7 @@ export function pdfItemsToText(items: unknown[]): string {
 
 /** Detect a stored bill document from its bytes, independent of headers. */
 export function documentMime(buffer: ArrayBuffer): string | null {
-  if (buffer.byteLength < 2) return null;
+  if (buffer.byteLength < 12) return null;
   const bytes = new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 12));
   const ascii = (start: number, end: number) => String.fromCharCode(...bytes.subarray(start, end));
   if (ascii(0, 5) === "%PDF-") return "application/pdf";
@@ -89,11 +89,9 @@ export async function fetchBillFile(url: string, name: string): Promise<File | n
   if (!response.ok) return null;
   const blob = await response.blob();
   const buffer = await blob.arrayBuffer();
-  // The authenticated document route sets a real Content-Type, but a proxy or
-  // generic download can strip it. Inspect the bytes before trusting it, and
-  // only fall back to a supported type (never text/html error pages).
-  const supported = new Set(["application/pdf", "image/jpeg", "image/png", "image/webp"]);
-  const type = documentMime(buffer) ?? (blob.type && supported.has(blob.type) ? blob.type : null);
+  // Trust the bytes, not the response header: a proxy or generic download can
+  // mislabel an error page or a truncated file.
+  const type = documentMime(buffer);
   if (!type) return null;
   const extension = type === "application/pdf" ? "pdf" : type === "image/png" ? "png" : type === "image/webp" ? "webp" : "jpg";
   return new File([buffer], `${name || "bill"}.${extension}`, { type });

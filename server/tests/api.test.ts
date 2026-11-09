@@ -825,6 +825,14 @@ describe("bill text parsing", () => {
     assert.equal(result.lines.find((line) => line.kind === "tax")?.amount, 24);
   });
 
+  it("parses grouped consumption and a per-unit price on one line", () => {
+    const result = parseBillText("Κατανάλωση 1.234 kWh x 0,15 = 185,10");
+    const line = result.lines[0];
+    assert.equal(line.quantity, 1234);
+    assert.equal(line.unitPrice, 0.15);
+    assert.equal(line.amount, 185.1);
+  });
+
   it("keeps three-decimal unit prices from becoming thousands", () => {
     const result = parseBillText([
       "ΔΕΗ",
@@ -875,13 +883,14 @@ describe("bill text parsing", () => {
       assert.equal(file?.type, "application/pdf");
       assert.match(file?.name ?? "", /\.pdf$/);
       assert.equal(documentMime(pdfBytes.buffer as ArrayBuffer), "application/pdf");
-      assert.equal(documentMime(new Uint8Array([0xff, 0xd8, 0xff, 0xe0]).buffer), "image/jpeg");
-      assert.equal(documentMime(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).buffer), "image/png");
+      assert.equal(documentMime(new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0, 0, 0, 0, 0, 0]).buffer), "image/jpeg");
+      assert.equal(documentMime(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]).buffer), "image/png");
       assert.equal(documentMime(new TextEncoder().encode("RIFF0000WEBP").buffer), "image/webp");
       assert.equal(documentMime(new TextEncoder().encode("RIFF0000WAVE").buffer), null);
       assert.equal(documentMime(new Uint8Array([]).buffer), null);
       assert.equal(documentMime(new Uint8Array([0xff]).buffer), null);
       assert.equal(documentMime(new Uint8Array([0x89, 0x50]).buffer), null);
+      assert.equal(documentMime(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d]).buffer), null);
       globalThis.fetch = (async () => new Response("missing", { status: 404 })) as typeof fetch;
       assert.equal(await fetchBillFile("/api/houses/x/bills/y/document", "bill"), null);
       globalThis.fetch = (async () => new Response("<html>error</html>", {
@@ -889,6 +898,11 @@ describe("bill text parsing", () => {
         headers: { "content-type": "text/html" },
       })) as typeof fetch;
       assert.equal(await fetchBillFile("/api/houses/x/bills/y/document", "bill"), null);
+      globalThis.fetch = (async () => new Response("<html>error</html>", {
+        status: 200,
+        headers: { "content-type": "image/png" },
+      })) as typeof fetch;
+      assert.equal(await fetchBillFile("/api/houses/x/bills/y/document", "bill"), null, "the header cannot override the bytes");
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -6566,6 +6580,12 @@ describe("insights, household split and admin console", () => {
       method: "PATCH",
       body: { subtotal: "1.234,56" },
     })).status, 400, "the API expects canonical numbers from clients");
+    const upperMoney = await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { subtotal: 999999999.99 },
+    });
+    assert.equal(upperMoney.status, 200, "two-decimal values near the maximum are accepted");
+    assert.equal(upperMoney.data.subtotal, 999999999.99);
     const cleared = await request(`/api/bills/${accepted.data.id}`, {
       method: "PATCH",
       body: { subtotal: null, taxTotal: null, ocrText: null, breakdown: [] },

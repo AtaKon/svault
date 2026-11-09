@@ -105,7 +105,7 @@ const verifyBillDocument: RequestHandler = (req, _res, next) => {
   next();
 };
 
-const twoDecimals = (value: number) => Math.abs(value - Math.round(value * 100) / 100) < 1e-7;
+const twoDecimals = (value: number) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-4;
 const optionalMoney = z.preprocess(
   // Keep undefined (field omitted) distinct from an explicit clear (null/"").
   // Booleans and objects are rejected instead of being coerced to 0/1.
@@ -204,7 +204,7 @@ const input = z.object({
   billType: z.enum(BILL_TYPE_VALUES).default("other"),
   category: z.enum(["to_split", "personal"]).default("personal"),
   amount: z.coerce.number().finite().positive().max(1_000_000_000)
-    .refine((value) => Math.abs(value - Math.round(value * 100) / 100) < 1e-7, "Enter an amount with up to two decimal places")
+    .refine(twoDecimals, "Enter an amount with up to two decimal places")
     .transform((value) => Math.round(value * 100) / 100),
   currency: z.string().trim().regex(/^[A-Za-z]{3}$/).optional(),
   dueDate: z.preprocess((value) => value === "" ? null : value, z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).refine((date) => {
@@ -408,8 +408,8 @@ singleBillRoutes.patch("/:billId", handler(async (req, res) => {
   const breakdown = body.breakdown === undefined
     ? normalizeStoredBreakdown(storedBreakdown)
     : sanitizeBreakdown(body.breakdown);
-  // Coerce legacy/non-enum values so a NOT VALID constraint cannot fail the
-  // update just because an old row predates the source column.
+  // Coerce legacy/non-enum values so the validated source constraint cannot
+  // fail an update just because an old row predates the source column.
   const source = body.source ?? (current.source === "scan" ? "scan" : "manual");
   await run(`UPDATE bills SET name = ?, bill_type = ?, category = ?, ledger_confirmed = ?, amount = ?, due_date = ?, paid_by = ?, split_with = ?, notes = ?,
     subtotal = ?, tax_total = ?, breakdown = ?, ocr_text = ?, source = ? WHERE id = ?`, [

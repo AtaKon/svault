@@ -384,7 +384,9 @@ function chargeLine(line: string): BillBreakdownLine | null {
 
   const quantityMatch = folded.match(CONSUMPTION);
   const explicitUnitPrice = folded.match(EXPLICIT_UNIT_PRICE);
-  const quantity = quantityMatch ? parseBillNumber(quantityMatch[1], { thousands: false }) : null;
+  // Consumption quantities group thousands on most bills ("1.234 kWh"), so
+  // they use the money interpretation; unit prices opt out separately.
+  const quantity = quantityMatch ? parseBillNumber(quantityMatch[1]) : null;
   const unit = quantityMatch ? unitLabel(quantityMatch[2]) : null;
   let unitPrice = explicitUnitPrice ? parseBillNumber(explicitUnitPrice[1], { thousands: false }) : null;
 
@@ -573,7 +575,13 @@ export function parseBillText(rawText: string, options: { currency?: string | nu
     discounts.length === 0 && credits.length === 0) {
     const expected = round2(printedTotal - subtotal);
     const current = taxLines[0].amount ?? 0;
-    if (expected > 0 && Math.abs(expected - current) > 0.05) taxLines[0].amount = expected;
+    const grossWithTax = round2(subtotal * (1 + (taxLines[0].taxRate ?? 0) / 100));
+    const looksLikeGross = Math.abs(current - grossWithTax) <= 0.05;
+    // Only fix a plausible column mix-up or a printed gross; a huge unexplained
+    // gap is more likely a parse error elsewhere in the bill.
+    if (expected > 0 && (looksLikeGross || Math.abs(expected - current) <= Math.max(0.05, current * 0.5))) {
+      taxLines[0].amount = expected;
+    }
   }
 
   let taxTotal = taxLines.length ? round2(taxLines.reduce((sum, line) => sum + (line.amount ?? 0), 0)) : null;

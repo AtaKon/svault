@@ -51,7 +51,7 @@ async function readPdf(
     }
 
     const extracted = pages.join("\n").trim();
-    const meaningful = extracted.replace(/[^A-Za-zΑ-Ωα-ω0-9]/g, "").length;
+    const meaningful = (extracted.match(/[\p{L}\p{N}]/gu) ?? []).length;
     if (meaningful >= TEXT_LAYER_MIN_CHARS && /\d/.test(extracted)) {
       onProgress(1, "Text read from the PDF");
       return { text: extracted, pages: textPages, usedOcr: false };
