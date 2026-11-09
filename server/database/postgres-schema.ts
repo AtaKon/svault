@@ -291,6 +291,11 @@ CREATE TABLE IF NOT EXISTS bills (
   split_with TEXT NOT NULL DEFAULT '[]',
   document TEXT,
   notes TEXT,
+  subtotal DOUBLE PRECISION,
+  tax_total DOUBLE PRECISION,
+  breakdown TEXT NOT NULL DEFAULT '[]',
+  ocr_text TEXT,
+  source TEXT NOT NULL DEFAULT 'manual' CHECK (source IN ('manual', 'scan')),
   created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL
 );
@@ -787,6 +792,32 @@ export const POSTGRES_MIGRATIONS: string[] = [
           UPDATE bills SET ledger_confirmed = 1 WHERE category = 'to_split';
         END IF;
       END IF;
+    END IF;
+  END $$`,
+  // Bills gained an optional OCR breakdown and printed totals.
+  "ALTER TABLE bills ADD COLUMN IF NOT EXISTS subtotal DOUBLE PRECISION",
+  "ALTER TABLE bills ADD COLUMN IF NOT EXISTS tax_total DOUBLE PRECISION",
+  "ALTER TABLE bills ADD COLUMN IF NOT EXISTS breakdown TEXT NOT NULL DEFAULT '[]'",
+  "ALTER TABLE bills ADD COLUMN IF NOT EXISTS ocr_text TEXT",
+  "ALTER TABLE bills ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manual'",
+  // Fresh installs get the CHECK from CREATE TABLE; upgraded databases are
+  // backfilled first so the constraint can validate every existing row.
+  `DO $$
+  BEGIN
+    IF to_regclass('bills') IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'bills_source_check' AND conrelid = to_regclass('bills')
+      ) THEN
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = current_schema() AND table_name = 'bills' AND column_name = 'source'
+      ) THEN
+        ALTER TABLE bills ADD COLUMN source TEXT NOT NULL DEFAULT 'manual';
+      END IF;
+      UPDATE bills SET source = 'manual' WHERE source IS NULL OR source NOT IN ('manual', 'scan');
+      ALTER TABLE bills ALTER COLUMN source SET NOT NULL;
+      ALTER TABLE bills ADD CONSTRAINT bills_source_check CHECK (source IN ('manual', 'scan'));
     END IF;
   END $$`,
 ];

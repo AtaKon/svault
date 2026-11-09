@@ -6,7 +6,7 @@ domain types. No workspace tooling, no bundler config beyond Vite, no test frame
 
 ## Prerequisites
 
-- **Node.js 22 or newer** (the server uses `node:sqlite`).
+- **Node.js 22.13 or newer** (the server uses `node:sqlite`; `pdfjs-dist` requires 22.13+).
 - npm 10+.
 - Optional: Docker for testing the production image.
 - Optional: a local Chrome/Edge install for the browser check scripts.
@@ -32,6 +32,11 @@ npm run dev
 recipe scanner falls back to loading Tesseract from a CDN. Receipt OCR prints the full-image, grayscale
 crop and binary crop scores to the browser console in development (`[ocr] product candidates`), which
 is the quickest way to see whether a layout change helped.
+
+Bill scans read a PDF text layer with `pdfjs-dist` first, because e-bills are more accurate and much
+faster to parse than a rendered scan. Only PDFs without usable text (and bill photos) are rendered and
+sent through Tesseract with the `bill` OCR mode, which uses Greek first and no receipt product crop.
+The bill parser itself lives in `shared/bill-parser.ts` and is covered by the normal `npm test` run.
 
 Seed demo data (only if the database is empty):
 

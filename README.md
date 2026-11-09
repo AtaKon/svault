@@ -28,6 +28,7 @@ dataset — all from one PWA that runs in a single Docker container.
 | **OpenFoodFacts enrichment** | Link any inventory item to an OpenFoodFacts product, or let receipt lines and barcode scans do it automatically. Brand, description, image, category and the full nutrition panel are filled only when empty; values you set are never overwritten. Recipes estimate calories and macros per whole recipe and per portion from those panels. A shared receipt-name catalogue ships with the app, learns locally, and can be exported or synced between installs. |
 | **Contribute back** | Look up food, beauty, pet food and general products across all four Open Food Facts databases. A **Contribute** page ranks items whose product is missing a brand, category, nutrition panel or photo, lets a signed-in user review the exact fields, and queues a safe additive edit. Accounts are optional, passwords are never stored, and writes stay off until the administrator enables them. |
 | **Receipt intake & shops** | Photograph or upload a weekly shop: OCR reads the lines, you fix anything it missed, and the whole basket becomes stock. Built-in layout templates handle Lidl Greece, Sklavenitis Greece and My market Greece quantities, weights, barcodes and discounts; templates for other stores can be built and tested in the app. Each receipt records whether AI, a template or the local parser read it, and discount lines roll up into a **money saved** total instead of becoming products. The shop is detected automatically, with a country-based catalogue. Receipts keep net and VAT, feeding spend-by-shop, tax and category analytics. Corrections and local vector suggestions map shop shorthand to the right products. |
+| **Bills & splitting** | Drop a utility-bill PDF or photo: the PDF text layer is read directly and scanned bills go through on-device OCR. SVault fills the supplier, amount and due date, then extracts the breakdown — charges, multiple taxes (VAT, municipal fees, stamp duty) and consumption prices per kWh/m³. Review it before saving, split the bill with the household, and keep the breakdown next to the stored document. |
 | **Bulk intake** | Bring in a receipt or a queue of scanned barcodes, review every editable line against suggested matches, then commit in one transaction. Works with AI vision or text-only/local parsing. |
 | **Shopping list** | Fill it from a recipe's missing ingredients, from everything below its reorder point, or from a week of planned meals. Lines merge unit-aware, group by category, and checking one records a normal stock movement with price and expiry. House admins can optionally enable cautious, exact-barcode PosoKanei price and promotion lookups. |
 | **Meal planner** | A seven-day breakfast/lunch/dinner/snack grid. Pick saved recipes or food ideas, scale servings per slot, duplicate a meal, and turn the week's missing ingredients into the shopping list. |
@@ -149,7 +150,7 @@ npm test           # 42 API, parser, AI-mock and dataset tests
 npm run typecheck
 ```
 
-Requires **Node 22+**. No native modules: SQLite comes from `node:sqlite`, which keeps the Docker
+Requires **Node 22.13+**. No native modules: SQLite comes from `node:sqlite`, which keeps the Docker
 image small and the install painless.
 
 ## Configuration

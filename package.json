@@ -5,7 +5,7 @@
   "description": "SVault - home inventory, recipes and vision datasets for every house you own.",
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13.0"
   },
   "scripts": {
     "dev": "concurrently -n api,web -c cyan,magenta \"npm:dev:api\" \"npm:dev:web\"",
@@ -39,6 +39,7 @@
     "jszip": "^3.10.1",
     "multer": "^2.5.0",
     "openid-client": "^6.8.9",
+    "pdfjs-dist": "5.7.284",
     "pg": "^8.23.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",

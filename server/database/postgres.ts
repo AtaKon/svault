@@ -107,13 +107,26 @@ export class PostgresDriver implements DatabaseDriver {
     } finally {
       client.release();
     }
-    await this.pool.query(POSTGRES_SCHEMA);
     // CREATE TABLE IF NOT EXISTS does not add columns to existing installations.
-    for (const statement of POSTGRES_MIGRATIONS) await this.pool.query(statement);
-    await this.pool.query(
-      "INSERT INTO schema_meta (key, value) VALUES ('version', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-      ["3"],
-    );
+    // Apply the base schema and every migration in one transaction so a failed
+    // backfill/constraint cannot leave the database half-upgraded.
+    const migrationClient = await this.pool.connect();
+    try {
+      await migrationClient.query("BEGIN");
+      await migrationClient.query(POSTGRES_SCHEMA);
+      for (const statement of POSTGRES_MIGRATIONS) await migrationClient.query(statement);
+      // Keep the version write in the same transaction as the schema changes.
+      await migrationClient.query(
+        "INSERT INTO schema_meta (key, value) VALUES ('version', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+        ["4"],
+      );
+      await migrationClient.query("COMMIT");
+    } catch (error) {
+      try { await migrationClient.query("ROLLBACK"); } catch { /* original error wins */ }
+      throw error;
+    } finally {
+      migrationClient.release();
+    }
     await applyPendingPostgresRestore(this.pool);
   }
 

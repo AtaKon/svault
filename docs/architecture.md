@@ -31,7 +31,7 @@ flowchart LR
 
 ## Runtime
 
-- **Node.js 22+** with native ESM. `node:sqlite` provides SQLite without a native addon, which keeps
+- **Node.js 22.13+** with native ESM. `node:sqlite` provides SQLite without a native addon, which keeps
   the Docker image small and the install free of build tooling. The container starts Node with
   `--disable-warning=ExperimentalWarning` because the SQLite module is still marked experimental.
 - **Express 5** handles routing, JSON parsing, uploads (multer) and static files.

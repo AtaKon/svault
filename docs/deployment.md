@@ -20,7 +20,7 @@ simple, but it also means SVault is a single-node application by design.
 - Docker Engine 24+ with the Compose plugin, or Docker Desktop on Windows/macOS.
 - About 200 MB of RAM and 500 MB of disk for the image plus data. Photo datasets grow with uploads.
 - No GPU and no external database.
-- Node.js 22+ only if you run it outside Docker.
+- Node.js 22.13+ only if you run it outside Docker.
 
 ## Quick start with Docker Compose
 
@@ -421,7 +421,7 @@ The in-app restore and `npm run restore` keep timestamped safety copies under
 | --- | --- |
 | Users, sessions, houses, roles | Yes (`svault.db`) |
 | Items, stock, prices, reminders | Yes |
-| Recipes and OCR text | Yes |
+| Recipes, bills and OCR text | Yes |
 | Photo records and labels | Yes |
 | Uploaded images | Yes (`uploads/`) |
 | AI keys stored in house settings | Yes (plaintext in the database) |

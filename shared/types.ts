@@ -1265,6 +1265,38 @@ export interface HouseholdReceipt {
   participantNames: string[];
 }
 
+export type BillBreakdownKind = "charge" | "tax" | "discount" | "credit";
+
+/** One charge, tax or adjustment printed on a utility bill. */
+export interface BillBreakdownLine {
+  description: string;
+  kind: BillBreakdownKind;
+  /** Consumption amount, when the bill prints one (1234.5 kWh). */
+  quantity: number | null;
+  /** Consumption unit such as kWh, m³, month or day. */
+  unit: string | null;
+  /** Price for one unit, when the bill prints one. */
+  unitPrice: number | null;
+  /** Printed line amount. Discounts and credits are stored as positive amounts. */
+  amount: number | null;
+  /** VAT/tax rate for this line, when the bill prints one. */
+  taxRate: number | null;
+}
+
+/** What the bill parser can read from a bill document before the user reviews it. */
+export interface BillParseResult {
+  name: string | null;
+  billType: BillType | null;
+  currency: string | null;
+  dueDate: string | null;
+  total: number | null;
+  /** True when the total was summed from the breakdown instead of printed. */
+  totalInferred: boolean;
+  subtotal: number | null;
+  taxTotal: number | null;
+  lines: BillBreakdownLine[];
+}
+
 export interface UtilityBill {
   id: string;
   name: string;
@@ -1277,6 +1309,11 @@ export interface UtilityBill {
   splitWith: string[];
   document: string | null;
   notes: string | null;
+  subtotal: number | null;
+  taxTotal: number | null;
+  breakdown: BillBreakdownLine[];
+  ocrText: string | null;
+  source: "manual" | "scan";
   createdAt: string;
 }
 

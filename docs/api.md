@@ -867,15 +867,33 @@ addressed to that user only. Other members do not see it.
 | Method | Path | Min role | Purpose |
 | --- | --- | --- | --- |
 | `GET` | `/api/houses/:houseId/bills` | viewer+ | List household bills. |
-| `POST` | `/api/houses/:houseId/bills` | member+ | Create a bill; multipart form fields include `name`, `billType`, `amount`, and `category`. `currency` defaults to the house currency. Attach an optional `document` PDF. |
-| `PATCH` | `/api/bills/:billId` | member+ | Update bill fields, payer, or participants. |
-| `DELETE` | `/api/bills/:billId` | member+ | Delete a bill and its attached PDF. |
-| `POST` | `/api/houses/:houseId/bills/:billId/document` | member+ | Attach or replace a PDF. |
-| `GET` | `/api/houses/:houseId/bills/:billId/document` | viewer+ | Download the attached PDF. |
+| `POST` | `/api/houses/:houseId/bills` | member+ | Create a bill; multipart form fields include `name`, `billType`, `amount`, and `category`. `currency` defaults to the house currency. Attach an optional `document` (PDF or JPEG/PNG/WebP photo) and the optional OCR breakdown. |
+| `PATCH` | `/api/bills/:billId` | member+ | Update bill fields, payer, participants, or the OCR breakdown. |
+| `DELETE` | `/api/bills/:billId` | member+ | Delete a bill and its attached document. |
+| `POST` | `/api/houses/:houseId/bills/:billId/document` | member+ | Attach or replace a PDF or bill photo. |
+| `GET` | `/api/houses/:houseId/bills/:billId/document` | viewer+ | Download the attached PDF or view the attached photo. |
 
-`billType` is one of `electricity`, `water`, `natural_gas`, `heating_oil`, `internet_telecom`, `rent`, `building_fees`, `municipal_fees`, `insurance`, or `other`. `category` is `to_split` or `personal`. Shared bills use equal cent-exact shares; when `to_split` is selected without `splitWith` or with an empty list, all current house members share it. When a member leaves, their payer/participant references are cleared on the next bill edit if those fields are omitted; explicitly submitting a departed member is rejected. Personal bills do not affect household balances. Household balances include shared bills only while their persisted `ledgerConfirmed` flag is true. Bills and purchase receipts are separate ledger entries; creating a shared bill or changing a personal bill to shared requires `ledgerConfirmed: true`, confirming the expense is not also recorded as a purchase receipt. PATCHing an already-shared bill may set `ledgerConfirmed` to `true` or `false`; omitting it preserves the current value. Setting it to `false` is currently API-only; the Bills page confirms shared status when changing a personal bill to shared. Bill PDFs are served as downloads through the authenticated document route; the storage path is private.
+`billType` is one of `electricity`, `water`, `natural_gas`, `heating_oil`, `internet_telecom`, `rent`, `building_fees`, `municipal_fees`, `insurance`, or `other`. `category` is `to_split` or `personal`. Shared bills use equal cent-exact shares; when `to_split` is selected without `splitWith` or with an empty list, all current house members share it. When a member leaves, their payer/participant references are cleared on the next bill edit if those fields are omitted; explicitly submitting a departed member is rejected. Personal bills do not affect household balances. Household balances include shared bills only while their persisted `ledgerConfirmed` flag is true. Bills and purchase receipts are separate ledger entries; creating a shared bill or changing a personal bill to shared requires `ledgerConfirmed: true`, confirming the expense is not also recorded as a purchase receipt. PATCHing an already-shared bill may set `ledgerConfirmed` to `true` or `false`; omitting it preserves the current value. Setting it to `false` is currently API-only; the Bills page confirms shared status when changing a personal bill to shared. Bill documents are served through the authenticated document route; the storage path is private, PDFs are downloads, and photos are inline.
 
 `splitWith` accepts an array of member IDs; multipart create forms may send it as a JSON-encoded array string. Omitting it or sending an empty array on a shared bill defaults to all current members.
+
+### OCR breakdown
+
+The Bills page reads the PDF text layer or runs on-device OCR, then sends what it found so the household can keep it with the bill. Nothing is parsed on the server.
+
+| Field | Shape | Meaning |
+| --- | --- | --- |
+| `subtotal` | number \| null | Printed net amount, or the sum of the charge lines. |
+| `taxTotal` | number \| null | Sum of the tax lines. |
+| `breakdown` | array \| JSON string | One entry per printed line (up to 100). |
+| `ocrText` | string \| null | Raw text recognised from the document (up to 50,000 chars). Treat it as sensitive: bills may contain addresses and account references. |
+| `source` | `manual` \| `scan` | Read-only provenance derived by the server: `scan` when OCR text or breakdown lines are stored, `manual` otherwise. |
+
+Each `breakdown` entry has `description`, `kind` (`charge`, `tax`, `discount` or `credit`), `quantity`,
+`unit`, `unitPrice`, `amount` and `taxRate`; nullable fields may be omitted. Discounts and credits are
+stored as positive amounts and subtracted when totals are shown. Typical bills keep one line per
+charge and one line per tax (VAT, municipal fees, stamp duty), which lets the UI show the tax total and
+the price per kWh/m³ without turning every meter reading into a charge.
 
 ## Insights
 

@@ -23,6 +23,12 @@ All notable changes to SVault are documented here. The format follows
   verification questions. Several ready items can be shared in one batch.
 - Open Prices and Folksonomy bearer tokens are stored encrypted per user; the instance account can be
   used as a fallback. A Folksonomy property endpoint is available for advanced automation.
+- **Bill OCR.** Drop a utility-bill PDF or photo on **Bills & splitting** and SVault fills the supplier,
+  amount and due date, then extracts the breakdown: individual charges, every tax line (VAT, municipal
+  fees, stamp duty) and consumption prices per kWh or m³. PDFs with a text layer are read directly;
+  scanned PDFs and photos use the same on-device Tesseract OCR as receipts, so nothing is uploaded.
+  The breakdown is reviewable before saving, stored with the bill, and can be re-read later. Bill
+  attachments now accept photos as well as PDFs.
 - **Espresso log.** Mark a bag of coffee beans as espresso and keep a tasting history with 1-5 star
   ratings, roast level, grind setting and time, dose, yield, extraction time, water temperature,
   pressure, TDS, grinder, machine, flavour tags and notes. SVault computes the brew ratio and extraction

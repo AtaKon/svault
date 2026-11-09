@@ -1,4 +1,4 @@
-type OcrMode = "recipe" | "receipt";
+type OcrMode = "recipe" | "receipt" | "bill";
 
 export interface OcrOptions {
   mode?: OcrMode;
@@ -256,8 +256,9 @@ async function prepareDocument(file: File, mode: OcrMode): Promise<HTMLCanvasEle
   if (!file.type.startsWith("image/")) return file;
   try {
     const bitmap = await createImageBitmap(file);
-    const maxWidth = mode === "receipt" ? 2400 : 2000;
-    const maxUpscale = mode === "receipt" ? 3 : 2;
+    const dense = mode === "receipt" || mode === "bill";
+    const maxWidth = dense ? 2400 : 2000;
+    const maxUpscale = dense ? 3 : 2;
     const scale = Math.min(
       maxUpscale,
       maxWidth / bitmap.width,
@@ -380,9 +381,10 @@ export async function ocrImage(
     phaseSpan = span;
   };
 
-  // Greek first: receipts are mostly Greek, while Latin product names are still
-  // covered by the English model. Recipes keep English first for mixed cards.
-  const languages = mode === "receipt" ? ["ell", "eng"] : ["eng", "ell"];
+  // Greek first: receipts and utility bills are mostly Greek, while Latin
+  // product names are still covered by the English model. Recipes keep English
+  // first for mixed cards.
+  const languages = mode === "receipt" || mode === "bill" ? ["ell", "eng"] : ["eng", "ell"];
   const worker = await createWorker(languages.join("+"), 1, {
     workerPath: "/tesseract/worker.min.js",
     corePath: "/tesseract/core",

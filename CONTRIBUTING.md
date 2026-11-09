@@ -18,7 +18,7 @@ take it, so others know.
 
 ## Development setup
 
-Requirements: Node.js 22+, npm 10+.
+Requirements: Node.js 22.13+, npm 10+.
 
 ```bash
 git clone https://github.com/AtaKon/svault.git

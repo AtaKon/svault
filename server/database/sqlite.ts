@@ -115,6 +115,13 @@ export class SqliteDriver implements DatabaseDriver {
         throw error;
       }
     }
+    ensureColumn("bills", "subtotal", "REAL");
+    ensureColumn("bills", "tax_total", "REAL");
+    ensureColumn("bills", "breakdown", "TEXT NOT NULL DEFAULT '[]'");
+    ensureColumn("bills", "ocr_text", "TEXT");
+    // SQLite cannot add a CHECK constraint in place; upgraded databases rely
+    // on the API's source enum, while fresh installs also enforce it in SQL.
+    ensureColumn("bills", "source", "TEXT NOT NULL DEFAULT 'manual'");
     ensureColumn("receipt_lines", "raw_description", "TEXT");
     ensureColumn("receipt_lines", "tax_rate", "REAL");
     ensureColumn("receipt_lines", "discount", "REAL");
@@ -703,6 +710,11 @@ CREATE TABLE IF NOT EXISTS bills (
   split_with TEXT NOT NULL DEFAULT '[]',
   document TEXT,
   notes TEXT,
+  subtotal REAL,
+  tax_total REAL,
+  breakdown TEXT NOT NULL DEFAULT '[]',
+  ocr_text TEXT,
+  source TEXT NOT NULL DEFAULT 'manual' CONSTRAINT bills_source_check CHECK (source IN ('manual', 'scan')),
   created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL
 );
