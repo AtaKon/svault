@@ -1,3 +1,4 @@
+import { parseZenithBill } from "./zenith-bill.js";
 import type { BillBreakdownLine, BillParseResult } from "./types.js";
 import type { BillType } from "./bill-types.js";
 
@@ -84,6 +85,7 @@ const SUPPLIERS: Array<[RegExp, string]> = [
   [/\bwind\b/, "Wind"],
   [/\bote\b|(?:^|[^α-ω])οτε(?:[^α-ω]|$)/u, "OTE"],
   [/ηρων|heron/, "Ηρών"],
+  [/zenith|ζενιθ/, "Zenith"],
   [/elpedison|ελπεντισον/, "Elpedison"],
   [/protergia|προτεργια/, "Protergia"],
   [/δεπα|φυσικο\s+αεριο|φυσικου\s+αεριου/, "Φυσικό αέριο"],
@@ -349,6 +351,22 @@ function detectBillType(text: string): BillType | null {
   return bestScore > 0 ? best : null;
 }
 
+/** Only accept an explicit color associated with a tariff, never a brand or generic color mention. */
+function detectContractColor(lines: string[], billType: BillType | null): BillParseResult["contractColor"] {
+  if (billType !== "electricity") return null;
+  const colors: Array<[RegExp, NonNullable<BillParseResult["contractColor"]>]> = [
+    [/\bblue\b|μπλε/u, "blue"], [/\bgreen\b|πρασιν\p{L}*/u, "green"],
+    [/\byellow\b|κιτριν\p{L}*/u, "yellow"], [/\borange\b|πορτοκαλ\p{L}*/u, "orange"],
+  ];
+  const found = new Set<NonNullable<BillParseResult["contractColor"]>>();
+  for (const line of lines) {
+    const value = fold(line);
+    if (!/(τιμολογ|προγραμμα|συμβολαι|χρωμα|tariff|contract|plan)/u.test(value)) continue;
+    for (const [pattern, color] of colors) if (pattern.test(value)) found.add(color);
+  }
+  return found.size === 1 ? [...found][0] : null;
+}
+
 function taxAmount(values: number[], rate: number | null): { amount: number | null; base: number | null } {
   if (!values.length) return { amount: null, base: null };
   if (values.length === 1) return { amount: values[0], base: null };
@@ -393,7 +411,7 @@ function chargeLine(line: string): BillBreakdownLine | null {
   const folded = fold(line);
   const allTokens = numbersIn(line);
   const tokens = allTokens.filter((token) => !token.percent);
-  if (!tokens.length) return null;
+  if (!tokens.length || line.length > 200 || tokens.length > 4) return null;
 
   const quantityMatch = folded.match(CONSUMPTION);
   const explicitUnitPrice = folded.match(EXPLICIT_UNIT_PRICE);
@@ -518,6 +536,8 @@ export function billLinesTotal(lines: BillBreakdownLine[]): number {
 }
 
 export function parseBillText(rawText: string, options: { currency?: string | null } = {}): BillParseResult {
+  const zenith = parseZenithBill(rawText, parseBillNumber);
+  if (zenith) return zenith;
   const text = rawText.replace(/\r\n?/g, "\n").replace(/\u00a0/g, " ");
   const lines = text.split("\n").map((line) => line.replace(/[ \t]+/g, " ").trim());
 
@@ -649,9 +669,11 @@ export function parseBillText(rawText: string, options: { currency?: string | nu
     totalInferred = true;
   }
 
+  const billType = detectBillType(text);
   return {
     name: detectName(lines),
-    billType: detectBillType(text),
+    billType,
+    contractColor: detectContractColor(lines, billType),
     currency: detectCurrency(text) ?? (options.currency ? options.currency.toUpperCase() : null),
     dueDate: detectDueDate(lines),
     total,

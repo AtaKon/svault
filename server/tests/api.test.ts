@@ -692,6 +692,71 @@ describe("bill text parsing", () => {
     assert.equal(text, "Water usage   23.13\nStanding charge   9.40");
   });
 
+  it("maps the Zenith electricity summary and reconciled supply details", () => {
+    const result = parseBillText([
+      "Σταθερό Τιμολόγιο", "Χρέωση Προμήθειας 31,12 €", "Ρυθμιζόμενες Χρεώσεις 10,24€",
+      "Φόροι - τέλη 3,03 €", "Χρεώσεις υπέρ Τρίτων 16,61€", "61,00 €",
+      "Σκανάρετε εδώ και", "πληρώστε εύκολα 12/11/2026", "61,00 € Ο λογαριασμός εξοφλείται",
+      "Πάγιο Τέλος   Δίκτυο Μεταφοράς", "09/09/2026 - 09/10/2026 30 ημ. = 11,90€ 149 kWhx0.01151€/kWh = 1,71 €",
+      "Κατανάλωση Ημέρας   Δίκτυο Διανομής", "09/09/2026 - 09/10/2026 149 kWh x 0.269 €/kWh = 40,08 €",
+      "Έκπτωσησυνέπειας Οκτ 26", "09/09/2026 - 09/10/2026 149 kWh x 0.14 €/kWh = -20,86 €", "www.zenith.gr",
+    ].join("\n"));
+    assert.equal(result.name, "Zenith");
+    assert.equal(result.billType, "electricity");
+    assert.equal(result.contractColor, "blue");
+    assert.equal(result.dueDate, "2026-11-12");
+    assert.equal(result.total, 61);
+    assert.equal(billLinesTotal(result.lines), 61);
+    assert.equal(result.lines[0].quantity, null);
+    assert.equal(result.lines[1].unitPrice, 0.269);
+    assert.equal(result.lines[2].kind, "discount");
+  });
+
+  it("maps Zenith gas without mixing the notice column into charge descriptions", () => {
+    const result = parseBillText([
+      "Προμήθεια Φυσικού Αερίου-ZeniΘ 96,75", "Διανομή Φυσικού Αερίου (ΕΔΑ) 28,63",
+      "Μεταφορά Φυσικού Αερίου (ΔΕΣΦΑ) 2,30", "Αξία Φ.Π.Α. 7,66", "25/06/2026 135,34 €",
+      "Πάγιο 07/03/26 15/05/26 70 15,40 •Ενδεχόμενες ανεξόφλητες προηγούμενες οφειλές δεν",
+      "Κατανάλωση 07/03/26 31/03/26 25 657,16 0,062 40,74 ανανεώνουν την ημερομηνία",
+      "Κατανάλωση 01/04/26 30/04/26 30 508,16 0,0825 41,92 ενημέρωση",
+      "Κατανάλωση 01/05/26 15/05/26 15 53,33 0,0745 3,97", "Έκπτωση Συνέπειας Dual Energy 11/09/25 13/01/26 125 -3,55",
+      "Έκπτωση Συνέπειας Dual Energy 14/01/26 06/03/26 52 -1,73", "Χρέωση Ενέργειας Διανομής 07/03/26 15/05/26 70 1.218,65 0,0150842 18,38",
+      "Χρέωση Δυναμικότητας Διανομής 07/03/26 15/05/26 70 50,11 0,002570247 9,02", "Προσαύξηση Διείσδυσης 07/03/26 15/05/26 70 1.218,65 0,0010061 1,23",
+      "Χρέωση Μεταφοράς 07/03/26 31/03/26 25 657,16 0,001995 1,31", "Χρέωση Μεταφοράς 01/04/26 30/04/26 30 508,16 0,001769 0,90",
+      "Χρέωση Μεταφοράς 01/05/26 15/05/26 15 53,33 0,00175 0,09",
+    ].join("\n"));
+    assert.equal(result.billType, "natural_gas");
+    assert.equal(result.contractColor, null);
+    assert.equal(result.dueDate, "2026-06-25");
+    assert.equal(result.total, 135.34);
+    assert.equal(result.subtotal, 127.68);
+    assert.equal(billLinesTotal(result.lines), 135.34);
+    assert.equal(result.lines[1].quantity, 657.16);
+    assert.equal(result.lines[1].unitPrice, 0.062);
+    assert.equal(result.lines[7].quantity, null);
+  });
+
+  it("preserves embedded PDF line breaks for parsing", () => {
+    const text = pdfItemsToText([{ str: "ZENITH\nΧρέωση ενέργειας 100 kWh 0,15 15,00\nΣΥΝΟΛΟ 15,00", transform: [1, 0, 0, 1, 0, 100], width: 100 }]);
+    const result = parseBillText(text);
+    assert.equal(result.name, "Zenith");
+    assert.equal(result.total, 15);
+    assert.equal(result.lines[0]?.amount, 15);
+  });
+
+  it("only detects an explicitly labelled electricity tariff color", () => {
+    assert.equal(parseBillText("ZENITH\nΗλεκτρική ενέργεια\nΠρόγραμμα: Πράσινο τιμολόγιο\nΣΥΝΟΛΟ 50,00").contractColor, "green");
+    assert.equal(parseBillText("ZENITH\nΗλεκτρική ενέργεια\nBlue sky\nΣΥΝΟΛΟ 50,00").contractColor, null);
+    assert.equal(parseBillText("Φυσικό αέριο\nΠρόγραμμα μπλε\nΣΥΝΟΛΟ 50,00").contractColor, null);
+    assert.equal(parseBillText("Ηλεκτρική ενέργεια\nΤιμολόγιο μπλε\nΤιμολόγιο πράσινο").contractColor, null);
+  });
+
+  it("does not turn a collapsed document into a fabricated charge", () => {
+    const result = parseBillText(`Χρέωση ${"αναλυτικές πληροφορίες ".repeat(12)} 15,00 20,00 30,00 40,00 50,00`);
+    assert.equal(result.lines.length, 0);
+    assert.equal(result.total, null);
+  });
+
   it("parses European, US and space-grouped amounts", () => {
     assert.equal(parseBillNumber("1.234,56"), 1234.56);
     assert.equal(parseBillNumber("1,234.56"), 1234.56);
