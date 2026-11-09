@@ -10,6 +10,7 @@ import {
   extractDictionary,
   extractServerMessages,
   findMissing,
+  PLACEHOLDER_SENTINEL,
 } from "./check-i18n.ts";
 
 test("extracts single-line and multi-line t() keys", () => {
@@ -87,7 +88,11 @@ test("normalizes interpolated and conditional server messages", () => {
   `);
   assert.deepEqual(
     messages.map((entry) => entry.key),
-    ["Daily limit ({x}). Try again tomorrow.", "Could not reach Open Prices", "Could not reach Folksonomy"],
+    [
+      `Daily limit (${PLACEHOLDER_SENTINEL}). Try again tomorrow.`,
+      "Could not reach Open Prices",
+      "Could not reach Folksonomy",
+    ],
   );
 
   const dictionary = new Set([
@@ -109,7 +114,7 @@ test("extracts JSON errors through chained status calls", () => {
 
 test("flags dynamic messages the dictionary cannot match", () => {
   const messages = extractServerMessages("throw new ApiError(400, `X ${one} of ${two}`);");
-  assert.deepEqual(messages.map((entry) => entry.key), ["X {x} of {x}"]);
+  assert.deepEqual(messages.map((entry) => entry.key), [`X ${PLACEHOLDER_SENTINEL} of ${PLACEHOLDER_SENTINEL}`]);
 
   const twoPlaceholders = new Set(["X {a} of {b}"]);
   assert.deepEqual(findMissing(twoPlaceholders, messages), []);
@@ -120,7 +125,7 @@ test("flags dynamic messages the dictionary cannot match", () => {
 
 test("requires matching placeholder counts for server messages", () => {
   const messages = extractServerMessages("throw new ApiError(400, `Value ${one}`);");
-  assert.deepEqual(messages.map((entry) => entry.key), ["Value {x}"]);
+  assert.deepEqual(messages.map((entry) => entry.key), [`Value ${PLACEHOLDER_SENTINEL}`]);
   assert.deepEqual(findMissing(new Set(["Value {a}"]), messages), []);
   assert.equal(findMissing(new Set(["Value {a} of {b}"]), messages).length, 1);
 });
@@ -139,13 +144,13 @@ test("excludes ultra-short dynamic keys like {count}d", () => {
 
 test("rejects lossy adjacent-placeholder matches", () => {
   const messages = extractServerMessages("throw new ApiError(400, `Value: ${one}`);");
-  assert.deepEqual(messages.map((entry) => entry.key), ["Value: {x}"]);
+  assert.deepEqual(messages.map((entry) => entry.key), [`Value: ${PLACEHOLDER_SENTINEL}`]);
   assert.equal(findMissing(new Set(["Value: {a}{b}"]), messages).length, 1);
 });
 
 test("flags client template calls that would bypass DYNAMIC_EL", () => {
   const keys = extractClientKeys("const label = t(`${count}d`);");
-  assert.deepEqual(keys.map((entry) => entry.key), ["{x}d"]);
+  assert.deepEqual(keys.map((entry) => entry.key), [PLACEHOLDER_SENTINEL + "d"]);
   const unmatchable = findMissing(new Set(["{count}d"]), keys);
   assert.equal(unmatchable.length, 1);
   assert.equal(unmatchable[0].reason, "unmatchable");
@@ -154,13 +159,14 @@ test("flags client template calls that would bypass DYNAMIC_EL", () => {
 
 test("accepts client dynamic keys that the runtime can match", () => {
   const keys = extractClientKeys("const label = t(`${count} items`);");
-  assert.deepEqual(keys.map((entry) => entry.key), ["{x} items"]);
+  assert.deepEqual(keys.map((entry) => entry.key), [PLACEHOLDER_SENTINEL + " items"]);
   assert.deepEqual(findMissing(new Set(["{count} items"]), keys), []);
 });
 
 test("covers dynamic key boundary shapes", () => {
   assert.equal(isDynamicTranslationKey("{count} d"), false);
   assert.equal(isDynamicTranslationKey("{a} {b}"), false);
+  assert.equal(isDynamicTranslationKey("{a}{b}"), false);
   assert.equal(isDynamicTranslationKey("{x}"), false);
   assert.equal(isDynamicTranslationKey("{field}: {message}"), true);
   assert.equal(isDynamicTranslationKey("{count} items"), true);
@@ -213,6 +219,13 @@ test("run-i18n-check is import-safe", async () => {
 
 test("rejects dynamic messages with extra literal text", () => {
   const messages = extractServerMessages("throw new ApiError(400, `Value ${one} of`);");
-  assert.deepEqual(messages.map((entry) => entry.key), ["Value {x} of"]);
+  assert.deepEqual(messages.map((entry) => entry.key), [`Value ${PLACEHOLDER_SENTINEL} of`]);
   assert.equal(findMissing(new Set(["Value {a}"]), messages).length, 1);
+});
+
+test("does not treat literal braces as placeholders", () => {
+  const messages = extractServerMessages('throw new ApiError(400, "Literal {x} text");');
+  assert.deepEqual(messages.map((entry) => entry.key), ["Literal {x} text"]);
+  assert.deepEqual(findMissing(new Set(["Literal {x} text"]), messages), []);
+  assert.equal(findMissing(new Set(["Literal {count} text"]), messages).length, 1);
 });
