@@ -230,11 +230,11 @@ test("does not treat literal braces as placeholders", () => {
   assert.equal(findMissing(new Set(["Literal {count} text"]), messages).length, 1);
 });
 
-test("does not confuse literal braces with interpolations", () => {
+test("normalizes braces in interpolated messages like runtime", () => {
   const messages = extractServerMessages("throw new ApiError(400, `Bad JSON {x}: ${detail}`);");
-  // EL uses braces for placeholders, so a message with literal braces cannot
-  // safely share a shape with a placeholder-bearing key.
-  assert.equal(findMissing(new Set(["Bad JSON {x}: {detail}"]), messages).length, 1);
+  // DYNAMIC_EL treats every brace token as a placeholder, so the checker mirrors
+  // that for interpolated messages.
+  assert.deepEqual(findMissing(new Set(["Bad JSON {x}: {detail}"]), messages), []);
 });
 
 test("keeps literal short dynamic keys available for exact lookup", () => {

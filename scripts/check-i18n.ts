@@ -16,9 +16,9 @@ import { buildDynamicMatcher } from "../shared/i18n";
  * `*.status(...).json({ error })`. Other error constructors, `send()`
  * responses and dynamic `t(someVariable)` client calls are not resolved.
  *
- * Interpolated messages that also contain literal brace text are treated as
- * unsupported: EL reserves braces for placeholders, so such a message cannot
- * be represented safely and is reported instead of being silently conflated.
+ * Interpolated messages normalize brace-like tokens the same way as EL keys,
+ * mirroring DYNAMIC_EL at runtime. Literal braces in static messages are not
+ * treated as placeholders.
  */
 
 export type TranslationEntry = {
@@ -226,6 +226,13 @@ function placeholderCount(normalizedKey: string): number {
   return normalizedKey.split(PLACEHOLDER_SENTINEL).length - 1;
 }
 
+function normalizeEntryKey(key: string): string {
+  // DYNAMIC_EL treats any brace token as a placeholder, so escaped literal
+  // braces in interpolated messages are collapsed back to a placeholder for
+  // shape comparison.
+  return normalizeKey(key).replace(/\u001e[\s\S]*?\u001d/g, PLACEHOLDER_SENTINEL);
+}
+
 export function findMissing(dictionary: Set<string>, entries: TranslationEntry[]): TranslationEntry[] {
   const dynamicByShape = new Map<string, { regex: RegExp; names: string[] }[]>();
   for (const key of dictionary) {
@@ -249,16 +256,17 @@ export function findMissing(dictionary: Set<string>, entries: TranslationEntry[]
       continue;
     }
 
-    const count = placeholderCount(entry.key);
-    const sample = entry.key.split(PLACEHOLDER_SENTINEL).join("v");
+    const normalized = normalizeEntryKey(entry.key);
+    const count = placeholderCount(normalized);
+    const sample = normalized.split(PLACEHOLDER_SENTINEL).join("v");
     // Match the exact normalized shape, the same placeholder count, and run
     // the shared matcher just as DYNAMIC_EL does at runtime.
     const found =
       dynamicByShape
-        .get(entry.key)
+        .get(normalized)
         ?.some((matcher) => matcher.names.length === count && matcher.regex.test(sample)) ?? false;
     if (!found) {
-      const reason = normalizedDictionary.has(entry.key) ? "unmatchable" : "missing";
+      const reason = normalizedDictionary.has(normalized) ? "unmatchable" : "missing";
       missing.push({ ...entry, reason });
     }
   }
