@@ -1,3 +1,4 @@
+import { pathToFileURL } from "node:url";
 import { checkRepository } from "./check-i18n";
 
 /** Explicit entrypoint for `npm test`; always scans the repository root. */
@@ -17,4 +18,6 @@ export function runI18nCheck(): void {
   console.log(`i18n check passed (${dictionary.size} EL keys).`);
 }
 
-runI18nCheck();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  runI18nCheck();
+}

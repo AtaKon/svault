@@ -2463,6 +2463,8 @@ const EL: Record<string, string> = {
   "Open Food Facts returned an unexpected response": "Το Open Food Facts επέστρεψε μη αναμενόμενη απάντηση.",
   "Open Food Facts login failed ({status})": "Η σύνδεση στο Open Food Facts απέτυχε ({status})",
   "The Open Food Facts account was not accepted by {service}": "Ο λογαριασμός Open Food Facts δεν έγινε δεκτός από {service}",
+  "The Open Food Facts account was not accepted by Open Prices": "Ο λογαριασμός Open Food Facts δεν έγινε δεκτός από το Open Prices.",
+  "The Open Food Facts account was not accepted by Folksonomy": "Ο λογαριασμός Open Food Facts δεν έγινε δεκτός από το Folksonomy.",
   "{project} does not accept contributions": "Το {project} δεν δέχεται συνεισφορές",
   "{project} product {code} is already linked to {name}": "Το προϊόν {code} του {project} είναι ήδη συνδεδεμένο με το «{name}»",
   "Daily contribution limit reached ({count}). Try again tomorrow.": "Το ημερήσιο όριο συνεισφορών εξαντλήθηκε ({count}). Δοκίμασε ξανά αύριο.",

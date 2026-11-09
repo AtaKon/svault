@@ -188,3 +188,14 @@ test("SV_I18N_ROOT cannot redirect the default scan", () => {
     else process.env.SV_I18N_ROOT = original;
   }
 });
+
+test("static server messages require an exact translation", () => {
+  const messages = extractServerMessages('throw new ApiError(404, "Widget failed");');
+  assert.equal(findMissing(new Set(["Widget failed"]), messages).length, 0);
+  assert.equal(findMissing(new Set(["{field} failed"]), messages).length, 1);
+});
+
+test("run-i18n-check is import-safe", async () => {
+  const module = await import("./run-i18n-check.ts");
+  assert.equal(typeof module.runI18nCheck, "function");
+});

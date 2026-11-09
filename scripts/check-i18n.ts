@@ -228,9 +228,9 @@ export function findMissing(dictionary: Set<string>, entries: TranslationEntry[]
       // Require the same placeholder count as runtime would substitute, so a
       // lossy cross-count match is not accepted as a translated message.
       found = dynamicMatchers.some((matcher) => matcher.names.length === count && matcher.regex.test(sample));
-    } else if (entry.kind === "server") {
-      found = dynamicMatchers.some((matcher) => matcher.regex.test(entry.key));
     } else {
+      // Static messages (client or server) must have an exact translation;
+      // dynamic patterns must not mask a missing literal.
       found = false;
     }
     if (!found) missing.push(entry);

@@ -89,6 +89,8 @@ planRoutes.get(
     const { houseId } = await requireHouse(req);
     const weekStart = mondayOf(req.query.week ? String(req.query.week) : null);
     const weekEnd = addDays(weekStart, 6);
+    // await every entry: serializeEntry is async, and a failure should surface
+    // as a request error instead of silently serializing as {}.
     const entries = await Promise.all(
       (await all<any>(
         "SELECT * FROM meal_plan_entries WHERE house_id = ? AND day >= ? AND day <= ? ORDER BY day, slot, sort, created_at",
