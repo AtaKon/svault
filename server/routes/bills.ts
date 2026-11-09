@@ -240,6 +240,11 @@ const patchInput = z.object({
   source: z.enum(["manual", "scan"]).optional(),
 }).strict();
 
+/** Provenance is derived from the stored OCR data, never trusted from clients. */
+function derivedSource(breakdown: BillBreakdownLine[], ocrText: string | null | undefined): "manual" | "scan" {
+  return breakdown.length > 0 || Boolean(ocrText?.trim()) ? "scan" : "manual";
+}
+
 function serialize(row: BillRow): UtilityBill {
   const parsedBreakdown = parseJson<unknown>(row.breakdown, []);
   return {
@@ -357,7 +362,7 @@ billRoutes.post("/:houseId/bills", requireHouseBillMember, billUpload.single("do
       tax_total: body.taxTotal ?? null,
       breakdown: JSON.stringify(breakdown),
       ocr_text: body.ocrText || null,
-      source: body.source ?? "manual",
+      source: derivedSource(breakdown, body.ocrText),
       created_at: now(),
     };
   } catch (error) {
@@ -410,9 +415,12 @@ singleBillRoutes.patch("/:billId", handler(async (req, res) => {
   const breakdown = body.breakdown === undefined
     ? normalizeStoredBreakdown(storedBreakdown)
     : sanitizeBreakdown(body.breakdown);
-  // Coerce legacy/non-enum values so the validated source constraint cannot
-  // fail an update just because an old row predates the source column.
-  const source = body.source ?? (current.source === "scan" ? "scan" : "manual");
+  // Derive provenance from the effective OCR data. Clients may send `source`
+  // for compatibility, but it is ignored; legacy values are normalised too.
+  const nextOcrText = body.ocrText === undefined ? current.ocr_text : body.ocrText;
+  const source = body.breakdown !== undefined || body.ocrText !== undefined
+    ? derivedSource(breakdown, nextOcrText)
+    : (current.source === "scan" ? "scan" : "manual");
   await run(`UPDATE bills SET name = ?, bill_type = ?, category = ?, ledger_confirmed = ?, amount = ?, due_date = ?, paid_by = ?, split_with = ?, notes = ?,
     subtotal = ?, tax_total = ?, breakdown = ?, ocr_text = ?, source = ? WHERE id = ?`, [
     body.name ?? current.name, body.billType ?? current.bill_type ?? "other", category, ledgerConfirmed ? 1 : 0, body.amount ?? current.amount,

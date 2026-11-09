@@ -295,7 +295,7 @@ CREATE TABLE IF NOT EXISTS bills (
   tax_total DOUBLE PRECISION,
   breakdown TEXT NOT NULL DEFAULT '[]',
   ocr_text TEXT,
-  source TEXT NOT NULL DEFAULT 'manual' CHECK (source IN ('manual', 'scan')),
+  source TEXT NOT NULL DEFAULT 'manual' CONSTRAINT bills_source_check CHECK (source IN ('manual', 'scan')),
   created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL
 );
@@ -804,17 +804,12 @@ export const POSTGRES_MIGRATIONS: string[] = [
   // backfilled first so the constraint can validate every existing row.
   `DO $$
   BEGIN
-    IF to_regclass('bills') IS NOT NULL THEN
-      UPDATE bills SET source = 'manual' WHERE source IS NULL OR source NOT IN ('manual', 'scan');
-    END IF;
-  END $$`,
-  `DO $$
-  BEGIN
     IF to_regclass('bills') IS NOT NULL
       AND NOT EXISTS (
         SELECT 1 FROM pg_constraint
         WHERE conname = 'bills_source_check' AND conrelid = to_regclass('bills')
       ) THEN
+      UPDATE bills SET source = 'manual' WHERE source IS NULL OR source NOT IN ('manual', 'scan');
       ALTER TABLE bills ADD CONSTRAINT bills_source_check CHECK (source IN ('manual', 'scan'));
     END IF;
   END $$`,

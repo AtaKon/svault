@@ -79,8 +79,9 @@ const SUPPLIERS: Array<[RegExp, string]> = [
   [/ευδαπ|eydap/, "ΕΥΔΑΠ"],
   [/ευαθ|eyath/, "ΕΥΑΘ"],
   [/κοσμοτε|cosmote/, "Cosmote"],
-  [/βονταφον|βοdaφων|vodafone/, "Vodafone"],
-  [/\bnova\b|\bwind\b/, "Nova"],
+  [/βονταφον|vodafone/, "Vodafone"],
+  [/\bnova\b/, "Nova"],
+  [/\bwind\b/, "Wind"],
   [/\bote\b|(?:^|[^α-ω])οτε(?:[^α-ω]|$)/u, "OTE"],
   [/ηρων|heron/, "Ηρών"],
   [/elpedison|ελπεντισον/, "Elpedison"],
@@ -284,6 +285,9 @@ function detectDueDate(lines: string[]): string | null {
         const dueDate = parseDateText(lines[index].slice(afterLabel));
         if (dueDate) return dueDate;
       }
+      // The line carried an issue label too; falling through to the next line
+      // risks picking up an adjacent issue date, so leave it unset.
+      continue;
     } else {
       const sameLine = parseDateText(lines[index]);
       if (sameLine) return sameLine;
@@ -301,7 +305,7 @@ function detectDueDate(lines: string[]): string | null {
 }
 
 function detectCurrency(text: string): string | null {
-  if (/€|\beur\b/i.test(text)) return "EUR";
+  if (/\d\s?€|€\s?\d|\beur\b/i.test(text)) return "EUR";
   // Require a currency-like amount so a stray symbol in a URL or slogan does
   // not decide the bill currency.
   if (/£\s?\d|\bgbp\b/i.test(text)) return "GBP";
@@ -371,6 +375,10 @@ function taxAmount(values: number[], rate: number | null): { amount: number | nu
       if (Math.abs(base * rate / 100 - tax) <= Math.max(0.03, Math.abs(tax) * 0.02)) {
         return { amount: tax, base };
       }
+      // Some layouts print tax before the net amount.
+      if (Math.abs(tax * rate / 100 - base) <= Math.max(0.03, Math.abs(base) * 0.02)) {
+        return { amount: base, base: tax };
+      }
     }
     // A printed rate that does not reconcile leaves the column order unclear.
     return { amount: null, base: null };
@@ -435,11 +443,15 @@ function chargeLine(line: string): BillBreakdownLine | null {
       }
     } else if (candidates.length === 1) {
       const value = candidates[0].value;
-      // A small number after a large quantity is usually the unit price; the
-      // printed amount is elsewhere, so skip instead of inventing both.
-      if (value < 1 && quantity >= 10) return null;
-      amount = value;
-      unitPrice = quantity > 0 ? amount / quantity : null;
+      if (value < 1 && quantity >= 10) {
+        // A small number after a large quantity is usually the unit price;
+        // derive the line amount instead of dropping the charge.
+        unitPrice = value;
+        amount = round2(quantity * value);
+      } else {
+        amount = value;
+        unitPrice = quantity > 0 ? amount / quantity : null;
+      }
     }
   } else if (quantity != null && unitPrice != null) {
     amount = candidates.length ? candidates[candidates.length - 1].value : quantity * unitPrice;

@@ -171,11 +171,14 @@ export function BillsPage() {
         { currency: house.currency || "EUR" },
       );
       if (run !== scanRun.current) return;
-      applyScan(scan.result, scan.text);
-      if (!scan.result.lines.length && scan.result.total == null) {
-        toast.error(t("No amount or breakdown was recognised. Check the file or enter the bill manually."));
-      } else {
+      const found = scan.result.lines.length > 0 || scan.result.total != null ||
+        scan.result.subtotal != null || scan.result.taxTotal != null;
+      if (found) {
+        applyScan(scan.result, scan.text);
         toast.success(t("Bill details filled from the file"));
+      } else {
+        // Do not mark a failed scan as provenance or replace the file state.
+        toast.error(t("No amount or breakdown was recognised. Check the file or enter the bill manually."));
       }
     } catch (error) {
       if (run !== scanRun.current) return;
@@ -291,7 +294,7 @@ export function BillsPage() {
       }
       const scan = await scanBillFile(saved, (progress) => setReadingProgress(progress), { currency: bill.currency });
       if (!scan.result.lines.length && scan.result.subtotal == null && scan.result.taxTotal == null) {
-        toast.error(t("No amount or breakdown was recognised in this document."));
+        toast.error(t("No new breakdown was recognised; the saved bill was left unchanged."));
         return;
       }
       const body: Record<string, unknown> = {

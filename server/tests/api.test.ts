@@ -710,6 +710,16 @@ describe("bill text parsing", () => {
     assert.equal(parseBillNumber("+12,50"), 12.5);
   });
 
+  it("drops a date on a total row without touching the grouped amount", () => {
+    const result = parseBillText("ΣΥΝΟΛΟ 15/03/2024 1.234,56");
+    assert.equal(result.total, 1234.56);
+  });
+
+  it("reconciles a tax row that prints the tax before the net", () => {
+    const result = parseBillText("VAT 24% 2,40 10,00");
+    assert.equal(result.lines.find((line) => line.kind === "tax")?.amount, 2.4);
+  });
+
   it("keeps large grouped totals while dropping real dates", () => {
     const result = parseBillText([
       "ΔΕΗ",
@@ -774,9 +784,10 @@ describe("bill text parsing", () => {
     assert.equal(twoValuesNoRate.lines.some((line) => line.kind === "tax"), false);
   });
 
-  it("skips a lone unit price instead of inventing an amount", () => {
+  it("derives the amount when only a unit price is printed", () => {
     const result = parseBillText("Κατανάλωση 100 kWh 0,15");
-    assert.equal(result.lines.length, 0);
+    assert.equal(result.lines[0]?.unitPrice, 0.15);
+    assert.equal(result.lines[0]?.amount, 15);
   });
 
   it("subtracts credits from an inferred subtotal", () => {
@@ -6620,11 +6631,15 @@ describe("insights, household split and admin console", () => {
     assert.equal(cleared.data.taxTotal, null);
     assert.equal(cleared.data.ocrText, null);
     assert.deepEqual(cleared.data.breakdown, []);
-    const sourceScan = await request(`/api/bills/${accepted.data.id}`, { method: "PATCH", body: { source: "scan" } });
+    assert.equal(cleared.data.source, "manual", "clearing OCR fields returns provenance to manual");
+    const sourceScan = await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { ocrText: "source scan text", source: "manual" },
+    });
     assert.equal(sourceScan.status, 200);
-    assert.equal(sourceScan.data.source, "scan");
+    assert.equal(sourceScan.data.source, "scan", "provenance is derived from stored OCR data, not the client flag");
     const sourcePreserved = await request(`/api/bills/${accepted.data.id}`, { method: "PATCH", body: { notes: "keep provenance" } });
-    assert.equal(sourcePreserved.data.source, "scan", "omitting source preserves it");
+    assert.equal(sourcePreserved.data.source, "scan", "omitting OCR fields preserves provenance");
     const invalidBreakdown = await request(`/api/bills/${accepted.data.id}`, {
       method: "PATCH",
       body: { breakdown: [{ description: "", kind: "charge", amount: 1 }] },
@@ -6834,7 +6849,7 @@ describe("insights, household split and admin console", () => {
       },
     });
     assert.equal(manualWithBreakdown.status, 201);
-    assert.equal(manualWithBreakdown.data.source, "manual", "an unspecified source stays manual");
+    assert.equal(manualWithBreakdown.data.source, "scan", "breakdown data implies scan provenance");
     const personalPatch = await request(`/api/bills/${manualWithBreakdown.data.id}`, {
       method: "PATCH",
       body: {
