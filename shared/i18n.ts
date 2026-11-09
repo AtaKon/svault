@@ -1,0 +1,27 @@
+/**
+ * Ultra-short dynamic patterns such as "{count}d" would match unrelated English
+ * copy (for example any server message ending in "d"). They are only used
+ * through literal t("{count}d") calls, where DYNAMIC_EL is not needed.
+ */
+export const DYNAMIC_KEY_MIN_LITERAL_LENGTH = 2;
+
+export function isDynamicTranslationKey(key: string): boolean {
+  if (!/\{[A-Za-z_$][\w$]*\}/.test(key)) return false;
+  return key.replace(/\{[A-Za-z_$][\w$]*\}/g, "").trim().length >= DYNAMIC_KEY_MIN_LITERAL_LENGTH;
+}
+
+export function buildDynamicMatcher(key: string): { regex: RegExp; names: string[] } | null {
+  if (!isDynamicTranslationKey(key)) return null;
+  const names: string[] = [];
+  let pattern = "";
+  for (const part of key.split(/(\{[A-Za-z_$][\w$]*\})/g)) {
+    const placeholder = /^\{([A-Za-z_$][\w$]*)\}$/.exec(part);
+    if (placeholder) {
+      names.push(placeholder[1]);
+      pattern += "([\\s\\S]*?)";
+    } else {
+      pattern += part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+  }
+  return { regex: new RegExp("^" + pattern + "$"), names };
+}

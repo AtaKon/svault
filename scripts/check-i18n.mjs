@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
+import { buildDynamicMatcher } from "../shared/i18n.ts";
 
 /**
  * Guards against translation regressions:
@@ -19,6 +20,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 function walk(dir) {
   const files = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === "node_modules") continue;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) files.push(...walk(full));
     else if (/\.(ts|tsx)$/.test(entry.name)) files.push(full);
@@ -86,13 +88,36 @@ export function extractClientKeys(source, file = "fixture.tsx") {
     if (!variants.length) return;
     for (const key of variants) {
       if (!key.trim() || !/[A-Za-z\u0370-\u03ff]/.test(key)) continue;
-      keys.push({ key, file, line: lineOf(sourceFile, node) });
+      keys.push({ key, file, line: lineOf(sourceFile, node), kind: "client" });
     }
   });
   return keys;
 }
 
 const ERROR_HELPERS = new Set(["notFound", "badRequest", "forbidden", "conflict"]);
+
+/** Walk a chained expression down to any `.status(...)` call. */
+function hasStatusCall(node) {
+  let current = node;
+  while (current) {
+    if (ts.isCallExpression(current)) {
+      const callee = current.expression;
+      if (ts.isPropertyAccessExpression(callee) && callee.name.text === "status") return true;
+      current = callee;
+      continue;
+    }
+    if (ts.isPropertyAccessExpression(current)) {
+      current = current.expression;
+      continue;
+    }
+    if (ts.isParenthesizedExpression(current)) {
+      current = current.expression;
+      continue;
+    }
+    return false;
+  }
+  return false;
+}
 
 /** Server messages that are later rendered through t(error.message). */
 export function extractServerMessages(source, file = "fixture.ts") {
@@ -104,7 +129,7 @@ export function extractServerMessages(source, file = "fixture.ts") {
     if (!variants.length) return;
     for (const key of variants) {
       if (!key.trim()) continue;
-      messages.push({ key, file, line: lineOf(sourceFile, argument) });
+      messages.push({ key, file, line: lineOf(sourceFile, argument), kind: "server" });
     }
   };
 
@@ -121,13 +146,11 @@ export function extractServerMessages(source, file = "fixture.ts") {
       collect(node.arguments[0]);
       return;
     }
-    // res.status(...).json({ error: "..." })
+    // res.status(...)[.type(...)].json({ error: "..." }) and any receiver
     if (
       ts.isPropertyAccessExpression(node.expression) &&
       node.expression.name.text === "json" &&
-      ts.isCallExpression(node.expression.expression) &&
-      ts.isPropertyAccessExpression(node.expression.expression.expression) &&
-      node.expression.expression.expression.name.text === "status"
+      hasStatusCall(node.expression.expression)
     ) {
       const body = node.arguments[0];
       if (!body || !ts.isObjectLiteralExpression(body)) return;
@@ -170,24 +193,25 @@ export function normalizeKey(key) {
 }
 
 export function findMissing(dictionary, entries) {
-  const normalizedDictionary = new Set([...dictionary].map(normalizeKey));
   const dynamicPatterns = [];
   for (const key of dictionary) {
-    if (normalizeKey(key) === key) continue;
-    // Mirror DYNAMIC_EL: ignore ultra-short literal fragments such as "{count}d".
-    if (key.replace(/\{[A-Za-z_$][\w$]*\}/g, "").trim().length < 2) continue;
-    const pattern = normalizeKey(key)
-      .replace(/[.*+?^$()|[\]\\]/g, "\\$&")
-      .replace(/\{x\}/g, "[\\s\\S]*");
-    dynamicPatterns.push(new RegExp("^" + pattern + "$"));
+    const matcher = buildDynamicMatcher(key);
+    if (matcher) dynamicPatterns.push(matcher.regex);
   }
 
   const missing = [];
   for (const entry of entries) {
+    if (entry.kind === "client") {
+      if (!dictionary.has(entry.key)) missing.push(entry);
+      continue;
+    }
     const dynamic = normalizeKey(entry.key) !== entry.key || entry.key.includes("{x}");
     let found;
     if (dynamic) {
-      found = normalizedDictionary.has(normalizeKey(entry.key));
+      // Mirror DYNAMIC_EL: substitute a concrete sample into the server message
+      // shape and let the shared matcher decide whether the dictionary covers it.
+      const sample = entry.key.replace(/\{x\}/g, "Sample");
+      found = dynamicPatterns.some((pattern) => pattern.test(sample));
     } else {
       found = dictionary.has(entry.key) || dynamicPatterns.some((pattern) => pattern.test(entry.key));
     }

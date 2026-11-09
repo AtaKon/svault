@@ -4583,7 +4583,12 @@ describe("weekly meal planner", () => {
     assert.equal(dashboard.data.plan.weekStart, weekStart);
     const currentWeek = await request(`/api/houses/${houseId}/plan?week=${weekStart}`);
     assert.equal(currentWeek.status, 200);
-    assert.ok(currentWeek.data.entries.some((entry: any) => entry.id === seeded.data.id));
+    const serialized = currentWeek.data.entries.find((entry: any) => entry.id === seeded.data.id);
+    assert.ok(serialized);
+    assert.equal(serialized.day, weekStart);
+    assert.equal(serialized.recipeId, recipeId);
+    assert.equal(serialized.servings, 2);
+    assert.equal(serialized.title, "Plan rice bowl");
     assert.equal(dashboard.data.plan.week, currentWeek.data.entries.length);
   });
 });

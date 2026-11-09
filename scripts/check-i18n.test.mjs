@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { buildDynamicMatcher } from "../shared/i18n.ts";
 import {
   extractClientKeys,
   extractDictionary,
@@ -91,4 +92,33 @@ test("normalizes interpolated and conditional server messages", () => {
     "Could not reach Folksonomy",
   ]);
   assert.deepEqual(findMissing(dictionary, messages), []);
+});
+
+test("extracts JSON errors through chained status calls", () => {
+  const messages = extractServerMessages(`
+    res.status(400).type("json").json({ error: "Chained error" });
+    reply.status(500).json({ error: "Reply error" });
+    res.json({ error: "No status call" });
+  `);
+  assert.deepEqual(messages.map((entry) => entry.key), ["Chained error", "Reply error"]);
+});
+
+test("flags dynamic messages the dictionary cannot match", () => {
+  const messages = extractServerMessages("throw new ApiError(400, `X ${one} of ${two}`);");
+  assert.deepEqual(messages.map((entry) => entry.key), ["X {x} of {x}"]);
+
+  const twoPlaceholders = new Set(["X {a} of {b}"]);
+  assert.deepEqual(findMissing(twoPlaceholders, messages), []);
+
+  const threePlaceholders = new Set(["X {a} of {b} of {c}"]);
+  assert.equal(findMissing(threePlaceholders, messages).length, 1);
+});
+
+test("excludes ultra-short dynamic keys like {count}d", () => {
+  assert.equal(buildDynamicMatcher("{count}d"), null);
+  assert.equal(buildDynamicMatcher("{count}d ago")?.regex.test("3d ago"), true);
+
+  const dictionary = new Set(["{count}d"]);
+  const unrelated = { key: "Catalogue sync failed", file: "fixture", line: 1 };
+  assert.deepEqual(findMissing(dictionary, [unrelated]), [unrelated]);
 });

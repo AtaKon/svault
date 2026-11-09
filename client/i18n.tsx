@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { api } from "./api";
 import { useAuth } from "./state";
 import { setFormatLocale } from "./format";
+import { buildDynamicMatcher } from "@shared/i18n";
 
 export type Language = "en" | "el";
 
@@ -2550,22 +2551,10 @@ const EL: Record<string, string> = {
   "The receipt image is missing": "Λείπει η εικόνα της απόδειξης.",
 };
 
-const DYNAMIC_EL = Object.entries(EL)
-  .filter(([key]) => /\{[a-zA-Z]\w*\}/.test(key))
-  // Ultra-short patterns such as "{count}d" would otherwise match unrelated
-  // English copy (e.g. any server message ending in "d"). They are only used
-  // through literal t("{count}d") calls, where DYNAMIC_EL is not needed.
-  .filter(([key]) => key.replace(/\{[a-zA-Z]\w*\}/g, "").trim().length >= 2)
-  .map(([key, value]) => {
-    const names: string[] = [];
-    const pattern = key
-      .replace(/[.*+?^$()|[\]\\]/g, "\\$&")
-      .replace(/\{([a-zA-Z]\w*)\}/g, (_match, name: string) => {
-        names.push(name);
-        return "([\\s\\S]*?)";
-      });
-    return { regex: new RegExp("^" + pattern + "$"), names, value };
-  });
+const DYNAMIC_EL = Object.entries(EL).flatMap(([key, value]) => {
+  const matcher = buildDynamicMatcher(key);
+  return matcher ? [{ ...matcher, value }] : [];
+});
 
 interface I18nValue {
   language: Language;
