@@ -217,10 +217,7 @@ export function findMissing(dictionary: Set<string>, entries: TranslationEntry[]
 
   const missing: TranslationEntry[] = [];
   for (const entry of entries) {
-    if (entry.kind === "client") {
-      if (!dictionary.has(entry.key)) missing.push(entry);
-      continue;
-    }
+    if (dictionary.has(entry.key)) continue;
 
     const normalized = normalizeKey(entry.key);
     const dynamic = normalized !== entry.key || entry.key.includes("{x}");
@@ -231,8 +228,10 @@ export function findMissing(dictionary: Set<string>, entries: TranslationEntry[]
       // Require the same placeholder count as runtime would substitute, so a
       // lossy cross-count match is not accepted as a translated message.
       found = dynamicMatchers.some((matcher) => matcher.names.length === count && matcher.regex.test(sample));
+    } else if (entry.kind === "server") {
+      found = dynamicMatchers.some((matcher) => matcher.regex.test(entry.key));
     } else {
-      found = dictionary.has(entry.key) || dynamicMatchers.some((matcher) => matcher.regex.test(entry.key));
+      found = false;
     }
     if (!found) missing.push(entry);
   }

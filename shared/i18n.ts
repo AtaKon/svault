@@ -6,8 +6,10 @@
 export const DYNAMIC_KEY_MIN_LITERAL_LENGTH = 2;
 
 export function isDynamicTranslationKey(key: string): boolean {
-  if (!/\{[A-Za-z_$][\w$]*\}/.test(key)) return false;
-  return key.replace(/\{[A-Za-z_$][\w$]*\}/g, "").trim().length >= DYNAMIC_KEY_MIN_LITERAL_LENGTH;
+  const placeholders = key.match(/\{[A-Za-z_$][\w$]*\}/g) ?? [];
+  if (!placeholders.length) return false;
+  const literalLength = key.replace(/\{[A-Za-z_$][\w$]*\}/g, "").trim().length;
+  return literalLength >= DYNAMIC_KEY_MIN_LITERAL_LENGTH || (placeholders.length >= 2 && literalLength >= 1);
 }
 
 export function buildDynamicMatcher(key: string): { regex: RegExp; names: string[] } | null {

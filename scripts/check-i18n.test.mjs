@@ -134,3 +134,17 @@ test("flags client template calls that would bypass DYNAMIC_EL", () => {
   assert.deepEqual(keys.map((entry) => entry.key), ["{x}d"]);
   assert.equal(findMissing(new Set(["{count}d"]), keys).length, 1);
 });
+
+test("accepts client dynamic keys that the runtime can match", () => {
+  const keys = extractClientKeys("const label = t(`${count} items`);");
+  assert.deepEqual(keys.map((entry) => entry.key), ["{x} items"]);
+  assert.deepEqual(findMissing(new Set(["{count} items"]), keys), []);
+});
+
+test("covers dynamic key boundary shapes", () => {
+  assert.equal(buildDynamicMatcher("{count} d"), null);
+  assert.equal(buildDynamicMatcher("{a} {b}"), null);
+  assert.equal(buildDynamicMatcher("{x}"), null);
+  assert.notEqual(buildDynamicMatcher("{field}: {message}"), null);
+  assert.notEqual(buildDynamicMatcher("{count} items"), null);
+});
