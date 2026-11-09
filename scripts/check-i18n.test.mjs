@@ -210,3 +210,9 @@ test("run-i18n-check is import-safe", async () => {
   const module = await import("./run-i18n-check.ts");
   assert.equal(typeof module.runI18nCheck, "function");
 });
+
+test("rejects dynamic messages with extra literal text", () => {
+  const messages = extractServerMessages("throw new ApiError(400, `Value ${one} of`);");
+  assert.deepEqual(messages.map((entry) => entry.key), ["Value {x} of"]);
+  assert.equal(findMissing(new Set(["Value {a}"]), messages).length, 1);
+});

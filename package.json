@@ -18,7 +18,7 @@
     "build:api": "tsc -p tsconfig.server.json",
     "start": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning dist/server/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --import tsx scripts/run-i18n-check.ts && node --import tsx --disable-warning=ExperimentalWarning --test server/tests/api.test.ts scripts/check-i18n.test.mjs",
+    "test": "node scripts/test-all.mjs",
     "test:i18n": "node --import tsx scripts/run-i18n-check.ts && node --import tsx --test scripts/check-i18n.test.mjs",
     "test:postgres": "node --env-file-if-exists=.env --import tsx --disable-warning=ExperimentalWarning scripts/test-postgres.mjs",
     "seed": "node --env-file-if-exists=.env --import tsx --disable-warning=ExperimentalWarning server/seed.ts",

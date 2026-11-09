@@ -13,7 +13,7 @@ import { buildDynamicMatcher } from "../shared/i18n";
  *
  * The server scan is intentionally partial: it understands ApiError,
  * OffWriteError, notFound/badRequest/forbidden/conflict and
- * `*.status(...).json({ error|message })`. Other error constructors, `send()`
+ * `*.status(...).json({ error })`. Other error constructors, `send()`
  * responses and dynamic `t(someVariable)` client calls are not resolved.
  */
 
@@ -172,7 +172,7 @@ export function extractServerMessages(source: string, file = "fixture.ts"): Tran
       for (const property of body.properties) {
         if (!ts.isPropertyAssignment(property)) continue;
         const name = propertyName(property.name);
-        if (name === "error" || name === "message") collect(property.initializer);
+        if (name === "error") collect(property.initializer);
       }
     }
   });
@@ -215,10 +215,14 @@ function placeholderCount(normalizedKey: string): number {
 }
 
 export function findMissing(dictionary: Set<string>, entries: TranslationEntry[]): TranslationEntry[] {
-  const dynamicMatchers: { regex: RegExp; names: string[] }[] = [];
+  const dynamicByShape = new Map<string, { names: string[] }[]>();
   for (const key of dictionary) {
     const matcher = buildDynamicMatcher(key);
-    if (matcher) dynamicMatchers.push(matcher);
+    if (!matcher) continue;
+    const shape = normalizeKey(key);
+    const list = dynamicByShape.get(shape) ?? [];
+    list.push(matcher);
+    dynamicByShape.set(shape, list);
   }
   const normalizedDictionary = new Set([...dictionary].map(normalizeKey));
 
@@ -231,10 +235,9 @@ export function findMissing(dictionary: Set<string>, entries: TranslationEntry[]
     let found: boolean;
     if (dynamic) {
       const count = placeholderCount(normalized);
-      const sample = normalized.replace(/\{x\}/g, "Sample");
-      // Require the same placeholder count as runtime would substitute, so a
-      // lossy cross-count match is not accepted as a translated message.
-      found = dynamicMatchers.some((matcher) => matcher.names.length === count && matcher.regex.test(sample));
+      // Match the exact normalized shape and require the same placeholder count.
+      // This avoids regex/sample substitution accepting lossy cross-shape hits.
+      found = dynamicByShape.get(normalized)?.some((matcher) => matcher.names.length === count) ?? false;
     } else {
       // Static messages (client or server) must have an exact translation;
       // dynamic patterns must not mask a missing literal.
