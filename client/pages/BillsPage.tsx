@@ -9,7 +9,8 @@ import { useI18n } from "@/i18n";
 import { BILL_TYPE_LABELS, BILL_TYPE_VALUES } from "@shared/bill-types";
 import { splitAmountEvenly } from "@shared/bill-splitting";
 import type { BillBreakdownLine, BillParseResult, UtilityBill } from "@shared/types";
-import { fetchBillFile, isSupportedBillFile, scanBillFile } from "@/bill-scan";
+import { fetchBillFile, isSupportedBillFile } from "@shared/bill-document";
+import { scanBillFile } from "@/bill-scan";
 
 type Member = { userId: string; name: string; role: string };
 type Household = { currency: string; members: Member[] };
@@ -82,6 +83,13 @@ export function BillsPage() {
   const [breakdown, setBreakdown] = useState<BillBreakdownLine[]>([]);
   const [ocrText, setOcrText] = useState("");
   const [scanned, setScanned] = useState(false);
+  const [scanSnapshot, setScanSnapshot] = useState<{
+    /** Values the previous scan filled; null means the user owns that field. */
+    name: string | null;
+    billType: UtilityBill["billType"] | null;
+    amount: string | null;
+    dueDate: string | null;
+  } | null>(null);
   const [scanning, setScanning] = useState(false);
   const [scanProgress, setScanProgress] = useState(0);
   const [readingBillId, setReadingBillId] = useState<string | null>(null);
@@ -111,15 +119,37 @@ export function BillsPage() {
   useEffect(() => { void load(); }, [load]);
 
   const applyScan = (result: BillParseResult, text: string) => {
-    // Keep values the user typed before choosing a file; a second scan may
-    // replace fields that the previous scan filled in.
-    setName((current) => current.trim() && !scanned ? current : result.name ?? current);
-    setBillType((current) => !scanned && current !== "electricity" ? current : result.billType ?? current);
-    setAmount((current) => {
-      if (current.trim() && !scanned) return current;
-      return result.total != null ? result.total.toFixed(2) : current;
+    // Keep values the user typed, but let a later scan replace fields that a
+    // previous scan filled and the user has not edited since. A null snapshot
+    // entry means the user owns that field from now on.
+    const scanName = result.name ?? "";
+    const scanAmount = result.total != null ? result.total.toFixed(2) : "";
+    const scanDueDate = result.dueDate ?? "";
+    const canReplace = (current: string, previous: string | null | undefined) =>
+      current.trim().length === 0 || (previous != null && current === previous);
+
+    const applyName = canReplace(name, scanSnapshot?.name);
+    const applyAmount = canReplace(amount, scanSnapshot?.amount);
+    const applyDueDate = canReplace(dueDate, scanSnapshot?.dueDate);
+    const applyType = scanSnapshot?.billType != null
+      ? billType === scanSnapshot.billType
+      : billType === "electricity";
+
+    const nextName = applyName && scanName ? scanName : name;
+    const nextAmount = applyAmount && scanAmount ? scanAmount : amount;
+    const nextDueDate = applyDueDate && scanDueDate ? scanDueDate : dueDate;
+    const nextType = applyType && result.billType ? result.billType : billType;
+
+    setName(nextName);
+    setAmount(nextAmount);
+    setDueDate(nextDueDate);
+    setBillType(nextType);
+    setScanSnapshot({
+      name: applyName && scanName ? scanName : null,
+      billType: applyType && result.billType ? result.billType : null,
+      amount: applyAmount && scanAmount ? scanAmount : null,
+      dueDate: applyDueDate && scanDueDate ? scanDueDate : null,
     });
-    setDueDate((current) => current && !scanned ? current : result.dueDate ?? current);
     setSubtotal(result.subtotal != null ? result.subtotal.toFixed(2) : "");
     setTaxTotal(result.taxTotal != null ? result.taxTotal.toFixed(2) : "");
     setBreakdown(result.lines.slice(0, 100));
@@ -166,6 +196,7 @@ export function BillsPage() {
     setBreakdown([]);
     setOcrText("");
     setScanned(false);
+    setScanSnapshot(null);
   };
 
   const save = async (event: React.FormEvent) => {
@@ -251,8 +282,7 @@ export function BillsPage() {
         return;
       }
       const scan = await scanBillFile(saved, (progress) => setReadingProgress(progress), { currency: bill.currency });
-      if (!scan.result.lines.length && scan.result.total == null &&
-        scan.result.subtotal == null && scan.result.taxTotal == null) {
+      if (!scan.result.lines.length && scan.result.subtotal == null && scan.result.taxTotal == null) {
         toast.error(t("No amount or breakdown was recognised in this document."));
         return;
       }

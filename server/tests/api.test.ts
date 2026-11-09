@@ -109,7 +109,7 @@ const { discardUploads } = await import("../upload.js");
 const { heuristicRecipe, parseIngredientLine, localIdeas } = await import("../services/recipe-local.js");
 const { heuristicReceipt } = await import("../services/receipt-local.js");
 const { billLinesTotal, parseBillNumber, parseBillText } = await import("../../shared/bill-parser.js");
-const { documentMime, fetchBillFile, isBillPdf, pdfItemsToText } = await import("../../client/bill-scan.js");
+const { documentMime, fetchBillFile, isBillPdf, pdfItemsToText } = await import("../../shared/bill-document.js");
 const { parseLidlReceipt } = await import("../services/receipt-lidl.js");
 const { parseSklavenitisReceipt } = await import("../services/receipt-sklavenitis.js");
 const { selectReceiptTemplate } = await import("../services/receipt-templates.js");
@@ -698,6 +698,7 @@ describe("bill text parsing", () => {
     assert.equal(parseBillNumber("1 234,56"), 1234.56);
     assert.equal(parseBillNumber("0,1234"), 0.1234);
     assert.equal(parseBillNumber("-12,50"), -12.5);
+    // Money rows default to grouped thousands; unit-price callers opt out.
     assert.equal(parseBillNumber("1,234"), 1234);
     assert.equal(parseBillNumber("1,234", { thousands: false }), 1.234);
     assert.equal(parseBillNumber("1.234.567,00"), 1234567);
@@ -728,6 +729,22 @@ describe("bill text parsing", () => {
     assert.equal(parseBillText("ΔΕΗ\nΛΗΞΗ 31/02/2026").dueDate, null);
   });
 
+  it("keeps ratios such as 24/7 in a description without changing the amount", () => {
+    const result = parseBillText("Χρέωση 24/7 υποστήριξη 10,00");
+    assert.equal(result.lines[0]?.amount, 10);
+  });
+
+  it("prefers the due date when issue and due labels share a line", () => {
+    assert.equal(
+      parseBillText("ΔΕΗ\nΛΗΞΗ 20/10/2026 (έκδοση 01/10/2026)").dueDate,
+      "2026-10-20",
+    );
+    assert.equal(
+      parseBillText("ΔΕΗ\n(έκδοση 01/10/2026) ΛΗΞΗ 20/10/2026").dueDate,
+      "2026-10-20",
+    );
+  });
+
   it("prefers a strong supplier signal over generic keyword counts", () => {
     const result = parseBillText("COSMOTE\nΛογαριασμός τηλεπικοινωνιών\nΧρέωση ρεύματος 5,00\nΣΥΝΟΛΟ 5,00");
     assert.equal(result.billType, "internet_telecom");
@@ -742,7 +759,8 @@ describe("bill text parsing", () => {
 
   it("never records the gross of a malformed three-column tax row", () => {
     const result = parseBillText("VAT 24% 100.00 20.00 130.00");
-    assert.equal(result.lines.find((line) => line.kind === "tax")?.amount, 20);
+    assert.equal(result.lines.some((line) => line.kind === "tax"), false);
+    assert.equal(result.taxTotal, null);
   });
 
   it("does not overwrite a lone tax line when a discount changes the base", () => {
@@ -6529,6 +6547,10 @@ describe("insights, household split and admin console", () => {
     })).status, 400, "an unknown breakdown kind is rejected");
     assert.equal((await request(`/api/bills/${accepted.data.id}`, {
       method: "PATCH",
+      body: { breakdown: [{ description: "Line", kind: "charge", amount: null }] },
+    })).status, 400, "breakdown lines need an amount");
+    assert.equal((await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
       body: {
         breakdown: Array.from({ length: 101 }, (_, index) => ({
           description: `Line ${index}`, kind: "charge", amount: 1,
@@ -6621,6 +6643,13 @@ describe("insights, household split and admin console", () => {
     } finally {
       await run("DROP TRIGGER reject_bill_insert");
     }
+
+    const beforeInvalidImageBody = files();
+    const invalidBodyForm = form(png, "Image with invalid body");
+    invalidBodyForm.set("name", "");
+    const invalidBody = await request(`/api/houses/${billHouse}/bills`, { method: "POST", body: invalidBodyForm });
+    assert.equal(invalidBody.status, 400);
+    assert.deepEqual(files(), beforeInvalidImageBody, "a renamed image is removed when body validation fails");
 
     const webp = new Blob([Buffer.from("RIFF0000WEBP")], { type: "image/webp" });
     const webpBill = await request(`/api/houses/${billHouse}/bills`, { method: "POST", body: form(webp, "WebP bill") });

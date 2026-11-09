@@ -194,7 +194,7 @@ function numbersIn(line: string): NumberToken[] {
       /\b(?:\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[./-]\d{1,2}[./-]\d{2,4})\b/g,
       (match) => parseDateText(match) ? " " : match,
     )
-    .replace(/\b\d{1,2}\/\d{2,4}\b/g, " ");
+    .replace(/\b\d{1,2}\/(?:19|20)\d{2}\b/g, " ");
   const tokens: NumberToken[] = [];
   const pattern = /[-+]?\d[\d.,]*/g;
   let match: RegExpExecArray | null;
@@ -257,8 +257,16 @@ function detectDueDate(lines: string[]): string | null {
     const folded = fold(lines[index]);
     if (ISSUE_DATE_LABEL.test(folded) && !DATE_LABEL.test(folded)) continue;
     if (!DATE_LABEL.test(folded)) continue;
-    const sameLine = parseDateText(lines[index]);
-    if (sameLine && !ISSUE_DATE_LABEL.test(folded.replace(DATE_LABEL, ""))) return sameLine;
+    if (ISSUE_DATE_LABEL.test(folded)) {
+      // Both labels share a line: read only the text around the due label so
+      // the issue date cannot win just because it is printed first.
+      const dueIndex = folded.search(DATE_LABEL);
+      const dueDate = parseDateText(lines[index].slice(Math.max(0, dueIndex - 8)));
+      if (dueDate) return dueDate;
+    } else {
+      const sameLine = parseDateText(lines[index]);
+      if (sameLine) return sameLine;
+    }
     const next = lines[index + 1];
     if (next) {
       const nextFolded = fold(next);
@@ -325,9 +333,9 @@ function taxAmount(values: number[], rate: number | null): { amount: number | nu
         Math.abs(tax * rate / 100 - base) <= Math.max(0.03, base * 0.02))) {
       return { amount: tax, base };
     }
-    // Three monetary columns are normally net/tax/gross. Even when OCR noise
-    // breaks the rate check, the middle value is safer than the gross total.
-    return { amount: tax, base };
+    // Three values are normally net/tax/gross, but guessing the middle column
+    // when the rate does not reconcile risks recording the gross as tax.
+    return { amount: null, base: null };
   }
   if (rate != null) {
     for (let index = values.length - 2; index >= 0; index--) {

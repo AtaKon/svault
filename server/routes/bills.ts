@@ -83,6 +83,7 @@ const verifyBillDocument: RequestHandler = (req, _res, next) => {
   if (!req.file) return next();
   try {
     const fd = fs.openSync(req.file.path, "r");
+    // Every supported format carries its signature at offset 0.
     const prefix = Buffer.alloc(1024);
     let bytesRead: number;
     try { bytesRead = fs.readSync(fd, prefix, 0, prefix.length, 0); } finally { fs.closeSync(fd); }
@@ -128,7 +129,9 @@ const breakdownLineInput = z.object({
   unitPrice: z.number().finite().nonnegative().max(1_000_000_000).nullable().optional(),
   amount: z.number().finite().nonnegative().max(1_000_000_000).nullable().optional(),
   taxRate: z.number().finite().min(0).max(100).nullable().optional(),
-}).strict();
+}).strict().superRefine((line, ctx) => {
+  if (line.amount == null) ctx.addIssue({ code: "custom", message: "Breakdown lines need an amount" });
+});
 const breakdownInput = z.preprocess(
   // Multipart forms send the breakdown as JSON; validate the decoded array so
   // malformed entries are rejected instead of silently dropped.
@@ -141,29 +144,22 @@ const breakdownInput = z.preprocess(
 
 /** Normalise a breakdown that Zod has already validated. */
 function sanitizeBreakdown(value: z.infer<typeof breakdownLineInput>[] | undefined): BillBreakdownLine[] {
-  const parsed: unknown[] = value ?? [];
-  const rounded = (number: unknown, scale: number): number | null => {
-    if (number == null || number === "") return null;
-    const parsedNumber = typeof number === "number" ? number : Number(number);
-    if (!Number.isFinite(parsedNumber) || parsedNumber < 0) return null;
+  const parsed = value ?? [];
+  const rounded = (number: number | null | undefined, scale: number): number | null => {
+    if (number == null) return null;
+    if (!Number.isFinite(number) || number < 0) return null;
     const factor = 10 ** scale;
-    return Math.round(parsedNumber * factor) / factor;
+    return Math.round(number * factor) / factor;
   };
-  return parsed
-    .filter((line): line is Record<string, unknown> => Boolean(line) && typeof line === "object")
-    .slice(0, 100)
-    .map((line) => ({
-      description: String(line.description ?? "").trim().slice(0, 160),
-      kind: (["charge", "tax", "discount", "credit"] as const).includes(line.kind as BillBreakdownLine["kind"])
-        ? line.kind as BillBreakdownLine["kind"]
-        : "charge",
-      quantity: rounded(line.quantity, 3),
-      unit: typeof line.unit === "string" && line.unit.trim() ? line.unit.trim().slice(0, 20) : null,
-      unitPrice: rounded(line.unitPrice, 4),
-      amount: rounded(line.amount, 2),
-      taxRate: rounded(line.taxRate, 2),
-    }))
-    .filter((line) => line.description.length > 0);
+  return parsed.slice(0, 100).map((line) => ({
+    description: line.description.trim().slice(0, 160),
+    kind: line.kind,
+    quantity: rounded(line.quantity, 3),
+    unit: line.unit?.trim() ? line.unit.trim().slice(0, 20) : null,
+    unitPrice: rounded(line.unitPrice, 4),
+    amount: rounded(line.amount, 2),
+    taxRate: rounded(line.taxRate, 2),
+  }));
 }
 
 const input = z.object({
@@ -375,6 +371,9 @@ singleBillRoutes.patch("/:billId", handler(async (req, res) => {
   const breakdown = body.breakdown === undefined
     ? Array.isArray(storedBreakdown) ? storedBreakdown as BillBreakdownLine[] : []
     : sanitizeBreakdown(body.breakdown);
+  // Coerce legacy/non-enum values so a NOT VALID constraint cannot fail the
+  // update just because an old row predates the source column.
+  const source = body.source ?? (current.source === "scan" ? "scan" : "manual");
   await run(`UPDATE bills SET name = ?, bill_type = ?, category = ?, ledger_confirmed = ?, amount = ?, due_date = ?, paid_by = ?, split_with = ?, notes = ?,
     subtotal = ?, tax_total = ?, breakdown = ?, ocr_text = ?, source = ? WHERE id = ?`, [
     body.name ?? current.name, body.billType ?? current.bill_type ?? "other", category, ledgerConfirmed ? 1 : 0, body.amount ?? current.amount,
@@ -384,7 +383,7 @@ singleBillRoutes.patch("/:billId", handler(async (req, res) => {
     body.taxTotal === undefined ? current.tax_total : body.taxTotal,
     JSON.stringify(breakdown),
     body.ocrText === undefined ? current.ocr_text : body.ocrText || null,
-    body.source ?? current.source,
+    source,
     current.id,
   ]);
   res.json(serialize(await requireBillRow(current.id, houseId)));
