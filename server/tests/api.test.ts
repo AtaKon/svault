@@ -4570,12 +4570,10 @@ describe("weekly meal planner", () => {
   });
 
   it("reports planned meals on the dashboard", async () => {
-    // The dashboard counts the current week, so seed a meal there instead of
-    // relying on the fixed dates used by the other planner tests.
-    const now = new Date();
-    const weekday = (now.getUTCDay() + 6) % 7;
-    const monday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - weekday));
-    const weekStart = monday.toISOString().slice(0, 10);
+    // Let the server define the current week boundary, then seed inside it.
+    const initialWeek = await request(`/api/houses/${houseId}/plan`);
+    assert.equal(initialWeek.status, 200);
+    const weekStart = initialWeek.data.weekStart;
     const seeded = await request(`/api/houses/${houseId}/plan`, {
       method: "POST",
       body: { day: weekStart, slot: "lunch", recipeId, servings: 2 },

@@ -114,6 +114,13 @@ test("flags dynamic messages the dictionary cannot match", () => {
   assert.equal(findMissing(threePlaceholders, messages).length, 1);
 });
 
+test("requires matching placeholder counts for server messages", () => {
+  const messages = extractServerMessages("throw new ApiError(400, `Value ${one}`);");
+  assert.deepEqual(messages.map((entry) => entry.key), ["Value {x}"]);
+  assert.deepEqual(findMissing(new Set(["Value {a}"]), messages), []);
+  assert.equal(findMissing(new Set(["Value {a} of {b}"]), messages).length, 1);
+});
+
 test("excludes ultra-short dynamic keys like {count}d", () => {
   assert.equal(buildDynamicMatcher("{count}d"), null);
   assert.equal(buildDynamicMatcher("{count}d ago")?.regex.test("3d ago"), true);
