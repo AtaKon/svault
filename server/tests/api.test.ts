@@ -748,6 +748,10 @@ describe("bill text parsing", () => {
       parseBillText("ΔΕΗ\nΈκδοση 01/03/2024 Λήξη 15/03/2024").dueDate,
       "2024-03-15",
     );
+    assert.equal(
+      parseBillText("ΔΕΗ\nΗμ/νία έκδοσης 01/03/2024  Λήξη 31/03/2024").dueDate,
+      "2024-03-31",
+    );
   });
 
   it("prefers a strong supplier signal over generic keyword counts", () => {
@@ -874,6 +878,7 @@ describe("bill text parsing", () => {
       assert.equal(documentMime(new Uint8Array([0xff, 0xd8, 0xff, 0xe0]).buffer), "image/jpeg");
       assert.equal(documentMime(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).buffer), "image/png");
       assert.equal(documentMime(new TextEncoder().encode("RIFF0000WEBP").buffer), "image/webp");
+      assert.equal(documentMime(new TextEncoder().encode("RIFF0000WAVE").buffer), null);
       assert.equal(documentMime(new Uint8Array([]).buffer), null);
       assert.equal(documentMime(new Uint8Array([0xff]).buffer), null);
       assert.equal(documentMime(new Uint8Array([0x89, 0x50]).buffer), null);
@@ -6557,6 +6562,10 @@ describe("insights, household split and admin console", () => {
     });
     assert.equal(commaMoney.status, 200);
     assert.equal(commaMoney.data.subtotal, 1.5, "comma decimals are accepted from multipart-style strings");
+    assert.equal((await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { subtotal: "1.234,56" },
+    })).status, 400, "the API expects canonical numbers from clients");
     const cleared = await request(`/api/bills/${accepted.data.id}`, {
       method: "PATCH",
       body: { subtotal: null, taxTotal: null, ocrText: null, breakdown: [] },
@@ -6667,6 +6676,7 @@ describe("insights, household split and admin console", () => {
     const photoResponse = await fetch(base + photoBill.data.document, { headers: { cookie } });
     assert.equal(photoResponse.status, 200);
     assert.equal(photoResponse.headers.get("content-type"), "image/png");
+    assert.match(photoResponse.headers.get("content-disposition") ?? "", /^inline;/);
     assert.equal((await request(`/api/bills/${photoBill.data.id}`, { method: "DELETE" })).status, 200);
 
     const beforeImageFailure = files();
@@ -6697,6 +6707,7 @@ describe("insights, household split and admin console", () => {
     assert.match(webpDocument ?? "", /\.webp$/);
     const webpResponse = await fetch(base + webpBill.data.document, { headers: { cookie } });
     assert.equal(webpResponse.headers.get("content-type"), "image/webp");
+    assert.match(webpResponse.headers.get("content-disposition") ?? "", /^inline;/);
     assert.equal((await request(`/api/bills/${webpBill.data.id}`, { method: "DELETE" })).status, 200);
 
     const wave = new Blob([Buffer.from("RIFF0000WAVE")], { type: "audio/wav" });
@@ -6723,6 +6734,7 @@ describe("insights, household split and admin console", () => {
     assert.match(jpegDocument ?? "", /\.jpg$/, "the stored extension follows the sniffed JPEG content");
     const jpegResponse = await fetch(base + jpegNamedPdf.data.document, { headers: { cookie } });
     assert.equal(jpegResponse.headers.get("content-type"), "image/jpeg");
+    assert.match(jpegResponse.headers.get("content-disposition") ?? "", /^inline;/);
     assert.equal((await request(`/api/bills/${jpegNamedPdf.data.id}`, { method: "DELETE" })).status, 200);
 
     const pdfNamedJpg = await request(`/api/houses/${billHouse}/bills`, {
@@ -6760,6 +6772,11 @@ describe("insights, household split and admin console", () => {
     ]);
     const negativeLine = (await request(`/api/houses/${billHouse}/bills`)).data.find((bill: any) => bill.id === scanOnly.data.id);
     assert.deepEqual(negativeLine.breakdown, [], "negative stored amounts are dropped on read");
+    await run("UPDATE bills SET breakdown = ? WHERE id = ?", [
+      JSON.stringify([{ description: "Stringy", kind: "charge", amount: "1e3" }]), scanOnly.data.id,
+    ]);
+    const stringyLine = (await request(`/api/houses/${billHouse}/bills`)).data.find((bill: any) => bill.id === scanOnly.data.id);
+    assert.deepEqual(stringyLine.breakdown, [], "scientific-notation stored amounts are dropped");
     assert.equal((await request(`/api/bills/${scanOnly.data.id}`, {
       method: "PATCH",
       body: { subtotal: 1.005 },
@@ -6773,6 +6790,16 @@ describe("insights, household split and admin console", () => {
     });
     assert.equal(manualWithBreakdown.status, 201);
     assert.equal(manualWithBreakdown.data.source, "manual", "an unspecified source stays manual");
+    const personalPatch = await request(`/api/bills/${manualWithBreakdown.data.id}`, {
+      method: "PATCH",
+      body: {
+        subtotal: 4, taxTotal: 1, ocrText: "personal read", source: "scan",
+        breakdown: [{ description: "Charge", kind: "charge", amount: 5, taxRate: null }],
+      },
+    });
+    assert.equal(personalPatch.status, 200, "personal bills accept OCR fields");
+    assert.equal(personalPatch.data.source, "scan");
+    assert.equal(personalPatch.data.breakdown.length, 1);
     assert.equal((await request(`/api/bills/${manualWithBreakdown.data.id}`, { method: "DELETE" })).status, 200);
     assert.equal((await request(`/api/bills/${scanOnly.data.id}`, { method: "DELETE" })).status, 200);
 

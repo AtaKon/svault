@@ -312,6 +312,8 @@ export function BillsPage() {
   };
 
   const numericAmount = Number(amount);
+  // amount is the gross bill total and breakdownSum includes tax lines while
+  // subtracting discounts, so the two are directly comparable.
   const recognisedSum = breakdownSum(breakdown);
   const totalMismatch = breakdown.length > 0 && Number.isFinite(numericAmount) && numericAmount > 0 &&
     Math.abs(recognisedSum - numericAmount) > 0.02;

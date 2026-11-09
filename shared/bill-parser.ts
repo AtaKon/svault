@@ -229,6 +229,24 @@ function unitLabel(unit: string): string {
   return UNIT_LABELS[unit.toLowerCase().replace(/\s+/g, "")] ?? unit;
 }
 
+/** Fold text while keeping a map back to original character offsets. */
+function foldWithIndex(text: string): { folded: string; map: number[] } {
+  let folded = "";
+  const map: number[] = [];
+  for (let index = 0; index < text.length; index++) {
+    const normalized = text[index].normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+    if (!normalized) {
+      map.push(index);
+      continue;
+    }
+    for (const part of normalized) {
+      folded += part;
+      map.push(index);
+    }
+  }
+  return { folded, map };
+}
+
 function parseDateText(text: string): string | null {
   const iso = text.match(/\b(20\d{2})-(\d{1,2})-(\d{1,2})\b/);
   if (iso) return isoDate(Number(iso[1]), Number(iso[2]), Number(iso[3]));
@@ -257,11 +275,15 @@ function detectDueDate(lines: string[]): string | null {
     if (ISSUE_DATE_LABEL.test(folded) && !DATE_LABEL.test(folded)) continue;
     if (!DATE_LABEL.test(folded)) continue;
     if (ISSUE_DATE_LABEL.test(folded)) {
-      // Both labels share a line: read only the text around the due label so
+      // Both labels share a line: read only the text after the due label so
       // the issue date cannot win just because it is printed first.
-      const dueIndex = folded.search(DATE_LABEL);
-      const dueDate = parseDateText(lines[index].slice(Math.max(0, dueIndex - 8)));
-      if (dueDate) return dueDate;
+      const { folded: mapped, map } = foldWithIndex(lines[index]);
+      const dueMatch = mapped.match(DATE_LABEL);
+      if (dueMatch?.index != null) {
+        const afterLabel = map[dueMatch.index + dueMatch[0].length] ?? lines[index].length;
+        const dueDate = parseDateText(lines[index].slice(afterLabel));
+        if (dueDate) return dueDate;
+      }
     } else {
       const sameLine = parseDateText(lines[index]);
       if (sameLine) return sameLine;
@@ -348,6 +370,8 @@ function taxAmount(values: number[], rate: number | null): { amount: number | nu
         return { amount: tax, base };
       }
     }
+    // A printed rate that does not reconcile leaves the column order unclear.
+    return { amount: null, base: null };
   }
   return { amount: values[values.length - 1], base: null };
 }
@@ -545,7 +569,7 @@ export function parseBillText(rawText: string, options: { currency?: string | nu
   // gross. When the printed total and subtotal are available, use their
   // difference to correct a lone tax line instead of inflating taxTotal.
   // Discounts and credits change the tax base, so never correct those bills.
-  if (printedTotal != null && subtotal != null && taxLines.length === 1 && taxLines[0].taxRate != null &&
+  if (printedTotal != null && printedSubtotal != null && subtotal != null && taxLines.length === 1 && taxLines[0].taxRate != null &&
     discounts.length === 0 && credits.length === 0) {
     const expected = round2(printedTotal - subtotal);
     const current = taxLines[0].amount ?? 0;

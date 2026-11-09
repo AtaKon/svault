@@ -800,7 +800,9 @@ export const POSTGRES_MIGRATIONS: string[] = [
   "ALTER TABLE bills ADD COLUMN IF NOT EXISTS breakdown TEXT NOT NULL DEFAULT '[]'",
   "ALTER TABLE bills ADD COLUMN IF NOT EXISTS ocr_text TEXT",
   "ALTER TABLE bills ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manual'",
-  // Fresh installs get the CHECK from CREATE TABLE; add it to upgraded databases too.
+  // Fresh installs get the CHECK from CREATE TABLE; upgraded databases are
+  // backfilled first so the constraint can validate every existing row.
+  "UPDATE bills SET source = 'manual' WHERE source IS NULL OR source NOT IN ('manual', 'scan')",
   `DO $$
   BEGIN
     IF to_regclass('bills') IS NOT NULL
@@ -808,9 +810,7 @@ export const POSTGRES_MIGRATIONS: string[] = [
         SELECT 1 FROM pg_constraint
         WHERE conname = 'bills_source_check' AND conrelid = to_regclass('bills')
       ) THEN
-      -- NOT VALID keeps the migration safe if an older column already holds
-      -- other values; new and updated rows are still enforced.
-      ALTER TABLE bills ADD CONSTRAINT bills_source_check CHECK (source IN ('manual', 'scan')) NOT VALID;
+      ALTER TABLE bills ADD CONSTRAINT bills_source_check CHECK (source IN ('manual', 'scan'));
     END IF;
   END $$`,
 ];

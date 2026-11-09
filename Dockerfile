@@ -1,5 +1,6 @@
 # syntax=docker/dockerfile:1
 
+# node:22 tracks the latest 22.x; pdfjs-dist requires Node >=22.13.
 FROM node:22-bookworm-slim AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./

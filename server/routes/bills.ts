@@ -177,7 +177,9 @@ function normalizeStoredBreakdown(value: unknown): BillBreakdownLine[] {
   if (!Array.isArray(parsed)) return [];
   const kinds = new Set<BillBreakdownLine["kind"]>(["charge", "tax", "discount", "credit"]);
   const number = (input: unknown, scale: number): number | null => {
-    const parsedNumber = typeof input === "number" ? input : Number(input);
+    const parsedNumber = typeof input === "number"
+      ? input
+      : typeof input === "string" && /^\d+(?:\.\d+)?$/.test(input) ? Number(input) : Number.NaN;
     if (input == null || !Number.isFinite(parsedNumber) || parsedNumber < 0) return null;
     const factor = 10 ** scale;
     return Math.round(parsedNumber * factor) / factor;
@@ -493,6 +495,8 @@ billRoutes.get("/:houseId/bills/:billId/document", handler(async (req, res) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
   const extension = path.extname(bill.document).toLowerCase() === ".jpeg" ? ".jpg" : path.extname(bill.document).toLowerCase();
+  // PDFs stay downloads; only sniffed JPEG/PNG/WebP are shown inline, and both
+  // nosniff and the sandbox CSP are set above.
   res.setHeader(
     "Content-Disposition",
     `${mime === "application/pdf" ? "attachment" : "inline"}; filename*=UTF-8''${encodeURIComponent(`${bill.name}${extension}`)}`,
