@@ -862,6 +862,25 @@ describe("bill text parsing", () => {
     assert.equal(parseBillText("ΔΕΗ\nΠροσφορά $\nΣΥΝΟΛΟ 10,00").currency, null);
   });
 
+  it("removes a grouped quantity token before price reconciliation", () => {
+    const result = parseBillText("Κατανάλωση 1,234 kWh 0,15 185,10");
+    const line = result.lines[0];
+    assert.equal(line.quantity, 1234);
+    assert.equal(line.unitPrice, 0.15);
+    assert.equal(line.amount, 185.1);
+  });
+
+  it("treats a negative amount without a keyword as a credit", () => {
+    const result = parseBillText("Διόρθωση -12,50");
+    assert.equal(result.lines[0]?.kind, "credit");
+    assert.equal(result.lines[0]?.amount, 12.5);
+  });
+
+  it("tries both triplets of a tax row with a reference column", () => {
+    const result = parseBillText("VAT 24% ref7x 100,00 24,00 124,00");
+    assert.equal(result.lines.find((line) => line.kind === "tax")?.amount, 24);
+  });
+
   it("parses grouped consumption and a per-unit price on one line", () => {
     const result = parseBillText("Κατανάλωση 1.234 kWh x 0,15 = 185,10");
     const line = result.lines[0];
@@ -6648,6 +6667,16 @@ describe("insights, household split and admin console", () => {
     assert.equal(sourceScan.data.source, "scan", "provenance is derived from stored OCR data, not the client flag");
     const sourcePreserved = await request(`/api/bills/${accepted.data.id}`, { method: "PATCH", body: { notes: "keep provenance" } });
     assert.equal(sourcePreserved.data.source, "scan", "omitting OCR fields preserves provenance");
+    await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { subtotal: 5, taxTotal: 1, breakdown: [{ description: "Line", kind: "charge", amount: 5 }] },
+    });
+    const clearedByBreakdown = await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { breakdown: [] },
+    });
+    assert.equal(clearedByBreakdown.data.subtotal, null, "clearing the breakdown clears its subtotal");
+    assert.equal(clearedByBreakdown.data.taxTotal, null, "clearing the breakdown clears its tax total");
     const invalidBreakdown = await request(`/api/bills/${accepted.data.id}`, {
       method: "PATCH",
       body: { breakdown: [{ description: "", kind: "charge", amount: 1 }] },

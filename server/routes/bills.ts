@@ -124,7 +124,7 @@ const optionalMoney = z.preprocess(
       if (!trimmed) return null;
       // Reject scientific/hex notation and more than two decimals; accept a
       // comma decimal because multipart clients may use one.
-      if (!/^[+-]?\d+(?:[.,]\d{1,2})?$/.test(trimmed)) return Number.NaN;
+      if (!/^[+-]?\d+(?:[.,]\d+)?$/.test(trimmed)) return Number.NaN;
       return trimmed.replace(",", ".");
     }
     return Number.NaN;
@@ -423,13 +423,16 @@ singleBillRoutes.patch("/:billId", handler(async (req, res) => {
   const source = body.breakdown !== undefined || body.ocrText !== undefined
     ? derivedSource(breakdown, nextOcrText)
     : (current.source === "scan" ? "scan" : "manual");
+  const clearScanTotals = body.breakdown !== undefined && breakdown.length === 0;
+  const nextSubtotal = body.subtotal === undefined ? (clearScanTotals ? null : current.subtotal) : body.subtotal;
+  const nextTaxTotal = body.taxTotal === undefined ? (clearScanTotals ? null : current.tax_total) : body.taxTotal;
   await run(`UPDATE bills SET name = ?, bill_type = ?, category = ?, ledger_confirmed = ?, amount = ?, due_date = ?, paid_by = ?, split_with = ?, notes = ?,
     subtotal = ?, tax_total = ?, breakdown = ?, ocr_text = ?, source = ? WHERE id = ?`, [
     body.name ?? current.name, body.billType ?? current.bill_type ?? "other", category, ledgerConfirmed ? 1 : 0, body.amount ?? current.amount,
     body.dueDate === undefined ? current.due_date : body.dueDate || null, paidBy ?? null, JSON.stringify(people),
     body.notes === undefined ? current.notes : body.notes || null,
-    body.subtotal === undefined ? current.subtotal : body.subtotal,
-    body.taxTotal === undefined ? current.tax_total : body.taxTotal,
+    nextSubtotal,
+    nextTaxTotal,
     JSON.stringify(breakdown),
     nextOcrText,
     source,

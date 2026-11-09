@@ -305,6 +305,10 @@ export function BillsPage() {
         toast.error(t("No new breakdown was recognised; the saved bill was left unchanged."));
         return;
       }
+      if (bill.breakdown.length && scan.result.lines.length &&
+        !window.confirm(t("Replace the saved breakdown with {count} recognised lines?", { count: scan.result.lines.length }))) {
+        return;
+      }
       // Provenance is derived server-side from the OCR data sent here.
       const body: Record<string, unknown> = { ocrText: scan.text.slice(0, 50_000) };
       // Partial re-reads preserve stored values: only send what was found, so

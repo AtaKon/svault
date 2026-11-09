@@ -350,14 +350,17 @@ function taxAmount(values: number[], rate: number | null): { amount: number | nu
   if (values.length === 1) return { amount: values[0], base: null };
 
   if (values.length >= 3) {
-    const [base, tax, gross] = values.slice(-3);
-    if (rate != null &&
-      Math.abs(base + tax - gross) <= 0.03 &&
-      Math.abs(base * rate / 100 - tax) <= Math.max(0.03, tax * 0.02)) {
-      return { amount: tax, base };
+    // Three values are normally net/tax/gross. Rows can carry an extra
+    // reference column, so try both the leading and trailing triplets.
+    const windows = values.length === 3 ? [values] : [values.slice(-3), values.slice(0, 3)];
+    for (const [base, tax, gross] of windows) {
+      if (rate != null &&
+        Math.abs(base + tax - gross) <= 0.03 &&
+        Math.abs(base * rate / 100 - tax) <= Math.max(0.03, tax * 0.02)) {
+        return { amount: tax, base };
+      }
     }
-    // Three values are normally net/tax/gross, but guessing the middle column
-    // when the rate does not reconcile risks recording the gross as tax.
+    // Guessing the middle column when nothing reconciles risks the gross.
     return { amount: null, base: null };
   }
   if (values.length === 2 && rate == null) {
@@ -400,19 +403,26 @@ function chargeLine(line: string): BillBreakdownLine | null {
   // printed money totals, so they are parsed with the decimal interpretation.
   const asUnitNumber = (token: NumberToken) => parseBillNumber(token.raw, { thousands: false });
   const near = (value: number, target: number) => Math.abs(value - target) <= Math.max(1e-6, Math.abs(target) * 1e-6);
+  const sameRaw = (raw: string, source: string) => raw.replace(/\s+/g, "") === source.replace(/\s+/g, "");
   const candidates = [...tokens];
   if (quantity != null) {
-    const quantityIndex = candidates.findIndex((token) => {
-      const value = asUnitNumber(token);
-      return value != null && near(value, quantity);
-    });
+    let quantityIndex = quantityMatch ? candidates.findIndex((token) => sameRaw(token.raw, quantityMatch[1])) : -1;
+    if (quantityIndex < 0) {
+      quantityIndex = candidates.findIndex((token) => {
+        const value = asUnitNumber(token);
+        return value != null && near(value, quantity);
+      });
+    }
     if (quantityIndex >= 0 && candidates.length > 1) candidates.splice(quantityIndex, 1);
   }
   if (unitPrice != null) {
-    const priceIndex = candidates.findIndex((token) => {
-      const value = asUnitNumber(token);
-      return value != null && near(value, unitPrice!);
-    });
+    let priceIndex = explicitUnitPrice ? candidates.findIndex((token) => sameRaw(token.raw, explicitUnitPrice[1])) : -1;
+    if (priceIndex < 0) {
+      priceIndex = candidates.findIndex((token) => {
+        const value = asUnitNumber(token);
+        return value != null && near(value, unitPrice!);
+      });
+    }
     if (priceIndex >= 0) candidates.splice(priceIndex, 1);
   }
   if (!candidates.length && !(quantity != null && unitPrice != null)) return null;
@@ -469,7 +479,13 @@ function chargeLine(line: string): BillBreakdownLine | null {
   }
   if (!/\p{L}{2}/u.test(description) && quantity == null) return null;
 
-  const kind = CREDIT_WORDS.test(folded) ? "credit" : DISCOUNT_WORDS.test(folded) ? "discount" : "charge";
+  const kind = CREDIT_WORDS.test(folded)
+    ? "credit"
+    : DISCOUNT_WORDS.test(folded)
+      ? "discount"
+      : amount < 0
+        ? "credit"
+        : "charge";
   const rate = allTokens.find((token) => token.percent)?.value ?? null;
   const magnitude = Math.abs(amount);
   if (!(magnitude > 0) || magnitude > 1_000_000) return null;
