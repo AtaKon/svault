@@ -89,10 +89,12 @@ planRoutes.get(
     const { houseId } = await requireHouse(req);
     const weekStart = mondayOf(req.query.week ? String(req.query.week) : null);
     const weekEnd = addDays(weekStart, 6);
-    const entries = (await all<any>(
-      "SELECT * FROM meal_plan_entries WHERE house_id = ? AND day >= ? AND day <= ? ORDER BY day, slot, sort, created_at",
-      [houseId, weekStart, weekEnd],
-    )).map(serializeEntry);
+    const entries = await Promise.all(
+      (await all<any>(
+        "SELECT * FROM meal_plan_entries WHERE house_id = ? AND day >= ? AND day <= ? ORDER BY day, slot, sort, created_at",
+        [houseId, weekStart, weekEnd],
+      )).map(serializeEntry),
+    );
     res.json({ weekStart, weekEnd, entries });
   }),
 );

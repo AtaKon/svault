@@ -4581,7 +4581,10 @@ describe("weekly meal planner", () => {
     const dashboard = await request(`/api/houses/${houseId}/dashboard`);
     assert.equal(dashboard.status, 200);
     assert.equal(dashboard.data.plan.weekStart, weekStart);
-    assert.ok(dashboard.data.plan.week >= 1);
+    const currentWeek = await request(`/api/houses/${houseId}/plan?week=${weekStart}`);
+    assert.equal(currentWeek.status, 200);
+    assert.ok(currentWeek.data.entries.some((entry: any) => entry.id === seeded.data.id));
+    assert.equal(dashboard.data.plan.week, currentWeek.data.entries.length);
   });
 });
 

@@ -2532,6 +2532,14 @@ const EL: Record<string, string> = {
   "deli": "αλλαντικάδικο",
   "kiosk": "περίπτερο",
   "wholesale": "χονδρική",
+  "That file is too large": "Αυτό το αρχείο είναι υπερβολικά μεγάλο.",
+  "Invalid backup archive": "Μη έγκυρο αρχείο αντιγράφου ασφαλείας.",
+  "Catalogue sync failed": "Ο συγχρονισμός του καταλόγου απέτυχε.",
+  "Folksonomy write failed": "Η εγγραφή στο Folksonomy απέτυχε.",
+  "Could not read that e-receipt": "Δεν ήταν δυνατή η ανάγνωση αυτής της ηλεκτρονικής απόδειξης.",
+  "Could not authenticate the instance account": "Δεν ήταν δυνατός ο έλεγχος ταυτότητας του λογαριασμού της εγκατάστασης.",
+  "Only {available} {unit} at that location. Try removing from another location.": "Υπάρχουν μόνο {available} {unit} σε αυτή την τοποθεσία. Δοκίμασε να αφαιρέσεις από άλλη τοποθεσία.",
+  "Only {available} {unit} available": "Υπάρχουν μόνο {available} {unit} διαθέσιμα.",
   "Enter your email or username": "Εισήγαγε το email ή το όνομα χρήστη σου.",
   "Inventory item not found": "Το αντικείμενο αποθέματος δεν βρέθηκε.",
   "Missing houseId": "Λείπει το houseId.",
@@ -2544,6 +2552,10 @@ const EL: Record<string, string> = {
 
 const DYNAMIC_EL = Object.entries(EL)
   .filter(([key]) => /\{[a-zA-Z]\w*\}/.test(key))
+  // Ultra-short patterns such as "{count}d" would otherwise match unrelated
+  // English copy (e.g. any server message ending in "d"). They are only used
+  // through literal t("{count}d") calls, where DYNAMIC_EL is not needed.
+  .filter(([key]) => key.replace(/\{[a-zA-Z]\w*\}/g, "").trim().length >= 2)
   .map(([key, value]) => {
     const names: string[] = [];
     const pattern = key
