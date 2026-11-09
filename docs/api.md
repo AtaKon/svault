@@ -886,7 +886,7 @@ The Bills page reads the PDF text layer or runs on-device OCR, then sends what i
 | `subtotal` | number \| null | Printed net amount, or the sum of the charge lines. |
 | `taxTotal` | number \| null | Sum of the tax lines. |
 | `breakdown` | array \| JSON string | One entry per printed line (up to 100). |
-| `ocrText` | string \| null | Raw text recognised from the document (up to 50,000 chars). |
+| `ocrText` | string \| null | Raw text recognised from the document (up to 50,000 chars). Treat it as sensitive: bills may contain addresses and account references. |
 | `source` | `manual` \| `scan` | How the bill was entered. Defaults to `manual`; the Bills page sends `scan` whenever it filled fields from a document. This is advisory provenance, not proof that OCR ran, because any member who can edit the bill can set it. |
 
 Each `breakdown` entry has `description`, `kind` (`charge`, `tax`, `discount` or `credit`), `quantity`,

@@ -12,6 +12,9 @@ interface PdfTextItem {
   width: number;
 }
 
+/** Matches the server upload limit; protects re-read from oversized objects. */
+export const MAX_BILL_DOCUMENT_BYTES = 20 * 1024 * 1024;
+
 export function isBillPdf(file: File): boolean {
   return file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
 }
@@ -87,10 +90,13 @@ export function documentMime(buffer: ArrayBuffer): string | null {
 
 /** Load a saved bill document back into a File so it can be re-read. */
 export async function fetchBillFile(url: string, name: string): Promise<File | null> {
-  // Same-origin cookies are what the document route uses; make that explicit.
+  // The authenticated document route relies on same-origin cookies.
   const response = await fetch(url, { credentials: "include" });
   if (!response.ok) return null;
+  const announced = Number(response.headers.get("content-length") ?? 0);
+  if (announced > MAX_BILL_DOCUMENT_BYTES) return null;
   const blob = await response.blob();
+  if (blob.size > MAX_BILL_DOCUMENT_BYTES) return null;
   const buffer = await blob.arrayBuffer();
   // Trust the bytes, not the response header: a proxy or generic download can
   // mislabel an error page or a truncated file.

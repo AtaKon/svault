@@ -111,7 +111,7 @@ async function readPdf(
     return { text: texts.join("\n\n").trim(), pages: ocrPages, usedOcr: true };
   } finally {
     // destroy() also tears down the pdf.js worker; never mask the original error.
-    await pdf.destroy().catch(() => undefined);
+    try { await pdf.destroy(); } catch { /* ignore cleanup failures */ }
   }
 }
 

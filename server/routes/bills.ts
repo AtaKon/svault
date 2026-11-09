@@ -98,6 +98,8 @@ const verifyBillDocument: RequestHandler = (req, _res, next) => {
     req.file.filename = nextName;
     req.file.path = nextPath;
     req.file.destination = billDir;
+    req.file.originalname = nextName;
+    req.file.mimetype = BILL_DOCUMENT_MIME[canonical] ?? req.file.mimetype;
   } catch (error) {
     discardUploads(req);
     return next(error instanceof ApiError ? error : new ApiError(400, "That file is not a valid PDF or image"));

@@ -577,11 +577,13 @@ export function parseBillText(rawText: string, options: { currency?: string | nu
     discounts.length === 0 && credits.length === 0) {
     const expected = round2(printedTotal - subtotal);
     const current = taxLines[0].amount ?? 0;
-    const grossWithTax = round2(subtotal * (1 + (taxLines[0].taxRate ?? 0) / 100));
+    const rate = taxLines[0].taxRate ?? 0;
+    const expectedByRate = round2(subtotal * rate / 100);
+    const grossWithTax = round2(subtotal * (1 + rate / 100));
     const looksLikeGross = Math.abs(current - grossWithTax) <= 0.05;
-    // Only fix a plausible column mix-up or a printed gross; a huge unexplained
-    // gap is more likely a parse error elsewhere in the bill.
-    if (expected > 0 && (looksLikeGross || Math.abs(expected - current) <= Math.max(0.05, current * 0.5))) {
+    // Fix only a printed gross or a total that reconciles with the tax rate; a
+    // wilder gap is more likely a parse error elsewhere in the bill.
+    if (expected > 0 && (looksLikeGross || Math.abs(expected - expectedByRate) <= 0.05)) {
       taxLines[0].amount = expected;
     }
   }

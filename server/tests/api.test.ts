@@ -790,6 +790,12 @@ describe("bill text parsing", () => {
     assert.equal(result.lines[0]?.amount, 10);
   });
 
+  it("does not rewrite a tax line when the printed total is wrong", () => {
+    const result = parseBillText("Subtotal 100.00\nVAT 24% 24.00\nTotal 300.00");
+    assert.equal(result.taxTotal, 24);
+    assert.equal(result.lines.find((line) => line.kind === "tax")?.amount, 24);
+  });
+
   it("does not overwrite a lone tax line when a discount changes the base", () => {
     const result = parseBillText([
       "Subtotal 100.00",
@@ -896,6 +902,9 @@ describe("bill text parsing", () => {
       assert.equal(documentMime(new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0, 0, 0, 0, 0, 0]).buffer), "image/jpeg");
       assert.equal(documentMime(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]).buffer), "image/png");
       assert.equal(documentMime(new TextEncoder().encode("RIFF0000WEBP").buffer), "image/webp");
+      assert.equal(documentMime(new Uint8Array([
+        0x52, 0x49, 0x46, 0x46, 0x24, 0, 0, 0, 0x57, 0x45, 0x42, 0x50, 0x56, 0x50, 0x38, 0x20,
+      ]).buffer), "image/webp");
       assert.equal(documentMime(new TextEncoder().encode("RIFF0000WAVE").buffer), null);
       assert.equal(documentMime(new Uint8Array([]).buffer), null);
       assert.equal(documentMime(new Uint8Array([0xff]).buffer), null);
@@ -914,6 +923,11 @@ describe("bill text parsing", () => {
         headers: { "content-type": "image/png" },
       })) as typeof fetch;
       assert.equal(await fetchBillFile("/api/houses/x/bills/y/document", "bill"), null, "the header cannot override the bytes");
+      globalThis.fetch = (async () => new Response(pdfBytes, {
+        status: 200,
+        headers: { "content-length": String(21 * 1024 * 1024) },
+      })) as typeof fetch;
+      assert.equal(await fetchBillFile("/api/houses/x/bills/y/document", "bill"), null, "oversized documents are rejected before buffering");
     } finally {
       globalThis.fetch = originalFetch;
     }
