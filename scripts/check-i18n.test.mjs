@@ -271,3 +271,8 @@ test("counts multiple literal brace groups with interpolations", () => {
     [],
   );
 });
+
+test("does not extract unrecognized error helpers", () => {
+  const messages = extractServerMessages('unauthorized("Nope"); tooManyRequests("Slow down");');
+  assert.deepEqual(messages, []);
+});

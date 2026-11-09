@@ -34,7 +34,14 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 function walk(dir: string): string[] {
   const files: string[] = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name === "node_modules" || entry.name === "dist" || entry.name === ".next") continue;
+    if (
+      entry.name === "node_modules" ||
+      entry.name === "dist" ||
+      entry.name === ".next" ||
+      entry.name === "coverage"
+    ) {
+      continue;
+    }
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) files.push(...walk(full));
     else if (/\.(ts|tsx)$/.test(entry.name)) files.push(full);
