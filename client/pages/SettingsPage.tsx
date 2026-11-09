@@ -886,6 +886,11 @@ function MembersTab({
   const [transferName, setTransferName] = useState("");
   const [transferBusy, setTransferBusy] = useState(false);
 
+  const beginTransfer = (member: Member) => {
+    setTransferTarget(member);
+    setTransferName("");
+  };
+
   const loadInvites = useCallback(async () => {
     if (!can("admin")) return;
     try {
@@ -1001,10 +1006,7 @@ function MembersTab({
                   <div className="truncate text-[11px] text-muted">{member.email}</div>
                   {can("owner") && member.role !== "owner" && (
                     <button
-                      onClick={() => {
-                        setTransferTarget(member);
-                        setTransferName("");
-                      }}
+                      onClick={() => beginTransfer(member)}
                       className="mt-1 text-[11px] font-medium text-brand hover:underline sm:hidden"
                     >
                       {t("Make owner")}</button>
@@ -1013,10 +1015,7 @@ function MembersTab({
                 {can("owner") && member.role !== "owner" ? (
                   <>
                     <button
-                      onClick={() => {
-                        setTransferTarget(member);
-                        setTransferName("");
-                      }}
+                      onClick={() => beginTransfer(member)}
                       className="hidden text-[11px] font-medium text-brand hover:underline sm:inline"
                     >
                       {t("Make owner")}</button>

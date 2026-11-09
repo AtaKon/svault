@@ -944,7 +944,7 @@ function CandidateCard({
               ? t("Connect an account to share this.")
               : candidate.blocked.includes("consent")
                 ? t("Accept the license above to share this.")
-                : t("Contributions are disabled on this server")}
+                : t("Contributions are disabled on this server.")}
           </p>
         )}
       </div>
