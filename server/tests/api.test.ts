@@ -762,6 +762,10 @@ describe("bill text parsing", () => {
       parseBillText("ΔΕΗ\nΗμ/νία έκδοσης 01/03/2024  Λήξη 31/03/2024").dueDate,
       "2024-03-31",
     );
+    assert.equal(
+      parseBillText("ΔΕΗ\nΗμερομηνία 01/02/2024 Λήξη 15/02/2024").dueDate,
+      "2024-02-15",
+    );
   });
 
   it("prefers a strong supplier signal over generic keyword counts", () => {
@@ -782,6 +786,12 @@ describe("bill text parsing", () => {
     assert.equal(result.taxTotal, null);
     const twoValuesNoRate = parseBillText("VAT 100,00 24,00");
     assert.equal(twoValuesNoRate.lines.some((line) => line.kind === "tax"), false);
+  });
+
+  it("does not invent a unit price for a fixed charge", () => {
+    const result = parseBillText("Πάγιο 350 kWh 45,00");
+    assert.equal(result.lines[0]?.amount, 45);
+    assert.equal(result.lines[0]?.unitPrice, null);
   });
 
   it("derives the amount when only a unit price is printed", () => {
@@ -6696,7 +6706,7 @@ describe("insights, household split and admin console", () => {
     assert.equal(afterReplacement.ocrText, null);
     assert.equal(afterReplacement.source, "manual");
 
-    const replacementJpeg = new Blob([Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10])], { type: "image/jpeg" });
+    const replacementJpeg = new Blob([Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0, 0, 0, 0, 0, 0])], { type: "image/jpeg" });
     const imageForm = form(replacementJpeg, "Image replacement");
     imageForm.delete("document");
     imageForm.append("document", replacementJpeg, "bill.jpg");
@@ -6785,7 +6795,7 @@ describe("insights, household split and admin console", () => {
       fields.append("document", blob, filename);
       return fields;
     };
-    const jpeg = new Blob([Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10])], { type: "image/jpeg" });
+    const jpeg = new Blob([Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0, 0, 0, 0, 0, 0])], { type: "image/jpeg" });
     const jpegNamedPdf = await request(`/api/houses/${billHouse}/bills`, {
       method: "POST", body: namedForm(jpeg, "bill.pdf", "JPEG named PDF"),
     });

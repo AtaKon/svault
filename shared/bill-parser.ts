@@ -32,7 +32,7 @@ const METER_READING = /(μετρηση|ενδειξη|reading|μετρητης|m
 const DISCOUNT_WORDS = /(εκπτωσ|discount|μειωσ|προσφορα|πιστωσ|credit|refund|επιστροφη)/;
 const CREDIT_WORDS = /(πιστωτικ|credit\s+note|επιστροφη|refund)/;
 const DATE_LABEL = /(ληξη|εξοφληση|πληρωτεο\s+εως|πληρωμη\s+εως|προθεσμια|due\s+date|pay\s+by|payment\s+due|due\s+by)/;
-const ISSUE_DATE_LABEL = /(εκδοσ|issue|ημερομηνια\s+εκδοσης)/;
+const ISSUE_DATE_LABEL = /(εκδοσ|issue|ημερομηνια)/;
 
 const NUMBER_TOKEN = String.raw`\d[\d.,]*\d|\d`;
 const CONSUMPTION = new RegExp(
@@ -456,6 +456,11 @@ function chargeLine(line: string): BillBreakdownLine | null {
   }
   if (amount == null && unitPrice != null && quantity != null) amount = quantity * unitPrice;
   if (amount == null || !Number.isFinite(amount)) return null;
+  // A fixed charge that happens to mention consumption has no printed unit
+  // price; do not derive one.
+  if (explicitUnitPrice == null && /(παγιο|standing|fixed\s+charge|fee|τελος|χαρτοσημο)/.test(folded)) {
+    unitPrice = null;
+  }
 
   let description = describeLine(line);
   if (!description) {

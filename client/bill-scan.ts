@@ -25,6 +25,18 @@ const MAX_TEXT_PAGES = 50;
 const TEXT_LAYER_MIN_CHARS = 60;
 const MAX_PAGE_WIDTH = 2200;
 
+/** Load pdf.js and install the worker URL once for the whole session. */
+let pdfjsModule: Promise<typeof import("pdfjs-dist")> | null = null;
+async function loadPdfjs(): Promise<typeof import("pdfjs-dist")> {
+  pdfjsModule ??= (async () => {
+    const pdfjs = await import("pdfjs-dist");
+    const worker = (await import("pdfjs-dist/build/pdf.worker.min.mjs?url")).default;
+    pdfjs.GlobalWorkerOptions.workerSrc = worker;
+    return pdfjs;
+  })();
+  return pdfjsModule;
+}
+
 function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob | null> {
   return new Promise((resolve) => canvas.toBlob((blob) => resolve(blob), "image/jpeg", 0.92));
 }
@@ -33,10 +45,7 @@ async function readPdf(
   file: File,
   onProgress: (progress: number, status: string) => void,
 ): Promise<{ text: string; pages: number; usedOcr: boolean }> {
-  const pdfjs = await import("pdfjs-dist");
-  const worker = (await import("pdfjs-dist/build/pdf.worker.min.mjs?url")).default;
-  pdfjs.GlobalWorkerOptions.workerSrc = worker;
-
+  const pdfjs = await loadPdfjs();
   const data = new Uint8Array(await file.arrayBuffer());
   const pdf = await pdfjs.getDocument({ data }).promise;
   const textPages = Math.min(pdf.numPages, MAX_TEXT_PAGES);
@@ -61,9 +70,8 @@ async function readPdf(
       canvas.height = Math.max(1, Math.ceil(viewport.height));
       const context = canvas.getContext("2d");
       if (!context) return "";
-      // v5 requires the canvas element; the context keeps older pdfjs builds
-      // working with the same call.
-      await page.render({ canvas, canvasContext: context, viewport }).promise;
+      // Pinned pdfjs-dist v5 takes the canvas element (canvasContext is legacy).
+      await page.render({ canvas, viewport }).promise;
       const blob = await canvasToBlob(canvas);
       canvas.width = 0;
       canvas.height = 0;

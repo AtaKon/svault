@@ -52,6 +52,9 @@ const BILL_DOCUMENT_MIME: Record<string, string> = {
 
 /** Detect a supported bill document from its leading bytes. */
 function documentKind(bytes: Buffer): "pdf" | "jpeg" | "png" | "webp" | null {
+  // Align with the client's re-read sniffer: short/truncated headers are not
+  // treated as valid documents.
+  if (bytes.length < 12) return null;
   if (bytes.subarray(0, 5).toString("latin1") === "%PDF-") return "pdf";
   const image = sniffImage(bytes);
   if (image === "image/jpeg") return "jpeg";
