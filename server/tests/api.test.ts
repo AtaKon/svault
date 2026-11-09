@@ -8,7 +8,6 @@ import path from "node:path";
 import { splitAmountEvenly } from "../../shared/bill-splitting.js";
 import { BILL_TYPE_LABELS, BILL_TYPE_VALUES } from "../../shared/bill-types.js";
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA, POSTGRES_TABLE_ORDER } from "../database/postgres-schema.js";
-import { serializePlanEntries } from "../lib/plan-serialize.js";
 
 const dataDir = mkdtempSync(path.join(tmpdir(), "svault-test-"));
 process.env.DATA_DIR = dataDir;
@@ -4595,15 +4594,6 @@ describe("weekly meal planner", () => {
     assert.equal(dashboard.data.plan.week, currentWeek.data.entries.length);
   });
 
-  it("propagates plan serialization failures instead of returning empty entries", async () => {
-    await assert.rejects(
-      () =>
-        serializePlanEntries([{ id: "row" }], async () => {
-          throw new Error("serialize failed");
-        }),
-      /serialize failed/,
-    );
-  });
 });
 
 describe("bulk intake", () => {

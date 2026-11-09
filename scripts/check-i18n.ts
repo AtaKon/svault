@@ -76,13 +76,13 @@ export function stringVariants(node: Node): string[] {
     return [...whenTrue, ...whenFalse].filter((value, index, all) => all.indexOf(value) === index);
   }
   if (ts.isTemplateExpression(node)) {
-    let variants = [node.head.text];
+    let variants = [escapeLiteralText(node.head.text)];
     for (const span of node.templateSpans) {
       const values = stringVariants(span.expression);
       if (!values.length) values.push(PLACEHOLDER_SENTINEL);
       const next: string[] = [];
       for (const prefix of variants) {
-        for (const value of values) next.push(prefix + value + span.literal.text);
+        for (const value of values) next.push(prefix + value + escapeLiteralText(span.literal.text));
       }
       variants = next;
     }
@@ -207,6 +207,12 @@ export function extractDictionary(
 }
 
 export const PLACEHOLDER_SENTINEL = "\u001f";
+const LITERAL_OPEN = "\u001e";
+const LITERAL_CLOSE = "\u001d";
+
+function escapeLiteralText(text: string): string {
+  return text.replaceAll("{", LITERAL_OPEN).replaceAll("}", LITERAL_CLOSE);
+}
 
 export function normalizeKey(key: string): string {
   return key.replace(/\{[A-Za-z_$][\w$]*\}/g, PLACEHOLDER_SENTINEL);
@@ -232,24 +238,23 @@ export function findMissing(dictionary: Set<string>, entries: TranslationEntry[]
   for (const entry of entries) {
     if (dictionary.has(entry.key)) continue;
 
-    const dynamic = entry.key.includes(PLACEHOLDER_SENTINEL);
-    let found: boolean;
-    if (dynamic) {
-      const count = placeholderCount(entry.key);
-      const sample = entry.key.split(PLACEHOLDER_SENTINEL).join("v");
-      // Match the exact normalized shape, the same placeholder count, and run
-      // the shared matcher just as DYNAMIC_EL does at runtime.
-      found =
-        dynamicByShape
-          .get(entry.key)
-          ?.some((matcher) => matcher.names.length === count && matcher.regex.test(sample)) ?? false;
-    } else {
+    if (!entry.key.includes(PLACEHOLDER_SENTINEL)) {
       // Static messages (client or server) must have an exact translation;
       // dynamic patterns must not mask a missing literal.
-      found = false;
+      missing.push({ ...entry, reason: "missing" });
+      continue;
     }
+
+    const count = placeholderCount(entry.key);
+    const sample = entry.key.split(PLACEHOLDER_SENTINEL).join("v");
+    // Match the exact normalized shape, the same placeholder count, and run
+    // the shared matcher just as DYNAMIC_EL does at runtime.
+    const found =
+      dynamicByShape
+        .get(entry.key)
+        ?.some((matcher) => matcher.names.length === count && matcher.regex.test(sample)) ?? false;
     if (!found) {
-      const reason = dynamic && normalizedDictionary.has(entry.key) ? "unmatchable" : "missing";
+      const reason = normalizedDictionary.has(entry.key) ? "unmatchable" : "missing";
       missing.push({ ...entry, reason });
     }
   }

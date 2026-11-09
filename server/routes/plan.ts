@@ -4,7 +4,6 @@ import { all, get, newId, now, parseJson, run } from "../db.js";
 import { requireAuth } from "../auth.js";
 import { ApiError, handler, parseBody, requireHouse } from "../http.js";
 import { addShoppingLine, listShopping, normalizeName } from "../services/shopping.js";
-import { serializePlanEntries } from "../lib/plan-serialize.js";
 import { convert, round } from "../units.js";
 import { MEAL_SLOTS, type FoodIdea, type IdeaResponse, type MealPlanEntry, type MealSlot } from "../../shared/types.js";
 
@@ -92,12 +91,11 @@ planRoutes.get(
     const weekEnd = addDays(weekStart, 6);
     // await every entry: serializeEntry is async, and a failure should surface
     // as a request error instead of silently serializing as {}.
-    const entries = await serializePlanEntries(
-      await all<any>(
+    const entries = await Promise.all(
+      (await all<any>(
         "SELECT * FROM meal_plan_entries WHERE house_id = ? AND day >= ? AND day <= ? ORDER BY day, slot, sort, created_at",
         [houseId, weekStart, weekEnd],
-      ),
-      serializeEntry,
+      )).map(serializeEntry),
     );
     res.json({ weekStart, weekEnd, entries });
   }),
