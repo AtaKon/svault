@@ -46,7 +46,10 @@ async function readPdf(
 ): Promise<{ text: string; usedOcr: boolean }> {
   const pdfjs = await loadPdfjs();
   const data = new Uint8Array(await file.arrayBuffer());
-  const pdf = await pdfjs.getDocument({ data }).promise;
+  // Keep the loading task: pdf.js v6 removed PDFDocumentProxy.destroy(), and
+  // task.destroy() tears down the document and worker on both v5 and v6.
+  const task = pdfjs.getDocument({ data });
+  const pdf = await task.promise;
   const textPages = Math.min(pdf.numPages, MAX_TEXT_PAGES);
 
   try {
@@ -118,7 +121,7 @@ async function readPdf(
     return { text: texts.join("\n\n").trim(), usedOcr: true };
   } finally {
     // destroy() also tears down the pdf.js worker; never mask the original error.
-    try { await pdf.destroy(); } catch { /* ignore cleanup failures */ }
+    try { await task.destroy(); } catch { /* ignore cleanup failures */ }
   }
 }
 
