@@ -1,5 +1,4 @@
 import { all, get, newId, now, run } from "../db.js";
-import type { AuthenticatorTransportFuture } from "@simplewebauthn/server";
 
 export interface StoredPasskey {
   id: string;
@@ -7,14 +6,14 @@ export interface StoredPasskey {
   credentialId: string;
   publicKey: string;
   counter: number;
-  transports: AuthenticatorTransportFuture[];
+  transports: string[];
   name: string;
   createdAt: string;
   lastUsedAt: string | null;
 }
 
 function serialize(row: any): StoredPasskey {
-  let transports: AuthenticatorTransportFuture[] = [];
+  let transports: string[] = [];
   try {
     transports = JSON.parse(row.transports || "[]");
   } catch {
@@ -51,7 +50,7 @@ export async function savePasskey(opts: {
   credentialId: string;
   publicKey: string;
   counter: number;
-  transports: AuthenticatorTransportFuture[];
+  transports: string[];
   name?: string;
 }): Promise<StoredPasskey> {
   const id = newId("pky");
