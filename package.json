@@ -29,7 +29,7 @@
   },
   "dependencies": {
     "@simplewebauthn/browser": "^13.3.0",
-    "@simplewebauthn/server": "^13.3.3",
+    "@simplewebauthn/server": "^14.0.3",
     "@tesseract.js-data/ell": "^1.0.0",
     "@tesseract.js-data/eng": "^1.0.0",
     "@zxing/browser": "^0.2.1",
