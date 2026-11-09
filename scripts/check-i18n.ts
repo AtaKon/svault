@@ -19,6 +19,10 @@ import { buildDynamicMatcher } from "../shared/i18n";
  * Interpolated messages normalize brace-like tokens the same way as EL keys,
  * mirroring DYNAMIC_EL at runtime. Literal braces in static messages are not
  * treated as placeholders.
+ *
+ * Known limitation: DYNAMIC_EL uses EL insertion order with first-match-wins.
+ * The checker validates shape and placeholder count but does not model that
+ * ordering, so duplicate normalized shapes are only as correct as their order.
  */
 
 export type TranslationEntry = {
@@ -286,10 +290,21 @@ export function findMissing(dictionary: Set<string>, entries: TranslationEntry[]
 export function checkRepository(repositoryRoot = root): {
   dictionary: Set<string>;
   duplicates: Set<string>;
+  duplicateShapes: string[][];
   missing: TranslationEntry[];
 } {
   const i18nSource = fs.readFileSync(path.join(repositoryRoot, "client/i18n.tsx"), "utf8");
   const { dictionary, duplicates } = extractDictionary(i18nSource, "client/i18n.tsx");
+
+  const shapeMap = new Map<string, string[]>();
+  for (const key of dictionary) {
+    if (!/\{[A-Za-z_$][\w$]*\}/.test(key)) continue;
+    const shape = normalizeKey(key);
+    const list = shapeMap.get(shape) ?? [];
+    list.push(key);
+    shapeMap.set(shape, list);
+  }
+  const duplicateShapes = [...shapeMap.values()].filter((keys) => keys.length > 1);
 
   const clientKeys: TranslationEntry[] = [];
   for (const file of walk(path.join(repositoryRoot, "client"))) {
@@ -313,6 +328,7 @@ export function checkRepository(repositoryRoot = root): {
   return {
     dictionary,
     duplicates,
+    duplicateShapes,
     missing: findMissing(dictionary, [...clientKeys, ...serverMessages]),
   };
 }

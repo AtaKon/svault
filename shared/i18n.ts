@@ -39,7 +39,11 @@ export function matchDynamicTranslation(
   if (!match) return null;
   const values: Record<string, string> = {};
   matcher.names.forEach((name, index) => {
-    values[name] = match[index + 1] ?? "";
+    const value = match[index + 1];
+    if (value === undefined) {
+      throw new Error(`Dynamic matcher for ${JSON.stringify(key)} did not capture ${name}`);
+    }
+    values[name] = value;
   });
   return values;
 }

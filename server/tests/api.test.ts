@@ -7716,7 +7716,10 @@ describe("PosoKanei price lookup client", () => {
     assert.equal(globalRateLimitCalls, 2, "each upstream request reserves a global slot");
     const withoutFetchedAt = (offers: any[]) => offers.map(({ fetchedAt: _fetchedAt, ...offer }) => offer);
     const stable = (offers: any[]) =>
-      [...offers].sort((a, b) => String(a.retailer).localeCompare(String(b.retailer)));
+      [...offers].sort(
+        (a, b) =>
+          String(a.retailer).localeCompare(String(b.retailer)) || Number(a.price) - Number(b.price),
+      );
     assert.deepEqual(one, two);
     // Two separate users perform separate upstream fetches, so fetchedAt can
     // differ and ordering is not guaranteed; compare stable content.

@@ -3,11 +3,15 @@ import { checkRepository } from "./check-i18n";
 
 /** Explicit entrypoint for `npm test`; defaults to the repository root. */
 export function runI18nCheck(repositoryRoot?: string): boolean {
-  const { dictionary, duplicates, missing } = checkRepository(repositoryRoot);
+  const { dictionary, duplicates, duplicateShapes, missing } = checkRepository(repositoryRoot);
 
   if (duplicates.size > 0) {
     console.error("Duplicate EL keys:");
     for (const key of duplicates) console.error(`  ${JSON.stringify(key)}`);
+  }
+  if (duplicateShapes.length > 0) {
+    console.warn("Multiple EL keys share a dynamic shape; DYNAMIC_EL uses first-match order:");
+    for (const keys of duplicateShapes) console.warn(`  ${keys.map((key) => JSON.stringify(key)).join(" / ")}`);
   }
   if (missing.length > 0) {
     const absent = missing.filter((entry) => entry.reason !== "unmatchable");

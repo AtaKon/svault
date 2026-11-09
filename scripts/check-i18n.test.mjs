@@ -307,3 +307,16 @@ test("runI18nCheck reports repository success and fixture failure", () => {
     fs.rmSync(fixture, { recursive: true, force: true });
   }
 });
+
+test("handles regex-special literals and round-trips values", () => {
+  const cases = [
+    { key: "Queued {count} contributions", sample: "Queued 3 contributions", expected: { count: "3" } },
+    { key: "{field}: {message}", sample: "name: required", expected: { field: "name", message: "required" } },
+    { key: "{x} (y) {z}", sample: "1 (y) 2", expected: { x: "1", z: "2" } },
+  ];
+  for (const testCase of cases) {
+    const matcher = buildDynamicMatcher(testCase.key);
+    assert.ok(matcher, testCase.key);
+    assert.deepEqual(matchDynamicTranslation(testCase.sample, matcher), testCase.expected);
+  }
+});
