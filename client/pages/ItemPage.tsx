@@ -706,7 +706,7 @@ export function ItemPage() {
                     <Button size="sm" variant="ghost" icon="arrowUpRight" onClick={() => setOffPickerOpen(true)}>
                       {t("Change ")}</Button>
                     <Button size="sm" variant="ghost" icon="sparkles" onClick={() => navigate("/contribute")}>
-                      {t("Contribute ")}</Button>
+                      {t("Contribute")}</Button>
                     <Button
                       size="sm"
                       variant="ghost"

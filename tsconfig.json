@@ -22,5 +22,5 @@
       "@shared/*": ["shared/*"]
     }
   },
-  "include": ["client", "server", "shared", "vite.config.ts"]
+  "include": ["client", "server", "shared", "scripts/check-i18n.ts", "scripts/run-i18n-check.ts", "vite.config.ts"]
 }
