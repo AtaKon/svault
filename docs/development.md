@@ -33,6 +33,11 @@ recipe scanner falls back to loading Tesseract from a CDN. Receipt OCR prints th
 crop and binary crop scores to the browser console in development (`[ocr] product candidates`), which
 is the quickest way to see whether a layout change helped.
 
+Bill scans read a PDF text layer with `pdfjs-dist` first, because e-bills are more accurate and much
+faster to parse than a rendered scan. Only PDFs without usable text (and bill photos) are rendered and
+sent through Tesseract with the `bill` OCR mode, which uses Greek first and no receipt product crop.
+The bill parser itself lives in `shared/bill-parser.ts` and is covered by the normal `npm test` run.
+
 Seed demo data (only if the database is empty):
 
 ```bash

@@ -108,6 +108,8 @@ const { all, closeDb, get, initDb, run } = await import("../db.js");
 const { discardUploads } = await import("../upload.js");
 const { heuristicRecipe, parseIngredientLine, localIdeas } = await import("../services/recipe-local.js");
 const { heuristicReceipt } = await import("../services/receipt-local.js");
+const { parseBillNumber, parseBillText } = await import("../../shared/bill-parser.js");
+const { pdfItemsToText } = await import("../../client/bill-scan.js");
 const { parseLidlReceipt } = await import("../services/receipt-lidl.js");
 const { parseSklavenitisReceipt } = await import("../services/receipt-sklavenitis.js");
 const { selectReceiptTemplate } = await import("../services/receipt-templates.js");
@@ -600,6 +602,102 @@ describe("receipt text parsing", () => {
     assert.equal(draft.total, 4);
     assert.equal(draft.savings, 1);
     assert.equal(draft.lines.length, 1);
+  });
+});
+
+describe("bill text parsing", () => {
+  it("reads the total, taxes and per-unit consumption from a Greek electricity bill", () => {
+    const result = parseBillText([
+      "ΔΕΗ Α.Ε.",
+      "ΛΟΓΑΡΙΑΣΜΟΣ ΗΛΕΚΤΡΙΚΟΥ ΡΕΥΜΑΤΟΣ",
+      "Ημερομηνία έκδοσης 01/10/2026",
+      "ΛΗΞΗ 20/10/2026",
+      "Χρέωση ενέργειας 1.234,56 kWh x 0,1234  152,30",
+      "Πάγιο  4,50",
+      "Δημοτικά τέλη  12,30",
+      "ΦΠΑ 24%  40,58",
+      "ΣΥΝΟΛΟ ΜΕ ΦΠΑ  209,68",
+      "Ποσό πληρωμής  209,68",
+    ].join("\n"), { currency: "EUR" });
+
+    assert.equal(result.name, "ΔΕΗ");
+    assert.equal(result.billType, "electricity");
+    assert.equal(result.dueDate, "2026-10-20");
+    assert.equal(result.total, 209.68);
+    assert.equal(result.totalInferred, false);
+    assert.equal(result.subtotal, 156.8);
+    assert.equal(result.taxTotal, 52.88);
+
+    const energy = result.lines.find((line) => line.description.startsWith("Χρέωση"));
+    assert.equal(energy?.quantity, 1234.56);
+    assert.equal(energy?.unit, "kWh");
+    assert.equal(energy?.unitPrice, 0.1234);
+    assert.equal(energy?.amount, 152.3);
+
+    const taxes = result.lines.filter((line) => line.kind === "tax");
+    assert.equal(taxes.length, 2, "municipal fees and VAT are both kept as taxes");
+    assert.equal(taxes.find((line) => line.description.startsWith("ΦΠΑ"))?.taxRate, 24);
+    assert.equal(result.lines.some((line) => /συνολο|πληρωμης/i.test(line.description)), false);
+  });
+
+  it("reads an English water bill with a dotted decimal total", () => {
+    const result = parseBillText([
+      "City Water Services",
+      "Bill date 03/04/2026",
+      "Payment due: 04/05/2026",
+      "Water usage 12.5 m3 x 1.85 = 23.13",
+      "Standing charge 9.40",
+      "VAT 20% 6.51",
+      "Subtotal 32.53",
+      "Total amount due 39.04",
+    ].join("\n"));
+
+    assert.equal(result.name, "City Water Services");
+    assert.equal(result.billType, "water");
+    assert.equal(result.dueDate, "2026-05-04");
+    assert.equal(result.total, 39.04);
+    assert.equal(result.subtotal, 32.53);
+    assert.equal(result.taxTotal, 6.51);
+    const usage = result.lines.find((line) => line.description === "Water usage");
+    assert.equal(usage?.quantity, 12.5);
+    assert.equal(usage?.unit, "m³");
+    assert.equal(usage?.unitPrice, 1.85);
+    assert.equal(usage?.amount, 23.13);
+  });
+
+  it("infers a missing total from the breakdown without inventing a printed one", () => {
+    const result = parseBillText([
+      "ΛΟΓΑΡΙΑΣΜΟΣ ΚΟΙΝΟΧΡΗΣΤΩΝ",
+      "Διαχείριση 03/2026",
+      "Κατανάλωση 120 kWh 0,15 18,00",
+      "Δημοτικά τέλη 5,20",
+      "Χαρτόσημο 0,50",
+    ].join("\n"));
+
+    assert.equal(result.billType, "building_fees");
+    assert.equal(result.total, 23.7);
+    assert.equal(result.totalInferred, true);
+    assert.equal(result.lines.length, 3);
+    assert.equal(result.lines.some((line) => line.description === "Διαχείριση"), false);
+  });
+
+  it("keeps PDF text runs on their visual lines", () => {
+    const text = pdfItemsToText([
+      { str: "Water usage", transform: [1, 0, 0, 1, 10, 700], width: 62 },
+      { str: "23.13", transform: [1, 0, 0, 1, 400, 700], width: 24 },
+      { str: "Standing charge", transform: [1, 0, 0, 1, 10, 681], width: 78 },
+      { str: "9.40", transform: [1, 0, 0, 1, 400, 681], width: 18 },
+      { str: "", transform: [1, 0, 0, 1, 10, 660], width: 0 },
+    ]);
+    assert.equal(text, "Water usage   23.13\nStanding charge   9.40");
+  });
+
+  it("parses European, US and space-grouped amounts", () => {
+    assert.equal(parseBillNumber("1.234,56"), 1234.56);
+    assert.equal(parseBillNumber("1,234.56"), 1234.56);
+    assert.equal(parseBillNumber("1 234,56"), 1234.56);
+    assert.equal(parseBillNumber("0,1234"), 0.1234);
+    assert.equal(parseBillNumber("-12,50"), -12.5);
   });
 });
 
@@ -6042,6 +6140,14 @@ describe("insights, household split and admin console", () => {
       fields.set("ledgerConfirmed", "true");
       fields.set("dueDate", "2025-02-01");
       fields.set("notes", "Preserve this utility note");
+      fields.set("subtotal", "8.40");
+      fields.set("taxTotal", "1.60");
+      fields.set("ocrText", "Κατανάλωση 100 kWh 0,084 8,40\nΦΠΑ 19% 1,60");
+      fields.set("source", "scan");
+      fields.set("breakdown", JSON.stringify([
+        { description: "Κατανάλωση", kind: "charge", quantity: 100, unit: "kWh", unitPrice: 0.084, amount: 8.4, taxRate: null },
+        { description: "ΦΠΑ", kind: "tax", quantity: null, unit: null, unitPrice: null, amount: 1.6, taxRate: 19 },
+      ]));
       fields.append("document", pdf, "electricity.pdf");
       return fields;
     };
@@ -6064,6 +6170,11 @@ describe("insights, household split and admin console", () => {
     const invalid = await request(`/api/houses/${billHouse}/bills`, { method: "POST", body: form(invalidPrefix) });
     assert.equal(invalid.status, 400);
     assert.deepEqual(files(), before, "invalid PDF signature must be removed");
+
+    const invalidImage = new Blob(["not really an image"], { type: "image/png" });
+    const invalidPhoto = await request(`/api/houses/${billHouse}/bills`, { method: "POST", body: form(invalidImage, "Invalid image") });
+    assert.equal(invalidPhoto.status, 400);
+    assert.deepEqual(files(), before, "an image without a valid signature must be removed");
 
     const beforeFailedInsert = files();
     await run(`CREATE TRIGGER reject_bill_insert BEFORE INSERT ON bills
@@ -6159,6 +6270,13 @@ describe("insights, household split and admin console", () => {
     assert.equal(accepted.data.currency, "GBP");
     assert.equal(accepted.data.billType, "electricity");
     assert.deepEqual([...accepted.data.splitWith].sort(), [ownerId, secondUserId].sort());
+    assert.equal(accepted.data.subtotal, 8.4);
+    assert.equal(accepted.data.taxTotal, 1.6);
+    assert.equal(accepted.data.source, "scan");
+    assert.deepEqual(accepted.data.breakdown.map((line: any) => line.kind), ["charge", "tax"]);
+    assert.equal(accepted.data.breakdown[0].unitPrice, 0.084);
+    assert.equal(accepted.data.breakdown[0].taxRate, null);
+    assert.match(accepted.data.ocrText, /kWh/);
     await assert.rejects(
       run("UPDATE bills SET bill_type = 'gas_provider' WHERE id = ?", [accepted.data.id]),
       "the database rejects bill types outside the shared enum",
@@ -6188,6 +6306,30 @@ describe("insights, household split and admin console", () => {
     assert.equal(backToSplit.data.notes, "Preserve this utility note");
     assert.equal(backToSplit.data.dueDate, "2025-02-01");
     assert.deepEqual([...backToSplit.data.splitWith].sort(), [ownerId, secondUserId].sort());
+    assert.equal(backToSplit.data.breakdown.length, 2, "PATCH without a breakdown keeps the stored one");
+    const reRead = await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: {
+        subtotal: 7.5,
+        taxTotal: 2.5,
+        ocrText: "updated bill text",
+        source: "scan",
+        breakdown: [
+          { description: "Energy", kind: "charge", quantity: 50, unit: "kWh", unitPrice: 0.15, amount: 7.5, taxRate: null },
+          { description: "VAT", kind: "tax", quantity: null, unit: null, unitPrice: null, amount: 2.5, taxRate: 20 },
+        ],
+      },
+    });
+    assert.equal(reRead.status, 200);
+    assert.equal(reRead.data.subtotal, 7.5);
+    assert.equal(reRead.data.taxTotal, 2.5);
+    assert.equal(reRead.data.ocrText, "updated bill text");
+    assert.deepEqual(reRead.data.breakdown.map((line: any) => line.description), ["Energy", "VAT"]);
+    const invalidBreakdown = await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { breakdown: [{ description: "", kind: "charge", amount: 1 }] },
+    });
+    assert.equal(invalidBreakdown.status, 400);
     const addedFile = files().find((file) => !before.includes(file));
     assert.ok(addedFile);
     const billBackup = await backupForTest();
@@ -6220,6 +6362,16 @@ describe("insights, household split and admin console", () => {
     const concurrentFiles = files().filter((file) => !beforeConcurrentReplacement.includes(file));
     assert.deepEqual(concurrentFiles, [finalDocument], "only the document referenced by the bill remains after concurrent replaces");
     assert.ok(!files().includes(replacementDocument), "the replaced PDF is removed after concurrent updates settle");
+
+    const png = new Blob([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0])], { type: "image/png" });
+    const photoBill = await request(`/api/houses/${billHouse}/bills`, { method: "POST", body: form(png, "Photo bill") });
+    assert.equal(photoBill.status, 201, "a bill photo is accepted next to PDFs");
+    const storedPhoto = (await get<{ document: string }>("SELECT document FROM bills WHERE id = ?", [photoBill.data.id]))?.document;
+    assert.match(storedPhoto ?? "", /\.png$/, "the stored extension follows the real image content");
+    const photoResponse = await fetch(base + photoBill.data.document, { headers: { cookie } });
+    assert.equal(photoResponse.status, 200);
+    assert.equal(photoResponse.headers.get("content-type"), "image/png");
+    assert.equal((await request(`/api/bills/${photoBill.data.id}`, { method: "DELETE" })).status, 200);
 
     await run("UPDATE house_members SET role = 'viewer' WHERE house_id = ? AND user_id = ?", [billHouse, secondUserId]);
     const viewerPdf = await fetch(base + accepted.data.document, { headers: { cookie: secondUserCookie } });
@@ -7758,6 +7910,11 @@ describe("bill ledger confirmation migration", () => {
   it("uses a false default and preserves existing shared bills when adding the column", async () => {
     const columnsBefore = await all<{ name: string; dflt_value: string | null }>("PRAGMA table_info(bills)");
     assert.equal(columnsBefore.find((column) => column.name === "ledger_confirmed")?.dflt_value, "0");
+    assert.equal(columnsBefore.find((column) => column.name === "breakdown")?.dflt_value, "'[]'");
+    assert.equal(columnsBefore.find((column) => column.name === "source")?.dflt_value, "'manual'");
+    assert.ok(columnsBefore.some((column) => column.name === "subtotal"));
+    assert.ok(columnsBefore.some((column) => column.name === "tax_total"));
+    assert.ok(columnsBefore.some((column) => column.name === "ocr_text"));
 
     const createdHouse = await request("/api/houses", {
       method: "POST",

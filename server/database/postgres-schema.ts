@@ -291,6 +291,11 @@ CREATE TABLE IF NOT EXISTS bills (
   split_with TEXT NOT NULL DEFAULT '[]',
   document TEXT,
   notes TEXT,
+  subtotal DOUBLE PRECISION,
+  tax_total DOUBLE PRECISION,
+  breakdown TEXT NOT NULL DEFAULT '[]',
+  ocr_text TEXT,
+  source TEXT NOT NULL DEFAULT 'manual',
   created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL
 );
@@ -789,6 +794,12 @@ export const POSTGRES_MIGRATIONS: string[] = [
       END IF;
     END IF;
   END $$`,
+  // Bills gained an optional OCR breakdown and printed totals.
+  "ALTER TABLE bills ADD COLUMN IF NOT EXISTS subtotal DOUBLE PRECISION",
+  "ALTER TABLE bills ADD COLUMN IF NOT EXISTS tax_total DOUBLE PRECISION",
+  "ALTER TABLE bills ADD COLUMN IF NOT EXISTS breakdown TEXT NOT NULL DEFAULT '[]'",
+  "ALTER TABLE bills ADD COLUMN IF NOT EXISTS ocr_text TEXT",
+  "ALTER TABLE bills ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manual'",
 ];
 
 /**

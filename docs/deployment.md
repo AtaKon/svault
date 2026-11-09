@@ -421,7 +421,7 @@ The in-app restore and `npm run restore` keep timestamped safety copies under
 | --- | --- |
 | Users, sessions, houses, roles | Yes (`svault.db`) |
 | Items, stock, prices, reminders | Yes |
-| Recipes and OCR text | Yes |
+| Recipes, bills and OCR text | Yes |
 | Photo records and labels | Yes |
 | Uploaded images | Yes (`uploads/`) |
 | AI keys stored in house settings | Yes (plaintext in the database) |

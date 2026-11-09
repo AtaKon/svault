@@ -8,9 +8,9 @@ import { all, get, newId, now, parseJson, run } from "../db.js";
 import { memberRole, roleAtLeast, requireAuth } from "../auth.js";
 import { ApiError, handler, parseBody, requireHouse } from "../http.js";
 import { MAX_UPLOAD_BYTES, UPLOAD_DIR } from "../config.js";
-import { uploadPath, discardUploads } from "../upload.js";
+import { uploadPath, discardUploads, sniffImage } from "../upload.js";
 import { BILL_TYPE_VALUES } from "../../shared/bill-types.js";
-import type { UtilityBill } from "../../shared/types.js";
+import type { BillBreakdownLine, UtilityBill } from "../../shared/types.js";
 
 export const billRoutes = Router();
 export const singleBillRoutes = Router();
@@ -31,37 +31,139 @@ interface BillRow {
   split_with: string;
   document: string | null;
   notes: string | null;
+  subtotal: number | null;
+  tax_total: number | null;
+  breakdown: string;
+  ocr_text: string | null;
+  source: string;
   created_at: string;
 }
 
 const billDir = path.join(UPLOAD_DIR, "bills");
 fs.mkdirSync(billDir, { recursive: true });
-const pdfUpload = multer({
+
+const BILL_DOCUMENT_MIME: Record<string, string> = {
+  ".pdf": "application/pdf",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp",
+};
+
+function documentExtension(file: Express.Multer.File): string {
+  const extension = path.extname(file.originalname).toLowerCase();
+  if (extension === ".jpeg") return ".jpg";
+  if (extension === ".pdf" || extension === ".jpg" || extension === ".png" || extension === ".webp") return extension;
+  if (file.mimetype === "application/pdf") return ".pdf";
+  if (file.mimetype === "image/png") return ".png";
+  if (file.mimetype === "image/webp") return ".webp";
+  return ".jpg";
+}
+
+/** Detect a supported bill document from its leading bytes. */
+function documentKind(bytes: Buffer): "pdf" | "jpeg" | "png" | "webp" | null {
+  if (bytes.subarray(0, 5).toString("latin1") === "%PDF-") return "pdf";
+  const image = sniffImage(bytes);
+  if (image === "image/jpeg") return "jpeg";
+  if (image === "image/png") return "png";
+  if (image === "image/webp") return "webp";
+  return null;
+}
+
+const billUpload = multer({
   storage: multer.diskStorage({
     destination: (_req, _file, cb) => cb(null, billDir),
-    filename: (_req, _file, cb) => cb(null, `${Date.now()}-${randomBytes(8).toString("hex")}.pdf`),
+    filename: (_req, file, cb) => cb(null, `${Date.now()}-${randomBytes(8).toString("hex")}${documentExtension(file)}`),
   }),
   limits: { fileSize: MAX_UPLOAD_BYTES, files: 1 },
-  fileFilter: (_req, file, cb) => file.mimetype === "application/pdf" || path.extname(file.originalname).toLowerCase() === ".pdf"
-    ? cb(null, true)
-    : cb(new ApiError(400, "Upload a PDF bill")),
+  fileFilter: (_req, file, cb) => {
+    const extension = path.extname(file.originalname).toLowerCase();
+    const accepted = file.mimetype === "application/pdf" ||
+      file.mimetype === "image/jpeg" ||
+      file.mimetype === "image/png" ||
+      file.mimetype === "image/webp" ||
+      [".pdf", ".jpg", ".jpeg", ".png", ".webp"].includes(extension);
+    if (!accepted) return cb(new ApiError(400, "Upload a PDF or image bill"));
+    cb(null, true);
+  },
 });
-const verifyPdf: RequestHandler = (req, _res, next) => {
+const verifyBillDocument: RequestHandler = (req, _res, next) => {
   if (!req.file) return next();
   try {
     const fd = fs.openSync(req.file.path, "r");
     const prefix = Buffer.alloc(1024);
     let bytesRead: number;
     try { bytesRead = fs.readSync(fd, prefix, 0, prefix.length, 0); } finally { fs.closeSync(fd); }
-    if (!prefix.subarray(0, bytesRead).subarray(0, 5).equals(Buffer.from("%PDF-"))) {
-      throw new ApiError(400, "That file is not a valid PDF");
+    const kind = documentKind(prefix.subarray(0, bytesRead));
+    if (!kind) throw new ApiError(400, "That file is not a valid PDF or image");
+
+    // Store the extension that matches the real content, not the uploaded name.
+    const canonical = `.${{ pdf: "pdf", jpeg: "jpg", png: "png", webp: "webp" }[kind]}`;
+    if (path.extname(req.file.filename).toLowerCase() !== canonical) {
+      const nextName = `${req.file.filename.replace(/\.[^.]+$/, "")}${canonical}`;
+      fs.renameSync(req.file.path, path.join(billDir, nextName));
+      req.file.filename = nextName;
+      req.file.path = path.join(billDir, nextName);
     }
   } catch (error) {
     discardUploads(req);
-    return next(error instanceof ApiError ? error : new ApiError(400, "That file is not a valid PDF"));
+    return next(error instanceof ApiError ? error : new ApiError(400, "That file is not a valid PDF or image"));
   }
   next();
 };
+
+const twoDecimals = (value: number) => Math.abs(value - Math.round(value * 100) / 100) < 1e-7;
+const optionalMoney = z.preprocess(
+  // Keep undefined (field omitted) distinct from an explicit clear (null/"").
+  (value) => value === undefined ? undefined : value === "" || value == null ? null : value,
+  z.coerce.number().finite().min(0).max(1_000_000_000)
+    .refine(twoDecimals, "Enter an amount with up to two decimal places")
+    .transform((value) => Math.round(value * 100) / 100)
+    .nullable()
+    .optional(),
+);
+
+const breakdownLineInput = z.object({
+  description: z.string().trim().min(1).max(160),
+  kind: z.enum(["charge", "tax", "discount", "credit"]).default("charge"),
+  quantity: z.number().finite().nonnegative().max(1_000_000_000).nullable().optional(),
+  unit: z.string().trim().max(20).nullable().optional(),
+  unitPrice: z.number().finite().nonnegative().max(1_000_000_000).nullable().optional(),
+  amount: z.number().finite().nonnegative().max(1_000_000_000).nullable().optional(),
+  taxRate: z.number().finite().min(0).max(100).nullable().optional(),
+}).strict();
+const breakdownInput = z.union([z.string().max(50_000), z.array(breakdownLineInput).max(100)]).optional();
+
+/** Accept the JSON string used by multipart forms and normalise every line. */
+function sanitizeBreakdown(value: string | z.infer<typeof breakdownLineInput>[] | undefined): BillBreakdownLine[] {
+  let parsed: unknown = value ?? [];
+  if (typeof parsed === "string") {
+    try { parsed = JSON.parse(parsed); } catch { parsed = []; }
+  }
+  if (!Array.isArray(parsed)) return [];
+  const rounded = (number: unknown, scale: number): number | null => {
+    if (number == null || number === "") return null;
+    const parsedNumber = typeof number === "number" ? number : Number(number);
+    if (!Number.isFinite(parsedNumber) || parsedNumber < 0) return null;
+    const factor = 10 ** scale;
+    return Math.round(parsedNumber * factor) / factor;
+  };
+  return parsed
+    .filter((line): line is Record<string, unknown> => Boolean(line) && typeof line === "object")
+    .slice(0, 100)
+    .map((line) => ({
+      description: String(line.description ?? "").trim().slice(0, 160),
+      kind: (["charge", "tax", "discount", "credit"] as const).includes(line.kind as BillBreakdownLine["kind"])
+        ? line.kind as BillBreakdownLine["kind"]
+        : "charge",
+      quantity: rounded(line.quantity, 3),
+      unit: typeof line.unit === "string" && line.unit.trim() ? line.unit.trim().slice(0, 20) : null,
+      unitPrice: rounded(line.unitPrice, 4),
+      amount: rounded(line.amount, 2),
+      taxRate: rounded(line.taxRate, 2),
+    }))
+    .filter((line) => line.description.length > 0);
+}
 
 const input = z.object({
   name: z.string().trim().min(1).max(120).refine((value) => !/[\u0000-\u001f\u007f]/.test(value), "Remove control characters from the bill name"),
@@ -79,6 +181,11 @@ const input = z.object({
   splitWith: z.union([z.string(), z.array(z.string())]).optional(),
   ledgerConfirmed: z.union([z.boolean(), z.enum(["true", "false"]).transform((value) => value === "true")]).optional(),
   notes: z.string().trim().max(1000).nullable().optional(),
+  subtotal: optionalMoney,
+  taxTotal: optionalMoney,
+  breakdown: breakdownInput,
+  ocrText: z.string().max(50_000).nullable().optional(),
+  source: z.enum(["manual", "scan"]).optional(),
 });
 const patchInput = z.object({
   name: input.shape.name.optional(),
@@ -90,6 +197,11 @@ const patchInput = z.object({
   splitWith: input.shape.splitWith.optional(),
   ledgerConfirmed: input.shape.ledgerConfirmed.optional(),
   notes: input.shape.notes.optional(),
+  subtotal: optionalMoney,
+  taxTotal: optionalMoney,
+  breakdown: breakdownInput,
+  ocrText: z.string().max(50_000).nullable().optional(),
+  source: z.enum(["manual", "scan"]).optional(),
 }).strict();
 
 function serialize(row: BillRow): UtilityBill {
@@ -105,6 +217,11 @@ function serialize(row: BillRow): UtilityBill {
     splitWith: parseJson<string[]>(row.split_with, []),
     document: row.document ? `/api/houses/${row.house_id}/bills/${row.id}/document` : null,
     notes: row.notes ?? null,
+    subtotal: row.subtotal == null ? null : Number(row.subtotal),
+    taxTotal: row.tax_total == null ? null : Number(row.tax_total),
+    breakdown: parseJson<BillBreakdownLine[]>(row.breakdown, []),
+    ocrText: row.ocr_text ?? null,
+    source: row.source === "scan" ? "scan" : "manual",
     createdAt: row.created_at,
   };
 }
@@ -166,7 +283,7 @@ billRoutes.get("/:houseId/bills", handler(async (req, res) => {
   res.json(rows.map(serialize));
 }));
 
-billRoutes.post("/:houseId/bills", requireHouseBillMember, pdfUpload.single("document"), verifyPdf, handler(async (req, res) => {
+billRoutes.post("/:houseId/bills", requireHouseBillMember, billUpload.single("document"), verifyBillDocument, handler(async (req, res) => {
   const filename = req.file?.filename ?? null;
   const houseId = String(req.params.houseId);
   let created: BillRow;
@@ -184,6 +301,7 @@ billRoutes.post("/:houseId/bills", requireHouseBillMember, pdfUpload.single("doc
     const members = await all<{ user_id: string }>("SELECT user_id FROM house_members WHERE house_id = ?", [houseId]);
     const paidBy = body.paidBy ?? req.user!.id;
     const people = await validatePeople(houseId, paidBy, splitWith.length ? splitWith : (body.category === "to_split" ? members.map((m) => m.user_id) : []));
+    const breakdown = sanitizeBreakdown(body.breakdown);
     created = {
       id: newId("bil"),
       house_id: houseId,
@@ -198,6 +316,11 @@ billRoutes.post("/:houseId/bills", requireHouseBillMember, pdfUpload.single("doc
       split_with: JSON.stringify(people),
       document: filename,
       notes: body.notes || null,
+      subtotal: body.subtotal ?? null,
+      tax_total: body.taxTotal ?? null,
+      breakdown: JSON.stringify(breakdown),
+      ocr_text: body.ocrText || null,
+      source: body.source ?? (breakdown.length ? "scan" : "manual"),
       created_at: now(),
     };
   } catch (error) {
@@ -208,10 +331,11 @@ billRoutes.post("/:houseId/bills", requireHouseBillMember, pdfUpload.single("doc
   }
 
   try {
-    await run(`INSERT INTO bills (id, house_id, name, bill_type, category, ledger_confirmed, amount, currency, due_date, paid_by, split_with, document, notes, created_by, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+    await run(`INSERT INTO bills (id, house_id, name, bill_type, category, ledger_confirmed, amount, currency, due_date, paid_by, split_with, document, notes, subtotal, tax_total, breakdown, ocr_text, source, created_by, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
       created.id, created.house_id, created.name, created.bill_type, created.category, created.ledger_confirmed, created.amount, created.currency,
-      created.due_date, created.paid_by, created.split_with, created.document, created.notes, req.user!.id, created.created_at,
+      created.due_date, created.paid_by, created.split_with, created.document, created.notes, created.subtotal, created.tax_total,
+      created.breakdown, created.ocr_text, created.source, req.user!.id, created.created_at,
     ]);
   } catch (error) {
     // The insert may have committed despite a driver error; remove the upload
@@ -245,15 +369,25 @@ singleBillRoutes.patch("/:billId", handler(async (req, res) => {
   let paidBy = body.paidBy === undefined ? current.paid_by : body.paidBy;
   if (body.paidBy === undefined && paidBy && !memberIds.has(paidBy)) paidBy = null;
   const people = await validatePeople(houseId, paidBy, splitWith);
-  await run(`UPDATE bills SET name = ?, bill_type = ?, category = ?, ledger_confirmed = ?, amount = ?, due_date = ?, paid_by = ?, split_with = ?, notes = ? WHERE id = ?`, [
+  const breakdown = body.breakdown === undefined
+    ? parseJson<BillBreakdownLine[]>(current.breakdown, [])
+    : sanitizeBreakdown(body.breakdown);
+  await run(`UPDATE bills SET name = ?, bill_type = ?, category = ?, ledger_confirmed = ?, amount = ?, due_date = ?, paid_by = ?, split_with = ?, notes = ?,
+    subtotal = ?, tax_total = ?, breakdown = ?, ocr_text = ?, source = ? WHERE id = ?`, [
     body.name ?? current.name, body.billType ?? current.bill_type ?? "other", category, ledgerConfirmed ? 1 : 0, body.amount ?? current.amount,
     body.dueDate === undefined ? current.due_date : body.dueDate || null, paidBy ?? null, JSON.stringify(people),
-    body.notes === undefined ? current.notes : body.notes || null, current.id,
+    body.notes === undefined ? current.notes : body.notes || null,
+    body.subtotal === undefined ? current.subtotal : body.subtotal,
+    body.taxTotal === undefined ? current.tax_total : body.taxTotal,
+    JSON.stringify(breakdown),
+    body.ocrText === undefined ? current.ocr_text : body.ocrText || null,
+    body.source ?? current.source,
+    current.id,
   ]);
   res.json(serialize(await requireBillRow(current.id, houseId)));
 }));
 
-billRoutes.post("/:houseId/bills/:billId/document", requireBillDocumentMember, pdfUpload.single("document"), verifyPdf, handler(async (req, res) => {
+billRoutes.post("/:houseId/bills/:billId/document", requireBillDocumentMember, billUpload.single("document"), verifyBillDocument, handler(async (req, res) => {
   const houseId = String(req.params.houseId);
   let current: BillRow | undefined;
   try {
@@ -265,7 +399,7 @@ billRoutes.post("/:houseId/bills/:billId/document", requireBillDocumentMember, p
     throw error;
   }
   if (!current) { await deleteDocument(req.file?.filename); throw new ApiError(404, "Bill not found"); }
-  if (!req.file) throw new ApiError(400, "Choose a PDF file");
+  if (!req.file) throw new ApiError(400, "Choose a PDF or image file");
   let updated: BillRow | undefined;
   let updateApplied = false;
   try {
@@ -310,13 +444,19 @@ billRoutes.post("/:houseId/bills/:billId/document", requireBillDocumentMember, p
 billRoutes.get("/:houseId/bills/:billId/document", handler(async (req, res) => {
   const { houseId } = await requireHouse(req);
   const bill = await billRow(String(req.params.billId), houseId);
-  if (!bill?.document || path.basename(bill.document) !== bill.document) throw new ApiError(404, "Bill PDF not found");
+  if (!bill?.document || path.basename(bill.document) !== bill.document) throw new ApiError(404, "Bill document not found");
   const documentPath = uploadPath("bills", bill.document);
-  if (!fs.existsSync(documentPath)) throw new ApiError(404, "Bill PDF not found");
-  res.setHeader("Content-Type", "application/pdf");
+  if (!fs.existsSync(documentPath)) throw new ApiError(404, "Bill document not found");
+  const mime = BILL_DOCUMENT_MIME[path.extname(bill.document).toLowerCase()];
+  if (!mime) throw new ApiError(404, "Bill document not found");
+  res.setHeader("Content-Type", mime);
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
-  res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(`${bill.name}.pdf`)}`);
+  const extension = path.extname(bill.document).toLowerCase() === ".jpeg" ? ".jpg" : path.extname(bill.document).toLowerCase();
+  res.setHeader(
+    "Content-Disposition",
+    `${mime === "application/pdf" ? "attachment" : "inline"}; filename*=UTF-8''${encodeURIComponent(`${bill.name}${extension}`)}`,
+  );
   res.sendFile(documentPath);
 }));
 
