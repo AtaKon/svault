@@ -7715,10 +7715,12 @@ describe("PosoKanei price lookup client", () => {
     assert.equal(rateLimitCalls, 2, "each user's upstream request reserves its own user slot");
     assert.equal(globalRateLimitCalls, 2, "each upstream request reserves a global slot");
     const withoutFetchedAt = (offers: any[]) => offers.map(({ fetchedAt: _fetchedAt, ...offer }) => offer);
+    const stable = (offers: any[]) =>
+      [...offers].sort((a, b) => String(a.retailer).localeCompare(String(b.retailer)));
     assert.deepEqual(one, two);
     // Two separate users perform separate upstream fetches, so fetchedAt can
-    // differ; compare content and assert both timestamps are valid ISO values.
-    assert.deepEqual(withoutFetchedAt(one), withoutFetchedAt(three));
+    // differ and ordering is not guaranteed; compare stable content.
+    assert.deepEqual(withoutFetchedAt(stable(one)), withoutFetchedAt(stable(three)));
     for (const offers of [one, three]) {
       assert.ok(Number.isFinite(Date.parse(offers[0].fetchedAt)));
     }

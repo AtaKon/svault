@@ -1,9 +1,9 @@
 import { pathToFileURL } from "node:url";
 import { checkRepository } from "./check-i18n";
 
-/** Explicit entrypoint for `npm test`; always scans the repository root. */
-export function runI18nCheck(): void {
-  const { dictionary, duplicates, missing } = checkRepository();
+/** Explicit entrypoint for `npm test`; defaults to the repository root. */
+export function runI18nCheck(repositoryRoot?: string): boolean {
+  const { dictionary, duplicates, missing } = checkRepository(repositoryRoot);
 
   if (duplicates.size > 0) {
     console.error("Duplicate EL keys:");
@@ -21,11 +21,12 @@ export function runI18nCheck(): void {
       for (const entry of unmatchable) console.error(`  ${entry.file}:${entry.line}: ${JSON.stringify(entry.key)}`);
     }
   }
-  if (duplicates.size > 0 || missing.length > 0) process.exit(1);
+  if (duplicates.size > 0 || missing.length > 0) return false;
 
   console.log(`i18n check passed (${dictionary.size} EL keys).`);
+  return true;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  runI18nCheck();
+  if (!runI18nCheck()) process.exit(1);
 }

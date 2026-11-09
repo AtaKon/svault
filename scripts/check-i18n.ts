@@ -38,7 +38,10 @@ function walk(dir: string): string[] {
       entry.name === "node_modules" ||
       entry.name === "dist" ||
       entry.name === ".next" ||
-      entry.name === "coverage"
+      entry.name === "coverage" ||
+      entry.name === ".git" ||
+      entry.name === "tmp" ||
+      entry.name === "data"
     ) {
       continue;
     }

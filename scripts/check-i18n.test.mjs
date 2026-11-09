@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { buildDynamicMatcher, isDynamicTranslationKey, matchDynamicTranslation } from "../shared/i18n.ts";
 import {
   checkRepository,
@@ -12,6 +13,7 @@ import {
   findMissing,
   PLACEHOLDER_SENTINEL,
 } from "./check-i18n.ts";
+import { runI18nCheck } from "./run-i18n-check.ts";
 
 test("extracts single-line and multi-line t() keys", () => {
   const keys = extractClientKeys(`
@@ -246,7 +248,8 @@ test("normalizes braces in interpolated messages like runtime", () => {
 });
 
 test("keeps literal short dynamic keys available for exact lookup", () => {
-  const { dictionary } = extractDictionary(fs.readFileSync(path.join(process.cwd(), "client/i18n.tsx"), "utf8"));
+  const i18nFile = fileURLToPath(new URL("../client/i18n.tsx", import.meta.url));
+  const { dictionary } = extractDictionary(fs.readFileSync(i18nFile, "utf8"));
   assert.ok(dictionary.has("{count}d"));
 });
 
@@ -275,4 +278,32 @@ test("counts multiple literal brace groups with interpolations", () => {
 test("does not extract unrecognized error helpers", () => {
   const messages = extractServerMessages('unauthorized("Nope"); tooManyRequests("Slow down");');
   assert.deepEqual(messages, []);
+});
+
+test("extracts template literal JSON error bodies", () => {
+  const messages = extractServerMessages("res.status(400).json({ error: `Bad ${detail}` });");
+  assert.deepEqual(messages.map((entry) => entry.key), [`Bad ${PLACEHOLDER_SENTINEL}`]);
+});
+
+test("rejects more dictionary placeholders than the message", () => {
+  const messages = extractServerMessages("throw new ApiError(400, `X ${a}`);");
+  assert.equal(findMissing(new Set(["X {a}{b}"]), messages).length, 1);
+});
+
+test("runI18nCheck reports repository success and fixture failure", () => {
+  assert.equal(runI18nCheck(), true);
+
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "svault-i18n-run-"));
+  try {
+    fs.mkdirSync(path.join(fixture, "client"), { recursive: true });
+    fs.mkdirSync(path.join(fixture, "server"), { recursive: true });
+    fs.writeFileSync(path.join(fixture, "client/i18n.tsx"), "const EL = {};");
+    fs.writeFileSync(
+      path.join(fixture, "client/page.tsx"),
+      'const { t } = useI18n();\nconst value = t("Missing key");',
+    );
+    assert.equal(runI18nCheck(fixture), false);
+  } finally {
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
 });
