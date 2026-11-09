@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { api } from "./api";
 import { useAuth } from "./state";
 import { setFormatLocale } from "./format";
+import { buildDynamicMatcher, matchDynamicTranslation } from "@shared/i18n";
 
 export type Language = "en" | "el";
 
@@ -2370,6 +2371,7 @@ const EL: Record<string, string> = {
   "Phone notifications": "Ειδοποιήσεις τηλεφώνου",
   "Lidl template": "Πρότυπο Lidl",
   "Sklavenitis template": "Πρότυπο Σκλαβενίτη",
+  "My market template": "Πρότυπο My market",
   "Template": "Πρότυπο",
   "Local read": "Τοπική ανάγνωση",
   "Your account needs instance administrator access.": "Ο λογαριασμός σου χρειάζεται δικαιώματα διαχειριστή της εγκατάστασης.",
@@ -2381,20 +2383,180 @@ const EL: Record<string, string> = {
   "another place": "άλλη θέση",
   "Imported dataset": "Εισαγόμενο σύνολο δεδομένων",
   "pcs, kg, g, l…": "τεμ., kg, g, l…",
+  "Front photo": "Μπροστινή φωτογραφία",
+  "Report": "Αναφορά",
+  "Advanced": "Για προχωρημένους",
+  "Advanced: Folksonomy property": "Για προχωρημένους: ιδιότητα Folksonomy",
+  "Community": "Κοινότητα",
+  "Connected": "Συνδεδεμένο",
+  "Disconnect": "Αποσύνδεση",
+  "Not connected": "Μη συνδεδεμένο",
+  "Connect account": "Σύνδεση λογαριασμού",
+  "Connect another project": "Σύνδεση άλλου έργου",
+  "Connect project": "Σύνδεση έργου",
+  "Connect Open Prices": "Σύνδεση Open Prices",
+  "Open Prices connected": "Το Open Prices συνδέθηκε.",
+  "Open Prices location": "Τοποθεσία Open Prices",
+  "Open Prices is a separate Open Food Facts project. Connect it once to share a receipt line and its proof.": "Το Open Prices είναι ξεχωριστό έργο του Open Food Facts. Σύνδεσέ το μία φορά για να μοιραστείς μια γραμμή απόδειξης και την απόδειξή της.",
+  "Connect Open Prices to share a price": "Σύνδεσε το Open Prices για να μοιραστείς μια τιμή.",
+  "Could not connect Open Prices": "Δεν ήταν δυνατή η σύνδεση με το Open Prices.",
+  "Could not search Open Prices locations": "Δεν ήταν δυνατή η αναζήτηση τοποθεσιών Open Prices.",
+  "Share price": "Κοινοποίηση τιμής",
+  "Share receipt prices": "Κοινοποίηση τιμών αποδείξεων",
+  "Share {count} fields": "Κοινοποίηση {count} πεδίων",
+  "Shop name or city": "Όνομα καταστήματος ή πόλη",
+  "Optional, but a location makes the price more useful.": "Προαιρετικό, αλλά μια τοποθεσία κάνει την τιμή πιο χρήσιμη.",
+  "Choose a receipt line before sharing a price": "Διάλεξε πρώτα μια γραμμή απόδειξης για να μοιραστείς μια τιμή.",
+  "Receipt line not found in this house": "Η γραμμή απόδειξης δεν βρέθηκε σε αυτό το σπίτι.",
+  "Open shopping line not found": "Η ανοιχτή γραμμή αγορών δεν βρέθηκε.",
+  "Missing receiptLineId": "Λείπει το receiptLineId.",
+  "This price is no longer eligible. Refresh the list and try again.": "Αυτή η τιμή δεν είναι πλέον κατάλληλη. Ανανέωσε τη λίστα και δοκίμασε ξανά.",
+  "Contribute to Open Food Facts": "Συνεισφορά στο Open Food Facts",
+  "Contribute": "Συνεισφορά",
+  "Share missing product data with Open Food Facts": "Μοιράσου δεδομένα προϊόντος που λείπουν με το Open Food Facts",
+  "Add to shopping list": "Προσθήκη στη λίστα αγορών",
+  "New item": "Νέο αντικείμενο",
+  "Household bills, PDFs and shared costs": "Λογαριασμοί σπιτιού, PDF και κοινόχρηστα έξοδα",
+  "Contribution not found": "Η συνεισφορά δεν βρέθηκε.",
+  "Contributions appear under your Open Food Facts username. SVault stores only an encrypted session cookie, never your password.": "Οι συνεισφορές εμφανίζονται με το όνομα χρήστη σου στο Open Food Facts. Το SVault αποθηκεύει μόνο ένα κρυπτογραφημένο cookie συνεδρίας, ποτέ τον κωδικό σου.",
+  "Share a missing brand, category, nutrition panel or front photo. Review each item's fields before sending; bulk share sends the fields shown on the selected cards.": "Μοιράσου ένα εμπορικό σήμα, κατηγορία, διατροφικό πίνακα ή μπροστινή φωτογραφία που λείπει. Έλεγξε τα πεδία κάθε στοιχείου πριν το στείλεις· η μαζική κοινοποίηση στέλνει τα πεδία που εμφανίζονται στις επιλεγμένες κάρτες.",
+  "Contributions are disabled on this server": "Οι συνεισφορές είναι απενεργοποιημένες σε αυτόν τον διακομιστή.",
+  "Contributions are disabled on this server.": "Οι συνεισφορές είναι απενεργοποιημένες σε αυτόν τον διακομιστή.",
+  "Contributions are disabled on this server. Ask the administrator to enable SV_OFF_WRITE_ENABLED.": "Οι συνεισφορές είναι απενεργοποιημένες σε αυτόν τον διακομιστή. Ζήτησε από τον διαχειριστή να ενεργοποιήσει το SV_OFF_WRITE_ENABLED.",
+  "Dry run is on: contributions are validated and queued but nothing is sent to Open Food Facts.": "Η δοκιμαστική λειτουργία είναι ενεργή: οι συνεισφορές επικυρώνονται και μπαίνουν στην ουρά, αλλά δεν αποστέλλεται τίποτα στο Open Food Facts.",
+  "Using the instance account": "Χρήση του λογαριασμού της εγκατάστασης",
+  "This server has a shared contribution account. You can use it, or connect your own for attribution.": "Αυτός ο διακομιστής έχει κοινόχρηστο λογαριασμό συνεισφορών. Μπορείς να τον χρησιμοποιήσεις ή να συνδέσεις τον δικό σου για αναγνώριση.",
+  "Open Food Facts username": "Όνομα χρήστη Open Food Facts",
+  "Username, not email.": "Όνομα χρήστη, όχι email.",
+  "Used once to get a session, then discarded.": "Χρησιμοποιείται μία φορά για τη λήψη συνεδρίας και μετά απορρίπτεται.",
+  "Enter your Open Food Facts username and password": "Εισήγαγε το όνομα χρήστη και τον κωδικό σου στο Open Food Facts.",
+  "Enter your Open Food Facts password": "Εισήγαγε τον κωδικό σου στο Open Food Facts.",
+  "Enter your Open Food Facts username, not your email": "Εισήγαγε το όνομα χρήστη σου στο Open Food Facts, όχι το email σου.",
+  "Connect an Open Food Facts account to contribute": "Σύνδεσε λογαριασμό Open Food Facts για να συνεισφέρεις.",
+  "Connect an Open Food Facts account to report a product": "Σύνδεσε λογαριασμό Open Food Facts για να αναφέρεις ένα προϊόν.",
+  "Accept the license above to share this.": "Αποδέξου την άδεια παραπάνω για να το μοιραστείς.",
+  "Accept the license before connecting an account": "Αποδέξου την άδεια πριν συνδέσεις λογαριασμό.",
+  "Accept the Open Food Facts license before connecting a service": "Αποδέξου την άδεια του Open Food Facts πριν συνδέσεις υπηρεσία.",
+  "Accept the Open Food Facts license before connecting an account": "Αποδέξου την άδεια του Open Food Facts πριν συνδέσεις λογαριασμό.",
+  "Accept the Open Food Facts license before contributing": "Αποδέξου την άδεια του Open Food Facts πριν συνεισφέρεις.",
+  "Accept the Open Food Facts license before writing a property": "Αποδέξου την άδεια του Open Food Facts πριν γράψεις μια ιδιότητα.",
+  "Connect an account to share this.": "Σύνδεσε λογαριασμό για να το μοιραστείς.",
+  "I understand contributions are public, data is shared under the Open Database License and photos under CC-BY-SA. I will only upload photos I took.": "Κατανοώ ότι οι συνεισφορές είναι δημόσιες, τα δεδομένα κοινοποιούνται με άδεια Open Database License και οι φωτογραφίες με CC-BY-SA. Θα ανεβάζω μόνο φωτογραφίες που τράβηξα εγώ.",
+  "Open Food Facts account connected": "Ο λογαριασμός Open Food Facts συνδέθηκε.",
+  "Open Food Facts account disconnected": "Ο λογαριασμός Open Food Facts αποσυνδέθηκε.",
+  "Could not connect the account": "Δεν ήταν δυνατή η σύνδεση του λογαριασμού.",
+  "Could not disconnect the account": "Δεν ήταν δυνατή η αποσύνδεση του λογαριασμού.",
+  "Could not load Open Food Facts contributions": "Δεν ήταν δυνατή η φόρτωση των συνεισφορών Open Food Facts.",
+  "Could not queue the contribution": "Δεν ήταν δυνατή η προσθήκη της συνεισφοράς στην ουρά.",
+  "Could not refresh the contributions": "Δεν ήταν δυνατή η ανανέωση των συνεισφορών.",
+  "Could not retry": "Δεν ήταν δυνατή η επανάληψη.",
+  "Could not cancel": "Δεν ήταν δυνατή η ακύρωση.",
+  "Could not send the answer": "Δεν ήταν δυνατή η αποστολή της απάντησης.",
+  "Could not save the property": "Δεν ήταν δυνατή η αποθήκευση της ιδιότητας.",
+  "Could not reach NutriPatrol": "Δεν ήταν δυνατή η σύνδεση με το NutriPatrol.",
+  "Could not reach Open Food Facts": "Δεν ήταν δυνατή η σύνδεση με το Open Food Facts.",
+  "Could not reach Open Food Facts. Try again later.": "Δεν ήταν δυνατή η σύνδεση με το Open Food Facts. Δοκίμασε ξανά αργότερα.",
+  "Could not reach Open Prices": "Δεν ήταν δυνατή η σύνδεση με το Open Prices.",
+  "Could not reach Folksonomy": "Δεν ήταν δυνατή η σύνδεση με το Folksonomy.",
+  "Open Food Facts did not return a session. Check the username and password.": "Το Open Food Facts δεν επέστρεψε συνεδρία. Έλεγξε το όνομα χρήστη και τον κωδικό.",
+  "Open Food Facts rejected that username or password": "Το Open Food Facts απέρριψε αυτό το όνομα χρήστη ή κωδικό.",
+  "Open Food Facts returned an unexpected response": "Το Open Food Facts επέστρεψε μη αναμενόμενη απάντηση.",
+  "Open Food Facts login failed ({status})": "Η σύνδεση στο Open Food Facts απέτυχε ({status})",
+  "The Open Food Facts account was not accepted by {service}": "Ο λογαριασμός Open Food Facts δεν έγινε δεκτός από {service}",
+  "The Open Food Facts account was not accepted by Open Prices": "Ο λογαριασμός Open Food Facts δεν έγινε δεκτός από το Open Prices.",
+  "The Open Food Facts account was not accepted by Folksonomy": "Ο λογαριασμός Open Food Facts δεν έγινε δεκτός από το Folksonomy.",
+  "{project} does not accept contributions": "Το {project} δεν δέχεται συνεισφορές",
+  "{project} product {code} is already linked to {name}": "Το προϊόν {code} του {project} είναι ήδη συνδεδεμένο με το «{name}»",
+  "Daily contribution limit reached ({count}). Try again tomorrow.": "Το ημερήσιο όριο συνεισφορών εξαντλήθηκε ({count}). Δοκίμασε ξανά αύριο.",
+  "Fields cannot be contributed: {fields}": "Δεν είναι δυνατή η συνεισφορά των πεδίων: {fields}",
+  "Unknown Open Food Facts project": "Άγνωστο έργο Open Food Facts.",
+  "Unknown Open Food Facts service": "Άγνωστη υπηρεσία Open Food Facts.",
+  "Choose a project for Robotoff": "Διάλεξε έργο για το Robotoff.",
+  "Choose a project for a full product read": "Διάλεξε έργο για πλήρη ανάγνωση προϊόντος.",
+  "Choose at least one field to contribute": "Διάλεξε τουλάχιστον ένα πεδίο για συνεισφορά.",
+  "Nothing to contribute right now": "Δεν υπάρχει κάτι για συνεισφορά αυτή τη στιγμή.",
+  "No contributions yet. Your first share will appear here.": "Δεν υπάρχουν ακόμη συνεισφορές. Η πρώτη σου κοινοποίηση θα εμφανιστεί εδώ.",
+  "Scan a new product or add a brand, category or photo to an item, and it will show up here.": "Σάρωσε ένα νέο προϊόν ή πρόσθεσε εμπορικό σήμα, κατηγορία ή φωτογραφία σε ένα αντικείμενο και θα εμφανιστεί εδώ.",
+  "Ready to share": "Έτοιμο για κοινοποίηση",
+  "Needs a little info": "Χρειάζονται λίγες πληροφορίες",
+  "Missing fields": "Λείπουν πεδία",
+  "Wrong project": "Λάθος έργο",
+  "Review contribution": "Έλεγχος συνεισφοράς",
+  "Public contribution": "Δημόσια συνεισφορά",
+  "New product": "Νέο προϊόν",
+  "Only the selected fields are sent. Existing Open Food Facts values are never overwritten silently.": "Αποστέλλονται μόνο τα επιλεγμένα πεδία. Οι υπάρχουσες τιμές του Open Food Facts δεν αντικαθίστανται ποτέ χωρίς προειδοποίηση.",
+  "Select all": "Επιλογή όλων",
+  "Loading contributions…": "Φόρτωση συνεισφορών…",
+  "Session expired": "Η συνεδρία έληξε",
+  "Queued for Open Food Facts": "Στην ουρά για το Open Food Facts",
+  "Queued {count} contributions": "Μπήκαν στην ουρά {count} συνεισφορές",
+  "No value": "Καμία τιμή",
+  "Your local front photo": "Η τοπική μπροστινή φωτογραφία σου",
+  "This becomes public on Open Food Facts and may be reused by anyone under its open licenses.": "Αυτό γίνεται δημόσιο στο Open Food Facts και μπορεί να χρησιμοποιηθεί από οποιονδήποτε υπό τις ανοιχτές άδειές του.",
+  "Fill the product code, property and value": "Συμπλήρωσε τον κωδικό προϊόντος, την ιδιότητα και την τιμή.",
+  "Folksonomy property saved": "Η ιδιότητα Folksonomy αποθηκεύτηκε.",
+  "Add an experimental key/value property to a product. This is separate from the normal product fields and is not needed for most contributions.": "Πρόσθεσε μια πειραματική ιδιότητα κλειδιού/τιμής σε ένα προϊόν. Είναι ξεχωριστή από τα κανονικά πεδία του προϊόντος και δεν χρειάζεται για τις περισσότερες συνεισφορές.",
+  "Help verify a product": "Βοήθησε στην επαλήθευση ενός προϊόντος",
+  "Optional: confirm a fact Open Food Facts extracted from a photo.": "Προαιρετικό: επιβεβαίωσε ένα στοιχείο που εξήγαγε το Open Food Facts από μια φωτογραφία.",
+  "Product code": "Κωδικός προϊόντος",
+  "Project": "Έργο",
+  "Property": "Ιδιότητα",
+  "Save property": "Αποθήκευση ιδιότητας",
+  "Yes": "Ναι",
+  "No": "Όχι",
+  "This item is no longer eligible for that contribution. Refresh the list and try again.": "Αυτό το αντικείμενο δεν είναι πλέον κατάλληλο για αυτή τη συνεισφορά. Ανανέωσε τη λίστα και δοκίμασε ξανά.",
+  "Bill not found": "Ο λογαριασμός δεν βρέθηκε.",
+  "Bill PDF not found": "Το PDF του λογαριασμού δεν βρέθηκε.",
+  "Bills must use the house currency": "Οι λογαριασμοί πρέπει να χρησιμοποιούν το νόμισμα του σπιτιού.",
+  "Choose a PDF file": "Διάλεξε ένα αρχείο PDF.",
+  "Confirm this bill is not also recorded as a purchase receipt": "Επιβεβαίωσε ότι αυτός ο λογαριασμός δεν έχει καταχωριστεί και ως απόδειξη αγοράς.",
+  "Everyone sharing the bill must be in this house": "Όλοι όσοι μοιράζονται τον λογαριασμό πρέπει να ανήκουν σε αυτό το σπίτι.",
+  "That file is not a valid PDF": "Αυτό το αρχείο δεν είναι έγκυρο PDF.",
+  "The bill document changed during upload. Try again.": "Το έγγραφο του λογαριασμού άλλαξε κατά τη μεταφόρτωση. Δοκίμασε ξανά.",
+  "Upload a PDF bill": "Ανέβασε ένα PDF λογαριασμού.",
+  "Brew date cannot be cleared": "Η ημερομηνία παρασκευής δεν μπορεί να καθαριστεί.",
+  "Brew date is out of range": "Η ημερομηνία παρασκευής είναι εκτός ορίων.",
+  "Invalid brew date": "Μη έγκυρη ημερομηνία παρασκευής.",
+  "Each flavour tag must be 40 characters or fewer": "Κάθε ετικέτα γεύσης πρέπει να έχει έως 40 χαρακτήρες.",
+  "Use at most 20 flavour tags": "Χρησιμοποίησε έως 20 ετικέτες γεύσης.",
+  "Turn on espresso logging for this item first": "Ενεργοποίησε πρώτα την καταγραφή espresso για αυτό το αντικείμενο.",
+  "You can only edit your own shots": "Μπορείς να επεξεργαστείς μόνο τα δικά σου shots.",
+  "You can only delete your own shots": "Μπορείς να διαγράψεις μόνο τα δικά σου shots.",
+  "Shot not found": "Το shot δεν βρέθηκε.",
+  "TDS (%)": "TDS (%)",
+  "Initial stock": "Αρχικό απόθεμα",
+  "Consumed": "Καταναλώθηκε",
+  "Count correction": "Διόρθωση καταμέτρησης",
+  "Moved between locations": "Μετακίνηση μεταξύ τοποθεσιών",
+  "Receipt deleted": "Η απόδειξη διαγράφηκε",
+  "CSV import": "Εισαγωγή CSV",
+  "Receipt · {vendor}": "Απόδειξη · {vendor}",
+  "convenience": "ψιλικατζίδικο",
+  "deli": "αλλαντικάδικο",
+  "kiosk": "περίπτερο",
+  "wholesale": "χονδρική",
+  "That file is too large": "Αυτό το αρχείο είναι υπερβολικά μεγάλο.",
+  "Invalid backup archive": "Μη έγκυρο αρχείο αντιγράφου ασφαλείας.",
+  "Catalogue sync failed": "Ο συγχρονισμός του καταλόγου απέτυχε.",
+  "Folksonomy write failed": "Η εγγραφή στο Folksonomy απέτυχε.",
+  "Could not read that e-receipt": "Δεν ήταν δυνατή η ανάγνωση αυτής της ηλεκτρονικής απόδειξης.",
+  "Could not authenticate the instance account": "Δεν ήταν δυνατός ο έλεγχος ταυτότητας του λογαριασμού της εγκατάστασης.",
+  "Only {available} {unit} at that location. Try removing from another location.": "Υπάρχουν μόνο {available} {unit} σε αυτή την τοποθεσία. Δοκίμασε να αφαιρέσεις από άλλη τοποθεσία.",
+  "Only {available} {unit} available": "Υπάρχουν μόνο {available} {unit} διαθέσιμα.",
+  "Enter your email or username": "Εισήγαγε το email ή το όνομα χρήστη σου.",
+  "Inventory item not found": "Το αντικείμενο αποθέματος δεν βρέθηκε.",
+  "Missing houseId": "Λείπει το houseId.",
+  "Missing itemId": "Λείπει το itemId.",
+  "Not found": "Δεν βρέθηκε.",
+  "The local image file is missing": "Λείπει το τοπικό αρχείο εικόνας.",
+  "The local image is not a stored upload": "Η τοπική εικόνα δεν είναι αποθηκευμένη μεταφόρτωση.",
+  "The receipt image is missing": "Λείπει η εικόνα της απόδειξης.",
 };
 
-const DYNAMIC_EL = Object.entries(EL)
-  .filter(([key]) => /\{[a-zA-Z]\w*\}/.test(key))
-  .map(([key, value]) => {
-    const names: string[] = [];
-    const pattern = key
-      .replace(/[.*+?^$()|[\]\\]/g, "\\$&")
-      .replace(/\{([a-zA-Z]\w*)\}/g, (_match, name: string) => {
-        names.push(name);
-        return "([\\s\\S]*?)";
-      });
-    return { regex: new RegExp("^" + pattern + "$"), names, value };
-  });
+const DYNAMIC_EL = Object.entries(EL).flatMap(([key, value]) => {
+  const matcher = buildDynamicMatcher(key);
+  return matcher ? [{ ...matcher, value }] : [];
+});
 
 interface I18nValue {
   language: Language;
@@ -2455,12 +2617,12 @@ export function I18nProvider({ children }: { children: ReactNode }) {
       let template = language === "el" ? EL[key] : undefined;
       if (language === "el" && template === undefined) {
         for (const entry of DYNAMIC_EL) {
-          const match = entry.regex.exec(key);
-          if (!match) continue;
+          const values = matchDynamicTranslation(key, entry);
+          if (!values) continue;
           template = entry.value;
-          entry.names.forEach((name, index) => {
-            template = template!.replaceAll("{" + name + "}", match[index + 1] ?? "");
-          });
+          for (const [name, value] of Object.entries(values)) {
+            template = template!.replaceAll("{" + name + "}", value);
+          }
           break;
         }
       }

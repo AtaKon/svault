@@ -747,7 +747,7 @@ export function ContributionsPage() {
                   <div className="truncate text-[13px] font-medium">{contribution.itemName ?? contribution.code}</div>
                   <div className="truncate text-[11px] text-muted">
                     {t(offProjectLabel(contribution.project))} ·{" "}
-                    {contribution.fields.length ? contribution.fields.map(fieldLabel).join(", ") : t("No fields")}
+                    {contribution.fields.length ? contribution.fields.map((field) => t(fieldLabel(field))).join(", ") : t("No fields")}
                     {contribution.remoteMessage ? ` · ${contribution.remoteMessage}` : ""}
                   </div>
                 </div>

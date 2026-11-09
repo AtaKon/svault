@@ -4536,6 +4536,10 @@ describe("weekly meal planner", () => {
     assert.equal(week.data.weekStart, "2026-11-02");
     assert.equal(week.data.weekEnd, "2026-11-08");
     assert.equal(week.data.entries.length, 1);
+    assert.equal(week.data.entries[0].day, "2026-11-02");
+    assert.equal(week.data.entries[0].recipeId, recipeId);
+    assert.equal(week.data.entries[0].servings, 4);
+    assert.equal(week.data.entries[0].title, "Plan rice bowl");
 
     const duplicate = await request(`/api/houses/${houseId}/plan/${entry.data.id}/duplicate`, {
       method: "POST",
@@ -4566,10 +4570,54 @@ describe("weekly meal planner", () => {
   });
 
   it("reports planned meals on the dashboard", async () => {
+    // Let the server define the current week boundary, then seed inside it.
+    const initialWeek = await request(`/api/houses/${houseId}/plan`);
+    assert.equal(initialWeek.status, 200);
+    const weekStart = initialWeek.data.weekStart;
+    const seeded = await request(`/api/houses/${houseId}/plan`, {
+      method: "POST",
+      body: { day: weekStart, slot: "lunch", recipeId, servings: 2 },
+    });
+    assert.equal(seeded.status, 201);
+
     const dashboard = await request(`/api/houses/${houseId}/dashboard`);
     assert.equal(dashboard.status, 200);
-    assert.ok(dashboard.data.plan.week >= 2);
+    assert.equal(dashboard.data.plan.weekStart, weekStart);
+    const currentWeek = await request(`/api/houses/${houseId}/plan?week=${weekStart}`);
+    assert.equal(currentWeek.status, 200);
+    const serialized = currentWeek.data.entries.find((entry: any) => entry.id === seeded.data.id);
+    assert.ok(serialized);
+    assert.equal(serialized.day, weekStart);
+    assert.equal(serialized.recipeId, recipeId);
+    assert.equal(serialized.servings, 2);
+    assert.equal(serialized.title, "Plan rice bowl");
+    assert.equal(dashboard.data.plan.week, currentWeek.data.entries.length);
   });
+
+  it("serializes malformed legacy rows without failing the week", async () => {
+    const initial = await request(`/api/houses/${houseId}/plan`);
+    assert.equal(initial.status, 200);
+    const weekStart = initial.data.weekStart;
+    const entry = await request(`/api/houses/${houseId}/plan`, {
+      method: "POST",
+      body: { day: weekStart, slot: "snack", title: "Legacy row", servings: 1 },
+    });
+    assert.equal(entry.status, 201);
+    await run("UPDATE meal_plan_entries SET slot = ?, servings = ? WHERE id = ?", [
+      "brunch",
+      "not-a-number",
+      entry.data.id,
+    ]);
+
+    const week = await request(`/api/houses/${houseId}/plan?week=${weekStart}`);
+    assert.equal(week.status, 200);
+    const row = week.data.entries.find((item: any) => item.id === entry.data.id);
+    assert.ok(row);
+    assert.equal(row.slot, "dinner");
+    assert.equal(row.servings, null);
+    assert.equal(row.title, "Legacy row");
+  });
+
 });
 
 describe("bulk intake", () => {
@@ -7666,8 +7714,19 @@ describe("PosoKanei price lookup client", () => {
     assert.equal(calls, 2);
     assert.equal(rateLimitCalls, 2, "each user's upstream request reserves its own user slot");
     assert.equal(globalRateLimitCalls, 2, "each upstream request reserves a global slot");
+    const withoutFetchedAt = (offers: any[]) => offers.map(({ fetchedAt: _fetchedAt, ...offer }) => offer);
+    const stable = (offers: any[]) =>
+      [...offers].sort(
+        (a, b) =>
+          String(a.retailer).localeCompare(String(b.retailer)) || Number(a.price) - Number(b.price),
+      );
     assert.deepEqual(one, two);
-    assert.deepEqual(one, three);
+    // Two separate users perform separate upstream fetches, so fetchedAt can
+    // differ and ordering is not guaranteed; compare stable content.
+    assert.deepEqual(withoutFetchedAt(stable(one)), withoutFetchedAt(stable(three)));
+    for (const offers of [one, three]) {
+      assert.ok(Number.isFinite(Date.parse(offers[0].fetchedAt)));
+    }
   });
 
   it("charges one slot when same-user callers share an in-flight 429", async () => {
