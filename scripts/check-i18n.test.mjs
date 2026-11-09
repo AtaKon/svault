@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { buildDynamicMatcher } from "../shared/i18n.ts";
+import { buildDynamicMatcher, isDynamicTranslationKey } from "../shared/i18n.ts";
 import {
   checkRepository,
   extractClientKeys,
@@ -131,7 +131,10 @@ test("excludes ultra-short dynamic keys like {count}d", () => {
 
   const dictionary = new Set(["{count}d"]);
   const unrelated = { key: "Catalogue sync failed", file: "fixture", line: 1 };
-  assert.deepEqual(findMissing(dictionary, [unrelated]), [unrelated]);
+  const missing = findMissing(dictionary, [unrelated]);
+  assert.equal(missing.length, 1);
+  assert.equal(missing[0].key, "Catalogue sync failed");
+  assert.equal(missing[0].reason, "missing");
 });
 
 test("rejects lossy adjacent-placeholder matches", () => {
@@ -143,7 +146,10 @@ test("rejects lossy adjacent-placeholder matches", () => {
 test("flags client template calls that would bypass DYNAMIC_EL", () => {
   const keys = extractClientKeys("const label = t(`${count}d`);");
   assert.deepEqual(keys.map((entry) => entry.key), ["{x}d"]);
-  assert.equal(findMissing(new Set(["{count}d"]), keys).length, 1);
+  const unmatchable = findMissing(new Set(["{count}d"]), keys);
+  assert.equal(unmatchable.length, 1);
+  assert.equal(unmatchable[0].reason, "unmatchable");
+  assert.equal(findMissing(new Set(), keys)[0].reason, "missing");
 });
 
 test("accepts client dynamic keys that the runtime can match", () => {
@@ -153,6 +159,11 @@ test("accepts client dynamic keys that the runtime can match", () => {
 });
 
 test("covers dynamic key boundary shapes", () => {
+  assert.equal(isDynamicTranslationKey("{count} d"), false);
+  assert.equal(isDynamicTranslationKey("{a} {b}"), false);
+  assert.equal(isDynamicTranslationKey("{x}"), false);
+  assert.equal(isDynamicTranslationKey("{field}: {message}"), true);
+  assert.equal(isDynamicTranslationKey("{count} items"), true);
   assert.equal(buildDynamicMatcher("{count} d"), null);
   assert.equal(buildDynamicMatcher("{a} {b}"), null);
   assert.equal(buildDynamicMatcher("{x}"), null);

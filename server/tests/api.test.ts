@@ -8,6 +8,7 @@ import path from "node:path";
 import { splitAmountEvenly } from "../../shared/bill-splitting.js";
 import { BILL_TYPE_LABELS, BILL_TYPE_VALUES } from "../../shared/bill-types.js";
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA, POSTGRES_TABLE_ORDER } from "../database/postgres-schema.js";
+import { serializePlanEntries } from "../lib/plan-serialize.js";
 
 const dataDir = mkdtempSync(path.join(tmpdir(), "svault-test-"));
 process.env.DATA_DIR = dataDir;
@@ -4593,6 +4594,16 @@ describe("weekly meal planner", () => {
     assert.equal(serialized.title, "Plan rice bowl");
     assert.equal(dashboard.data.plan.week, currentWeek.data.entries.length);
   });
+
+  it("propagates plan serialization failures instead of returning empty entries", async () => {
+    await assert.rejects(
+      () =>
+        serializePlanEntries([{ id: "row" }], async () => {
+          throw new Error("serialize failed");
+        }),
+      /serialize failed/,
+    );
+  });
 });
 
 describe("bulk intake", () => {
@@ -7694,6 +7705,11 @@ describe("PosoKanei price lookup client", () => {
     // Two separate users perform separate upstream fetches, so fetchedAt can
     // differ by a millisecond; compare the actual offer content instead.
     assert.deepEqual(withoutFetchedAt(one), withoutFetchedAt(three));
+    const fetchedAt = (offers: any[]) => Date.parse(offers[0].fetchedAt);
+    assert.ok(
+      Math.abs(fetchedAt(one) - fetchedAt(three)) <= 100,
+      "separate-user fetches should still happen within the same short window",
+    );
   });
 
   it("charges one slot when same-user callers share an in-flight 429", async () => {

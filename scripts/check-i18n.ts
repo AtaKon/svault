@@ -17,14 +17,20 @@ import { buildDynamicMatcher } from "../shared/i18n";
  * responses and dynamic `t(someVariable)` client calls are not resolved.
  */
 
-export type TranslationEntry = { key: string; file: string; line: number; kind: "client" | "server" };
+export type TranslationEntry = {
+  key: string;
+  file: string;
+  line: number;
+  kind: "client" | "server";
+  reason?: "missing" | "unmatchable";
+};
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function walk(dir: string): string[] {
   const files: string[] = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name === "node_modules") continue;
+    if (entry.name === "node_modules" || entry.name === "dist" || entry.name === ".next") continue;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) files.push(...walk(full));
     else if (/\.(ts|tsx)$/.test(entry.name)) files.push(full);
@@ -214,6 +220,7 @@ export function findMissing(dictionary: Set<string>, entries: TranslationEntry[]
     const matcher = buildDynamicMatcher(key);
     if (matcher) dynamicMatchers.push(matcher);
   }
+  const normalizedDictionary = new Set([...dictionary].map(normalizeKey));
 
   const missing: TranslationEntry[] = [];
   for (const entry of entries) {
@@ -233,7 +240,10 @@ export function findMissing(dictionary: Set<string>, entries: TranslationEntry[]
       // dynamic patterns must not mask a missing literal.
       found = false;
     }
-    if (!found) missing.push(entry);
+    if (!found) {
+      const reason = dynamic && normalizedDictionary.has(normalized) ? "unmatchable" : "missing";
+      missing.push({ ...entry, reason });
+    }
   }
   return missing;
 }
