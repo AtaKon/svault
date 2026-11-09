@@ -188,14 +188,16 @@ export function documentMime(buffer: ArrayBuffer): string | null {
 
 /** Load a saved bill document back into a File so it can be re-read. */
 export async function fetchBillFile(url: string, name: string): Promise<File | null> {
-  const response = await fetch(url);
+  // Same-origin cookies are what the document route uses; make that explicit.
+  const response = await fetch(url, { credentials: "include" });
   if (!response.ok) return null;
   const blob = await response.blob();
   const buffer = await blob.arrayBuffer();
   // The authenticated document route sets a real Content-Type, but a proxy or
   // generic download can strip it. Inspect the bytes before trusting it.
   const type = documentMime(buffer) ??
-    (blob.type && blob.type !== "application/octet-stream" ? blob.type : "application/pdf");
+    (blob.type && blob.type !== "application/octet-stream" ? blob.type : null);
+  if (!type) return null;
   const extension = type === "application/pdf" ? "pdf" : type === "image/png" ? "png" : type === "image/webp" ? "webp" : "jpg";
   return new File([buffer], `${name || "bill"}.${extension}`, { type });
 }

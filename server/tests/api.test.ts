@@ -700,6 +700,54 @@ describe("bill text parsing", () => {
     assert.equal(parseBillNumber("-12,50"), -12.5);
     assert.equal(parseBillNumber("1,234"), 1234);
     assert.equal(parseBillNumber("1,234", { thousands: false }), 1.234);
+    assert.equal(parseBillNumber("1.234.567,00"), 1234567);
+    assert.equal(parseBillNumber("1,234,567"), 1234567);
+    assert.equal(parseBillNumber("1,2,3.45"), null);
+    assert.equal(parseBillNumber("1,2,3"), null);
+  });
+
+  it("keeps large grouped totals while dropping real dates", () => {
+    const result = parseBillText([
+      "ΔΕΗ",
+      "Ημερομηνία έκδοσης 15/03/2024",
+      "ΣΥΝΟΛΟ 1.234.567,00",
+    ].join("\n"));
+    assert.equal(result.total, 1234567);
+  });
+
+  it("accepts a grand total that also mentions consumption", () => {
+    const result = parseBillText("Σύνολο 1.234,56 για 350 kWh");
+    assert.equal(result.total, 1234.56);
+  });
+
+  it("reads a due date from the next line and rejects impossible dates", () => {
+    const result = parseBillText("ΔΕΗ\nΗμερομηνία έκδοσης 01/10/2026\nΛΗΞΗ\n20/10/2026");
+    assert.equal(result.dueDate, "2026-10-20");
+    assert.equal(parseBillText("ΔΕΗ\nΛΗΞΗ 31/02/2026").dueDate, null);
+  });
+
+  it("prefers a strong supplier signal over generic keyword counts", () => {
+    const result = parseBillText("COSMOTE\nΛογαριασμός τηλεπικοινωνιών\nΧρέωση ρεύματος 5,00\nΣΥΝΟΛΟ 5,00");
+    assert.equal(result.billType, "internet_telecom");
+  });
+
+  it("reads an English total including VAT and a net-plus-tax row", () => {
+    const result = parseBillText("Subtotal 100.00\nVAT 24% 100.00 24.00\nTotal including VAT 124.00");
+    assert.equal(result.subtotal, 100);
+    assert.equal(result.taxTotal, 24);
+    assert.equal(result.total, 124);
+  });
+
+  it("uses the printed total to disambiguate a single gross tax value", () => {
+    const result = parseBillText([
+      "Subtotal 100.00",
+      "VAT 24% 124.00",
+      "Total 124.00",
+    ].join("\n"));
+    assert.equal(result.subtotal, 100);
+    assert.equal(result.taxTotal, 24);
+    assert.equal(result.total, 124);
+    assert.equal(result.lines.find((line) => line.kind === "tax")?.amount, 24);
   });
 
   it("keeps three-decimal unit prices from becoming thousands", () => {
@@ -752,6 +800,12 @@ describe("bill text parsing", () => {
       assert.equal(file?.type, "application/pdf");
       assert.match(file?.name ?? "", /\.pdf$/);
       assert.equal(documentMime(pdfBytes.buffer as ArrayBuffer), "application/pdf");
+      assert.equal(documentMime(new Uint8Array([0xff, 0xd8, 0xff, 0xe0]).buffer), "image/jpeg");
+      assert.equal(documentMime(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).buffer), "image/png");
+      assert.equal(documentMime(new TextEncoder().encode("RIFF0000WEBP").buffer), "image/webp");
+      assert.equal(documentMime(new Uint8Array([]).buffer), null);
+      globalThis.fetch = (async () => new Response("missing", { status: 404 })) as typeof fetch;
+      assert.equal(await fetchBillFile("/api/houses/x/bills/y/document", "bill"), null);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -6395,6 +6449,20 @@ describe("insights, household split and admin console", () => {
     assert.equal(stringMoneyPatch.status, 200, "both multipart strings and JSON numbers are accepted");
     assert.equal(stringMoneyPatch.data.subtotal, 7.5);
     assert.equal(stringMoneyPatch.data.taxTotal, 2.5);
+    const cleared = await request(`/api/bills/${accepted.data.id}`, {
+      method: "PATCH",
+      body: { subtotal: null, taxTotal: null, ocrText: null, breakdown: [] },
+    });
+    assert.equal(cleared.status, 200);
+    assert.equal(cleared.data.subtotal, null, "null explicitly clears a stored subtotal");
+    assert.equal(cleared.data.taxTotal, null);
+    assert.equal(cleared.data.ocrText, null);
+    assert.deepEqual(cleared.data.breakdown, []);
+    const sourceScan = await request(`/api/bills/${accepted.data.id}`, { method: "PATCH", body: { source: "scan" } });
+    assert.equal(sourceScan.status, 200);
+    assert.equal(sourceScan.data.source, "scan");
+    const sourcePreserved = await request(`/api/bills/${accepted.data.id}`, { method: "PATCH", body: { notes: "keep provenance" } });
+    assert.equal(sourcePreserved.data.source, "scan", "omitting source preserves it");
     const invalidBreakdown = await request(`/api/bills/${accepted.data.id}`, {
       method: "PATCH",
       body: { breakdown: [{ description: "", kind: "charge", amount: 1 }] },
@@ -6446,6 +6514,20 @@ describe("insights, household split and admin console", () => {
     assert.equal(afterReplacement.taxTotal, null);
     assert.equal(afterReplacement.ocrText, null);
     assert.equal(afterReplacement.source, "manual");
+
+    const replacementJpeg = new Blob([Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10])], { type: "image/jpeg" });
+    const imageForm = form(replacementJpeg, "Image replacement");
+    imageForm.delete("document");
+    imageForm.append("document", replacementJpeg, "bill.jpg");
+    const imageReplacement = await request(`/api/houses/${billHouse}/bills/${accepted.data.id}/document`, {
+      method: "POST", body: imageForm,
+    });
+    assert.equal(imageReplacement.status, 200, "a PDF bill can be replaced by a photo");
+    const imageDocument = (await get<{ document: string }>("SELECT document FROM bills WHERE id = ?", [accepted.data.id]))?.document;
+    assert.match(imageDocument ?? "", /\.jpg$/);
+    const imageResponse = await fetch(base + imageReplacement.data.document, { headers: { cookie } });
+    assert.equal(imageResponse.headers.get("content-type"), "image/jpeg");
+    assert.ok(!files().includes(replacementDocument), "replacing with a photo removes the old PDF");
 
     const beforeConcurrentReplacement = files();
     const concurrentDocuments = await Promise.all([

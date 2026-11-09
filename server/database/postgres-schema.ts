@@ -800,6 +800,17 @@ export const POSTGRES_MIGRATIONS: string[] = [
   "ALTER TABLE bills ADD COLUMN IF NOT EXISTS breakdown TEXT NOT NULL DEFAULT '[]'",
   "ALTER TABLE bills ADD COLUMN IF NOT EXISTS ocr_text TEXT",
   "ALTER TABLE bills ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manual'",
+  // Fresh installs get the CHECK from CREATE TABLE; add it to upgraded databases too.
+  `DO $$
+  BEGIN
+    IF to_regclass('bills') IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'bills_source_check' AND conrelid = to_regclass('bills')
+      ) THEN
+      ALTER TABLE bills ADD CONSTRAINT bills_source_check CHECK (source IN ('manual', 'scan'));
+    END IF;
+  END $$`,
 ];
 
 /**

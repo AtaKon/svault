@@ -21,8 +21,8 @@ const TOTAL_WORDS =
   /(συνολο(?:\s+(?:πληρωτεου|πληρωμης|με\s+φπα))?|πληρωτεο(?:\s+ποσο)?|ποσο\s+πληρωμης|τελικο\s+ποσο|προς\s+πληρωμη|total(?:\s+(?:amount|due|payable|incl(?:uding)?\s+(?:vat|tax)))?|amount\s+due|grand\s+total|balance\s+due|pay(?:ment)?\s+due)/;
 const SUBTOTAL_WORDS = /(υποσυνολο|καθαρη\s+αξια|συνολο\s+χρεωσεων|χρεωσεις\s+συνολο|sub\s*-?\s*total|net\s+(?:amount|total)|total\s+charges)/;
 const TOTAL_WITH_TAX = /(με\s+φπα|συμπεριλαμβανομενου|incl(?:uding)?\s+(?:vat|tax)|(?:vat|tax)\s+incl|with\s+vat)/;
-const CONSUMPTION_ONLY = /(καταναλωσ|consumption)/;
-const NOT_A_TOTAL = /(page|σελιδα|invoice\s+no|receipt\s+no|αριθμ\p{L}*\s+παραστατικου|items|τεμαχια|ποσοτητα|quantity|kwh|m3|m³)/u;
+const CONSUMPTION_ONLY = /(καταναλωσ|consumption|usage)/;
+const NOT_A_TOTAL = /(page|σελιδα|invoice\s+no|receipt\s+no|αριθμ\p{L}*\s+παραστατικου|items|τεμαχια|ποσοτητα|quantity)/u;
 const TAX_WORDS =
   /(φπα|φ\.π\.α|vat|iva|sales\s+tax|χαρτοσημο|δημοτικ\p{L}*\s+(?:τελ|φορ)|(?:^|[^α-ω])(?:ερτ|εφα)(?:[^α-ω]|$)|ε\.φ\.α|(?:^|[^α-ω])φορος(?:[^α-ω]|$)|(?:^|[^α-ω])εισφορα(?:[^α-ω]|$)|(?:^|[^α-ω])tax(?:[^α-ω]|$))/u;
 const TAX_EXCLUDE = /(αφμ|a\.?\s*φ\.?\s*μ|vat\s+(?:no|number|id)|tax\s+(?:id|no|number|office|invoice)|invoice|τιμολογιο|αποδειξη|receipt)/;
@@ -100,7 +100,7 @@ const STRONG_TYPE_SIGNALS: Array<[BillType, RegExp]> = [
   ["natural_gas", /(δεπα|επα\s+αττικη|φυσικο\s+αεριο|φυσικου\s+αεριου)/u],
 ];
 
-const TYPE_KEYWORDS: Array<[BillType, RegExp]> = [
+const TYPE_KEYWORDS_SOURCE: Array<[BillType, RegExp]> = [
   ["electricity", /(ηλεκτρικ\p{L}*\s+(?:ρευμα|ενεργεια)|ρευμα|\bδεη\b|\bdei\b|kwh|electricity|electric\s+power)/u],
   ["water", /(νερο|υδρευση|υδρευσης|ευδαπ|ευαθ|\bwater\b|\bm3\b|m³)/u],
   ["natural_gas", /(φυσικο\s+αεριο|φυσικου\s+αεριου|δεπα|natural\s+gas|\bgas\b)/u],
@@ -111,6 +111,8 @@ const TYPE_KEYWORDS: Array<[BillType, RegExp]> = [
   ["municipal_fees", /(δημοτικ\p{L}*\s+(?:τελ|φορ)|municipal|δημος|δημου)/u],
   ["insurance", /(ασφαλει|ασφαλιστ|insurance|policy\s+no)/u],
 ];
+/** Global variants are built once instead of on every parser call. */
+const TYPE_KEYWORDS = TYPE_KEYWORDS_SOURCE.map(([type, pattern]) => [type, new RegExp(pattern.source, "gu")] as const);
 
 interface NumberToken {
   value: number;
@@ -150,23 +152,29 @@ export function parseBillNumber(raw: string, options: { thousands?: boolean } = 
   if (lastDot >= 0 && lastComma >= 0) {
     const decimal = lastDot > lastComma ? "." : ",";
     const thousands = decimal === "." ? "," : ".";
+    // Reject malformed grouping such as 1,2,3.45 instead of guessing.
+    const shape = decimal === "."
+      ? /^\d{1,3}(?:,\d{3})*\.\d+$/
+      : /^\d{1,3}(?:\.\d{3})*,\d+$/;
+    if (!shape.test(text)) return null;
     text = text.split(thousands).join("");
     if (decimal === ",") text = text.replace(",", ".");
-  } else if (lastComma >= 0) {
-    const decimals = text.length - lastComma - 1;
-    const integer = text.slice(0, lastComma);
-    const leadingZero = /^0+$/.test(integer);
-    if (decimals === 3 && integer.length > 0 && integer.length <= 3 && !leadingZero && options.thousands !== false) {
-      text = text.replace(",", "");
+  } else if (lastComma >= 0 || lastDot >= 0) {
+    const separator = lastComma >= 0 ? "," : ".";
+    const separatorCount = text.split(separator).length - 1;
+    if (separatorCount > 1) {
+      // Several separators are only valid as grouped thousands.
+      if (!/^\d{1,3}(?:[.,]\d{3})+$/.test(text) || options.thousands === false) return null;
+      text = text.replace(/[.,]/g, "");
     } else {
-      text = text.replace(",", ".");
-    }
-  } else if (lastDot >= 0) {
-    const decimals = text.length - lastDot - 1;
-    const integer = text.slice(0, lastDot);
-    const leadingZero = /^0+$/.test(integer);
-    if (decimals === 3 && integer.length > 0 && integer.length <= 3 && !leadingZero && options.thousands !== false) {
-      text = text.replace(".", "");
+      const decimals = text.length - text.lastIndexOf(separator) - 1;
+      const integer = text.slice(0, text.lastIndexOf(separator));
+      const leadingZero = /^0+$/.test(integer);
+      if (decimals === 3 && integer.length > 0 && integer.length <= 3 && !leadingZero && options.thousands !== false) {
+        text = text.replace(separator, "");
+      } else {
+        text = text.replace(separator, ".");
+      }
     }
   }
 
@@ -176,10 +184,14 @@ export function parseBillNumber(raw: string, options: { thousands?: boolean } = 
 
 function numbersIn(line: string): NumberToken[] {
   // Dates, billing periods and meter serials are not money; remove them first.
+  // A dotted pair such as 100.00 is money, so dotted runs are stripped only
+  // when they form a real date. This also keeps 1.234.567,00 intact.
   const source = compactThousands(line)
-    // A dotted pair such as 100.00 is money, so only full dates may use dots.
-    .replace(/\b\d{1,4}[./-]\d{1,2}[./-]\d{1,4}\b/g, " ")
-    .replace(/\b\d{1,2}[/-]\d{2,4}\b/g, " ");
+    .replace(
+      /\b(?:\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[./-]\d{1,2}[./-]\d{2,4})\b/g,
+      (match) => parseDateText(match) ? " " : match,
+    )
+    .replace(/\b\d{1,2}\/\d{2,4}\b/g, " ");
   const tokens: NumberToken[] = [];
   const pattern = /[-+]?\d[\d.,]*/g;
   let match: RegExpExecArray | null;
@@ -190,6 +202,13 @@ function numbersIn(line: string): NumberToken[] {
     tokens.push({ value, raw: match[0], percent });
   }
   return tokens;
+}
+
+/** Prefer a decimal amount over an integer consumption figure on total rows. */
+function moneyValue(tokens: NumberToken[]): number | null {
+  if (!tokens.length) return null;
+  const decimal = [...tokens].reverse().find((token) => /[.,]\d{1,2}$/.test(token.raw));
+  return (decimal ?? tokens[tokens.length - 1]).value;
 }
 
 function describeLine(line: string): string {
@@ -281,7 +300,7 @@ function detectBillType(text: string): BillType | null {
   let best: BillType | null = null;
   let bestScore = 0;
   for (const [type, pattern] of TYPE_KEYWORDS) {
-    const matches = folded.match(new RegExp(pattern.source, "gu"));
+    const matches = folded.match(pattern);
     const score = matches ? matches.length : 0;
     if (score > bestScore) {
       best = type;
@@ -330,13 +349,20 @@ function chargeLine(line: string): BillBreakdownLine | null {
   // Unit prices may legitimately have three decimals ("1,234"), unlike the
   // printed money totals, so they are parsed with the decimal interpretation.
   const asUnitNumber = (token: NumberToken) => parseBillNumber(token.raw, { thousands: false });
+  const near = (value: number, target: number) => Math.abs(value - target) <= Math.max(1e-6, Math.abs(target) * 1e-6);
   const candidates = [...tokens];
   if (quantity != null) {
-    const quantityIndex = candidates.findIndex((token) => Math.abs((asUnitNumber(token) ?? NaN) - quantity) < 1e-9);
+    const quantityIndex = candidates.findIndex((token) => {
+      const value = asUnitNumber(token);
+      return value != null && near(value, quantity);
+    });
     if (quantityIndex >= 0 && candidates.length > 1) candidates.splice(quantityIndex, 1);
   }
   if (unitPrice != null) {
-    const priceIndex = candidates.findIndex((token) => Math.abs((asUnitNumber(token) ?? NaN) - unitPrice!) < 1e-9);
+    const priceIndex = candidates.findIndex((token) => {
+      const value = asUnitNumber(token);
+      return value != null && near(value, unitPrice!);
+    });
     if (priceIndex >= 0) candidates.splice(priceIndex, 1);
   }
   if (!candidates.length && !(quantity != null && unitPrice != null)) return null;
@@ -445,13 +471,13 @@ export function parseBillText(rawText: string, options: { currency?: string | nu
     }
 
     if (SUBTOTAL_WORDS.test(folded) && !isGrandWithTax) {
-      const value = money.length ? money[money.length - 1].value : null;
+      const value = moneyValue(money);
       if (value != null && value > 0) printedSubtotal = round2(value);
       continue;
     }
 
     if (TOTAL_WORDS.test(folded) && !CONSUMPTION_ONLY.test(folded) && !NOT_A_TOTAL.test(folded)) {
-      const value = money.length ? money[money.length - 1].value : null;
+      const value = moneyValue(money);
       if (value != null && value > 0) {
         const explicit = /(πληρωτεο|ποσο\s+πληρωμης|amount\s+due|balance\s+due|pay(?:ment)?\s+due)/.test(folded);
         const score = (explicit ? 10 : 5) +
@@ -488,6 +514,16 @@ export function parseBillText(rawText: string, options: { currency?: string | nu
 
   let subtotal = printedSubtotal;
   if (subtotal == null && charges.length) subtotal = round2(chargeSum - discountSum);
+
+  // A single-value tax row is ambiguous: it may print the tax, the net or the
+  // gross. When the printed total and subtotal are available, use their
+  // difference to correct a lone tax line instead of inflating taxTotal.
+  if (printedTotal != null && subtotal != null && taxLines.length === 1 && taxLines[0].taxRate != null) {
+    const expected = round2(printedTotal - subtotal);
+    const current = taxLines[0].amount ?? 0;
+    if (expected > 0 && Math.abs(expected - current) > 0.05) taxLines[0].amount = expected;
+  }
+
   let taxTotal = taxLines.length ? round2(taxLines.reduce((sum, line) => sum + (line.amount ?? 0), 0)) : null;
   if (taxTotal == null && printedTotal != null && subtotal != null && printedTotal > subtotal) {
     taxTotal = round2(printedTotal - subtotal);

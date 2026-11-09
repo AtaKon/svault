@@ -105,7 +105,11 @@ const verifyBillDocument: RequestHandler = (req, _res, next) => {
 const twoDecimals = (value: number) => Math.abs(value - Math.round(value * 100) / 100) < 1e-7;
 const optionalMoney = z.preprocess(
   // Keep undefined (field omitted) distinct from an explicit clear (null/"").
-  (value) => value === undefined ? undefined : value === "" || value == null ? null : value,
+  (value) => value === undefined
+    ? undefined
+    : typeof value === "string" && value.trim() === "" || value == null
+      ? null
+      : value,
   z.coerce.number().finite().min(0).max(1_000_000_000)
     .refine(twoDecimals, "Enter an amount with up to two decimal places")
     .transform((value) => Math.round(value * 100) / 100)
@@ -199,6 +203,7 @@ const patchInput = z.object({
 }).strict();
 
 function serialize(row: BillRow): UtilityBill {
+  const parsedBreakdown = parseJson<unknown>(row.breakdown, []);
   return {
     id: row.id,
     name: row.name,
@@ -213,9 +218,7 @@ function serialize(row: BillRow): UtilityBill {
     notes: row.notes ?? null,
     subtotal: row.subtotal == null ? null : Number(row.subtotal),
     taxTotal: row.tax_total == null ? null : Number(row.tax_total),
-    breakdown: Array.isArray(parseJson<unknown>(row.breakdown, []))
-      ? parseJson<BillBreakdownLine[]>(row.breakdown, [])
-      : [],
+    breakdown: Array.isArray(parsedBreakdown) ? parsedBreakdown as BillBreakdownLine[] : [],
     ocrText: row.ocr_text ?? null,
     source: row.source === "scan" ? "scan" : "manual",
     createdAt: row.created_at,

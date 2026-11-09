@@ -111,10 +111,15 @@ export function BillsPage() {
   useEffect(() => { void load(); }, [load]);
 
   const applyScan = (result: BillParseResult, text: string) => {
-    if (result.name) setName(result.name);
-    if (result.billType) setBillType(result.billType);
-    if (result.total != null) setAmount(result.total.toFixed(2));
-    if (result.dueDate) setDueDate(result.dueDate);
+    // Keep values the user typed before choosing a file; a second scan may
+    // replace fields that the previous scan filled in.
+    setName((current) => current.trim() && !scanned ? current : result.name ?? current);
+    setBillType((current) => !scanned && current !== "electricity" ? current : result.billType ?? current);
+    setAmount((current) => {
+      if (current.trim() && !scanned) return current;
+      return result.total != null ? result.total.toFixed(2) : current;
+    });
+    setDueDate((current) => current && !scanned ? current : result.dueDate ?? current);
     setSubtotal(result.subtotal != null ? result.subtotal.toFixed(2) : "");
     setTaxTotal(result.taxTotal != null ? result.taxTotal.toFixed(2) : "");
     setBreakdown(result.lines.slice(0, 100));
@@ -195,7 +200,7 @@ export function BillsPage() {
         if (subtotal.trim()) data.set("subtotal", subtotal);
         if (taxTotal.trim()) data.set("taxTotal", taxTotal);
         if (ocrText) data.set("ocrText", ocrText);
-        data.set("source", "scan");
+        if (scanned || breakdown.length || ocrText) data.set("source", "scan");
       }
       await api<UtilityBill>(`/api/houses/${house.id}/bills`, { method: "POST", body: data });
       setName(""); setAmount(""); setDueDate(""); setNotes(""); setFile(null);
@@ -250,16 +255,16 @@ export function BillsPage() {
         toast.error(t("No amount or breakdown was recognised in this document."));
         return;
       }
-      await api(`/api/bills/${bill.id}`, {
-        method: "PATCH",
-        body: {
-          subtotal: scan.result.subtotal,
-          taxTotal: scan.result.taxTotal,
-          breakdown: scan.result.lines.slice(0, 100),
-          ocrText: scan.text.slice(0, 50_000),
-          source: "scan",
-        },
-      });
+      const body: Record<string, unknown> = {
+        breakdown: scan.result.lines.slice(0, 100),
+        ocrText: scan.text.slice(0, 50_000),
+        source: "scan",
+      };
+      // Omitting a missing subtotal/tax preserves any value already stored;
+      // an explicit null would erase it on a partial re-read.
+      if (scan.result.subtotal != null) body.subtotal = scan.result.subtotal;
+      if (scan.result.taxTotal != null) body.taxTotal = scan.result.taxTotal;
+      await api(`/api/bills/${bill.id}`, { method: "PATCH", body });
       toast.success(t("Bill breakdown updated"));
       await load();
     } catch (error) {
