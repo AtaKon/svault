@@ -1,7 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { buildDynamicMatcher } from "../shared/i18n.ts";
 import {
+  checkRepository,
   extractClientKeys,
   extractDictionary,
   extractServerMessages,
@@ -154,4 +158,33 @@ test("covers dynamic key boundary shapes", () => {
   assert.equal(buildDynamicMatcher("{x}"), null);
   assert.notEqual(buildDynamicMatcher("{field}: {message}"), null);
   assert.notEqual(buildDynamicMatcher("{count} items"), null);
+});
+
+test("checkRepository passes on the repository and fails on a fixture", () => {
+  assert.equal(checkRepository().missing.length, 0);
+
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "svault-i18n-"));
+  try {
+    fs.mkdirSync(path.join(fixture, "client"), { recursive: true });
+    fs.mkdirSync(path.join(fixture, "server"), { recursive: true });
+    fs.writeFileSync(path.join(fixture, "client/i18n.tsx"), 'const EL = { Present: "ok" };');
+    fs.writeFileSync(
+      path.join(fixture, "client/page.tsx"),
+      'const a = t("Present");\nconst b = t("Missing key");',
+    );
+    assert.deepEqual(checkRepository(fixture).missing.map((entry) => entry.key), ["Missing key"]);
+  } finally {
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test("SV_I18N_ROOT cannot redirect the default scan", () => {
+  const original = process.env.SV_I18N_ROOT;
+  process.env.SV_I18N_ROOT = "/does/not/exist";
+  try {
+    assert.equal(checkRepository().missing.length, 0);
+  } finally {
+    if (original === undefined) delete process.env.SV_I18N_ROOT;
+    else process.env.SV_I18N_ROOT = original;
+  }
 });

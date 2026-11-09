@@ -4574,6 +4574,10 @@ describe("weekly meal planner", () => {
     const initialWeek = await request(`/api/houses/${houseId}/plan`);
     assert.equal(initialWeek.status, 200);
     const weekStart = initialWeek.data.weekStart;
+    const before = await request(`/api/houses/${houseId}/dashboard`);
+    assert.equal(before.status, 200);
+    assert.equal(before.data.plan.week, initialWeek.data.entries.length);
+
     const seeded = await request(`/api/houses/${houseId}/plan`, {
       method: "POST",
       body: { day: weekStart, slot: "lunch", recipeId, servings: 2 },
@@ -4583,6 +4587,7 @@ describe("weekly meal planner", () => {
     const dashboard = await request(`/api/houses/${houseId}/dashboard`);
     assert.equal(dashboard.status, 200);
     assert.equal(dashboard.data.plan.weekStart, weekStart);
+    assert.equal(dashboard.data.plan.week, before.data.plan.week + 1);
     const currentWeek = await request(`/api/houses/${houseId}/plan?week=${weekStart}`);
     assert.equal(currentWeek.status, 200);
     const serialized = currentWeek.data.entries.find((entry: any) => entry.id === seeded.data.id);

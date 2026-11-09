@@ -265,24 +265,3 @@ export function checkRepository(repositoryRoot = root): {
     missing: findMissing(dictionary, [...clientKeys, ...serverMessages]),
   };
 }
-
-function main(): void {
-  const repositoryRoot = process.env.SV_I18N_ROOT ? path.resolve(process.env.SV_I18N_ROOT) : root;
-  const { dictionary, duplicates, missing } = checkRepository(repositoryRoot);
-
-  if (duplicates.size > 0) {
-    console.error("Duplicate EL keys:");
-    for (const key of duplicates) console.error(`  ${JSON.stringify(key)}`);
-  }
-  if (missing.length > 0) {
-    console.error("Missing EL translations:");
-    for (const entry of missing) console.error(`  ${entry.file}:${entry.line}: ${JSON.stringify(entry.key)}`);
-  }
-  if (duplicates.size > 0 || missing.length > 0) process.exit(1);
-
-  console.log(`i18n check passed (${dictionary.size} EL keys).`);
-}
-
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main();
-}
