@@ -133,8 +133,11 @@ insightRoutes.post(
       const suggested = current.settlements.find(
         (entry) => entry.fromUserId === body.fromUserId && entry.toUserId === body.toUserId,
       );
-      const suggestedAmount = suggested ? Math.round(suggested.amount * 100) / 100 : 0;
-      if (!suggested || amount > suggestedAmount) {
+      if (!suggested) {
+        throw new ApiError(400, "There is no outstanding payment between these people");
+      }
+      const suggestedAmount = Math.round(suggested.amount * 100) / 100;
+      if (amount > suggestedAmount) {
         throw new ApiError(400, "The payment cannot be greater than the current amount to settle");
       }
       await session.run(

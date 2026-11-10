@@ -509,7 +509,7 @@ export function InsightsPage() {
 
         <Card className="p-4">
           <h2 className="font-display text-lg">{t("Household split")}</h2>
-          <p className="text-[11px] text-muted">{t("Who paid for receipts and who still owes what")}</p>
+          <p className="text-[11px] text-muted">{t("Who paid for receipts and who still owes what")}. {t("Only transfers between current members affect this balance.")}</p>
           <div className="mt-3 space-y-1.5">
             {household.balances.map((member) => (
               <div key={member.userId} className="flex items-center gap-2 text-sm">
@@ -518,8 +518,8 @@ export function InsightsPage() {
                 </span>
                 <span className="min-w-0 flex-1 truncate">{member.name}</span>
                 <span className="text-[11px] text-muted">{t("paid ")}{' '}{money(member.paid, household.currency)}</span>
-                {member.settled > 0 && <span className="text-[10px] text-muted">{t("Sent {amount}", { amount: money(member.settled, household.currency) })}</span>}
-                {member.settled < 0 && <span className="text-[10px] text-muted">{t("Received {amount}", { amount: money(Math.abs(member.settled), household.currency) })}</span>}
+                {member.settled > 0.009 && <span className="text-[10px] text-muted">{t("Sent {amount}", { amount: money(member.settled, household.currency) })}</span>}
+                {member.settled < -0.009 && <span className="text-[10px] text-muted">{t("Received {amount}", { amount: money(Math.abs(member.settled), household.currency) })}</span>}
                 <span className={cn("w-20 text-right tabular-nums", member.balance > 0.009 ? "text-brand" : member.balance < -0.009 ? "text-danger" : "text-muted")}>
                   {member.balance > 0.009 ? "+" : ""}
                   {money(member.balance, household.currency)}

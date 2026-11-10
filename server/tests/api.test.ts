@@ -7891,20 +7891,24 @@ describe("insights, household split and admin console", () => {
       const waitToRelease = new Promise<void>((resolve) => { releaseWrite = resolve; });
       const writeLockReady = new Promise<void>((resolve) => { writeLockAcquired = resolve; });
       const writer = tx(async (session) => {
+        await lockHouseholdLedger(session, house.data.id);
         await session.run("UPDATE houses SET name = ? WHERE id = ?", ["Locked settlement house", house.data.id]);
         writeLockAcquired();
         await waitToRelease;
-      }, { writeLock: true });
+      });
       await writeLockReady;
 
       const childSource = `import { SqliteDriver } from "./server/database/sqlite.ts";
         const db = new SqliteDriver();
         process.stdout.write("ready\\n");
-        const row = await db.tx((session) => session.get("SELECT name FROM houses WHERE id = ?", [${JSON.stringify(house.data.id)}]), { writeLock: true });
+        const row = await db.tx(async (session) => {
+          await session.run("UPDATE houses SET id = id WHERE id = ?", [${JSON.stringify(house.data.id)}]);
+          return session.get("SELECT name FROM houses WHERE id = ?", [${JSON.stringify(house.data.id)}]);
+        });
         process.stdout.write(JSON.stringify(row));`;
       const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", childSource], {
         cwd: process.cwd(),
-        env: process.env,
+        env: { ...process.env, DATA_DIR: dataDir },
         stdio: ["ignore", "pipe", "pipe"],
       });
       let childOutput = "";
@@ -8094,6 +8098,7 @@ describe("insights, household split and admin console", () => {
       body: { fromUserId: memberId, toUserId: ownerId, amount: 0.01 },
     });
     assert.equal(noSubCentDebt.status, 400);
+    assert.equal(noSubCentDebt.data.error, "There is no outstanding payment between these people");
 
     const secondReceipt = await receipt(7);
     assert.equal(secondReceipt.status, 201, JSON.stringify(secondReceipt.data));
@@ -8128,6 +8133,32 @@ describe("insights, household split and admin console", () => {
     const netTransfers = await request(ledgerPath);
     assert.equal(netTransfers.data.balances.find((entry: any) => entry.userId === memberId).settled, 0.8);
     assert.equal(netTransfers.data.balances.find((entry: any) => entry.userId === ownerId).settled, -0.8);
+
+    const departingCreditorReceipt = await request(`/api/houses/${house.data.id}/receipts`, {
+      method: "POST",
+      body: {
+        vendorName: "Departing Creditor Market",
+        purchasedAt: at(11),
+        currency: "EUR",
+        total: 2,
+        paidBy: memberId,
+        splitWith: [ownerId, memberId],
+        lines: [{ description: "Shared item", quantity: 1, lineTotal: 2 }],
+      },
+    });
+    assert.equal(departingCreditorReceipt.status, 201, JSON.stringify(departingCreditorReceipt.data));
+    ledger = await request(ledgerPath);
+    assert.deepEqual(ledger.data.settlements.map((entry: any) => [entry.fromUserId, entry.toUserId, entry.amount]), [
+      [ownerId, memberId, 1],
+    ]);
+    const paidDepartingCreditor = await request(path, {
+      method: "POST",
+      body: { fromUserId: ownerId, toUserId: memberId, amount: 1 },
+    });
+    assert.equal(paidDepartingCreditor.status, 201, JSON.stringify(paidDepartingCreditor.data));
+    const beforeCreditorLeaves = await request(ledgerPath);
+    assert.equal(beforeCreditorLeaves.data.balances.find((entry: any) => entry.userId === memberId).settled, -0.2);
+    assert.equal(beforeCreditorLeaves.data.balances.find((entry: any) => entry.userId === memberId).balance, 0);
 
     await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [house.data.id, memberId]);
     ledger = await request(ledgerPath);
