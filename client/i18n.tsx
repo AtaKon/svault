@@ -1520,7 +1520,7 @@ const EL: Record<string, string> = {
   "Recording…": "Καταχώριση…",
   "Payment recorded": "Η πληρωμή καταχωρίστηκε",
   "Could not record the payment": "Δεν ήταν δυνατή η καταχώριση της πληρωμής",
-  "net transfers ": "καθαρές μεταφορές ",
+  "net sent ": "καθαρή αποστολή ",
   "Loading…": "Φόρτωση…",
   "Money & shelves": "Χρήματα και αποθέματα",
   "Monthly average": "Μηνιαίος μέσος όρος",

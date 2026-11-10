@@ -10,6 +10,14 @@ export interface RunResult {
 
 export type DatabaseKind = "sqlite" | "postgres";
 
+/** SQL operations bound to the connection that owns a transaction. */
+export interface DatabaseSession {
+  all<T = Record<string, any>>(sql: string, params?: unknown[]): Promise<T[]>;
+  get<T = Record<string, any>>(sql: string, params?: unknown[]): Promise<T | undefined>;
+  run(sql: string, params?: unknown[]): Promise<RunResult>;
+  exec(sql: string): Promise<void>;
+}
+
 /**
  * The database surface used by the rest of the server.
  *
@@ -19,7 +27,7 @@ export type DatabaseKind = "sqlite" | "postgres";
  * dedicated one) through AsyncLocalStorage, so concurrent requests cannot leak
  * into each other's transaction.
  */
-export interface DatabaseDriver {
+export interface DatabaseDriver extends DatabaseSession {
   readonly kind: DatabaseKind;
   /** Create the schema and run any in-place migrations. Idempotent. */
   init(): Promise<void>;
@@ -29,7 +37,7 @@ export interface DatabaseDriver {
   /** Execute one or more statements without binding parameters. */
   exec(sql: string): Promise<void>;
   /** Run `fn` inside a transaction; nested calls use savepoints. */
-  tx<T>(fn: () => Promise<T>): Promise<T>;
+  tx<T>(fn: (session: DatabaseSession) => Promise<T>): Promise<T>;
   /** Table names in the current schema (used by backup and migrations). */
   tables(): Promise<string[]>;
   close(): Promise<void>;

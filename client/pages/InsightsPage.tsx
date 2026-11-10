@@ -514,7 +514,7 @@ export function InsightsPage() {
                 </span>
                 <span className="min-w-0 flex-1 truncate">{member.name}</span>
                 <span className="text-[11px] text-muted">{t("paid ")}{' '}{money(member.paid, household.currency)}</span>
-                {member.settled !== 0 && <span className="text-[10px] text-muted">{t("net transfers ")}{member.settled > 0 ? "+" : ""}{money(member.settled, household.currency)}</span>}
+                {member.settled !== 0 && <span className="text-[10px] text-muted">{t("net sent ")}{member.settled > 0 ? "+" : ""}{money(member.settled, household.currency)}</span>}
                 <span className={cn("w-20 text-right tabular-nums", member.balance > 0.009 ? "text-brand" : member.balance < -0.009 ? "text-danger" : "text-muted")}>
                   {member.balance > 0.009 ? "+" : ""}
                   {money(member.balance, household.currency)}

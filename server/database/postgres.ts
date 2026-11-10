@@ -3,7 +3,7 @@ import pg from "pg";
 import { DATABASE_URL, PG_POOL_SIZE, PG_SSL } from "../config.js";
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA } from "./postgres-schema.js";
 import { applyPendingPostgresRestore } from "./postgres-restore.js";
-import type { DatabaseDriver, RunResult } from "./types.js";
+import type { DatabaseDriver, DatabaseSession, RunResult } from "./types.js";
 
 const { Pool } = pg;
 
@@ -153,14 +153,14 @@ export class PostgresDriver implements DatabaseDriver {
     await this.client().query(sql);
   }
 
-  async tx<T>(fn: () => Promise<T>): Promise<T> {
+  async tx<T>(fn: (session: DatabaseSession) => Promise<T>): Promise<T> {
     const existing = txStorage.getStore();
     if (existing) {
       const savepoint = `sp_${existing.depth}`;
       await existing.client.query(`SAVEPOINT ${savepoint}`);
       existing.depth++;
       try {
-        const result = await fn();
+        const result = await fn(this.session(existing.client));
         existing.depth--;
         await existing.client.query(`RELEASE SAVEPOINT ${savepoint}`);
         return result;
@@ -180,7 +180,7 @@ export class PostgresDriver implements DatabaseDriver {
     await client.query("BEGIN");
     const context: PgTx = { client, depth: 0 };
     try {
-      const result = await txStorage.run(context, fn);
+      const result = await txStorage.run(context, () => fn(this.session(client)));
       await client.query("COMMIT");
       return result;
     } catch (error) {
@@ -193,6 +193,22 @@ export class PostgresDriver implements DatabaseDriver {
     } finally {
       client.release();
     }
+  }
+
+  private session(client: pg.Pool | pg.PoolClient): DatabaseSession {
+    const query = async (sql: string, params: unknown[] = []) =>
+      client.query(toPostgresPlaceholders(sql), normaliseParams(params));
+    return {
+      all: async <T = Record<string, any>>(sql: string, params: unknown[] = []) =>
+        (await query(sql, params)).rows as T[],
+      get: async <T = Record<string, any>>(sql: string, params: unknown[] = []) =>
+        (await query(sql, params)).rows[0] as T | undefined,
+      run: async (sql: string, params: unknown[] = []) => {
+        const result = await query(sql, params);
+        return { changes: Number(result.rowCount ?? 0) };
+      },
+      exec: async (sql: string) => { await client.query(sql); },
+    };
   }
 
   async tables(): Promise<string[]> {

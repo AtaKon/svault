@@ -3,7 +3,7 @@ import { z } from "zod";
 import { requireAuth } from "../auth.js";
 import { ApiError, handler, parseBody, requireHouse } from "../http.js";
 import { limitRequests, limiters, userOrIp } from "../rate-limit.js";
-import { all, get, newId, now, parseJson, run, tx } from "../db.js";
+import { all, get, newId, now, parseJson, tx } from "../db.js";
 import { lookupPosoKaneiBarcode, PosoKaneiUnavailableError } from "../services/posokanei.js";
 import { shoppingRow } from "../services/shopping.js";
 import {
@@ -123,12 +123,11 @@ insightRoutes.post(
     if (!memberIds.has(body.fromUserId) || !memberIds.has(body.toUserId)) {
       throw new ApiError(400, "Both people must be members of this house");
     }
-    await withSettlementLock(houseId, () => tx(async () => {
+    await withSettlementLock(houseId, () => tx(async (session) => {
       // Acquire a write lock before reading the ledger. This row lock serializes
       // competing settlements across Postgres connections and SQLite processes.
-      // The database helpers pin householdInsight reads to this transaction's connection.
-      await run("UPDATE houses SET id = id WHERE id = ?", [houseId]);
-      const current = await householdInsight(houseId);
+      await session.run("UPDATE houses SET id = id WHERE id = ?", [houseId]);
+      const current = await householdInsight(houseId, session);
       const suggested = current.settlements.find(
         (entry) => entry.fromUserId === body.fromUserId && entry.toUserId === body.toUserId,
       );
@@ -136,7 +135,7 @@ insightRoutes.post(
       if (!suggested || amount > suggestedAmount) {
         throw new ApiError(400, "The payment cannot be greater than the current amount to settle");
       }
-      await run(
+      await session.run(
         `INSERT INTO household_settlements (id, house_id, from_user_id, to_user_id, amount, created_by, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [newId("hst"), houseId, body.fromUserId, body.toUserId, amount, req.user!.id, now()],

@@ -8013,9 +8013,28 @@ describe("insights, household split and admin console", () => {
     assert.equal(ledger.data.balances.find((entry: any) => entry.userId === memberId).balance, 0);
     assert.equal(ledger.data.balances.find((entry: any) => entry.userId === ownerId).balance, 0);
 
+    const memberPaidReceipt = await request(`/api/houses/${house.data.id}/receipts`, {
+      method: "POST",
+      body: {
+        vendorName: "Member Paid Market",
+        purchasedAt: at(10),
+        currency: "EUR",
+        total: 0.2,
+        paidBy: memberId,
+        splitWith: [ownerId, memberId],
+        lines: [{ description: "Shared item", quantity: 1, lineTotal: 0.2 }],
+      },
+    });
+    assert.equal(memberPaidReceipt.status, 201, JSON.stringify(memberPaidReceipt.data));
+    const paymentToDepartingMember = await request(path, {
+      method: "POST",
+      body: { fromUserId: ownerId, toUserId: memberId, amount: 0.1 },
+    });
+    assert.equal(paymentToDepartingMember.status, 201, JSON.stringify(paymentToDepartingMember.data));
+
     await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [house.data.id, memberId]);
     ledger = await request(ledgerPath);
-    assert.equal(ledger.data.balances.find((entry: any) => entry.userId === ownerId).settled, -1.1);
+    assert.equal(ledger.data.balances.find((entry: any) => entry.userId === ownerId).settled, -1.0);
   });
 
   it("reads an e-receipt without writing anything", async () => {

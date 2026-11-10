@@ -5,7 +5,7 @@ import path from "node:path";
 import { DB_FILE, PRE_RESTORE_DIR, PRE_RESTORE_KEEP, UPLOAD_DIR, ensureDirs } from "../config.js";
 import { pruneOldFiles } from "../services/restore-files.js";
 import { RESERVED_ATTRIBUTE_KEYS } from "../../shared/types.js";
-import type { DatabaseDriver, RunResult } from "./types.js";
+import type { DatabaseDriver, DatabaseSession, RunResult } from "./types.js";
 
 /** A restore is staged by the API and applied before SQLite is opened. */
 export function applyPendingSqliteRestore() {
@@ -315,14 +315,14 @@ COMMIT;`);
     this.conn().exec(sql);
   }
 
-  async tx<T>(fn: () => Promise<T>): Promise<T> {
+  async tx<T>(fn: (session: DatabaseSession) => Promise<T>): Promise<T> {
     const existing = txStorage.getStore();
     if (existing) {
       const savepoint = `sp_${existing.depth}`;
       existing.conn.exec(`SAVEPOINT ${savepoint}`);
       existing.depth++;
       try {
-        const result = await fn();
+        const result = await fn(this.session(existing.conn));
         existing.depth--;
         existing.conn.exec(`RELEASE ${savepoint}`);
         return result;
@@ -345,7 +345,7 @@ COMMIT;`);
     conn.exec("BEGIN");
     const context: SqliteTx = { conn, depth: 0 };
     try {
-      const result = await txStorage.run(context, fn);
+      const result = await txStorage.run(context, () => fn(this.session(conn)));
       conn.exec("COMMIT");
       return result;
     } catch (error) {
@@ -358,6 +358,20 @@ COMMIT;`);
     } finally {
       conn.close();
     }
+  }
+
+  private session(conn: DatabaseSync): DatabaseSession {
+    return {
+      all: async <T = Record<string, any>>(sql: string, params: unknown[] = []) =>
+        conn.prepare(sql).all(...normaliseParams(params)) as unknown as T[],
+      get: async <T = Record<string, any>>(sql: string, params: unknown[] = []) =>
+        conn.prepare(sql).get(...normaliseParams(params)) as unknown as T | undefined,
+      run: async (sql: string, params: unknown[] = []) => {
+        const result = conn.prepare(sql).run(...normaliseParams(params)) as any;
+        return { changes: Number(result?.changes ?? 0), lastInsertRowid: result?.lastInsertRowid };
+      },
+      exec: async (sql: string) => { conn.exec(sql); },
+    };
   }
 
   async tables(): Promise<string[]> {

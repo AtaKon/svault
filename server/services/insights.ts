@@ -1,4 +1,5 @@
 import { all, get, parseJson, run } from "../db.js";
+import type { DatabaseSession } from "../database/types.js";
 import { convert, round } from "../units.js";
 import { createNotification } from "./notifications.js";
 import { normalizeName } from "./shopping.js";
@@ -364,7 +365,10 @@ export async function scanPriceAlerts(houseId: string): Promise<number> {
 
 /* ------------------------------------------------------------- household */
 
-export async function householdInsight(houseId: string): Promise<{
+export async function householdInsight(
+  houseId: string,
+  session: Pick<DatabaseSession, "all" | "get"> = { all, get },
+): Promise<{
   currency: string;
   /** Everyone in the house, including members with no receipts yet. */
   members: { userId: string; name: string; role: string }[];
@@ -381,9 +385,9 @@ export async function householdInsight(houseId: string): Promise<{
     participantNames: string[];
   }[];
 }> {
-  const house = await get<{ currency: string }>("SELECT currency FROM houses WHERE id = ?", [houseId]);
+  const house = await session.get<{ currency: string }>("SELECT currency FROM houses WHERE id = ?", [houseId]);
   const currency = house?.currency ?? "EUR";
-  const members = await all<{ id: string; name: string; role: string }>(
+  const members = await session.all<{ id: string; name: string; role: string }>(
     `SELECT u.id, u.name, m.role FROM house_members m JOIN users u ON u.id = m.user_id
      WHERE m.house_id = ? ORDER BY m.created_at`,
     [houseId],
@@ -391,7 +395,7 @@ export async function householdInsight(houseId: string): Promise<{
   const memberIds = new Set(members.map((member) => member.id));
   const names = new Map(members.map((member) => [member.id, member.name]));
 
-  const rows = await all<any>(
+  const rows = await session.all<any>(
     `SELECT r.id, r.purchased_at, r.created_at, r.total, r.paid_by, r.split_with, r.created_by,
        COALESCE(v.name, r.vendor_name) AS vendor_name
      FROM receipts r LEFT JOIN vendors v ON v.id = r.vendor_id
@@ -443,7 +447,7 @@ export async function householdInsight(houseId: string): Promise<{
 
   // Utility bills contribute to the household ledger only when explicitly
   // categorised as shared. Personal bills remain visible in Bills & splitting.
-  const bills = await all<any>(
+  const bills = await session.all<any>(
     `SELECT amount, paid_by, split_with FROM bills
      WHERE house_id = ? AND category = 'to_split' AND ledger_confirmed = 1 ORDER BY created_at`,
     [houseId],
@@ -466,7 +470,7 @@ export async function householdInsight(houseId: string): Promise<{
 
   // Recorded transfers reduce the outstanding balances without changing the
   // original receipts or bills that created those debts.
-  const transferRows = await all<{ from_user_id: string; to_user_id: string; amount: number }>(
+  const transferRows = await session.all<{ from_user_id: string; to_user_id: string; amount: number }>(
     "SELECT from_user_id, to_user_id, amount FROM household_settlements WHERE house_id = ? ORDER BY created_at",
     [houseId],
   );
@@ -475,8 +479,10 @@ export async function householdInsight(houseId: string): Promise<{
     const from = transfer.from_user_id;
     const to = transfer.to_user_id;
     const amount = money(transfer.amount);
-    // Keep the active member's side of a transfer if the counterparty later
-    // leaves the house; removing a member must not erase cash they already paid.
+    // Preserve the active member's real cash flow when the counterparty leaves.
+    // The active-member ledger can then be non-zero-sum because the former
+    // member is no longer represented; transfers are historical records, not
+    // obligations that disappear when either participant leaves.
     if (memberIds.has(from)) transferBalance.set(from, (transferBalance.get(from) ?? 0) + amount);
     if (memberIds.has(to)) transferBalance.set(to, (transferBalance.get(to) ?? 0) - amount);
   }
