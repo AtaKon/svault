@@ -428,9 +428,16 @@ billRoutes.post("/:houseId/bills", requireHouseBillMember, billUpload.single("do
       ]);
     });
   } catch (error) {
-    // The insert may have committed despite a driver error; remove the upload
-    // only if a follow-up query confirms that no row references it.
-    if (filename) await deleteDocument(filename);
+    // Rollback normally removes the row. A commit error can be ambiguous, so
+    // retain the document if a follow-up query cannot prove it is unreferenced.
+    if (filename) {
+      try {
+        const reference = await get("SELECT id FROM bills WHERE document = ?", [filename]);
+        if (!reference) await deleteDocument(filename);
+      } catch {
+        // Keep the upload when the database outcome cannot be confirmed.
+      }
+    }
     throw error;
   }
   // Return the validated insert values directly; a post-insert read is both

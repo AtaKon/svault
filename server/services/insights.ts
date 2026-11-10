@@ -482,7 +482,8 @@ export async function householdInsight(
     // A transfer only offsets the live household ledger while both parties
     // are represented. Receipt shares are recalculated when someone leaves;
     // retaining only one side of the old transfer could invert the remaining
-    // members' suggested obligations. The historical transfer row is kept.
+    // members' suggested obligations. The row is kept and takes effect again
+    // if the same member rejoins alongside their original receipt shares.
     if (memberIds.has(from) && memberIds.has(to)) {
       transferBalance.set(from, (transferBalance.get(from) ?? 0) + amount);
       transferBalance.set(to, (transferBalance.get(to) ?? 0) - amount);

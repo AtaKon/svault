@@ -8874,6 +8874,17 @@ describe("insights, household split and admin console", () => {
     assert.equal(ledger.data.balances.find((entry: any) => entry.userId === ownerId).settled, 0);
     assert.equal(ledger.data.balances.find((entry: any) => entry.userId === ownerId).balance, 0);
     assert.deepEqual(ledger.data.settlements, []);
+
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
+      house.data.id,
+      memberId,
+      "member",
+      new Date().toISOString(),
+    ]);
+    const rejoinedLedger = await request(ledgerPath);
+    assert.equal(rejoinedLedger.data.balances.find((entry: any) => entry.userId === memberId).settled, -0.2);
+    assert.equal(rejoinedLedger.data.balances.find((entry: any) => entry.userId === ownerId).settled, 0.2);
+    assert.deepEqual(rejoinedLedger.data.settlements, []);
   });
 
   it("reads an e-receipt without writing anything", async () => {

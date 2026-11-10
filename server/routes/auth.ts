@@ -369,6 +369,7 @@ authRoutes.post(
         await notifyHouseAdded(req.user!.id, invite.house_id, invite.role as Role, invite.created_by);
       } catch {
         // Membership is committed; a notification failure must not make acceptance appear to fail.
+        console.warn("Invite accepted, but the house-added notification could not be delivered");
       }
     }
     res.json(await userPayload(req.user!.id));

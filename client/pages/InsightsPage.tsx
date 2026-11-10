@@ -518,8 +518,8 @@ export function InsightsPage() {
                 </span>
                 <span className="min-w-0 flex-1 truncate">{member.name}</span>
                 <span className="text-[11px] text-muted">{t("paid ")}{' '}{money(member.paid, household.currency)}</span>
-                {member.settled > 0.009 && <span className="text-[10px] text-muted">{t("Sent {amount}", { amount: money(member.settled, household.currency) })}</span>}
-                {member.settled < -0.009 && <span className="text-[10px] text-muted">{t("Received {amount}", { amount: money(Math.abs(member.settled), household.currency) })}</span>}
+                {member.settled > 0.009 && <span className="text-[10px] text-muted">{t("Net sent {amount}", { amount: money(member.settled, household.currency) })}</span>}
+                {member.settled < -0.009 && <span className="text-[10px] text-muted">{t("Net received {amount}", { amount: money(Math.abs(member.settled), household.currency) })}</span>}
                 <span className={cn("w-20 text-right tabular-nums", member.balance > 0.009 ? "text-brand" : member.balance < -0.009 ? "text-danger" : "text-muted")}>
                   {member.balance > 0.009 ? "+" : ""}
                   {money(member.balance, household.currency)}
