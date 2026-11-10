@@ -34,6 +34,10 @@ All notable changes to SVault are documented here. The format follows
   pressure, TDS, grinder, machine, flavour tags and notes. SVault computes the brew ratio and extraction
   yield, summarises averages per bean, and adds a house-wide **Espresso log** screen for comparing
   shots. Everyone can read the log; members edit their own shots and admins can edit any.
+- Espresso shots accept decimal grams and seconds, with either a dot or a decimal comma. Machines and
+  grinders can be saved once and picked from a dropdown when logging a shot, with inline creation from
+  the shot form and a **Machines & grinders** manager on the Espresso log screen. Renaming or deleting
+  saved equipment keeps the name recorded on past shots.
 - House admins can enable PosoKanei price lookups on the shopping list. Members explicitly check a
   linked item's exact barcode; SVault caches results and applies per-user and instance-wide request
   limits. External offers remain separate from recorded purchase prices.

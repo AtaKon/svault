@@ -538,11 +538,33 @@ export interface EspressoShot {
   ratio: number | null;
   /** Computed (TDS % x yield) / dose, percent. */
   extractionYieldPercent: number | null;
+  /** Saved grinder this shot was pulled with, if one was picked. */
+  grinderId: string | null;
+  /** Saved machine this shot was pulled with, if one was picked. */
+  machineId: string | null;
+  /** Snapshot of the grinder name, kept when the saved grinder is deleted. */
   grinder: string | null;
+  /** Snapshot of the machine name, kept when the saved machine is deleted. */
   machine: string | null;
   tastingNotes: string | null;
   tags: string[];
   notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type EspressoEquipmentKind = "machine" | "grinder";
+
+/** A saved espresso machine or grinder, picked from a dropdown when logging a shot. */
+export interface EspressoEquipment {
+  id: string;
+  houseId: string;
+  kind: EspressoEquipmentKind;
+  name: string;
+  brand: string | null;
+  notes: string | null;
+  /** How many shots reference this equipment. */
+  shotCount?: number;
   createdAt: string;
   updatedAt: string;
 }
