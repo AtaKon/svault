@@ -1067,9 +1067,52 @@ describe("bill text parsing", () => {
     assert.equal(billPhotoName("scan"), "scan.jpg");
     assert.equal(billPhotoName(".hidden"), "bill.jpg");
     assert.equal(billPhotoName("bill.final.tiff"), "bill.final.jpg");
+    assert.equal(billPhotoName("a.b.c"), "a.b.jpg");
     assert.deepEqual(billPhotoSize(4032, 3024, 2600), { width: 2600, height: 1950 }, "a large phone photo is scaled down");
     assert.deepEqual(billPhotoSize(800, 600, 2600), { width: 800, height: 600 }, "small photos are never upscaled");
     assert.deepEqual(billPhotoSize(0, 0, 2600), { width: 1, height: 1 }, "a degenerate size still produces a valid canvas");
+  });
+
+  it("converts a decodable phone photo to JPEG and reports an unsupported HEIC", async () => {
+    const { BILL_PHOTO_DECODE_ERROR, BILL_PHOTO_HEIC_ERROR, prepareBillImage } = await import("../../client/bill-image.js");
+    const globals = globalThis as unknown as { document?: unknown; createImageBitmap?: unknown };
+    const originalDocument = globals.document;
+    const originalCreateImageBitmap = globals.createImageBitmap;
+    let closed = false;
+    const canvas = {
+      width: 0,
+      height: 0,
+      getContext: () => ({
+        imageSmoothingEnabled: false,
+        imageSmoothingQuality: "",
+        drawImage: () => undefined,
+      }),
+      toBlob: (callback: (blob: Blob | null) => void) => callback(new Blob(["jpeg"], { type: "image/jpeg" })),
+    };
+    globals.document = { createElement: () => canvas };
+    globals.createImageBitmap = async () => ({ width: 4032, height: 3024, close: () => { closed = true; } });
+    try {
+      const heic = new File([new Uint8Array([0, 0, 0, 0])], "IMG_0042.HEIC", { type: "image/heic" });
+      const converted = await prepareBillImage(heic);
+      assert.equal(converted.type, "image/jpeg");
+      assert.equal(converted.name, "IMG_0042.jpg");
+      assert.ok(closed, "the decoded bitmap is released");
+
+      const jpeg = new File(["jpeg"], "bill.jpg", { type: "image/jpeg" });
+      assert.strictEqual(await prepareBillImage(jpeg), jpeg, "web-native photos pass through untouched");
+      const pdf = new File(["%PDF-1.7"], "bill.pdf", { type: "application/pdf" });
+      assert.strictEqual(await prepareBillImage(pdf), pdf, "PDFs pass through untouched");
+
+      globals.createImageBitmap = async () => { throw new Error("no decoder"); };
+      await assert.rejects(() => prepareBillImage(heic),
+        (error: unknown) => error instanceof Error && error.message === BILL_PHOTO_HEIC_ERROR);
+      const avif = new File([new Uint8Array([0, 0, 0, 0])], "bill.avif", { type: "image/avif" });
+      await assert.rejects(() => prepareBillImage(avif),
+        (error: unknown) => error instanceof Error && error.message === BILL_PHOTO_DECODE_ERROR);
+    } finally {
+      globals.document = originalDocument;
+      globals.createImageBitmap = originalCreateImageBitmap;
+    }
   });
 
   it("decodes a saved document from its bytes when the response has no useful type", async () => {
@@ -1118,6 +1161,12 @@ describe("bill text parsing", () => {
       assert.equal(documentMime(new Uint8Array([
         0, 0, 0, 16, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x69, 0x66, 0x31, 0, 0, 0, 0, 0x61, 0x76, 0x69, 0x66,
       ]).buffer), "image/heic", "bytes of the next box are not scanned as compatible brands");
+      assert.equal(documentMime(new Uint8Array([
+        0, 0, 0, 0, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x69, 0x66, 0x31, 0, 0, 0, 0, 0x6d, 0x69, 0x66, 0x31,
+      ]).buffer), null, "an open-ended brand list with no codec is rejected instead of guessed");
+      assert.equal(documentMime(new Uint8Array([
+        0, 0, 0x07, 0xd0, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x69, 0x66, 0x31, 0, 0, 0, 0, 0x6d, 0x69, 0x66, 0x31,
+      ]).buffer), null, "a brand list that continues past the read window is rejected instead of guessed");
       assert.equal(documentMime(new Uint8Array([0x42, 0x4d, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]).buffer), "image/bmp");
       assert.equal(documentMime(new Uint8Array([0x49, 0x49, 0x2a, 0x00, 0, 0, 0, 0, 0, 0, 0, 0]).buffer), "image/tiff");
       assert.equal(documentMime(new TextEncoder().encode("RIFF0000WAVE").buffer), null);
@@ -7775,6 +7824,32 @@ describe("insights, household split and admin console", () => {
     const tiffResponse = await fetch(base + tiffBill.data.document, { headers: { cookie } });
     assert.equal(tiffResponse.headers.get("content-type"), "image/tiff");
     assert.equal((await request(`/api/bills/${tiffBill.data.id}`, { method: "DELETE" })).status, 200);
+
+    const bmp = new Blob([Buffer.from([0x42, 0x4d, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])], { type: "image/bmp" });
+    const bmpForm = form(bmp, "BMP bill scan");
+    bmpForm.delete("document");
+    bmpForm.append("document", bmp, "bill.bmp");
+    const bmpBill = await request(`/api/houses/${billHouse}/bills`, { method: "POST", body: bmpForm });
+    assert.equal(bmpBill.status, 201, "a BMP bill photo is accepted");
+    const storedBmp = (await get<{ document: string }>("SELECT document FROM bills WHERE id = ?", [bmpBill.data.id]))?.document;
+    assert.match(storedBmp ?? "", /\.bmp$/);
+    const bmpResponse = await fetch(base + bmpBill.data.document, { headers: { cookie } });
+    assert.equal(bmpResponse.headers.get("content-type"), "image/bmp");
+    assert.match(bmpResponse.headers.get("content-disposition") ?? "", /^inline;/);
+    assert.equal((await request(`/api/bills/${bmpBill.data.id}`, { method: "DELETE" })).status, 200);
+
+    // A HEIC whose brand list is truncated cannot be classified safely; reject
+    // it rather than store an AVIF under a HEIC extension.
+    const beforeTruncated = files();
+    const truncated = new Blob([Buffer.from([
+      0, 0, 0x07, 0xd0, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x69, 0x66, 0x31, 0, 0, 0, 0, 0x6d, 0x69, 0x66, 0x31,
+    ])], { type: "image/heic" });
+    const truncatedForm = form(truncated, "Truncated HEIC");
+    truncatedForm.delete("document");
+    truncatedForm.append("document", truncated, "bill.heic");
+    const truncatedBill = await request(`/api/houses/${billHouse}/bills`, { method: "POST", body: truncatedForm });
+    assert.equal(truncatedBill.status, 400, "an unclassifiable HEIF brand list is rejected");
+    assert.deepEqual(files(), beforeTruncated, "the rejected HEIC leaves no file behind");
 
     // The uploaded name and MIME never decide the stored type: the bytes do.
     const lying = new Blob([Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0, 0, 0, 0, 0, 0])], { type: "image/heic" });

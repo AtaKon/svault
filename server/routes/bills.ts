@@ -48,20 +48,6 @@ interface BillRow {
 const billDir = path.join(UPLOAD_DIR, "bills");
 fs.mkdirSync(billDir, { recursive: true });
 
-const BILL_DOCUMENT_MIME: Record<string, string> = {
-  ".pdf": "application/pdf",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".png": "image/png",
-  ".webp": "image/webp",
-  ".gif": "image/gif",
-  ".avif": "image/avif",
-  ".heic": "image/heic",
-  ".bmp": "image/bmp",
-  ".tif": "image/tiff",
-  ".tiff": "image/tiff",
-};
-
 /** Canonical extension for a sniffed document type; the name never comes from the client. */
 const DOCUMENT_EXTENSION: Record<string, string> = {
   "application/pdf": ".pdf",
@@ -75,12 +61,22 @@ const DOCUMENT_EXTENSION: Record<string, string> = {
   "image/tiff": ".tif",
 };
 
-/** Image types the sniffer can return and the document route can serve. */
+/** Extension → MIME for serving stored documents, derived from the one map above. */
+const BILL_DOCUMENT_MIME: Record<string, string> = {
+  ...Object.fromEntries(Object.entries(DOCUMENT_EXTENSION).map(([mime, extension]) => [extension, mime])),
+  ".jpeg": "image/jpeg",
+  ".tiff": "image/tiff",
+};
+
+/** Upload types the file filter accepts; the sniffer still decides what is stored. */
 const BILL_DOCUMENT_TYPES = new Set([
-  "application/pdf",
-  "image/jpeg", "image/jpg", "image/pjpeg",
-  "image/png", "image/webp", "image/gif", "image/avif",
-  "image/heic", "image/heif", "image/bmp", "image/tiff",
+  ...Object.keys(DOCUMENT_EXTENSION),
+  // Aliases browsers may send before the sniffer normalises them.
+  "image/jpg", "image/pjpeg", "image/heif",
+]);
+const BILL_DOCUMENT_EXTENSIONS = new Set([
+  ...Object.values(DOCUMENT_EXTENSION),
+  ".jpeg", ".heif", ".tiff",
 ]);
 
 /**
@@ -108,8 +104,7 @@ const billUpload = multer({
     const extension = path.extname(file.originalname).toLowerCase();
     // The content sniff below is authoritative, but keep the allowlist narrow so
     // SVG and other image-like documents never reach the temp directory.
-    const accepted = BILL_DOCUMENT_TYPES.has(file.mimetype) ||
-      [".pdf", ".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif", ".heic", ".heif", ".bmp", ".tif", ".tiff"].includes(extension);
+    const accepted = BILL_DOCUMENT_TYPES.has(file.mimetype) || BILL_DOCUMENT_EXTENSIONS.has(extension);
     if (!accepted) return cb(new ApiError(400, "Upload a PDF or image bill"));
     cb(null, true);
   },

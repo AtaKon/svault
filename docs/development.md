@@ -36,9 +36,11 @@ is the quickest way to see whether a layout change helped.
 Bill scans read a PDF text layer with `pdfjs-dist` first, because e-bills are more accurate and much
 faster to parse than a rendered scan. Only PDFs without usable text (and bill photos) are rendered and
 sent through Tesseract with the `bill` OCR mode, which uses Greek first and no receipt product crop.
-Phone camera rolls hand over HEIC/HEIF, AVIF, GIF, BMP or TIFF photos; `client/bill-scan.ts`
-re-encodes them to JPEG in the browser once, so the preview, upload and later re-read share the same
-bytes. The bill parser itself lives in `shared/bill-parser.ts` and is covered by the normal `npm test` run.
+Phone camera rolls hand over HEIC/HEIF, AVIF, GIF, BMP or TIFF photos; `client/bill-image.ts`
+re-encodes the ones the browser can decode to JPEG in the browser once, so the preview, upload and
+later re-read share the same bytes. HEIC decoding is Safari-only (iOS/macOS); other browsers show a
+clear message and offer the camera button, which captures JPEG. The bill parser itself lives in
+`shared/bill-parser.ts` and is covered by the normal `npm test` run.
 
 Seed demo data (only if the database is empty):
 

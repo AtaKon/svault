@@ -44,13 +44,15 @@ function ftypMime(head: Uint8Array, ascii: (start: number, end: number) => strin
 
   if (major === "mif1" || major === "msf1") {
     // A box size of 0 means "until the end of the file"; otherwise the declared
-    // size bounds the compatible-brand list. Never fall back to a fixed 16 when
-    // the box declares no brands: the bytes that follow belong to the next box.
+    // size bounds the compatible-brand list. Never read past the declared box.
     const declared = ((head[0] << 24) | (head[1] << 16) | (head[2] << 8) | head[3]) >>> 0;
     const end = declared === 0 ? head.length : Math.min(head.length, declared);
     for (let offset = 16; offset + 4 <= end; offset += 4) {
       if (AVIF_BRANDS.has(ascii(offset, offset + 4))) return "image/avif";
     }
+    // If the brand list continues past the bytes we have, an AVIF brand may be
+    // beyond the window. Do not guess HEIC: reject instead of mislabelling.
+    if (declared === 0 || declared > head.length) return null;
   }
   return "image/heic";
 }
