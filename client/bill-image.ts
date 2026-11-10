@@ -6,9 +6,12 @@ import { billPhotoName, billPhotoSize, isBillPdf } from "../shared/bill-document
  * Phone camera rolls hand over HEIC/HEIF (iPhone), AVIF, GIF, BMP and TIFF.
  * The server and the local OCR worker need a format every browser can decode,
  * so the first decodable photo is re-encoded to JPEG once and the same bytes
- * are used for the scan, the upload and a later re-read. HEIC is decoded by the
- * browser only on Safari (iOS/macOS); elsewhere the UI asks for the camera
- * button or a JPEG instead of uploading a file nothing can read.
+ * are used for the scan, the upload and a later re-read. Direct API uploads may
+ * still store any type the server sniffs; the web UI needs a browser decoder
+ * because it scans the photo before upload, so an undecodable HEIC/GIF/TIFF is
+ * reported with a clear message instead of being stored unscanned. HEIC is
+ * decoded by the browser only on Safari (iOS/macOS); elsewhere the UI asks for
+ * the camera button or a JPEG instead of uploading a file nothing can read.
  */
 
 export const BILL_PHOTO_HEIC_ERROR = "bill-photo-heic";

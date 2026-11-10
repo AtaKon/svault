@@ -34,7 +34,8 @@ const BILL_INPUT_TYPES = new Set([
   "image/png", "image/webp", "image/gif", "image/avif",
   "image/heic", "image/heif", "image/bmp", "image/tiff",
 ]);
-const DOCUMENT_EXTENSIONS: Record<string, string> = {
+/** Canonical extension for a sniffed document type; the name never comes from the client. */
+export const DOCUMENT_EXTENSIONS: Record<string, string> = {
   "application/pdf": "pdf",
   "image/jpeg": "jpg",
   "image/png": "png",
@@ -128,7 +129,8 @@ export function billPhotoName(name: string): string {
 export function billPhotoSize(width: number, height: number, maxEdge: number): { width: number; height: number } {
   const safeWidth = Number.isFinite(width) && width > 0 ? width : 1;
   const safeHeight = Number.isFinite(height) && height > 0 ? height : 1;
-  const scale = Math.min(1, maxEdge / Math.max(safeWidth, safeHeight));
+  const safeEdge = Number.isFinite(maxEdge) && maxEdge > 0 ? maxEdge : 1;
+  const scale = Math.min(1, safeEdge / Math.max(safeWidth, safeHeight));
   return {
     width: Math.max(1, Math.round(safeWidth * scale)),
     height: Math.max(1, Math.round(safeHeight * scale)),

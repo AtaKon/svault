@@ -1074,6 +1074,9 @@ describe("bill text parsing", () => {
     assert.equal(billPhotoName("evil\u0000name.jpg"), "evilname.jpg", "control characters are stripped");
     assert.equal(billPhotoName(".jpg"), "bill.jpg", "an extension-only name gets a real stem");
     assert.deepEqual(billPhotoSize(100, 100, -5), { width: 1, height: 1 }, "a negative max edge never produces a zero canvas");
+    assert.deepEqual(billPhotoSize(100, 100, Number.NaN), { width: 1, height: 1 }, "a non-finite max edge clamps to one pixel");
+    assert.deepEqual(billPhotoSize(100, 100, Number.POSITIVE_INFINITY), { width: 1, height: 1 }, "an infinite max edge is not used to upscale");
+    assert.equal(billPhotoName("///"), "bill.jpg", "a separator-only name falls back to bill");
     assert.deepEqual(billPhotoSize(4032, 3024, 2600), { width: 2600, height: 1950 }, "a large phone photo is scaled down");
     assert.deepEqual(billPhotoSize(800, 600, 2600), { width: 800, height: 600 }, "small photos are never upscaled");
     assert.deepEqual(billPhotoSize(0, 0, 2600), { width: 1, height: 1 }, "a degenerate size still produces a valid canvas");
@@ -1186,6 +1189,9 @@ describe("bill text parsing", () => {
         0, 0, 0, 0, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x69, 0x66, 0x31, 0, 0, 0, 0, 0x61, 0x76, 0x69, 0x66,
       ]).buffer), "image/avif", "a size-0 ftyp box scans compatible brands to the end of the window");
       assert.equal(documentMime(new Uint8Array([
+        0, 0, 0, 0, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x69, 0x66, 0x31, 0, 0, 0, 0, 0x68, 0x65, 0x69, 0x63,
+      ]).buffer), "image/heic", "an open-ended ftyp with an in-window HEIC brand is treated as HEIC");
+      assert.equal(documentMime(new Uint8Array([
         0, 0, 0, 32, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x69, 0x66, 0x31, 0, 0, 0, 0,
         0x6d, 0x69, 0x66, 0x31, 0x6d, 0x73, 0x66, 0x31, 0x61, 0x76, 0x69, 0x66,
       ]).buffer), "image/avif", "the codec can appear after several compatible brands");
@@ -1228,6 +1234,7 @@ describe("bill text parsing", () => {
         0, 0, 0, 18, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x69, 0x66, 0x31, 0, 0, 0, 0, 0x61, 0x76,
       ]).buffer), null, "a declared size that cuts a compatible brand in half is rejected");
       assert.equal(documentMime(new Uint8Array([0x49, 0x49, 0x2a, 0x00, 0, 0, 0, 0, 0, 0, 0, 0]).buffer), "image/tiff");
+      assert.equal(documentMime(new Uint8Array([0x4d, 0x4d, 0x00, 0x2a, 0, 0, 0, 0, 0, 0, 0, 0]).buffer), "image/tiff", "big-endian TIFF is recognised");
       assert.equal(documentMime(new TextEncoder().encode("RIFF0000WAVE").buffer), null);
       assert.equal(documentMime(new Uint8Array([]).buffer), null);
       assert.equal(documentMime(new Uint8Array([0xff]).buffer), null);
@@ -1292,6 +1299,7 @@ describe("bill text parsing", () => {
 
   it("classifies every supported image in the bill storage map", async () => {
     const { sniffImage } = await import("../upload.js");
+    const { DOCUMENT_EXTENSIONS } = await import("../../shared/bill-document.js");
     const bmp = new Uint8Array(54);
     bmp.set([0x42, 0x4d, 54, 0, 0, 0, 0, 0, 0, 0, 54, 0, 0, 0], 0);
     const samples: Array<[Uint8Array, string | null]> = [
@@ -1303,10 +1311,12 @@ describe("bill text parsing", () => {
       [new Uint8Array([0, 0, 0, 0x1c, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63]), "image/heic"],
       [bmp, "image/bmp"],
       [new Uint8Array([0x49, 0x49, 0x2a, 0x00, 0, 0, 0, 0, 0, 0, 0, 0]), "image/tiff"],
+      [new Uint8Array([0x4d, 0x4d, 0x00, 0x2a, 0, 0, 0, 0, 0, 0, 0, 0]), "image/tiff"],
       [new TextEncoder().encode("BMW is not a bitmap"), null],
     ];
     for (const [sample, expected] of samples) {
       assert.equal(sniffImage(Buffer.from(sample)), expected, `sniffImage should classify ${expected}`);
+      if (expected) assert.ok(expected in DOCUMENT_EXTENSIONS, `${expected} must have a stored extension`);
     }
   });
 });
