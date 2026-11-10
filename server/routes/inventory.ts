@@ -881,22 +881,32 @@ inventoryRoutes.patch(
       );
     }
     const name = body.name ?? current.name;
-    await run("UPDATE espresso_equipment SET name = ?, brand = ?, notes = ?, updated_at = ? WHERE id = ?", [
-      name,
-      body.brand === undefined ? current.brand : body.brand,
-      body.notes === undefined ? current.notes : body.notes,
-      now(),
-      current.id,
-    ]);
-    // Keep the name snapshot on existing shots in sync when equipment is renamed.
-    if (name !== current.name) {
-      const column = current.kind === "grinder" ? "grinder" : "machine";
-      await run(`UPDATE espresso_shots SET ${column} = ? WHERE ${column}_id = ? AND house_id = ?`, [
+    // The rename and its shot snapshots must land together, or a failure would
+    // leave the equipment renamed while past shots keep the old label.
+    await tx(async () => {
+      await run("UPDATE espresso_equipment SET name = ?, brand = ?, notes = ?, updated_at = ? WHERE id = ?", [
         name,
+        body.brand === undefined ? current.brand : body.brand,
+        body.notes === undefined ? current.notes : body.notes,
+        now(),
         current.id,
-        houseId,
       ]);
-    }
+      if (name !== current.name) {
+        if (current.kind === "grinder") {
+          await run("UPDATE espresso_shots SET grinder = ? WHERE grinder_id = ? AND house_id = ?", [
+            name,
+            current.id,
+            houseId,
+          ]);
+        } else {
+          await run("UPDATE espresso_shots SET machine = ? WHERE machine_id = ? AND house_id = ?", [
+            name,
+            current.id,
+            houseId,
+          ]);
+        }
+      }
+    });
     res.json(serializeEspressoEquipment(await get<any>("SELECT * FROM espresso_equipment WHERE id = ?", [current.id])));
   }),
 );
@@ -906,8 +916,19 @@ inventoryRoutes.delete(
   handler(async (req, res) => {
     const { houseId } = await requireHouse(req, "member");
     const current = await espressoEquipmentRow(houseId, String(req.params.equipmentId));
-    // Shots keep their text snapshot; the foreign key clears the pick.
-    await run("DELETE FROM espresso_equipment WHERE id = ? AND house_id = ?", [current.id, houseId]);
+    // Shots keep their text snapshot. Clear the picks explicitly as well as via
+    // the foreign key, so upgraded databases never keep a dangling id.
+    await tx(async () => {
+      await run("UPDATE espresso_shots SET grinder_id = NULL WHERE grinder_id = ? AND house_id = ?", [
+        current.id,
+        houseId,
+      ]);
+      await run("UPDATE espresso_shots SET machine_id = NULL WHERE machine_id = ? AND house_id = ?", [
+        current.id,
+        houseId,
+      ]);
+      await run("DELETE FROM espresso_equipment WHERE id = ? AND house_id = ?", [current.id, houseId]);
+    });
     res.json({ ok: true });
   }),
 );

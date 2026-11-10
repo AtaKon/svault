@@ -1927,6 +1927,17 @@ describe("espresso log", () => {
       body: { rating: 3, roastLevel: "extra-dark" },
     });
     assert.equal(roast.status, 400);
+    const negativeDose = await request(`/api/items/${coffeeId}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 3, doseGrams: -1 },
+    });
+    assert.equal(negativeDose.status, 400);
+    // Decimal commas are normalised in the client form; the API takes numbers.
+    const commaDose = await request(`/api/items/${coffeeId}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 3, doseGrams: "18,5" },
+    });
+    assert.equal(commaDose.status, 400);
   });
 
   it("keeps the log inside its house", async () => {
@@ -2325,12 +2336,29 @@ describe("espresso equipment", () => {
     assert.equal(explicitText.data.grinderId, null);
     assert.equal(explicitText.data.grinder, "Still here");
 
+    const noop = await request(`/api/items/${coffeeId}/espresso-shots/${legacy.data.id}`, {
+      method: "PATCH",
+      body: {},
+    });
+    assert.equal(noop.status, 200);
+    assert.equal(noop.data.grinder, "Still here");
+    assert.equal(noop.data.machine, "Old machine");
+
+    // An explicit null pick with no text is the documented "clear this field" contract.
+    const clearedGrinder = await request(`/api/items/${coffeeId}/espresso-shots/${legacy.data.id}`, {
+      method: "PATCH",
+      body: { grinderId: null },
+    });
+    assert.equal(clearedGrinder.status, 200);
+    assert.equal(clearedGrinder.data.grinderId, null);
+    assert.equal(clearedGrinder.data.grinder, null);
+    assert.equal(clearedGrinder.data.machine, "Old machine");
+
     const cleared = await request(`/api/items/${coffeeId}/espresso-shots/${legacy.data.id}`, {
       method: "PATCH",
-      body: { grinderId: null, machineId: null },
+      body: { machineId: null },
     });
     assert.equal(cleared.status, 200);
-    assert.equal(cleared.data.grinder, null);
     assert.equal(cleared.data.machine, null);
 
     await request(`/api/items/${coffeeId}/espresso-shots/${legacy.data.id}`, { method: "DELETE" });
@@ -2417,6 +2445,22 @@ describe("espresso equipment", () => {
       body: { rating: 3, machineId: theirs.data.id },
     });
     assert.equal(crossHouse.status, 400);
+
+    const wrongKindPatch = await request(`/api/items/${coffeeId}/espresso-shots/${shotId}`, {
+      method: "PATCH",
+      body: { machineId: grinderId },
+    });
+    assert.equal(wrongKindPatch.status, 400);
+    const crossHousePatch = await request(`/api/items/${coffeeId}/espresso-shots/${shotId}`, {
+      method: "PATCH",
+      body: { machineId: theirs.data.id },
+    });
+    assert.equal(crossHousePatch.status, 400);
+    const missingPatch = await request(`/api/items/${coffeeId}/espresso-shots/${shotId}`, {
+      method: "PATCH",
+      body: { machineId: "eqp_missing" },
+    });
+    assert.equal(missingPatch.status, 400);
   });
 
   it("renames equipment and keeps the shot snapshot in sync", async () => {
@@ -2433,12 +2477,21 @@ describe("espresso equipment", () => {
   });
 
   it("keeps shot names after equipment is deleted", async () => {
+    const second = await request(`/api/items/${coffeeId}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 4, machineId },
+    });
+    assert.equal(second.status, 201);
+
     const removed = await request(`/api/houses/${houseId}/espresso-equipment/${machineId}`, { method: "DELETE" });
     assert.equal(removed.status, 200);
     const log = await request(`/api/items/${coffeeId}/espresso-shots`);
+    for (const id of [shotId, second.data.id]) {
+      const shot = log.data.shots.find((entry: any) => entry.id === id);
+      assert.equal(shot.machineId, null);
+      assert.equal(shot.machine, "Lelit Mara X");
+    }
     const shot = log.data.shots.find((entry: any) => entry.id === shotId);
-    assert.equal(shot.machineId, null);
-    assert.equal(shot.machine, "Lelit Mara X");
     assert.equal(shot.grinderId, grinderId);
     assert.equal(shot.grinder, "Eureka Mignon Specialita");
 
@@ -2617,17 +2670,24 @@ db.exec(\`
     VALUES ('itm_legacy', 'hse_legacy', 'Legacy coffee', '2026-01-01', '2026-01-01');
 \`);
 db.close();
-const { initDb, get, run, closeDb } = await import("./server/db.ts");
+const { initDb, all, get, run, closeDb } = await import("./server/db.ts");
 await initDb();
-const columns = await get("SELECT COUNT(*) AS n FROM pragma_table_info('espresso_shots') WHERE name IN ('grinder_id', 'machine_id')");
+const grinderColumn = await get("SELECT COUNT(*) AS n FROM pragma_table_info('espresso_shots') WHERE name = 'grinder_id'");
+const machineColumn = await get("SELECT COUNT(*) AS n FROM pragma_table_info('espresso_shots') WHERE name = 'machine_id'");
+const fks = await all("SELECT \\"table\\", \\"from\\", on_delete FROM pragma_foreign_key_list('espresso_shots') WHERE \\"from\\" IN ('grinder_id', 'machine_id') ORDER BY \\"from\\"");
 await run("INSERT INTO espresso_equipment (id, house_id, kind, name, created_at, updated_at) VALUES ('eqp_legacy', 'hse_legacy', 'grinder', 'Legacy grinder', '2026-01-01', '2026-01-01')");
-await run("INSERT INTO espresso_shots (id, house_id, item_id, brewed_at, rating, grinder_id, grinder, created_at, updated_at) VALUES ('esp_legacy', 'hse_legacy', 'itm_legacy', '2026-01-01', 4, 'eqp_legacy', 'Legacy grinder', '2026-01-01', '2026-01-01')");
-await run("DELETE FROM espresso_equipment WHERE id = 'eqp_legacy'");
-const shot = await get("SELECT grinder_id, grinder FROM espresso_shots WHERE id = 'esp_legacy'");
+await run("INSERT INTO espresso_equipment (id, house_id, kind, name, created_at, updated_at) VALUES ('eqp_machine', 'hse_legacy', 'machine', 'Legacy machine', '2026-01-01', '2026-01-01')");
+await run("INSERT INTO espresso_shots (id, house_id, item_id, brewed_at, rating, grinder_id, machine_id, grinder, machine, created_at, updated_at) VALUES ('esp_legacy', 'hse_legacy', 'itm_legacy', '2026-01-01', 4, 'eqp_legacy', 'eqp_machine', 'Legacy grinder', 'Legacy machine', '2026-01-01', '2026-01-01')");
+await run("DELETE FROM espresso_equipment WHERE id IN ('eqp_legacy', 'eqp_machine')");
+const shot = await get("SELECT grinder_id, machine_id, grinder, machine FROM espresso_shots WHERE id = 'esp_legacy'");
 console.log(JSON.stringify({
-  columns: Number(columns.n),
+  grinderColumn: Number(grinderColumn.n),
+  machineColumn: Number(machineColumn.n),
+  fks: fks.map((entry) => entry.from + ":" + entry.table + ":" + entry.on_delete),
   grinderId: shot.grinder_id,
+  machineId: shot.machine_id,
   grinder: shot.grinder,
+  machine: shot.machine,
 }));
 await closeDb();
 `;
@@ -2651,9 +2711,16 @@ await closeDb();
         },
       );
       const result = JSON.parse(output.trim());
-      assert.equal(result.columns, 2);
+      assert.equal(result.grinderColumn, 1);
+      assert.equal(result.machineColumn, 1);
+      assert.deepEqual(result.fks, [
+        "grinder_id:espresso_equipment:SET NULL",
+        "machine_id:espresso_equipment:SET NULL",
+      ]);
       assert.equal(result.grinderId, null);
+      assert.equal(result.machineId, null);
       assert.equal(result.grinder, "Legacy grinder");
+      assert.equal(result.machine, "Legacy machine");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -2670,6 +2737,11 @@ await closeDb();
     assert.ok(
       POSTGRES_MIGRATIONS.includes(
         "ALTER TABLE espresso_shots ADD COLUMN IF NOT EXISTS grinder_id TEXT REFERENCES espresso_equipment(id) ON DELETE SET NULL",
+      ),
+    );
+    assert.ok(
+      POSTGRES_MIGRATIONS.includes(
+        "ALTER TABLE espresso_shots ADD COLUMN IF NOT EXISTS machine_id TEXT REFERENCES espresso_equipment(id) ON DELETE SET NULL",
       ),
     );
     assert.ok(POSTGRES_TABLE_ORDER.indexOf("espresso_equipment") > POSTGRES_TABLE_ORDER.indexOf("items"));
