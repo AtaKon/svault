@@ -1072,6 +1072,8 @@ describe("bill text parsing", () => {
     assert.equal(billPhotoName("..\\..\\evil.heic"), "evil.jpg", "Windows separators never survive");
     assert.equal(billPhotoName("  spaced  .jpg"), "spaced.jpg");
     assert.equal(billPhotoName("evil\u0000name.jpg"), "evilname.jpg", "control characters are stripped");
+    assert.equal(billPhotoName(".jpg"), "bill.jpg", "an extension-only name gets a real stem");
+    assert.deepEqual(billPhotoSize(100, 100, -5), { width: 1, height: 1 }, "a negative max edge never produces a zero canvas");
     assert.deepEqual(billPhotoSize(4032, 3024, 2600), { width: 2600, height: 1950 }, "a large phone photo is scaled down");
     assert.deepEqual(billPhotoSize(800, 600, 2600), { width: 800, height: 600 }, "small photos are never upscaled");
     assert.deepEqual(billPhotoSize(0, 0, 2600), { width: 1, height: 1 }, "a degenerate size still produces a valid canvas");
@@ -1111,6 +1113,10 @@ describe("bill text parsing", () => {
 
       const jpeg = new File(["jpeg"], "bill.jpg", { type: "image/jpeg" });
       assert.strictEqual(await prepareBillImage(jpeg), jpeg, "web-native photos pass through untouched");
+      const jpgAlias = new File(["jpeg"], "bill.jpg", { type: "image/jpg" });
+      assert.strictEqual(await prepareBillImage(jpgAlias), jpgAlias, "the image/jpg alias passes through");
+      const pjpegAlias = new File(["jpeg"], "bill.jpg", { type: "image/pjpeg" });
+      assert.strictEqual(await prepareBillImage(pjpegAlias), pjpegAlias, "the image/pjpeg alias passes through");
       const pdf = new File(["%PDF-1.7"], "bill.pdf", { type: "application/pdf" });
       assert.strictEqual(await prepareBillImage(pdf), pdf, "PDFs pass through untouched");
 
@@ -1214,6 +1220,10 @@ describe("bill text parsing", () => {
       };
       assert.equal(documentMime(bmpHeader().buffer), "image/bmp");
       assert.equal(documentMime(new TextEncoder().encode("BMW is not a bitmap at all").buffer), null, "BM text is not a BMP");
+      const badBmpOffset = new Uint8Array(54);
+      badBmpOffset.set([0x42, 0x4d, 54, 0, 0, 0, 0, 0, 0, 0, 40, 0, 0, 0], 0);
+      assert.equal(documentMime(badBmpOffset.buffer), null, "a BMP pixel offset below the header is rejected");
+      assert.equal(documentMime(new TextEncoder().encode("GIF89a").buffer), null, "a document shorter than the 12-byte floor is rejected");
       assert.equal(documentMime(new Uint8Array([0x49, 0x49, 0x2a, 0x00, 0, 0, 0, 0, 0, 0, 0, 0]).buffer), "image/tiff");
       assert.equal(documentMime(new TextEncoder().encode("RIFF0000WAVE").buffer), null);
       assert.equal(documentMime(new Uint8Array([]).buffer), null);
@@ -1264,6 +1274,17 @@ describe("bill text parsing", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  it("sees a HEIC brand past the saved-document window when the bytes are supplied", async () => {
+    const { sniffImageBytes } = await import("../../shared/image-sniff.js");
+    const large = new Uint8Array(1032);
+    large.set([0, 0, 4, 8], 0);
+    large.set(new TextEncoder().encode("ftyp"), 4);
+    large.set(new TextEncoder().encode("mif1"), 8);
+    large.set(new TextEncoder().encode("heic"), 1028);
+    assert.equal(sniffImageBytes(large), "image/heic", "a HEIC brand beyond the window is still recognised from the bytes");
+    assert.equal(documentMime(large.buffer), null, "documentMime is deliberately bounded to the 1024-byte window");
   });
 
   it("only reports image types the bill storage map knows", async () => {
@@ -7920,6 +7941,22 @@ describe("insights, household split and admin console", () => {
     const storedEmptyType = (await get<{ document: string }>("SELECT document FROM bills WHERE id = ?", [emptyTypeBill.data.id]))?.document;
     assert.match(storedEmptyType ?? "", /\.heic$/);
     assert.equal((await request(`/api/bills/${emptyTypeBill.data.id}`, { method: "DELETE" })).status, 200);
+
+    // The MIME alias never overrides the bytes: image/heif with AVIF content is
+    // stored and served as AVIF.
+    const heifAsAvif = new Blob([Buffer.from([
+      0, 0, 0, 20, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x69, 0x66, 0x31, 0, 0, 0, 0, 0x61, 0x76, 0x69, 0x66,
+    ])], { type: "image/heif" });
+    const heifAsAvifForm = form(heifAsAvif, "HEIF MIME with AVIF bytes");
+    heifAsAvifForm.delete("document");
+    heifAsAvifForm.append("document", heifAsAvif, "bill.heif");
+    const heifAsAvifBill = await request(`/api/houses/${billHouse}/bills`, { method: "POST", body: heifAsAvifForm });
+    assert.equal(heifAsAvifBill.status, 201, "an image/heif MIME is accepted for sniffing");
+    const storedHeifAsAvif = (await get<{ document: string }>("SELECT document FROM bills WHERE id = ?", [heifAsAvifBill.data.id]))?.document;
+    assert.match(storedHeifAsAvif ?? "", /\.avif$/, "AVIF bytes win over the HEIF MIME alias");
+    const heifAsAvifResponse = await fetch(base + heifAsAvifBill.data.document, { headers: { cookie } });
+    assert.equal(heifAsAvifResponse.headers.get("content-type"), "image/avif");
+    assert.equal((await request(`/api/bills/${heifAsAvifBill.data.id}`, { method: "DELETE" })).status, 200);
 
     const tiff = new Blob([Buffer.from([0x49, 0x49, 0x2a, 0x00, 0, 0, 0, 0, 0, 0, 0, 0])], { type: "image/tiff" });
     const tiffForm = form(tiff, "TIFF bill scan");

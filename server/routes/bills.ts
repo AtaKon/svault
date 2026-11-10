@@ -75,6 +75,9 @@ const BILL_DOCUMENT_TYPES = new Set([
   // Aliases browsers may send before the sniffer normalises them.
   "image/jpg", "image/pjpeg", "image/heif",
 ]);
+// Single source of truth: the shared picker list plus the PDF extension. The
+// local set is built once from the imported BILL_PHOTO_EXTENSIONS; there is no
+// second declaration of the imported binding.
 const BILL_DOCUMENT_EXTENSIONS = new Set([".pdf", ...BILL_PHOTO_EXTENSIONS]);
 
 /**

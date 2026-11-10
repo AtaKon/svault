@@ -66,9 +66,9 @@ function ftypMime(head: Uint8Array, ascii: (start: number, end: number) => strin
     // A HEIC brand already found in the scanned prefix is enough, even when the
     // declared box continues past the read window.
     if (heic) return "image/heic";
-    // Without a codec brand we cannot tell what the container holds. If the
-    // brand list continues past the bytes we have, an AVIF brand may be beyond
-    // the window; reject instead of guessing HEIC or AVIF.
+    // Without a codec brand the container may hold another codec. Reject
+    // rather than guess HEIC; real camera ftyp boxes are far smaller than the
+    // 1024-byte window, so their compatible brands are visible.
     return null;
   }
   return "image/heic";
