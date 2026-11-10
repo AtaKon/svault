@@ -110,7 +110,8 @@ const { heuristicRecipe, parseIngredientLine, localIdeas } = await import("../se
 const { heuristicReceipt } = await import("../services/receipt-local.js");
 const { billLinesTotal, parseBillNumber, parseBillText } = await import("../../shared/bill-parser.js");
 const { billHistory, extractBillMetrics } = await import("../../shared/bill-history.js");
-const { billPhotoName, billPhotoSize, documentMime, fetchBillFile, isBillPdf, isSupportedBillFile, pdfItemsToText } = await import("../../shared/bill-document.js");
+const { BILL_PHOTO_EXTENSIONS, billPhotoName, billPhotoSize, documentMime, fetchBillFile, isBillPdf, isSupportedBillFile, pdfItemsToText } = await import("../../shared/bill-document.js");
+const { BILL_DOCUMENT_MIME } = await import("../routes/bills.js");
 const { parseLidlReceipt } = await import("../services/receipt-lidl.js");
 const { parseSklavenitisReceipt } = await import("../services/receipt-sklavenitis.js");
 const { selectReceiptTemplate } = await import("../services/receipt-templates.js");
@@ -1075,13 +1076,20 @@ describe("bill text parsing", () => {
     assert.equal(billPhotoName(".jpg"), "bill.jpg", "an extension-only name gets a real stem");
     assert.deepEqual(billPhotoSize(100, 100, -5), { width: 1, height: 1 }, "a negative max edge never produces a zero canvas");
     assert.deepEqual(billPhotoSize(100, 100, Number.NaN), { width: 1, height: 1 }, "a non-finite max edge clamps to one pixel");
-    assert.deepEqual(billPhotoSize(100, 100, Number.POSITIVE_INFINITY), { width: 1, height: 1 }, "an infinite max edge is not used to upscale");
+    assert.deepEqual(billPhotoSize(100, 100, Number.POSITIVE_INFINITY), { width: 100, height: 100 }, "an infinite max edge disables downscaling");
     assert.equal(billPhotoName("///"), "bill.jpg", "a separator-only name falls back to bill");
     assert.deepEqual(billPhotoSize(4032, 3024, 2600), { width: 2600, height: 1950 }, "a large phone photo is scaled down");
     assert.deepEqual(billPhotoSize(800, 600, 2600), { width: 800, height: 600 }, "small photos are never upscaled");
     assert.deepEqual(billPhotoSize(0, 0, 2600), { width: 1, height: 1 }, "a degenerate size still produces a valid canvas");
     assert.deepEqual(billPhotoSize(-100, Number.NaN, 2600), { width: 1, height: 1 }, "negative and non-finite dimensions never reach the canvas");
     assert.deepEqual(billPhotoSize(100, 100, 0), { width: 1, height: 1 }, "a zero max edge never produces a zero canvas");
+  });
+
+  it("maps every accepted bill photo suffix to a served MIME type", () => {
+    assert.ok(BILL_DOCUMENT_MIME[".pdf"]);
+    for (const extension of BILL_PHOTO_EXTENSIONS) {
+      assert.ok(BILL_DOCUMENT_MIME[extension], `missing served MIME for ${extension}`);
+    }
   });
 
   it("converts a decodable phone photo to JPEG and reports an unsupported HEIC", async () => {

@@ -1,6 +1,17 @@
 import assert from "node:assert/strict";
-import { createCanvas, DOMMatrix, ImageData, Path2D } from "@napi-rs/canvas";
 import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
+
+let canvasApi;
+try {
+  canvasApi = await import("@napi-rs/canvas");
+} catch (error) {
+  const code = error && typeof error === "object" ? error.code : null;
+  if (code !== "ERR_MODULE_NOT_FOUND" && code !== "ERR_DLOPEN_FAILED") throw error;
+  if (process.env.SV_PDFJS_SMOKE_REQUIRED === "1") throw error;
+  console.log("Skipped PDF.js render smoke: optional @napi-rs/canvas is unavailable.");
+  process.exit(0);
+}
+const { createCanvas, DOMMatrix, ImageData, Path2D } = canvasApi;
 
 // PDF.js v6's legacy build is the Node entry point and shares the rendering
 // API used by the browser build in client/bill-scan.ts.

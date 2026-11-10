@@ -1,10 +1,10 @@
 # syntax=docker/dockerfile:1
 
-# node:22 tracks the latest 22.x; pdfjs-dist requires Node >=22.13.
+# Float the Node 22 tag so it stays at or above pdfjs-dist's >=22.13 engine floor.
 FROM node:22-bookworm-slim AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci --no-audit --no-fund
+RUN npm ci --include=optional --no-audit --no-fund
 
 FROM deps AS build
 WORKDIR /app
@@ -23,8 +23,10 @@ COPY --from=build --chown=svault:svault /app/node_modules ./node_modules
 COPY --from=build --chown=svault:svault /app/dist ./dist
 COPY --from=build --chown=svault:svault /app/public ./public
 COPY --from=build --chown=svault:svault /app/assets ./assets
+COPY --from=build --chown=svault:svault /app/scripts/pdfjs-render-smoke.mjs ./scripts/pdfjs-render-smoke.mjs
 COPY --chown=svault:svault docker-entrypoint.sh /usr/local/bin/svault-entrypoint
-RUN chmod 0555 /usr/local/bin/svault-entrypoint
+RUN chmod 0555 /usr/local/bin/svault-entrypoint \
+ && SV_PDFJS_SMOKE_REQUIRED=1 node scripts/pdfjs-render-smoke.mjs
 USER svault
 EXPOSE 4000
 VOLUME ["/data"]

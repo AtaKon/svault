@@ -24,7 +24,7 @@ steps:
   test:
     image: node:22.23.4-bookworm
     commands:
-      - npm ci --no-audit --no-fund
+      - npm ci --include=optional --no-audit --no-fund
       - npm run typecheck
       # The SPA fallback test expects dist/client to exist.
       - npm run build

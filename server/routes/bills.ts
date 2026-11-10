@@ -50,7 +50,7 @@ const billDir = path.join(UPLOAD_DIR, "bills");
 fs.mkdirSync(billDir, { recursive: true });
 
 /** Extension → MIME for serving stored documents, derived from the shared map. */
-const BILL_DOCUMENT_MIME: Record<string, string> = {
+export const BILL_DOCUMENT_MIME: Record<string, string> = {
   ...Object.fromEntries(Object.entries(DOCUMENT_EXTENSIONS).map(([mime, extension]) => [`.${extension}`, mime])),
   ".jpeg": "image/jpeg",
   ".tiff": "image/tiff",
