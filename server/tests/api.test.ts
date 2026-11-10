@@ -2410,6 +2410,14 @@ describe("espresso equipment", () => {
     });
     assert.equal(duplicate.status, 409);
 
+    // The guard is case-insensitive on create and rename.
+    const casePost = await request(`/api/houses/${houseId}/espresso-equipment`, {
+      method: "POST",
+      body: { kind: "machine", name: "LELIT MARA X" },
+    });
+    assert.equal(casePost.status, 409);
+    assert.equal(casePost.data.error, "That machine already exists");
+
     // Names are unique per kind: the same name may exist as a grinder.
     const tempGrinder = await request(`/api/houses/${houseId}/espresso-equipment`, {
       method: "POST",
@@ -2423,6 +2431,12 @@ describe("espresso equipment", () => {
     assert.equal(sameNameOtherKind.status, 200);
     const renamedList = await request(`/api/houses/${houseId}/espresso-equipment`);
     assert.equal(renamedList.data.find((entry: any) => entry.id === tempGrinder.data.id).name, "Second machine");
+
+    const caseRename = await request(`/api/houses/${houseId}/espresso-equipment/${tempGrinder.data.id}`, {
+      method: "PATCH",
+      body: { name: "eUrEkA mIgNoN" },
+    });
+    assert.equal(caseRename.status, 409);
 
     const me = await request("/api/auth/me", { auth: secondUserCookie });
     const theirHouseId = me.data.houses.find((house: any) => house.role === "owner").id;
@@ -2665,6 +2679,9 @@ describe("espresso equipment", () => {
     assert.equal(textOnly.data.grinderId, null);
     assert.equal(textOnly.data.grinder, "Manual text");
     assert.equal(textOnly.data.machine, "Second machine");
+
+    const afterUnlink = await request(`/api/houses/${houseId}/espresso-equipment`);
+    assert.equal(afterUnlink.data.find((entry: any) => entry.id === second.data.id).shotCount, 0);
 
     await request(`/api/items/${coffeeId}/espresso-shots/${fresh.data.id}`, { method: "DELETE" });
     await request(`/api/houses/${houseId}/espresso-equipment/${second.data.id}`, { method: "DELETE" });
