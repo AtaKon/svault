@@ -48,6 +48,13 @@ export const DOCUMENT_EXTENSIONS: Record<string, string> = {
   "image/tiff": "tif",
 };
 
+/** MIME types used when serving stored bill documents by their canonical suffix. */
+export const BILL_DOCUMENT_MIME: Record<string, string> = {
+  ...Object.fromEntries(Object.entries(DOCUMENT_EXTENSIONS).map(([mime, extension]) => [`.${extension}`, mime])),
+  ".jpeg": "image/jpeg",
+  ".tiff": "image/tiff",
+};
+
 export function isBillPdf(file: File): boolean {
   return file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
 }

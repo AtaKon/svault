@@ -25,9 +25,9 @@ COPY --from=build --chown=svault:svault /app/public ./public
 COPY --from=build --chown=svault:svault /app/assets ./assets
 COPY --from=build --chown=svault:svault /app/scripts/pdfjs-render-smoke.mjs ./scripts/pdfjs-render-smoke.mjs
 COPY --chown=svault:svault docker-entrypoint.sh /usr/local/bin/svault-entrypoint
-RUN chmod 0555 /usr/local/bin/svault-entrypoint \
- && SV_PDFJS_SMOKE_REQUIRED=1 node scripts/pdfjs-render-smoke.mjs
+RUN chmod 0555 /usr/local/bin/svault-entrypoint
 USER svault
+RUN SV_PDFJS_SMOKE_REQUIRED=1 node scripts/pdfjs-render-smoke.mjs
 EXPOSE 4000
 VOLUME ["/data"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

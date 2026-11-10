@@ -10,7 +10,7 @@ import { ApiError, handler, parseBody, requireHouse } from "../http.js";
 import { MAX_UPLOAD_BYTES, UPLOAD_DIR } from "../config.js";
 import { uploadPath, discardUploads, sniffImage } from "../upload.js";
 import { BILL_TYPE_VALUES } from "../../shared/bill-types.js";
-import { BILL_PHOTO_EXTENSIONS, DOCUMENT_EXTENSIONS } from "../../shared/bill-document.js";
+import { BILL_DOCUMENT_MIME, BILL_PHOTO_EXTENSIONS, DOCUMENT_EXTENSIONS } from "../../shared/bill-document.js";
 import { ELECTRICITY_CONTRACT_COLORS } from "../../shared/types.js";
 import type { BillBreakdownLine, UtilityBill } from "../../shared/types.js";
 
@@ -48,13 +48,6 @@ interface BillRow {
 
 const billDir = path.join(UPLOAD_DIR, "bills");
 fs.mkdirSync(billDir, { recursive: true });
-
-/** Extension → MIME for serving stored documents, derived from the shared map. */
-export const BILL_DOCUMENT_MIME: Record<string, string> = {
-  ...Object.fromEntries(Object.entries(DOCUMENT_EXTENSIONS).map(([mime, extension]) => [`.${extension}`, mime])),
-  ".jpeg": "image/jpeg",
-  ".tiff": "image/tiff",
-};
 
 /** Upload types the file filter accepts; the sniffer still decides what is stored. */
 const BILL_DOCUMENT_TYPES = new Set([

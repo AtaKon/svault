@@ -74,7 +74,7 @@ function requestFiles(req: Request): Express.Multer.File[] {
 }
 
 /** Delete request files only when they are strictly under the trusted Multer destination. */
-function discardFilesUnder(req: Request, root: string) {
+export function discardFilesUnder(req: Request, root: string) {
   const uploadRoot = path.resolve(root);
   for (const file of requestFiles(req)) {
     if (!file.path) continue;
@@ -179,12 +179,12 @@ export function archiveUploader(field: string, maxBytes: number, access: UploadA
     limits: { fileSize: maxBytes, files: 1 },
   });
   const cleanup: RequestHandler = (req, res, next) => {
-    // Register only after Multer completes, so req.file is populated before
-    // the response-close cleanup can run after the route finishes.
+    // Register before Multer so close cleanup also covers upload errors. On
+    // successful uploads, req.file is populated by the time the response closes.
     res.on("close", () => discardFilesUnder(req, dest));
     next();
   };
-  return [accessGuard(access), upload.single(field), cleanup];
+  return [accessGuard(access), cleanup, upload.single(field)];
 }
 
 export function uploadPath(prefix: UploadPrefix, filename: string): string {

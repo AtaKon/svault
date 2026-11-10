@@ -111,7 +111,6 @@ const { heuristicReceipt } = await import("../services/receipt-local.js");
 const { billLinesTotal, parseBillNumber, parseBillText } = await import("../../shared/bill-parser.js");
 const { billHistory, extractBillMetrics } = await import("../../shared/bill-history.js");
 const { BILL_PHOTO_EXTENSIONS, billPhotoName, billPhotoSize, documentMime, fetchBillFile, isBillPdf, isSupportedBillFile, pdfItemsToText } = await import("../../shared/bill-document.js");
-const { BILL_DOCUMENT_MIME } = await import("../routes/bills.js");
 const { parseLidlReceipt } = await import("../services/receipt-lidl.js");
 const { parseSklavenitisReceipt } = await import("../services/receipt-sklavenitis.js");
 const { selectReceiptTemplate } = await import("../services/receipt-templates.js");
@@ -1086,11 +1085,11 @@ describe("bill text parsing", () => {
   });
 
   it("maps every accepted bill photo suffix to a served MIME type", async () => {
+    const { BILL_DOCUMENT_MIME, DOCUMENT_EXTENSIONS } = await import("../../shared/bill-document.js");
     assert.ok(BILL_DOCUMENT_MIME[".pdf"]);
     for (const extension of BILL_PHOTO_EXTENSIONS) {
       assert.ok(BILL_DOCUMENT_MIME[extension], `missing served MIME for ${extension}`);
     }
-    const { DOCUMENT_EXTENSIONS } = await import("../../shared/bill-document.js");
     for (const [mime, extension] of Object.entries(DOCUMENT_EXTENSIONS)) {
       assert.equal(BILL_DOCUMENT_MIME[`.${extension}`], mime, `missing served extension for ${mime}`);
     }
@@ -6818,6 +6817,43 @@ describe("dataset import", () => {
     assert.equal(response.status, 200);
     assert.equal((await response.json()).total, 1);
     assert.deepEqual(readdirSync(dir).filter((name) => !before.has(name)), []);
+  });
+
+  it("removes oversized archive uploads and keeps cleanup inside its destination", async () => {
+    const express = (await import("express")).default;
+    const { archiveUploadDir, archiveUploader, discardFilesUnder } = await import("../upload.js");
+    const { readFileSync, writeFileSync } = await import("node:fs");
+    const dir = archiveUploadDir();
+    const before = new Set(readdirSync(dir));
+    const uploadApp = express();
+    uploadApp.post("/upload", ...archiveUploader("archive", 8, () => true), (_req, res) => res.sendStatus(204));
+    uploadApp.use((error: unknown, _req: unknown, res: import("express").Response, _next: unknown) => {
+      const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
+      res.status(code === "LIMIT_FILE_SIZE" ? 413 : 500).end();
+    });
+    const uploadServer = http.createServer(uploadApp);
+    await new Promise<void>((resolve) => uploadServer.listen(0, "127.0.0.1", resolve));
+    const address = uploadServer.address();
+    if (!address || typeof address === "string") throw new Error("no upload test address");
+    try {
+      const form = new FormData();
+      form.append("archive", new Blob([new Uint8Array(1024)], { type: "application/zip" }), "oversized.zip");
+      const response = await fetch(`http://127.0.0.1:${address.port}/upload`, { method: "POST", body: form });
+      assert.equal(response.status, 413);
+      await response.arrayBuffer();
+      assert.deepEqual(readdirSync(dir).filter((name) => !before.has(name)), []);
+    } finally {
+      await new Promise<void>((resolve, reject) => uploadServer.close((error) => error ? reject(error) : resolve()));
+    }
+
+    const outsideFile = path.join(dataDir, `outside-archive-${randomUUID()}.zip`);
+    writeFileSync(outsideFile, "must remain");
+    try {
+      discardFilesUnder({ file: { path: outsideFile } } as any, dir);
+      assert.equal(readFileSync(outsideFile, "utf8"), "must remain");
+    } finally {
+      rmSync(outsideFile, { force: true });
+    }
   });
 
   it("parses YOLO labels, classes and splits", async () => {

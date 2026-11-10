@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
 
+const [nodeMajor, nodeMinor] = process.versions.node.split(".").map(Number);
+assert.ok(nodeMajor > 22 || (nodeMajor === 22 && nodeMinor >= 13), `PDF.js requires Node.js >=22.13.0; found ${process.versions.node}`);
+
 let canvasApi;
 try {
   canvasApi = await import("@napi-rs/canvas");
@@ -13,8 +16,8 @@ try {
 }
 const { createCanvas, DOMMatrix, ImageData, Path2D } = canvasApi;
 
-// PDF.js v6's legacy build is the Node entry point and shares the rendering
-// API used by the browser build in client/bill-scan.ts.
+// This exercises only PDF.js v6's Node legacy entry point. The browser bundle
+// and worker used by client/bill-scan.ts need a separate Vite browser check.
 globalThis.DOMMatrix ??= DOMMatrix;
 globalThis.ImageData ??= ImageData;
 globalThis.Path2D ??= Path2D;
