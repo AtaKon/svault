@@ -110,7 +110,7 @@ const { heuristicRecipe, parseIngredientLine, localIdeas } = await import("../se
 const { heuristicReceipt } = await import("../services/receipt-local.js");
 const { billLinesTotal, parseBillNumber, parseBillText } = await import("../../shared/bill-parser.js");
 const { billHistory, extractBillMetrics } = await import("../../shared/bill-history.js");
-const { billPhotoName, billPhotoSize, documentMime, fetchBillFile, isBillPdf, isSupportedBillFile, pdfItemsToText } = await import("../../shared/bill-document.js");
+const { BILL_PHOTO_EXTENSIONS, billPhotoName, billPhotoSize, documentMime, fetchBillFile, isBillPdf, isSupportedBillFile, pdfItemsToText } = await import("../../shared/bill-document.js");
 const { parseLidlReceipt } = await import("../services/receipt-lidl.js");
 const { parseSklavenitisReceipt } = await import("../services/receipt-sklavenitis.js");
 const { selectReceiptTemplate } = await import("../services/receipt-templates.js");
@@ -1074,11 +1074,27 @@ describe("bill text parsing", () => {
     assert.equal(billPhotoName("evil\u0000name.jpg"), "evilname.jpg", "control characters are stripped");
     assert.equal(billPhotoName(".jpg"), "bill.jpg", "an extension-only name gets a real stem");
     assert.deepEqual(billPhotoSize(100, 100, -5), { width: 1, height: 1 }, "a negative max edge never produces a zero canvas");
+    assert.deepEqual(billPhotoSize(100, 100, Number.NaN), { width: 1, height: 1 }, "a non-finite max edge clamps to one pixel");
+    assert.deepEqual(billPhotoSize(100, 100, Number.POSITIVE_INFINITY), { width: 100, height: 100 }, "an infinite max edge disables downscaling");
+    assert.deepEqual(billPhotoSize(100, 100, Number.NEGATIVE_INFINITY), { width: 1, height: 1 }, "a negative-infinite edge clamps to a valid minimum");
+    assert.deepEqual(billPhotoSize(100_000, 75_000, Number.MAX_SAFE_INTEGER), { width: 100_000, height: 75_000 }, "large finite bounds never upscale the source");
+    assert.equal(billPhotoName("///"), "bill.jpg", "a separator-only name falls back to bill");
     assert.deepEqual(billPhotoSize(4032, 3024, 2600), { width: 2600, height: 1950 }, "a large phone photo is scaled down");
     assert.deepEqual(billPhotoSize(800, 600, 2600), { width: 800, height: 600 }, "small photos are never upscaled");
     assert.deepEqual(billPhotoSize(0, 0, 2600), { width: 1, height: 1 }, "a degenerate size still produces a valid canvas");
     assert.deepEqual(billPhotoSize(-100, Number.NaN, 2600), { width: 1, height: 1 }, "negative and non-finite dimensions never reach the canvas");
     assert.deepEqual(billPhotoSize(100, 100, 0), { width: 1, height: 1 }, "a zero max edge never produces a zero canvas");
+  });
+
+  it("maps every accepted bill photo suffix to a served MIME type", async () => {
+    const { BILL_DOCUMENT_MIME, DOCUMENT_EXTENSIONS } = await import("../../shared/bill-document.js");
+    assert.ok(BILL_DOCUMENT_MIME[".pdf"]);
+    for (const extension of BILL_PHOTO_EXTENSIONS) {
+      assert.ok(BILL_DOCUMENT_MIME[extension], `missing served MIME for ${extension}`);
+    }
+    for (const [mime, extension] of Object.entries(DOCUMENT_EXTENSIONS)) {
+      assert.equal(BILL_DOCUMENT_MIME[`.${extension}`], mime, `missing served extension for ${mime}`);
+    }
   });
 
   it("converts a decodable phone photo to JPEG and reports an unsupported HEIC", async () => {
@@ -1186,6 +1202,9 @@ describe("bill text parsing", () => {
         0, 0, 0, 0, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x69, 0x66, 0x31, 0, 0, 0, 0, 0x61, 0x76, 0x69, 0x66,
       ]).buffer), "image/avif", "a size-0 ftyp box scans compatible brands to the end of the window");
       assert.equal(documentMime(new Uint8Array([
+        0, 0, 0, 0, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x69, 0x66, 0x31, 0, 0, 0, 0, 0x68, 0x65, 0x69, 0x63,
+      ]).buffer), "image/heic", "an open-ended ftyp with an in-window HEIC brand is treated as HEIC");
+      assert.equal(documentMime(new Uint8Array([
         0, 0, 0, 32, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x69, 0x66, 0x31, 0, 0, 0, 0,
         0x6d, 0x69, 0x66, 0x31, 0x6d, 0x73, 0x66, 0x31, 0x61, 0x76, 0x69, 0x66,
       ]).buffer), "image/avif", "the codec can appear after several compatible brands");
@@ -1228,6 +1247,7 @@ describe("bill text parsing", () => {
         0, 0, 0, 18, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x69, 0x66, 0x31, 0, 0, 0, 0, 0x61, 0x76,
       ]).buffer), null, "a declared size that cuts a compatible brand in half is rejected");
       assert.equal(documentMime(new Uint8Array([0x49, 0x49, 0x2a, 0x00, 0, 0, 0, 0, 0, 0, 0, 0]).buffer), "image/tiff");
+      assert.equal(documentMime(new Uint8Array([0x4d, 0x4d, 0x00, 0x2a, 0, 0, 0, 0, 0, 0, 0, 0]).buffer), "image/tiff", "big-endian TIFF is recognised");
       assert.equal(documentMime(new TextEncoder().encode("RIFF0000WAVE").buffer), null);
       assert.equal(documentMime(new Uint8Array([]).buffer), null);
       assert.equal(documentMime(new Uint8Array([0xff]).buffer), null);
@@ -1292,6 +1312,7 @@ describe("bill text parsing", () => {
 
   it("classifies every supported image in the bill storage map", async () => {
     const { sniffImage } = await import("../upload.js");
+    const { DOCUMENT_EXTENSIONS } = await import("../../shared/bill-document.js");
     const bmp = new Uint8Array(54);
     bmp.set([0x42, 0x4d, 54, 0, 0, 0, 0, 0, 0, 0, 54, 0, 0, 0], 0);
     const samples: Array<[Uint8Array, string | null]> = [
@@ -1303,10 +1324,12 @@ describe("bill text parsing", () => {
       [new Uint8Array([0, 0, 0, 0x1c, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63]), "image/heic"],
       [bmp, "image/bmp"],
       [new Uint8Array([0x49, 0x49, 0x2a, 0x00, 0, 0, 0, 0, 0, 0, 0, 0]), "image/tiff"],
+      [new Uint8Array([0x4d, 0x4d, 0x00, 0x2a, 0, 0, 0, 0, 0, 0, 0, 0]), "image/tiff"],
       [new TextEncoder().encode("BMW is not a bitmap"), null],
     ];
     for (const [sample, expected] of samples) {
       assert.equal(sniffImage(Buffer.from(sample)), expected, `sniffImage should classify ${expected}`);
+      if (expected) assert.ok(expected in DOCUMENT_EXTENSIONS, `${expected} must have a stored extension`);
     }
   });
 });
@@ -6760,6 +6783,90 @@ describe("backup and restore", () => {
 
 describe("dataset import", () => {
   const png = () => encodePng(8, 8, Buffer.alloc(8 * 8 * 4, 180));
+
+  it("removes temporary archive uploads after a rejected preview", async () => {
+    const { archiveUploadDir } = await import("../upload.js");
+    const { readdirSync } = await import("node:fs");
+    const dir = archiveUploadDir();
+    const before = new Set(readdirSync(dir));
+    const form = new FormData();
+    form.append("dataset", new Blob(["not a zip"], { type: "application/zip" }), "bad.zip");
+    const response = await fetch(`${base}/api/houses/${houseId}/photos/dataset/preview`, {
+      method: "POST", headers: { cookie }, body: form,
+    });
+    assert.equal(response.status, 400);
+    await response.arrayBuffer();
+    assert.deepEqual(readdirSync(dir).filter((name) => !before.has(name)), []);
+  });
+
+  it("removes temporary archive uploads after a successful preview", async () => {
+    const { archiveUploadDir } = await import("../upload.js");
+    const { readdirSync } = await import("node:fs");
+    const dir = archiveUploadDir();
+    const before = new Set(readdirSync(dir));
+    const zip = new JSZip();
+    zip.file("classes.txt", "apple\n");
+    zip.file("train/images/a.png", png());
+    zip.file("train/labels/a.txt", "0 0.5 0.5 0.2 0.2\n");
+    const archiveBuffer = await zip.generateAsync({ type: "nodebuffer" });
+    const archiveBytes = new Uint8Array(new ArrayBuffer(archiveBuffer.length));
+    archiveBytes.set(archiveBuffer);
+    const form = new FormData();
+    form.append("dataset", new Blob([archiveBytes.buffer], { type: "application/zip" }), "valid.zip");
+    const response = await fetch(`${base}/api/houses/${houseId}/photos/dataset/preview`, {
+      method: "POST", headers: { cookie }, body: form,
+    });
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).total, 1);
+    assert.deepEqual(readdirSync(dir).filter((name) => !before.has(name)), []);
+  });
+
+  it("removes oversized archive uploads and keeps cleanup inside its destination", async () => {
+    const express = (await import("express")).default;
+    const { archiveUploadDir, archiveUploader, discardFilesUnder } = await import("../upload.js");
+    const { readFileSync, writeFileSync } = await import("node:fs");
+    const dir = archiveUploadDir();
+    const before = new Set(readdirSync(dir));
+    const uploadApp = express();
+    uploadApp.post("/upload", ...archiveUploader("archive", 8, () => true), (_req, res) => res.sendStatus(204));
+    uploadApp.use((error: unknown, _req: unknown, res: import("express").Response, _next: unknown) => {
+      const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
+      res.status(code === "LIMIT_FILE_SIZE" ? 413 : 500).end();
+    });
+    const uploadServer = http.createServer(uploadApp);
+    await new Promise<void>((resolve) => uploadServer.listen(0, "127.0.0.1", resolve));
+    const address = uploadServer.address();
+    if (!address || typeof address === "string") throw new Error("no upload test address");
+    try {
+      const form = new FormData();
+      form.append("archive", new Blob([new Uint8Array(1024)], { type: "application/zip" }), "oversized.zip");
+      const response = await fetch(`http://127.0.0.1:${address.port}/upload`, { method: "POST", body: form });
+      assert.equal(response.status, 413);
+      await response.arrayBuffer();
+      assert.deepEqual(readdirSync(dir).filter((name) => !before.has(name)), []);
+    } finally {
+      await new Promise<void>((resolve, reject) => uploadServer.close((error) => error ? reject(error) : resolve()));
+    }
+
+    const outsideFile = path.join(dataDir, `outside-archive-${randomUUID()}.zip`);
+    const siblingDirectory = path.join(path.dirname(dir), `${path.basename(dir)}-evil`);
+    const siblingFile = path.join(siblingDirectory, "x.zip");
+    const beforeDirectory = existsSync(dir);
+    writeFileSync(outsideFile, "must remain");
+    mkdirSync(siblingDirectory, { recursive: true });
+    writeFileSync(siblingFile, "sibling must remain");
+    try {
+      discardFilesUnder({ file: { path: outsideFile } } as any, dir);
+      assert.equal(readFileSync(outsideFile, "utf8"), "must remain");
+      discardFilesUnder({ file: { path: siblingFile } } as any, dir);
+      assert.equal(readFileSync(siblingFile, "utf8"), "sibling must remain");
+      discardFilesUnder({ file: { path: dir } } as any, dir);
+      assert.equal(existsSync(dir), beforeDirectory, "cleanup never removes its destination directory");
+    } finally {
+      rmSync(outsideFile, { force: true });
+      rmSync(siblingDirectory, { recursive: true, force: true });
+    }
+  });
 
   it("parses YOLO labels, classes and splits", async () => {
     const zip = new JSZip();

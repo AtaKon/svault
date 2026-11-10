@@ -73,19 +73,23 @@ function requestFiles(req: Request): Express.Multer.File[] {
   return [];
 }
 
-/** Delete every file multer stored for this request. */
-export function discardUploads(req: Request) {
-  const uploadRoot = path.resolve(UPLOAD_DIR);
+/** Delete request files only when they are strictly under the trusted Multer destination. */
+export function discardFilesUnder(req: Request, root: string) {
+  const uploadRoot = path.resolve(root);
   for (const file of requestFiles(req)) {
     if (!file.path) continue;
     const resolved = path.resolve(file.path);
     const relative = path.relative(uploadRoot, resolved);
-    // Multer writes inside UPLOAD_DIR. Never let a malformed request object
-    // turn this cleanup helper into an arbitrary file deletion primitive.
+    // Never let a malformed request object turn cleanup into an arbitrary
+    // file deletion primitive. Archive uploads use a separate temp destination.
     if (relative && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) {
       fs.rmSync(resolved, { force: true });
     }
   }
+}
+
+export function discardUploads(req: Request) {
+  discardFilesUnder(req, UPLOAD_DIR);
 }
 
 /** Reject uploads whose content is not one of the accepted image formats. */
@@ -152,7 +156,7 @@ export function uploader(prefix: UploadPrefix, access: UploadAccess = "member"):
   };
 }
 
-/** A temporary directory for large archive uploads (restore, dataset import). */
+/** A temporary directory for large archive uploads, separate from durable UPLOAD_DIR storage. */
 export function archiveUploadDir(): string {
   const dir = path.join(os.tmpdir(), "svault-uploads");
   fs.mkdirSync(dir, { recursive: true });
@@ -164,15 +168,30 @@ export function archiveUploadDir(): string {
  * file is removed automatically once the response has been sent.
  */
 export function archiveUploader(field: string, maxBytes: number, access: UploadAccess): RequestHandler[] {
+  // Capture one absolute path for Multer and cleanup. This temp destination is
+  // intentionally outside UPLOAD_DIR, so cleanup must use this exact boundary.
+  const dest = path.resolve(archiveUploadDir());
+  const requestArchivePaths = new WeakMap<Request, string>();
   const upload = multer({
     storage: multer.diskStorage({
-      destination: (_req, _file, cb) => cb(null, archiveUploadDir()),
-      filename: (_req, _file, cb) => cb(null, `${Date.now()}-${randomBytes(8).toString("hex")}.zip`),
+      destination: (_req, _file, cb) => cb(null, dest),
+      filename: (req, _file, cb) => {
+        const filename = `${Date.now()}-${randomBytes(8).toString("hex")}.zip`;
+        requestArchivePaths.set(req, path.join(dest, filename));
+        cb(null, filename);
+      },
     }),
     limits: { fileSize: maxBytes, files: 1 },
   });
   const cleanup: RequestHandler = (req, res, next) => {
-    res.on("close", () => discardUploads(req));
+    // Register before Multer so close cleanup also covers upload errors. On
+    // successful uploads, req.file is populated by the time the response closes.
+    res.on("close", () => {
+      discardFilesUnder(req, dest);
+      const trackedPath = requestArchivePaths.get(req);
+      if (trackedPath) discardFilesUnder({ file: { path: trackedPath } } as Request, dest);
+      requestArchivePaths.delete(req);
+    });
     next();
   };
   return [accessGuard(access), cleanup, upload.single(field)];

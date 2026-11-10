@@ -10,7 +10,7 @@ import { ApiError, handler, parseBody, requireHouse } from "../http.js";
 import { MAX_UPLOAD_BYTES, UPLOAD_DIR } from "../config.js";
 import { uploadPath, discardUploads, sniffImage } from "../upload.js";
 import { BILL_TYPE_VALUES } from "../../shared/bill-types.js";
-import { BILL_PHOTO_EXTENSIONS } from "../../shared/bill-document.js";
+import { BILL_DOCUMENT_MIME, BILL_PHOTO_EXTENSIONS, DOCUMENT_EXTENSIONS } from "../../shared/bill-document.js";
 import { ELECTRICITY_CONTRACT_COLORS } from "../../shared/types.js";
 import type { BillBreakdownLine, UtilityBill } from "../../shared/types.js";
 
@@ -49,29 +49,9 @@ interface BillRow {
 const billDir = path.join(UPLOAD_DIR, "bills");
 fs.mkdirSync(billDir, { recursive: true });
 
-/** Canonical extension for a sniffed document type; the name never comes from the client. */
-const DOCUMENT_EXTENSION: Record<string, string> = {
-  "application/pdf": ".pdf",
-  "image/jpeg": ".jpg",
-  "image/png": ".png",
-  "image/webp": ".webp",
-  "image/gif": ".gif",
-  "image/avif": ".avif",
-  "image/heic": ".heic",
-  "image/bmp": ".bmp",
-  "image/tiff": ".tif",
-};
-
-/** Extension → MIME for serving stored documents, derived from the one map above. */
-const BILL_DOCUMENT_MIME: Record<string, string> = {
-  ...Object.fromEntries(Object.entries(DOCUMENT_EXTENSION).map(([mime, extension]) => [extension, mime])),
-  ".jpeg": "image/jpeg",
-  ".tiff": "image/tiff",
-};
-
 /** Upload types the file filter accepts; the sniffer still decides what is stored. */
 const BILL_DOCUMENT_TYPES = new Set([
-  ...Object.keys(DOCUMENT_EXTENSION),
+  ...Object.keys(DOCUMENT_EXTENSIONS),
   // Aliases browsers may send before the sniffer normalises them.
   "image/jpg", "image/pjpeg", "image/heif",
 ]);
@@ -119,7 +99,8 @@ const verifyBillDocument: RequestHandler = (req, _res, next) => {
     let bytesRead: number;
     try { bytesRead = fs.readSync(fd, prefix, 0, prefix.length, 0); } finally { fs.closeSync(fd); }
     const mime = documentMime(prefix.subarray(0, bytesRead));
-    const canonical = mime ? DOCUMENT_EXTENSION[mime] : undefined;
+    const extension = mime ? DOCUMENT_EXTENSIONS[mime] : undefined;
+    const canonical = extension ? `.${extension}` : undefined;
     if (!mime || !canonical) throw new ApiError(400, "That file is not a valid PDF or image");
 
     // Store the extension that matches the real content, not the uploaded name.

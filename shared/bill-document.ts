@@ -34,7 +34,8 @@ const BILL_INPUT_TYPES = new Set([
   "image/png", "image/webp", "image/gif", "image/avif",
   "image/heic", "image/heif", "image/bmp", "image/tiff",
 ]);
-const DOCUMENT_EXTENSIONS: Record<string, string> = {
+/** Canonical extension for a sniffed document type; the name never comes from the client. */
+export const DOCUMENT_EXTENSIONS: Record<string, string> = {
   "application/pdf": "pdf",
   "image/jpeg": "jpg",
   "image/png": "png",
@@ -45,6 +46,13 @@ const DOCUMENT_EXTENSIONS: Record<string, string> = {
   "image/heif": "heif",
   "image/bmp": "bmp",
   "image/tiff": "tif",
+};
+
+/** MIME types used when serving stored bill documents by their canonical suffix. */
+export const BILL_DOCUMENT_MIME: Record<string, string> = {
+  ...Object.fromEntries(Object.entries(DOCUMENT_EXTENSIONS).map(([mime, extension]) => [`.${extension}`, mime])),
+  ".jpeg": "image/jpeg",
+  ".tiff": "image/tiff",
 };
 
 export function isBillPdf(file: File): boolean {
@@ -124,11 +132,17 @@ export function billPhotoName(name: string): string {
   return `${stem || "bill"}.jpg`;
 }
 
-/** Fit a photo inside `maxEdge` without ever upscaling it. */
+/**
+ * Fit a photo inside `maxEdge` without ever upscaling it. Positive Infinity
+ * preserves source dimensions; callers allocating canvases for untrusted
+ * images must pass a finite edge to bound memory use.
+ */
 export function billPhotoSize(width: number, height: number, maxEdge: number): { width: number; height: number } {
   const safeWidth = Number.isFinite(width) && width > 0 ? width : 1;
   const safeHeight = Number.isFinite(height) && height > 0 ? height : 1;
-  const scale = Math.min(1, maxEdge / Math.max(safeWidth, safeHeight));
+  // NaN/non-positive bounds need a minimal valid canvas; Infinity means no downscale.
+  const safeEdge = Number.isNaN(maxEdge) || maxEdge <= 0 ? 1 : maxEdge;
+  const scale = Math.min(1, safeEdge / Math.max(safeWidth, safeHeight));
   return {
     width: Math.max(1, Math.round(safeWidth * scale)),
     height: Math.max(1, Math.round(safeHeight * scale)),

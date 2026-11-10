@@ -131,7 +131,7 @@ export function Input({ className, ...rest }: InputHTMLAttributes<HTMLInputEleme
   return (
     <input
       className={cn(
-        "h-11 w-full rounded-xl border border-line bg-surface px-3 text-[15px] outline-none transition-colors",
+        "h-11 w-full min-w-0 rounded-xl border border-line bg-surface px-3 text-[15px] outline-none transition-colors",
         "placeholder:text-muted/50 focus:border-brand focus:ring-2 focus:ring-brand/15 disabled:opacity-60",
         className,
       )}
@@ -155,7 +155,7 @@ export function Textarea({ className, ...rest }: TextareaHTMLAttributes<HTMLText
 
 export function Select({ className, children, ...rest }: SelectHTMLAttributes<HTMLSelectElement>) {
   return (
-    <div className="relative">
+    <div className="relative min-w-0">
       <select
         className={cn(
           "h-11 w-full appearance-none rounded-xl border border-line bg-surface pl-3 pr-9 text-[15px] outline-none transition-colors",
@@ -187,7 +187,7 @@ export function Field({
   className?: string;
 }) {
   return (
-    <label className={cn("block", className)}>
+    <label className={cn("block min-w-0", className)}>
       {label && (
         <span className="mb-1.5 flex items-baseline justify-between gap-2">
           <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted">
