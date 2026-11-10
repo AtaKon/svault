@@ -3,7 +3,7 @@ import { z } from "zod";
 import { requireAuth } from "../auth.js";
 import { ApiError, handler, parseBody, requireHouse } from "../http.js";
 import { limitRequests, limiters, userOrIp } from "../rate-limit.js";
-import { all, get, lockHouseholdLedger, newId, now, parseJson, tx } from "../db.js";
+import { all, databaseKind, get, lockHouseholdLedger, newId, now, parseJson, tx } from "../db.js";
 import { lookupPosoKaneiBarcode, PosoKaneiUnavailableError } from "../services/posokanei.js";
 import { shoppingRow } from "../services/shopping.js";
 import {
@@ -88,7 +88,7 @@ const settlementBody = z.object({
 
 const settlementTails = new Map<string, Promise<void>>();
 
-/** Serialize settlements per house in-process; the transaction also locks its house row for other processes. */
+/** Queue SQLite's synchronous writers locally; BEGIN IMMEDIATE also locks across processes. */
 async function withSettlementLock<T>(houseId: string, work: () => Promise<T>): Promise<T> {
   const previous = settlementTails.get(houseId) ?? Promise.resolve();
   let release!: () => void;
@@ -117,19 +117,18 @@ insightRoutes.post(
     const { houseId } = await requireHouse(req, "member");
     const body = parseBody(settlementBody, req.body);
     const amount = body.amount;
-    if (amount <= 0) throw new ApiError(400, "Enter a payment of at least 0.01");
     if (body.fromUserId === body.toUserId) throw new ApiError(400, "Choose two different household members");
-    const memberIds = new Set((await all<{ user_id: string }>(
-      "SELECT user_id FROM house_members WHERE house_id = ?",
-      [houseId],
-    )).map((row) => row.user_id));
-    if (!memberIds.has(body.fromUserId) || !memberIds.has(body.toUserId)) {
-      throw new ApiError(400, "Both people must be members of this house");
-    }
-    await withSettlementLock(houseId, () => tx(async (session) => {
+    const recordPayment = () => tx(async (session) => {
       // Lock the house before reading. Receipt, bill, membership, and other
       // settlement writes use the same lock before changing the household ledger.
       await lockHouseholdLedger(session, houseId);
+      const memberIds = new Set((await session.all<{ user_id: string }>(
+        "SELECT user_id FROM house_members WHERE house_id = ?",
+        [houseId],
+      )).map((row) => row.user_id));
+      if (!memberIds.has(body.fromUserId) || !memberIds.has(body.toUserId)) {
+        throw new ApiError(400, "Both people must be members of this house");
+      }
       const current = await householdInsight(houseId, session);
       const suggested = current.settlements.find(
         (entry) => entry.fromUserId === body.fromUserId && entry.toUserId === body.toUserId,
@@ -143,7 +142,9 @@ insightRoutes.post(
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [newId("hst"), houseId, body.fromUserId, body.toUserId, amount, req.user!.id, now()],
       );
-    }, { writeLock: true }));
+    }, { writeLock: true });
+    if (databaseKind() === "sqlite") await withSettlementLock(houseId, recordPayment);
+    else await recordPayment();
     res.status(201).json(await householdInsight(houseId));
   }),
 );

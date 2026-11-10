@@ -11,7 +11,6 @@ import {
   clearedCookie,
   verifyPassword,
   userHouses,
-  memberRole,
 } from "../auth.js";
 import { parseBody, handler, ApiError } from "../http.js";
 import { serializeHouse } from "../serialize.js";
@@ -347,21 +346,26 @@ authRoutes.post(
     if (invite.email && invite.email.toLowerCase() !== req.user!.email.toLowerCase()) {
       throw new ApiError(403, "This invite was sent to a different email address");
     }
-    const shouldNotify = !await memberRole(req.user!.id, invite.house_id);
-    if (shouldNotify) {
-      await tx(async (session) => {
-        await lockHouseholdLedger(session, invite.house_id);
+    let memberAdded = false;
+    await tx(async (session) => {
+      await lockHouseholdLedger(session, invite.house_id);
+      const membership = await session.get(
+        "SELECT user_id FROM house_members WHERE house_id = ? AND user_id = ?",
+        [invite.house_id, req.user!.id],
+      );
+      if (!membership) {
         await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
           invite.house_id,
           req.user!.id,
           invite.role as Role,
           now(),
         ]);
-        await run("UPDATE house_invites SET accepted_at = ?, accepted_by = ? WHERE id = ?", [now(), req.user!.id, invite.id]);
-      });
-      await notifyHouseAdded(req.user!.id, invite.house_id, invite.role as Role, invite.created_by);
-    } else {
+        memberAdded = true;
+      }
       await run("UPDATE house_invites SET accepted_at = ?, accepted_by = ? WHERE id = ?", [now(), req.user!.id, invite.id]);
+    });
+    if (memberAdded) {
+      await notifyHouseAdded(req.user!.id, invite.house_id, invite.role as Role, invite.created_by);
     }
     res.json(await userPayload(req.user!.id));
   }),

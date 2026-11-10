@@ -8050,6 +8050,30 @@ describe("insights, household split and admin console", () => {
     assert.equal(settledAfterNewDebt.status, 201, JSON.stringify(settledAfterNewDebt.data));
     assert.deepEqual(settledAfterNewDebt.data.settlements, []);
 
+    const debtReducingReceipt = await request(`/api/houses/${house.data.id}/receipts`, {
+      method: "POST",
+      body: {
+        vendorName: "Member Paid Market",
+        purchasedAt: at(8),
+        currency: "EUR",
+        total: 0.4,
+        paidBy: memberId,
+        splitWith: [ownerId, memberId],
+        lines: [{ description: "Shared item", quantity: 1, lineTotal: 0.4 }],
+      },
+    });
+    assert.equal(debtReducingReceipt.status, 201, JSON.stringify(debtReducingReceipt.data));
+    ledger = await request(ledgerPath);
+    assert.deepEqual(ledger.data.settlements.map((entry: any) => [entry.fromUserId, entry.toUserId, entry.amount]), [
+      [ownerId, memberId, 0.2],
+    ]);
+    const counterflowPayment = await request(path, {
+      method: "POST",
+      body: { fromUserId: ownerId, toUserId: memberId, amount: 0.2 },
+    });
+    assert.equal(counterflowPayment.status, 201, JSON.stringify(counterflowPayment.data));
+    assert.deepEqual(counterflowPayment.data.settlements, []);
+
     const centReceipt = await request(`/api/houses/${house.data.id}/receipts`, {
       method: "POST",
       body: {
@@ -8102,8 +8126,8 @@ describe("insights, household split and admin console", () => {
     });
     assert.equal(paymentToDepartingMember.status, 201, JSON.stringify(paymentToDepartingMember.data));
     const netTransfers = await request(ledgerPath);
-    assert.equal(netTransfers.data.balances.find((entry: any) => entry.userId === memberId).settled, 1.0);
-    assert.equal(netTransfers.data.balances.find((entry: any) => entry.userId === ownerId).settled, -1.0);
+    assert.equal(netTransfers.data.balances.find((entry: any) => entry.userId === memberId).settled, 0.8);
+    assert.equal(netTransfers.data.balances.find((entry: any) => entry.userId === ownerId).settled, -0.8);
 
     await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [house.data.id, memberId]);
     ledger = await request(ledgerPath);
