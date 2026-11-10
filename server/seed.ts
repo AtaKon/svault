@@ -267,6 +267,24 @@ const coffeeBeansId = await createItem(lake, lakeLocations, lakeCategories, {
   keep: 700,
 });
 
+/* Saved equipment so the shot form shows the dropdowns in the demo. */
+const espressoMachineId = newId("eqp");
+const espressoGrinderId = newId("eqp");
+await run(
+  `INSERT INTO espresso_equipment (id, house_id, kind, name, brand, notes, created_at, updated_at)
+   VALUES (?, ?, 'machine', 'Lelit Mara X', 'Lelit', NULL, ?, ?), (?, ?, 'grinder', 'Eureka Mignon', 'Eureka', NULL, ?, ?)`,
+  [
+    espressoMachineId,
+    lake,
+    daysAgo(200),
+    daysAgo(200),
+    espressoGrinderId,
+    lake,
+    daysAgo(200),
+    daysAgo(200),
+  ],
+);
+
 /* A short dial-in history so the espresso log is populated in the demo. */
 for (const shot of [
   { days: 1, rating: 4, grind: "2.4", dose: 18, yield: 36, time: 28, tds: 9.2, notes: "Cocoa and orange peel." },
@@ -276,8 +294,8 @@ for (const shot of [
   await run(
     `INSERT INTO espresso_shots (id, house_id, item_id, user_id, brewed_at, rating, roast_level, grind_setting,
        grind_seconds, dose_grams, yield_grams, extraction_seconds, water_temp_c, pressure_bar, tds_percent,
-       grinder, machine, tasting_notes, tags, notes, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, 'medium', ?, 12, ?, ?, ?, 93, 9, ?, 'Eureka Mignon', 'Lelit Mara X', ?, ?, NULL, ?, ?)`,
+       grinder_id, machine_id, grinder, machine, tasting_notes, tags, notes, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, 'medium', ?, 12, ?, ?, ?, 93, 9, ?, ?, ?, 'Eureka Mignon', 'Lelit Mara X', ?, ?, NULL, ?, ?)`,
     [
       newId("esp"),
       lake,
@@ -290,6 +308,8 @@ for (const shot of [
       shot.yield,
       shot.time,
       shot.tds,
+      espressoGrinderId,
+      espressoMachineId,
       shot.notes,
       JSON.stringify(["chocolate", "citrus"]),
       daysAgo(shot.days),

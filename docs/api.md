@@ -222,6 +222,10 @@ Attribute types: `text`, `number`, `select`, `date`, `boolean`, `url`. Built-in 
 | `PATCH` | `/api/items/:itemId/espresso-shots/:shotId` | member+ | Edit a shot. The author or an admin+ can change it. |
 | `DELETE` | `/api/items/:itemId/espresso-shots/:shotId` | member+ | Delete a shot. The author or an admin+ can remove it. |
 | `GET` | `/api/houses/:houseId/espresso-shots` | viewer+ | House-wide log: `shots`, `summary` and espresso-enabled `beans`. Optional `itemId` and `limit` (1-500). |
+| `GET` | `/api/houses/:houseId/espresso-equipment` | viewer+ | Saved machines and grinders, each with `kind`, `name`, `brand` and `shotCount`. |
+| `POST` | `/api/houses/:houseId/espresso-equipment` | member+ | Save `{ "kind": "machine" \\| "grinder", "name": "...", "brand": "..." }`. Names are unique per kind. |
+| `PATCH` | `/api/houses/:houseId/espresso-equipment/:equipmentId` | member+ | Rename or edit `name`, `brand` or `notes`. Existing shot snapshots follow the new name. |
+| `DELETE` | `/api/houses/:houseId/espresso-equipment/:equipmentId` | member+ | Delete saved equipment. Shots keep the recorded name. |
 
 List query parameters:
 
@@ -311,13 +315,15 @@ dial-in history, and the house-wide **Espresso log** screen lists every coffee. 
   "rating": 5,
   "roastLevel": "medium",
   "grindSetting": "2.4",
-  "grindSeconds": 12,
-  "doseGrams": 18,
-  "yieldGrams": 36,
-  "extractionSeconds": 28,
+  "grindSeconds": 12.5,
+  "doseGrams": 18.5,
+  "yieldGrams": 36.2,
+  "extractionSeconds": 28.4,
   "waterTempC": 93,
   "pressureBar": 9,
   "tdsPercent": 9.2,
+  "grinderId": "eqp_...",
+  "machineId": "eqp_...",
   "grinder": "Eureka Mignon",
   "machine": "Lelit Mara X",
   "tastingNotes": "Cocoa and orange peel",
@@ -327,8 +333,13 @@ dial-in history, and the house-wide **Espresso log** screen lists every coffee. 
 ```
 
 `rating` is required and must be 1-5. `roastLevel` is one of `light`, `medium-light`, `medium`,
-`medium-dark` or `dark`. Every other field is optional, so a quick rating alone is valid. `grindSetting`
-is free text so both `2.4` and `fine` work. `tags` accepts an array or a comma-separated string; each
+`medium-dark` or `dark`. Every other field is optional, so a quick rating alone is valid. Grams,
+seconds, temperature, pressure and TDS all accept decimals. `grindSetting`
+is free text so both `2.4` and `fine` work. `grinderId` and `machineId` reference saved equipment from
+`GET /api/houses/:houseId/espresso-equipment`; the server copies the equipment name into the `grinder`
+and `machine` snapshot fields. Sending `null` clears the pick and the snapshot, while omitting both keeps
+the shot unchanged. The free-text `grinder` and `machine` fields are still accepted for older clients.
+`tags` accepts an array or a comma-separated string; each
 tag is capped at 40 characters and the list at 20, and over-limit input is rejected rather than
 truncated. `brewedAt` must be between 2000-01-01 and one day in the future.
 

@@ -4,7 +4,7 @@ import { api, qs } from "@/api";
 import { useAuth, useHouse } from "@/state";
 import { useI18n } from "@/i18n";
 import { Badge, Button, Card, EmptyState, LoadingBlock, PageHeader, Select, Stat } from "@/components/ui";
-import { EspressoShotRow, EspressoShotSheet } from "@/components/Espresso";
+import { EspressoEquipmentSheet, EspressoShotRow, EspressoShotSheet } from "@/components/Espresso";
 import { useToast } from "@/components/toast";
 import { qty } from "@/format";
 import type { EspressoShot, EspressoShotList } from "@shared/types";
@@ -21,6 +21,7 @@ export function EspressoPage() {
   const [data, setData] = useState<EspressoShotList | null>(null);
   const [loading, setLoading] = useState(true);
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [equipmentOpen, setEquipmentOpen] = useState(false);
   const [editing, setEditing] = useState<EspressoShot | null>(null);
   const [sheetSession, setSheetSession] = useState(0);
   const requestId = useRef(0);
@@ -79,17 +80,24 @@ export function EspressoPage() {
         title={t("Espresso log")}
         subtitle={t("Ratings, grind, dose, yield and extraction history across your coffee beans.")}
         actions={
-          can("member") && loggableBeans.length > 0 ? (
-            <Button
-              icon="plus"
-              onClick={() => {
-                setEditing(null);
-                setSheetSession((current) => current + 1);
-                setSheetOpen(true);
-              }}
-            >
-              {t("Log a shot")}
-            </Button>
+          can("member") ? (
+            <div className="flex flex-wrap gap-2">
+              <Button variant="secondary" icon="settings" onClick={() => setEquipmentOpen(true)}>
+                {t("Machines & grinders")}
+              </Button>
+              {loggableBeans.length > 0 && (
+                <Button
+                  icon="plus"
+                  onClick={() => {
+                    setEditing(null);
+                    setSheetSession((current) => current + 1);
+                    setSheetOpen(true);
+                  }}
+                >
+                  {t("Log a shot")}
+                </Button>
+              )}
+            </div>
           ) : undefined
         }
       />
@@ -191,6 +199,8 @@ export function EspressoPage() {
         onSaved={() => void load()}
         onDeleted={() => void load()}
       />
+
+      <EspressoEquipmentSheet open={equipmentOpen} onClose={() => setEquipmentOpen(false)} />
     </div>
   );
 }

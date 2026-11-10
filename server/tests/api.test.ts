@@ -2225,6 +2225,126 @@ describe("espresso log", () => {
   });
 });
 
+describe("espresso equipment", () => {
+  let coffeeId = "";
+  let machineId = "";
+  let grinderId = "";
+  let shotId = "";
+
+  before(async () => {
+    const coffee = await request(`/api/houses/${houseId}/items`, {
+      method: "POST",
+      body: { name: "Equipment coffee", unit: "g", espresso: true },
+    });
+    assert.equal(coffee.status, 201);
+    coffeeId = coffee.data.id;
+  });
+
+  it("saves machines and grinders for the dropdown", async () => {
+    const machine = await request(`/api/houses/${houseId}/espresso-equipment`, {
+      method: "POST",
+      body: { kind: "machine", name: "Lelit Mara X", brand: "Lelit" },
+    });
+    assert.equal(machine.status, 201);
+    assert.equal(machine.data.kind, "machine");
+    assert.equal(machine.data.name, "Lelit Mara X");
+    assert.equal(machine.data.brand, "Lelit");
+    machineId = machine.data.id;
+
+    const grinder = await request(`/api/houses/${houseId}/espresso-equipment`, {
+      method: "POST",
+      body: { kind: "grinder", name: "Eureka Mignon" },
+    });
+    assert.equal(grinder.status, 201);
+    assert.equal(grinder.data.kind, "grinder");
+    grinderId = grinder.data.id;
+
+    const duplicate = await request(`/api/houses/${houseId}/espresso-equipment`, {
+      method: "POST",
+      body: { kind: "grinder", name: "eureka mignon" },
+    });
+    assert.equal(duplicate.status, 409);
+
+    const list = await request(`/api/houses/${houseId}/espresso-equipment`);
+    assert.equal(list.status, 200);
+    assert.ok(list.data.some((entry: any) => entry.id === machineId));
+    assert.ok(list.data.some((entry: any) => entry.id === grinderId));
+  });
+
+  it("logs decimal grams and seconds with the picked equipment", async () => {
+    const shot = await request(`/api/items/${coffeeId}/espresso-shots`, {
+      method: "POST",
+      body: {
+        rating: 4,
+        doseGrams: 18.5,
+        yieldGrams: 36.2,
+        extractionSeconds: 28.4,
+        grindSeconds: 12.6,
+        machineId,
+        grinderId,
+      },
+    });
+    assert.equal(shot.status, 201);
+    assert.equal(shot.data.doseGrams, 18.5);
+    assert.equal(shot.data.yieldGrams, 36.2);
+    assert.equal(shot.data.extractionSeconds, 28.4);
+    assert.equal(shot.data.grindSeconds, 12.6);
+    assert.equal(shot.data.machineId, machineId);
+    assert.equal(shot.data.grinderId, grinderId);
+    assert.equal(shot.data.machine, "Lelit Mara X");
+    assert.equal(shot.data.grinder, "Eureka Mignon");
+    shotId = shot.data.id;
+  });
+
+  it("rejects equipment of the wrong kind or from another house", async () => {
+    const wrongKind = await request(`/api/items/${coffeeId}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 3, machineId: grinderId },
+    });
+    assert.equal(wrongKind.status, 400);
+    assert.equal(wrongKind.data.error, "That machine is not in this house");
+
+    const me = await request("/api/auth/me", { auth: secondUserCookie });
+    const theirHouseId = me.data.houses.find((house: any) => house.role === "owner").id;
+    const theirs = await request(`/api/houses/${theirHouseId}/espresso-equipment`, {
+      method: "POST",
+      auth: secondUserCookie,
+      body: { kind: "machine", name: "Their machine" },
+    });
+    assert.equal(theirs.status, 201);
+    const crossHouse = await request(`/api/items/${coffeeId}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 3, machineId: theirs.data.id },
+    });
+    assert.equal(crossHouse.status, 400);
+  });
+
+  it("renames equipment and keeps the shot snapshot in sync", async () => {
+    const renamed = await request(`/api/houses/${houseId}/espresso-equipment/${grinderId}`, {
+      method: "PATCH",
+      body: { name: "Eureka Mignon Specialita" },
+    });
+    assert.equal(renamed.status, 200);
+    assert.equal(renamed.data.name, "Eureka Mignon Specialita");
+    const log = await request(`/api/items/${coffeeId}/espresso-shots`);
+    assert.equal(log.data.shots[0].grinder, "Eureka Mignon Specialita");
+    assert.equal(log.data.shots[0].grinderId, grinderId);
+  });
+
+  it("keeps shot names after equipment is deleted", async () => {
+    const removed = await request(`/api/houses/${houseId}/espresso-equipment/${machineId}`, { method: "DELETE" });
+    assert.equal(removed.status, 200);
+    const log = await request(`/api/items/${coffeeId}/espresso-shots`);
+    assert.equal(log.data.shots[0].machineId, null);
+    assert.equal(log.data.shots[0].machine, "Lelit Mara X");
+    assert.equal(log.data.shots[0].id, shotId);
+  });
+
+  after(async () => {
+    await request(`/api/items/${coffeeId}`, { method: "DELETE" });
+  });
+});
+
 describe("espresso schema migration", () => {
   it("adds the espresso column and table to a pre-change SQLite database", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "svault-espresso-migration-"));
@@ -2273,11 +2393,15 @@ await initDb();
 const column = await get("SELECT COUNT(*) AS n FROM pragma_table_info('items') WHERE name = 'espresso'");
 const item = await get("SELECT espresso FROM items WHERE id = 'itm_legacy'");
 const table = await get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'espresso_shots'");
+const equipment = await get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'espresso_equipment'");
+const grinderColumn = await get("SELECT COUNT(*) AS n FROM pragma_table_info('espresso_shots') WHERE name = 'grinder_id'");
 console.log(JSON.stringify({
   kind: DATABASE_KIND,
   column: Number(column.n),
   espresso: Number(item.espresso),
   table: table?.name ?? null,
+  equipment: equipment?.name ?? null,
+  grinderColumn: Number(grinderColumn.n),
 }));
 await closeDb();
 `;
@@ -2305,6 +2429,8 @@ await closeDb();
       assert.equal(result.column, 1);
       assert.equal(result.espresso, 0);
       assert.equal(result.table, "espresso_shots");
+      assert.equal(result.equipment, "espresso_equipment");
+      assert.equal(result.grinderColumn, 1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -2315,8 +2441,16 @@ await closeDb();
       "../database/postgres-schema.js"
     );
     assert.match(POSTGRES_SCHEMA, /espresso INTEGER NOT NULL DEFAULT 0/);
+    assert.match(POSTGRES_SCHEMA, /CREATE TABLE IF NOT EXISTS espresso_equipment/);
     assert.match(POSTGRES_SCHEMA, /CREATE TABLE IF NOT EXISTS espresso_shots/);
     assert.ok(POSTGRES_MIGRATIONS.includes("ALTER TABLE items ADD COLUMN IF NOT EXISTS espresso INTEGER NOT NULL DEFAULT 0"));
+    assert.ok(
+      POSTGRES_MIGRATIONS.includes(
+        "ALTER TABLE espresso_shots ADD COLUMN IF NOT EXISTS grinder_id TEXT REFERENCES espresso_equipment(id) ON DELETE SET NULL",
+      ),
+    );
+    assert.ok(POSTGRES_TABLE_ORDER.indexOf("espresso_equipment") > POSTGRES_TABLE_ORDER.indexOf("items"));
+    assert.ok(POSTGRES_TABLE_ORDER.indexOf("espresso_shots") > POSTGRES_TABLE_ORDER.indexOf("espresso_equipment"));
     assert.ok(POSTGRES_TABLE_ORDER.indexOf("espresso_shots") > POSTGRES_TABLE_ORDER.indexOf("items"));
     assert.ok(POSTGRES_TABLE_ORDER.indexOf("espresso_shots") > POSTGRES_TABLE_ORDER.indexOf("users"));
     assert.ok(POSTGRES_TABLE_ORDER.indexOf("espresso_shots") > POSTGRES_TABLE_ORDER.indexOf("houses"));

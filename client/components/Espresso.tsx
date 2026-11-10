@@ -10,6 +10,8 @@ import { qty } from "@/format";
 import {
   ESPRESSO_ROAST_LEVELS,
   type EspressoBeanSummary,
+  type EspressoEquipment,
+  type EspressoEquipmentKind,
   type EspressoRoastLevel,
   type EspressoShot,
   type EspressoShotList,
@@ -32,10 +34,32 @@ function localInput(iso: string): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+/** Accept both "18.5" and "18,5" so a decimal comma never becomes an empty field. */
 function numberOrNull(value: string): number | null {
-  if (!value.trim()) return null;
-  const parsed = Number(value);
+  const normalised = value.trim().replace(/\s/g, "").replace(/,/g, ".");
+  if (!normalised) return null;
+  const parsed = Number(normalised);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function decimalInput(value: number | null | undefined): string {
+  return value == null ? "" : String(value);
+}
+
+/** In-progress legacy free text, kept as a selectable option while editing. */
+const LEGACY_TEXT_PREFIX = "text:";
+
+function equipmentPick(id: string | null | undefined, text: string | null | undefined): string {
+  if (id) return id;
+  return text ? `${LEGACY_TEXT_PREFIX}${text}` : "";
+}
+
+function equipmentPayload(pick: string): { id: string | null; text: string | null } {
+  if (!pick) return { id: null, text: null };
+  if (pick.startsWith(LEGACY_TEXT_PREFIX)) {
+    return { id: null, text: pick.slice(LEGACY_TEXT_PREFIX.length) };
+  }
+  return { id: pick, text: null };
 }
 
 function formatShotDate(iso: string, locale: string): string {
@@ -95,6 +119,103 @@ export function EspressoStars({
   );
 }
 
+/* --------------------------------------------------------------- equipment */
+
+/** Dropdown for saved equipment with an inline "new machine/grinder" form. */
+function EquipmentSelect({
+  kind,
+  label,
+  value,
+  onChange,
+  equipment,
+  onCreated,
+  canCreate,
+}: {
+  kind: EspressoEquipmentKind;
+  label: string;
+  value: string;
+  onChange: (next: string) => void;
+  equipment: EspressoEquipment[];
+  onCreated: (created: EspressoEquipment) => void;
+  canCreate: boolean;
+}) {
+  const { t } = useI18n();
+  const { house } = useHouse();
+  const toast = useToast();
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const create = async () => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    setSaving(true);
+    try {
+      const created = await api<EspressoEquipment>(`/api/houses/${house.id}/espresso-equipment`, {
+        method: "POST",
+        body: { kind, name: trimmed },
+      });
+      toast.success(kind === "machine" ? t("Machine added") : t("Grinder added"));
+      setCreating(false);
+      setName("");
+      onCreated(created);
+    } catch (error) {
+      toast.error(error instanceof Error ? t(error.message) : t("Could not save the equipment"));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div>
+      <div className="mb-1.5 flex items-baseline justify-between gap-2">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted">{label}</span>
+        {canCreate && (
+          <button
+            type="button"
+            onClick={() => setCreating((current) => !current)}
+            className="text-[11px] font-medium text-brand hover:underline"
+          >
+            {creating ? t("Cancel") : t("New")}
+          </button>
+        )}
+      </div>
+      <Select value={value} onChange={(event) => onChange(event.target.value)}>
+        <option value="">{t("Not recorded")}</option>
+        {value.startsWith(LEGACY_TEXT_PREFIX) && (
+          <option value={value}>{value.slice(LEGACY_TEXT_PREFIX.length)}</option>
+        )}
+        {equipment.map((entry) => (
+          <option key={entry.id} value={entry.id}>
+            {entry.name}
+            {entry.brand ? ` · ${entry.brand}` : ""}
+          </option>
+        ))}
+      </Select>
+      {creating && (
+        <div className="mt-2 flex gap-2">
+          <Input
+            autoFocus
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                void create();
+              }
+            }}
+            placeholder={t(kind === "machine" ? "e.g. Lelit Mara X" : "e.g. Eureka Mignon")}
+            maxLength={80}
+          />
+          <Button type="button" size="sm" onClick={() => void create()} loading={saving} disabled={!name.trim()}>
+            {t("Add")}
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ---------------------------------------------------------------- the sheet */
 
 export function EspressoShotSheet({
@@ -128,13 +249,43 @@ export function EspressoShotSheet({
   const [waterTempC, setWaterTempC] = useState("");
   const [pressureBar, setPressureBar] = useState("");
   const [tdsPercent, setTdsPercent] = useState("");
-  const [grinder, setGrinder] = useState("");
-  const [machine, setMachine] = useState("");
+  const [grinderPick, setGrinderPick] = useState("");
+  const [machinePick, setMachinePick] = useState("");
   const [tastingNotes, setTastingNotes] = useState("");
   const [tags, setTags] = useState("");
   const [notes, setNotes] = useState("");
+  const [equipment, setEquipment] = useState<EspressoEquipment[]>([]);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const { house, can } = useHouse();
+  const canManage = can("member");
+
+  useEffect(() => {
+    if (!open) return;
+    let active = true;
+    api<EspressoEquipment[]>(`/api/houses/${house.id}/espresso-equipment`)
+      .then((list) => {
+        if (active) setEquipment(list);
+      })
+      .catch(() => {
+        // The sheet still works without saved equipment; logging a shot should not block.
+      });
+    return () => {
+      active = false;
+    };
+  }, [open, house.id]);
+
+  const addEquipment = (created: EspressoEquipment) => {
+    setEquipment((current) =>
+      [...current.filter((entry) => entry.id !== created.id), created].sort((a, b) =>
+        a.name.localeCompare(b.name),
+      ),
+    );
+    if (created.kind === "grinder") setGrinderPick(created.id);
+    else setMachinePick(created.id);
+  };
+  const machines = equipment.filter((entry) => entry.kind === "machine");
+  const grinders = equipment.filter((entry) => entry.kind === "grinder");
 
   // Reset when the sheet opens, another shot is selected, or the target item
   // changes. A newly added bean does not reset an in-progress edit.
@@ -146,15 +297,15 @@ export function EspressoShotSheet({
       setRating(shot.rating);
       setRoastLevel(shot.roastLevel ?? "");
       setGrindSetting(shot.grindSetting ?? "");
-      setGrindSeconds(shot.grindSeconds == null ? "" : String(shot.grindSeconds));
-      setDoseGrams(shot.doseGrams == null ? "" : String(shot.doseGrams));
-      setYieldGrams(shot.yieldGrams == null ? "" : String(shot.yieldGrams));
-      setExtractionSeconds(shot.extractionSeconds == null ? "" : String(shot.extractionSeconds));
-      setWaterTempC(shot.waterTempC == null ? "" : String(shot.waterTempC));
-      setPressureBar(shot.pressureBar == null ? "" : String(shot.pressureBar));
-      setTdsPercent(shot.tdsPercent == null ? "" : String(shot.tdsPercent));
-      setGrinder(shot.grinder ?? "");
-      setMachine(shot.machine ?? "");
+      setGrindSeconds(decimalInput(shot.grindSeconds));
+      setDoseGrams(decimalInput(shot.doseGrams));
+      setYieldGrams(decimalInput(shot.yieldGrams));
+      setExtractionSeconds(decimalInput(shot.extractionSeconds));
+      setWaterTempC(decimalInput(shot.waterTempC));
+      setPressureBar(decimalInput(shot.pressureBar));
+      setTdsPercent(decimalInput(shot.tdsPercent));
+      setGrinderPick(equipmentPick(shot.grinderId, shot.grinder));
+      setMachinePick(equipmentPick(shot.machineId, shot.machine));
       setTastingNotes(shot.tastingNotes ?? "");
       setTags(shot.tags.join(", "));
       setNotes(shot.notes ?? "");
@@ -171,8 +322,8 @@ export function EspressoShotSheet({
       setWaterTempC("");
       setPressureBar("");
       setTdsPercent("");
-      setGrinder("");
-      setMachine("");
+      setGrinderPick("");
+      setMachinePick("");
       setTastingNotes("");
       setTags("");
       setNotes("");
@@ -212,6 +363,13 @@ export function EspressoShotSheet({
       toast.error(t("Choose a brew date"));
       return;
     }
+    const numeric = [grindSeconds, doseGrams, yieldGrams, extractionSeconds, waterTempC, pressureBar, tdsPercent];
+    if (numeric.some((value) => value.trim() && numberOrNull(value) == null)) {
+      toast.error(t("Use numbers only for grams, seconds and percentages"));
+      return;
+    }
+    const grinder = equipmentPayload(grinderPick);
+    const machine = equipmentPayload(machinePick);
     setSaving(true);
     try {
       const body = {
@@ -226,8 +384,10 @@ export function EspressoShotSheet({
         waterTempC: numberOrNull(waterTempC),
         pressureBar: numberOrNull(pressureBar),
         tdsPercent: numberOrNull(tdsPercent),
-        grinder: grinder.trim() || null,
-        machine: machine.trim() || null,
+        grinderId: grinder.id,
+        machineId: machine.id,
+        grinder: grinder.text,
+        machine: machine.text,
         tastingNotes: tastingNotes.trim() || null,
         tags: tags
           .split(",")
@@ -320,15 +480,17 @@ export function EspressoShotSheet({
 
         <div className="grid grid-cols-3 gap-2">
           <Field label={t("Dose (g)")}>
-            <Input type="number" inputMode="decimal" step="any" min="0" value={doseGrams} onChange={(event) => setDoseGrams(event.target.value)} placeholder="18" />
+            <Input type="text" inputMode="decimal" autoComplete="off" value={doseGrams} onChange={(event) => setDoseGrams(event.target.value)} placeholder="18.5" />
           </Field>
           <Field label={t("Yield (g)")}>
-            <Input type="number" inputMode="decimal" step="any" min="0" value={yieldGrams} onChange={(event) => setYieldGrams(event.target.value)} placeholder="36" />
+            <Input type="text" inputMode="decimal" autoComplete="off" value={yieldGrams} onChange={(event) => setYieldGrams(event.target.value)} placeholder="36.5" />
           </Field>
           <Field label={t("Time (s)")}>
-            <Input type="number" inputMode="decimal" step="any" min="0" value={extractionSeconds} onChange={(event) => setExtractionSeconds(event.target.value)} placeholder="28" />
+            <Input type="text" inputMode="decimal" autoComplete="off" value={extractionSeconds} onChange={(event) => setExtractionSeconds(event.target.value)} placeholder="28.5" />
           </Field>
         </div>
+
+        <p className="text-[10px] text-muted">{t("Decimals are fine, e.g. 18.5 g or 28.4 s.")}</p>
 
         {(liveRatio != null || liveExtractionYield != null) && (
           <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted">
@@ -346,29 +508,41 @@ export function EspressoShotSheet({
             <Input value={grindSetting} onChange={(event) => setGrindSetting(event.target.value)} placeholder="2.4" maxLength={40} />
           </Field>
           <Field label={t("Grind time (s)")}>
-            <Input type="number" inputMode="decimal" step="any" min="0" value={grindSeconds} onChange={(event) => setGrindSeconds(event.target.value)} placeholder="12" />
+            <Input type="text" inputMode="decimal" autoComplete="off" value={grindSeconds} onChange={(event) => setGrindSeconds(event.target.value)} placeholder="12.5" />
           </Field>
         </div>
 
         <div className="grid grid-cols-3 gap-2">
           <Field label={t("Water temp. (°C)")}>
-            <Input type="number" inputMode="decimal" step="any" min="0" value={waterTempC} onChange={(event) => setWaterTempC(event.target.value)} placeholder="93" />
+            <Input type="text" inputMode="decimal" autoComplete="off" value={waterTempC} onChange={(event) => setWaterTempC(event.target.value)} placeholder="93" />
           </Field>
           <Field label={t("Pressure (bar)")}>
-            <Input type="number" inputMode="decimal" step="any" min="0" value={pressureBar} onChange={(event) => setPressureBar(event.target.value)} placeholder="9" />
+            <Input type="text" inputMode="decimal" autoComplete="off" value={pressureBar} onChange={(event) => setPressureBar(event.target.value)} placeholder="9" />
           </Field>
           <Field label={t("TDS (%)")}>
-            <Input type="number" inputMode="decimal" step="any" min="0" value={tdsPercent} onChange={(event) => setTdsPercent(event.target.value)} placeholder="9.2" />
+            <Input type="text" inputMode="decimal" autoComplete="off" value={tdsPercent} onChange={(event) => setTdsPercent(event.target.value)} placeholder="9.2" />
           </Field>
         </div>
 
         <div className="grid grid-cols-2 gap-3">
-          <Field label={t("Grinder")}>
-            <Input value={grinder} onChange={(event) => setGrinder(event.target.value)} placeholder="Eureka Mignon" maxLength={80} />
-          </Field>
-          <Field label={t("Machine")}>
-            <Input value={machine} onChange={(event) => setMachine(event.target.value)} placeholder="Lelit Mara X" maxLength={80} />
-          </Field>
+          <EquipmentSelect
+            kind="grinder"
+            label={t("Grinder")}
+            value={grinderPick}
+            onChange={setGrinderPick}
+            equipment={grinders}
+            onCreated={addEquipment}
+            canCreate={canManage}
+          />
+          <EquipmentSelect
+            kind="machine"
+            label={t("Machine")}
+            value={machinePick}
+            onChange={setMachinePick}
+            equipment={machines}
+            onCreated={addEquipment}
+            canCreate={canManage}
+          />
         </div>
 
         <Field label={t("Tasting notes")}>
@@ -431,6 +605,8 @@ export function EspressoShotRow({
           : null,
     shot.extractionSeconds != null ? t("{value} s", { value: qty(shot.extractionSeconds) }) : null,
     shot.ratio != null ? t("1:{value}", { value: qty(shot.ratio) }) : null,
+    shot.machine ? t("Machine {value}", { value: shot.machine }) : null,
+    shot.grinder ? t("Grinder {value}", { value: shot.grinder }) : null,
     shot.waterTempC != null ? `${qty(shot.waterTempC)}°C` : null,
     shot.tdsPercent != null ? `TDS ${qty(shot.tdsPercent)}%` : null,
     shot.extractionYieldPercent != null
@@ -502,6 +678,200 @@ export function EspressoSummaryStrip({ summary }: { summary: EspressoShotSummary
         </div>
       </div>
     </div>
+  );
+}
+
+/* ------------------------------------------------------ equipment manager */
+
+function EquipmentSection({
+  kind,
+  title,
+  items,
+  onSave,
+  onDelete,
+}: {
+  kind: EspressoEquipmentKind;
+  title: string;
+  items: EspressoEquipment[];
+  onSave: (payload: {
+    id?: string;
+    kind: EspressoEquipmentKind;
+    name: string;
+    brand: string | null;
+  }) => Promise<boolean>;
+  onDelete: (entry: EspressoEquipment) => void;
+}) {
+  const { t } = useI18n();
+  const [editingId, setEditingId] = useState("");
+  const [name, setName] = useState("");
+  const [brand, setBrand] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const reset = () => {
+    setEditingId("");
+    setName("");
+    setBrand("");
+  };
+
+  const submit = async () => {
+    const trimmed = name.trim();
+    if (!trimmed || saving) return;
+    setSaving(true);
+    const ok = await onSave({ id: editingId || undefined, kind, name: trimmed, brand: brand.trim() || null });
+    setSaving(false);
+    if (ok) reset();
+  };
+
+  const startEdit = (entry: EspressoEquipment) => {
+    setEditingId(entry.id);
+    setName(entry.name);
+    setBrand(entry.brand ?? "");
+  };
+
+  return (
+    <section className="space-y-2">
+      <h3 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted">{title}</h3>
+      {items.length === 0 ? (
+        <p className="text-xs text-muted">{t("Nothing saved yet.")}</p>
+      ) : (
+        <div className="divide-y divide-line rounded-xl border border-line">
+          {items.map((entry) => (
+            <div key={entry.id} className="flex items-center gap-1 px-3 py-2">
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[13px] font-medium">
+                  {entry.name}
+                  {entry.brand ? <span className="font-normal text-muted"> · {entry.brand}</span> : null}
+                </div>
+                <div className="text-[10px] text-muted">{t("{count} shots", { count: entry.shotCount ?? 0 })}</div>
+              </div>
+              <IconButton icon="pencil" label={t("Rename")} size={15} onClick={() => startEdit(entry)} />
+              <IconButton
+                icon="trash"
+                label={t("Delete")}
+                size={15}
+                className="text-danger hover:bg-danger-soft"
+                onClick={() => onDelete(entry)}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="space-y-2 rounded-xl border border-line bg-raised/40 p-3">
+        <Input
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          placeholder={t(kind === "machine" ? "e.g. Lelit Mara X" : "e.g. Eureka Mignon")}
+          maxLength={80}
+        />
+        <Input
+          value={brand}
+          onChange={(event) => setBrand(event.target.value)}
+          placeholder={t("Brand (optional)")}
+          maxLength={80}
+        />
+        <div className="flex gap-2">
+          <Button type="button" size="sm" onClick={() => void submit()} loading={saving} disabled={!name.trim()}>
+            {editingId ? t("Save") : t("Add")}
+          </Button>
+          {editingId && (
+            <Button type="button" size="sm" variant="secondary" onClick={reset}>
+              {t("Cancel")}
+            </Button>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/** Manage the saved machines and grinders offered by the shot form. */
+export function EspressoEquipmentSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { t } = useI18n();
+  const { house, can } = useHouse();
+  const toast = useToast();
+  const [equipment, setEquipment] = useState<EspressoEquipment[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      setEquipment(await api<EspressoEquipment[]>(`/api/houses/${house.id}/espresso-equipment`));
+    } catch (error) {
+      toast.error(error instanceof Error ? t(error.message) : t("Could not load the equipment"));
+    } finally {
+      setLoading(false);
+    }
+  }, [house.id, t, toast]);
+
+  useEffect(() => {
+    if (open) void load();
+  }, [open, load]);
+
+  const save = async (payload: {
+    id?: string;
+    kind: EspressoEquipmentKind;
+    name: string;
+    brand: string | null;
+  }): Promise<boolean> => {
+    try {
+      if (payload.id) {
+        await api(`/api/houses/${house.id}/espresso-equipment/${payload.id}`, {
+          method: "PATCH",
+          body: { name: payload.name, brand: payload.brand },
+        });
+      } else {
+        await api(`/api/houses/${house.id}/espresso-equipment`, {
+          method: "POST",
+          body: { kind: payload.kind, name: payload.name, brand: payload.brand },
+        });
+      }
+      toast.success(payload.id ? t("Equipment updated") : t("Equipment added"));
+      await load();
+      return true;
+    } catch (error) {
+      toast.error(error instanceof Error ? t(error.message) : t("Could not save the equipment"));
+      return false;
+    }
+  };
+
+  const remove = async (entry: EspressoEquipment) => {
+    if (!window.confirm(t("Delete “{name}”? Shots that used it keep the name.", { name: entry.name }))) return;
+    try {
+      await api(`/api/houses/${house.id}/espresso-equipment/${entry.id}`, { method: "DELETE" });
+      toast.success(t("Equipment deleted"));
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? t(error.message) : t("Could not delete the equipment"));
+    }
+  };
+
+  const machines = equipment.filter((entry) => entry.kind === "machine");
+  const grinders = equipment.filter((entry) => entry.kind === "grinder");
+
+  return (
+    <Sheet
+      open={open}
+      onClose={onClose}
+      title={t("Machines & grinders")}
+      description={t("Save your setup once, then pick it when logging a shot.")}
+    >
+      <div className="space-y-5 pb-2">
+        {!can("member") ? (
+          <p className="text-xs text-muted">{t("Ask a household member to add machines and grinders.")}</p>
+        ) : (
+          <>
+            <EquipmentSection kind="machine" title={t("Espresso machines")} items={machines} onSave={save} onDelete={remove} />
+            <EquipmentSection kind="grinder" title={t("Grinders")} items={grinders} onSave={save} onDelete={remove} />
+          </>
+        )}
+        {loading && (
+          <div className="flex items-center gap-2 text-xs text-muted">
+            <Spinner size={14} /> {t("Loading…")}
+          </div>
+        )}
+      </div>
+    </Sheet>
   );
 }
 

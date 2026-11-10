@@ -11,6 +11,7 @@ import {
   priceStats,
   serializeAttribute,
   serializeCategory,
+  serializeEspressoEquipment,
   serializeEspressoShot,
   serializeEspressoSummary,
   serializeItem,
@@ -113,6 +114,8 @@ const espressoShotBody = z.object({
   waterTempC: z.number().min(0).max(120).nullish(),
   pressureBar: z.number().min(0).max(20).nullish(),
   tdsPercent: z.number().min(0).max(100).nullish(),
+  grinderId: z.string().trim().max(60).nullish(),
+  machineId: z.string().trim().max(60).nullish(),
   grinder: z.string().trim().max(80).nullish(),
   machine: z.string().trim().max(80).nullish(),
   tastingNotes: z.string().trim().max(500).nullish(),
@@ -202,6 +205,75 @@ async function shotAccess(req: any, minRole: Role = "member") {
 
 function canChangeShot(shot: any, userId: string, role: Role) {
   return shot.user_id === userId || roleAtLeast(role, "admin");
+}
+
+/* ------------------------------------------------------- espresso equipment */
+
+const espressoEquipmentBody = z.object({
+  kind: z.enum(["machine", "grinder"]),
+  name: z.string().trim().min(1).max(80),
+  brand: z.string().trim().max(80).nullish(),
+  notes: z.string().trim().max(500).nullish(),
+});
+
+async function espressoEquipmentRow(houseId: string, equipmentId: string) {
+  const row = await get<any>("SELECT * FROM espresso_equipment WHERE id = ? AND house_id = ?", [
+    equipmentId,
+    houseId,
+  ]);
+  if (!row) throw new ApiError(404, "Equipment not found");
+  return row;
+}
+
+async function espressoEquipmentNameTaken(
+  houseId: string,
+  kind: "machine" | "grinder",
+  name: string,
+  exceptId = "",
+) {
+  const row = await get<any>(
+    "SELECT id FROM espresso_equipment WHERE house_id = ? AND kind = ? AND lower(name) = lower(?) AND id <> ?",
+    [houseId, kind, name.trim(), exceptId],
+  );
+  return Boolean(row);
+}
+
+/** Reject an equipment id that is missing, belongs to another house, or is the wrong kind. */
+async function shotEquipment(houseId: string, equipmentId: string | null | undefined, kind: "machine" | "grinder") {
+  if (!equipmentId) return null;
+  const row = await get<any>("SELECT * FROM espresso_equipment WHERE id = ? AND house_id = ? AND kind = ?", [
+    equipmentId,
+    houseId,
+    kind,
+  ]);
+  if (!row) {
+    throw new ApiError(
+      400,
+      kind === "machine" ? "That machine is not in this house" : "That grinder is not in this house",
+    );
+  }
+  return row;
+}
+
+/**
+ * Resolve the equipment id and its text snapshot for a shot write. Picking
+ * saved equipment replaces the free text with its current name, an explicit
+ * null clears both, and an omitted pick keeps what the shot already had.
+ */
+async function resolveShotEquipment(
+  houseId: string,
+  kind: "machine" | "grinder",
+  idValue: string | null | undefined,
+  textValue: string | null | undefined,
+  current: { id: string | null; text: string | null },
+): Promise<{ id: string | null; text: string | null }> {
+  if (idValue !== undefined) {
+    if (!idValue) return { id: null, text: null };
+    const equipment = await shotEquipment(houseId, idValue, kind);
+    return { id: equipment!.id, text: equipment!.name };
+  }
+  if (textValue !== undefined) return { id: null, text: textValue };
+  return current;
 }
 
 async function itemDetail(itemId: string, userId: string) {
@@ -751,6 +823,90 @@ inventoryRoutes.get(
   }),
 );
 
+inventoryRoutes.get(
+  "/:houseId/espresso-equipment",
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req);
+    const rows = await all<any>(
+      `SELECT e.*,
+         (SELECT COUNT(*) FROM espresso_shots s
+            WHERE s.house_id = e.house_id AND (s.grinder_id = e.id OR s.machine_id = e.id)) AS shot_count
+       FROM espresso_equipment e WHERE e.house_id = ?
+       ORDER BY e.kind, lower(e.name)`,
+      [houseId],
+    );
+    res.json(rows.map(serializeEspressoEquipment));
+  }),
+);
+
+inventoryRoutes.post(
+  "/:houseId/espresso-equipment",
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req, "member");
+    const body = parseBody(espressoEquipmentBody, req.body);
+    if (await espressoEquipmentNameTaken(houseId, body.kind, body.name)) {
+      throw new ApiError(
+        409,
+        body.kind === "machine" ? "That machine already exists" : "That grinder already exists",
+      );
+    }
+    const id = newId("eqp");
+    const stamp = now();
+    await run(
+      `INSERT INTO espresso_equipment (id, house_id, kind, name, brand, notes, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, houseId, body.kind, body.name, body.brand ?? null, body.notes ?? null, stamp, stamp],
+    );
+    res
+      .status(201)
+      .json(serializeEspressoEquipment(await get<any>("SELECT * FROM espresso_equipment WHERE id = ?", [id])));
+  }),
+);
+
+inventoryRoutes.patch(
+  "/:houseId/espresso-equipment/:equipmentId",
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req, "member");
+    const current = await espressoEquipmentRow(houseId, String(req.params.equipmentId));
+    const body = parseBody(espressoEquipmentBody.partial().omit({ kind: true }), req.body);
+    if (body.name && (await espressoEquipmentNameTaken(houseId, current.kind, body.name, current.id))) {
+      throw new ApiError(
+        409,
+        current.kind === "machine" ? "That machine already exists" : "That grinder already exists",
+      );
+    }
+    const name = body.name ?? current.name;
+    await run("UPDATE espresso_equipment SET name = ?, brand = ?, notes = ?, updated_at = ? WHERE id = ?", [
+      name,
+      body.brand === undefined ? current.brand : body.brand,
+      body.notes === undefined ? current.notes : body.notes,
+      now(),
+      current.id,
+    ]);
+    // Keep the name snapshot on existing shots in sync when equipment is renamed.
+    if (name !== current.name) {
+      const column = current.kind === "grinder" ? "grinder" : "machine";
+      await run(`UPDATE espresso_shots SET ${column} = ? WHERE ${column}_id = ? AND house_id = ?`, [
+        name,
+        current.id,
+        houseId,
+      ]);
+    }
+    res.json(serializeEspressoEquipment(await get<any>("SELECT * FROM espresso_equipment WHERE id = ?", [current.id])));
+  }),
+);
+
+inventoryRoutes.delete(
+  "/:houseId/espresso-equipment/:equipmentId",
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req, "member");
+    const current = await espressoEquipmentRow(houseId, String(req.params.equipmentId));
+    // Shots keep their text snapshot; the foreign key clears the pick.
+    await run("DELETE FROM espresso_equipment WHERE id = ? AND house_id = ?", [current.id, houseId]);
+    res.json({ ok: true });
+  }),
+);
+
 /* ------------------------------------------------------------ single items */
 
 export const itemRoutes = Router();
@@ -1026,13 +1182,17 @@ itemRoutes.post(
       throw new ApiError(400, "Turn on espresso logging for this item first");
     }
     const body = parseBody(espressoShotBody, req.body);
+    const [grinder, machine] = await Promise.all([
+      resolveShotEquipment(item.house_id, "grinder", body.grinderId, body.grinder, { id: null, text: null }),
+      resolveShotEquipment(item.house_id, "machine", body.machineId, body.machine, { id: null, text: null }),
+    ]);
     const id = newId("esp");
     const stamp = now();
     await run(
       `INSERT INTO espresso_shots (id, house_id, item_id, user_id, brewed_at, rating, roast_level, grind_setting,
          grind_seconds, dose_grams, yield_grams, extraction_seconds, water_temp_c, pressure_bar, tds_percent,
-         grinder, machine, tasting_notes, tags, notes, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         grinder_id, machine_id, grinder, machine, tasting_notes, tags, notes, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         item.house_id,
@@ -1049,8 +1209,10 @@ itemRoutes.post(
         body.waterTempC ?? null,
         body.pressureBar ?? null,
         body.tdsPercent ?? null,
-        body.grinder ?? null,
-        body.machine ?? null,
+        grinder.id,
+        machine.id,
+        grinder.text,
+        machine.text,
         body.tastingNotes ?? null,
         JSON.stringify(parseEspressoTags(body.tags)),
         body.notes ?? null,
@@ -1078,10 +1240,21 @@ itemRoutes.patch(
       throw new ApiError(403, "You can only edit your own shots");
     }
     const body = parseBody(espressoShotBody.partial(), req.body);
+    const [grinder, machine] = await Promise.all([
+      resolveShotEquipment(shot.house_id, "grinder", body.grinderId, body.grinder, {
+        id: shot.grinder_id ?? null,
+        text: shot.grinder ?? null,
+      }),
+      resolveShotEquipment(shot.house_id, "machine", body.machineId, body.machine, {
+        id: shot.machine_id ?? null,
+        text: shot.machine ?? null,
+      }),
+    ]);
     await run(
       `UPDATE espresso_shots SET brewed_at = ?, rating = ?, roast_level = ?, grind_setting = ?, grind_seconds = ?,
          dose_grams = ?, yield_grams = ?, extraction_seconds = ?, water_temp_c = ?, pressure_bar = ?, tds_percent = ?,
-         grinder = ?, machine = ?, tasting_notes = ?, tags = ?, notes = ?, updated_at = ? WHERE id = ? AND item_id = ? AND house_id = ?`,
+         grinder_id = ?, machine_id = ?, grinder = ?, machine = ?, tasting_notes = ?, tags = ?, notes = ?, updated_at = ?
+         WHERE id = ? AND item_id = ? AND house_id = ?`,
       [
         body.brewedAt === undefined ? shot.brewed_at : espressoBrewedAt(body.brewedAt),
         body.rating === undefined ? shot.rating : body.rating,
@@ -1094,8 +1267,10 @@ itemRoutes.patch(
         body.waterTempC === undefined ? shot.water_temp_c : body.waterTempC,
         body.pressureBar === undefined ? shot.pressure_bar : body.pressureBar,
         body.tdsPercent === undefined ? shot.tds_percent : body.tdsPercent,
-        body.grinder === undefined ? shot.grinder : body.grinder,
-        body.machine === undefined ? shot.machine : body.machine,
+        grinder.id,
+        machine.id,
+        grinder.text,
+        machine.text,
         body.tastingNotes === undefined ? shot.tasting_notes : body.tastingNotes,
         JSON.stringify(body.tags === undefined ? parseJson(shot.tags, []) : parseEspressoTags(body.tags)),
         body.notes === undefined ? shot.notes : body.notes,

@@ -20,6 +20,7 @@ import type {
   OffProduct,
   EspressoShot,
   EspressoShotSummary,
+  EspressoEquipment,
 } from "../shared/types.js";
 
 export const ITEM_SELECT = `
@@ -224,11 +225,27 @@ export function serializeEspressoShot(row: any): EspressoShot {
       dose != null && dose > 0 && yieldGrams != null && tds != null
         ? round((yieldGrams * tds) / dose, 1)
         : null,
+    grinderId: row.grinder_id ?? null,
+    machineId: row.machine_id ?? null,
     grinder: row.grinder ?? null,
     machine: row.machine ?? null,
     tastingNotes: row.tasting_notes ?? null,
     tags: parseJson<string[]>(row.tags, []),
     notes: row.notes ?? null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function serializeEspressoEquipment(row: any): EspressoEquipment {
+  return {
+    id: row.id,
+    houseId: row.house_id,
+    kind: row.kind,
+    name: row.name,
+    brand: row.brand ?? null,
+    notes: row.notes ?? null,
+    shotCount: row.shot_count == null ? undefined : Number(row.shot_count),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

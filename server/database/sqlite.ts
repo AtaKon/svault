@@ -142,7 +142,11 @@ export class SqliteDriver implements DatabaseDriver {
     ensureColumn("receipt_lines", "off_project", "TEXT NOT NULL DEFAULT 'off'");
     ensureColumn("catalog_mappings", "off_project", "TEXT NOT NULL DEFAULT 'off'");
     ensureColumn("items", "espresso", "INTEGER NOT NULL DEFAULT 0");
+    ensureColumn("espresso_shots", "grinder_id", "TEXT REFERENCES espresso_equipment(id) ON DELETE SET NULL");
+    ensureColumn("espresso_shots", "machine_id", "TEXT REFERENCES espresso_equipment(id) ON DELETE SET NULL");
     conn.exec("CREATE INDEX IF NOT EXISTS items_off ON items(off_code)");
+    conn.exec("CREATE INDEX IF NOT EXISTS espresso_shots_grinder ON espresso_shots(grinder_id)");
+    conn.exec("CREATE INDEX IF NOT EXISTS espresso_shots_machine ON espresso_shots(machine_id)");
 
     /* catalog_products gained a project dimension. SQLite cannot change a
        primary key in place, so rebuild the cache table once. Rows created
@@ -572,8 +576,23 @@ CREATE TABLE IF NOT EXISTS item_barcodes (
 );
 CREATE INDEX IF NOT EXISTS barcodes_item ON item_barcodes(item_id);
 
+/* Saved machines and grinders, picked from a dropdown when logging a shot. */
+CREATE TABLE IF NOT EXISTS espresso_equipment (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  name TEXT NOT NULL,
+  brand TEXT,
+  notes TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS espresso_equipment_house ON espresso_equipment(house_id, kind, name);
+
 /* Tasting and dial-in log for espresso coffee items. A shot's beans are an
-   inventory item, so deleting the coffee removes its history too. */
+   inventory item, so deleting the coffee removes its history too. The grinder
+   and machine columns keep a name snapshot, so deleting saved equipment does
+   not erase what the shot was pulled with. */
 CREATE TABLE IF NOT EXISTS espresso_shots (
   id TEXT PRIMARY KEY,
   house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
@@ -590,6 +609,8 @@ CREATE TABLE IF NOT EXISTS espresso_shots (
   water_temp_c REAL,
   pressure_bar REAL,
   tds_percent REAL,
+  grinder_id TEXT REFERENCES espresso_equipment(id) ON DELETE SET NULL,
+  machine_id TEXT REFERENCES espresso_equipment(id) ON DELETE SET NULL,
   grinder TEXT,
   machine TEXT,
   tasting_notes TEXT,
@@ -601,6 +622,8 @@ CREATE TABLE IF NOT EXISTS espresso_shots (
 CREATE INDEX IF NOT EXISTS espresso_shots_house ON espresso_shots(house_id, brewed_at);
 CREATE INDEX IF NOT EXISTS espresso_shots_item ON espresso_shots(item_id, brewed_at);
 CREATE INDEX IF NOT EXISTS espresso_shots_user ON espresso_shots(user_id, brewed_at);
+CREATE INDEX IF NOT EXISTS espresso_shots_grinder ON espresso_shots(grinder_id);
+CREATE INDEX IF NOT EXISTS espresso_shots_machine ON espresso_shots(machine_id);
 
 CREATE TABLE IF NOT EXISTS stock_lots (
   id TEXT PRIMARY KEY,
