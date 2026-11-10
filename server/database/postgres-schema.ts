@@ -222,6 +222,19 @@ CREATE TABLE IF NOT EXISTS item_barcodes (
 );
 CREATE INDEX IF NOT EXISTS barcodes_item ON item_barcodes(item_id);
 
+CREATE TABLE IF NOT EXISTS espresso_equipment (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  name TEXT NOT NULL,
+  brand TEXT,
+  notes TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS espresso_equipment_house ON espresso_equipment(house_id, kind, name);
+CREATE UNIQUE INDEX IF NOT EXISTS espresso_equipment_name ON espresso_equipment(house_id, kind, lower(name));
+
 CREATE TABLE IF NOT EXISTS espresso_shots (
   id TEXT PRIMARY KEY,
   house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
@@ -238,6 +251,8 @@ CREATE TABLE IF NOT EXISTS espresso_shots (
   water_temp_c DOUBLE PRECISION,
   pressure_bar DOUBLE PRECISION,
   tds_percent DOUBLE PRECISION,
+  grinder_id TEXT REFERENCES espresso_equipment(id) ON DELETE SET NULL,
+  machine_id TEXT REFERENCES espresso_equipment(id) ON DELETE SET NULL,
   grinder TEXT,
   machine TEXT,
   tasting_notes TEXT,
@@ -249,6 +264,8 @@ CREATE TABLE IF NOT EXISTS espresso_shots (
 CREATE INDEX IF NOT EXISTS espresso_shots_house ON espresso_shots(house_id, brewed_at);
 CREATE INDEX IF NOT EXISTS espresso_shots_item ON espresso_shots(item_id, brewed_at);
 CREATE INDEX IF NOT EXISTS espresso_shots_user ON espresso_shots(user_id, brewed_at);
+CREATE INDEX IF NOT EXISTS espresso_shots_grinder ON espresso_shots(grinder_id);
+CREATE INDEX IF NOT EXISTS espresso_shots_machine ON espresso_shots(machine_id);
 
 CREATE TABLE IF NOT EXISTS receipts (
   id TEXT PRIMARY KEY,
@@ -777,6 +794,10 @@ export const POSTGRES_MIGRATIONS: string[] = [
   "ALTER TABLE receipt_lines ADD COLUMN IF NOT EXISTS off_project TEXT NOT NULL DEFAULT 'off'",
   "ALTER TABLE catalog_mappings ADD COLUMN IF NOT EXISTS off_project TEXT NOT NULL DEFAULT 'off'",
   "ALTER TABLE items ADD COLUMN IF NOT EXISTS espresso INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE espresso_shots ADD COLUMN IF NOT EXISTS grinder_id TEXT REFERENCES espresso_equipment(id) ON DELETE SET NULL",
+  "ALTER TABLE espresso_shots ADD COLUMN IF NOT EXISTS machine_id TEXT REFERENCES espresso_equipment(id) ON DELETE SET NULL",
+  "CREATE INDEX IF NOT EXISTS espresso_shots_grinder ON espresso_shots(grinder_id)",
+  "CREATE INDEX IF NOT EXISTS espresso_shots_machine ON espresso_shots(machine_id)",
   // POSTGRES_SCHEMA creates bills on fresh installs; this atomically upgrades
   // an existing bills table created before ledger_confirmed was introduced.
   `DO $$
@@ -854,6 +875,7 @@ export const POSTGRES_TABLE_ORDER = [
   "vendors",
   "items",
   "item_barcodes",
+  "espresso_equipment",
   "espresso_shots",
   "receipts",
   "bills",

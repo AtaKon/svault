@@ -323,8 +323,12 @@ editor (or enable **Track espresso shots** when creating it), and save. The item
 - Press **Log shot** and give the espresso a 1-5 star rating. Everything else is optional, so a quick
   rating is enough.
 - Record the roast level, grind setting, grind time, grinder, machine, dose, yield, extraction time,
-  water temperature, pressure and TDS. SVault calculates the brew ratio (for example `1:2`) and the
+  water temperature, pressure and TDS. Grams and seconds take decimals, so `18.5` g or `28.4` s (and a
+  decimal comma like `18,5`) are fine. SVault calculates the brew ratio (for example `1:2`) and the
   extraction yield from dose, yield and TDS as you type.
+- Save your machines and grinders once with **Machines & grinders** on the **Espresso log** screen, then
+  pick them from the dropdowns when logging a shot. You can also add one from the shot form with **New**.
+  Renaming or deleting saved equipment does not change the name recorded on past shots.
 - Add tasting notes, flavour tags and free notes. Each shot keeps who brewed it and when.
 - The card shows the average rating, average ratio and average extraction time. Open **Espresso log**
   under **More** (or the sidebar) to compare every coffee, filter by bean and see the best shots.
