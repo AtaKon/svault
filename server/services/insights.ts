@@ -479,12 +479,14 @@ export async function householdInsight(
     const from = transfer.from_user_id;
     const to = transfer.to_user_id;
     const amount = money(transfer.amount);
-    // Preserve the active member's real cash flow when the counterparty leaves.
-    // The active-member ledger can then be non-zero-sum because the former
-    // member is no longer represented; transfers are historical records, not
-    // obligations that disappear when either participant leaves.
-    if (memberIds.has(from)) transferBalance.set(from, (transferBalance.get(from) ?? 0) + amount);
-    if (memberIds.has(to)) transferBalance.set(to, (transferBalance.get(to) ?? 0) - amount);
+    // A transfer only offsets the live household ledger while both parties
+    // are represented. Receipt shares are recalculated when someone leaves;
+    // retaining only one side of the old transfer could invert the remaining
+    // members' suggested obligations. The historical transfer row is kept.
+    if (memberIds.has(from) && memberIds.has(to)) {
+      transferBalance.set(from, (transferBalance.get(from) ?? 0) + amount);
+      transferBalance.set(to, (transferBalance.get(to) ?? 0) - amount);
+    }
   }
 
   const balances: HouseholdBalance[] = members.map((member) => {

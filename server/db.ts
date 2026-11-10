@@ -61,6 +61,11 @@ export function tx<T>(fn: (session: DatabaseSession) => Promise<T>, options?: Da
   return active().tx(fn, options);
 }
 
+/** Serialize ledger-changing work for a house with household settlements. */
+export async function lockHouseholdLedger(session: DatabaseSession, houseId: string): Promise<void> {
+  await session.run("UPDATE houses SET id = id WHERE id = ?", [houseId]);
+}
+
 export function tables(): Promise<string[]> {
   return active().tables();
 }

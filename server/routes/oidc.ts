@@ -11,7 +11,7 @@ import {
   type Configuration,
 } from "openid-client";
 import { randomBytes } from "node:crypto";
-import { get, newId, now, run } from "../db.js";
+import { get, lockHouseholdLedger, newId, now, run, tx } from "../db.js";
 import { createSession, hashPassword, sessionCookie } from "../auth.js";
 import { ApiError, handler } from "../http.js";
 import { OIDC } from "../config.js";
@@ -106,11 +106,14 @@ async function findOrCreateIdentity(claims: Record<string, any>) {
       ],
     );
     if (OIDC.defaultHouseId && await get("SELECT id FROM houses WHERE id = ?", [OIDC.defaultHouseId])) {
-      await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, 'member', ?)", [
-        OIDC.defaultHouseId,
-        userId,
-        now(),
-      ]);
+      await tx(async (session) => {
+        await lockHouseholdLedger(session, OIDC.defaultHouseId!);
+        await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, 'member', ?)", [
+          OIDC.defaultHouseId!,
+          userId,
+          now(),
+        ]);
+      });
     } else {
       await createHouse({ userId, name: `${String(claims.name ?? email.split("@")[0]).split(" ")[0]}'s Home` });
     }

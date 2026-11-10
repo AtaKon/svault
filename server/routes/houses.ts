@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
-import { all, get, newId, now, parseJson, run, tx } from "../db.js";
+import { all, get, lockHouseholdLedger, newId, now, parseJson, run, tx } from "../db.js";
 import { houseMembers, memberRole, requireAuth, roleAtLeast, verifyPassword } from "../auth.js";
 import { ApiError, handler, parseBody, requireHouse } from "../http.js";
 import { serializeHouse } from "../serialize.js";
@@ -349,7 +349,10 @@ houseRoutes.delete(
     if (!targetRole) throw new ApiError(404, "That person is not a member");
     if (targetRole === "owner") throw new ApiError(400, "The owner cannot be removed");
     if (role === "admin" && targetRole === "admin") throw new ApiError(403, "Only the owner can remove an admin");
-    await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [houseId, targetId]);
+    await tx(async (session) => {
+      await lockHouseholdLedger(session, houseId);
+      await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [houseId, targetId]);
+    });
     res.json({ ok: true });
   }),
 );
@@ -398,7 +401,10 @@ houseRoutes.post(
       const owners = await all<any>("SELECT user_id FROM house_members WHERE house_id = ? AND role = 'owner'", [houseId]);
       if (owners.length <= 1) throw new ApiError(400, "Transfer this house to someone else before leaving");
     }
-    await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [houseId, req.user!.id]);
+    await tx(async (session) => {
+      await lockHouseholdLedger(session, houseId);
+      await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [houseId, req.user!.id]);
+    });
     res.json({ ok: true });
   }),
 );

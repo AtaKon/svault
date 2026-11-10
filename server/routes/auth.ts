@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
-import { get, newId, now, run, tx } from "../db.js";
+import { get, lockHouseholdLedger, newId, now, run, tx } from "../db.js";
 import {
   createSession,
   hashPassword,
@@ -134,7 +134,7 @@ authRoutes.post(
       throw new ApiError(403, "This invite was sent to a different email address");
     }
 
-    await tx(async () => {
+    await tx(async (session) => {
       await run("INSERT INTO users (id, email, username, name, password_hash, is_admin, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", [
         userId,
         body.email,
@@ -145,6 +145,7 @@ authRoutes.post(
         now(),
       ]);
       if (invite) {
+        await lockHouseholdLedger(session, invite.house_id);
         await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING", [
           invite.house_id,
           userId,
@@ -346,16 +347,22 @@ authRoutes.post(
     if (invite.email && invite.email.toLowerCase() !== req.user!.email.toLowerCase()) {
       throw new ApiError(403, "This invite was sent to a different email address");
     }
-    if (!await memberRole(req.user!.id, invite.house_id)) {
-      await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
-        invite.house_id,
-        req.user!.id,
-        invite.role as Role,
-        now(),
-      ]);
+    const shouldNotify = !await memberRole(req.user!.id, invite.house_id);
+    if (shouldNotify) {
+      await tx(async (session) => {
+        await lockHouseholdLedger(session, invite.house_id);
+        await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
+          invite.house_id,
+          req.user!.id,
+          invite.role as Role,
+          now(),
+        ]);
+        await run("UPDATE house_invites SET accepted_at = ?, accepted_by = ? WHERE id = ?", [now(), req.user!.id, invite.id]);
+      });
       await notifyHouseAdded(req.user!.id, invite.house_id, invite.role as Role, invite.created_by);
+    } else {
+      await run("UPDATE house_invites SET accepted_at = ?, accepted_by = ? WHERE id = ?", [now(), req.user!.id, invite.id]);
     }
-    await run("UPDATE house_invites SET accepted_at = ?, accepted_by = ? WHERE id = ?", [now(), req.user!.id, invite.id]);
     res.json(await userPayload(req.user!.id));
   }),
 );

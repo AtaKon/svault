@@ -3,7 +3,7 @@ import { z } from "zod";
 import { requireAuth } from "../auth.js";
 import { ApiError, handler, parseBody, requireHouse } from "../http.js";
 import { limitRequests, limiters, userOrIp } from "../rate-limit.js";
-import { all, databaseKind, get, newId, now, parseJson, tx } from "../db.js";
+import { all, get, lockHouseholdLedger, newId, now, parseJson, tx } from "../db.js";
 import { lookupPosoKaneiBarcode, PosoKaneiUnavailableError } from "../services/posokanei.js";
 import { shoppingRow } from "../services/shopping.js";
 import {
@@ -80,7 +80,10 @@ const settingsBody = z.object({
 const settlementBody = z.object({
   fromUserId: z.string().min(1).max(60),
   toUserId: z.string().min(1).max(60),
-  amount: z.number().finite().positive().max(1e9),
+  amount: z.number().finite().positive().max(1e9).refine(
+    (value) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-7,
+    "Enter an amount in whole cents",
+  ),
 });
 
 const settlementTails = new Map<string, Promise<void>>();
@@ -113,7 +116,7 @@ insightRoutes.post(
   handler(async (req, res) => {
     const { houseId } = await requireHouse(req, "member");
     const body = parseBody(settlementBody, req.body);
-    const amount = Math.round(body.amount * 100) / 100;
+    const amount = body.amount;
     if (amount <= 0) throw new ApiError(400, "Enter a payment of at least 0.01");
     if (body.fromUserId === body.toUserId) throw new ApiError(400, "Choose two different household members");
     const memberIds = new Set((await all<{ user_id: string }>(
@@ -124,14 +127,9 @@ insightRoutes.post(
       throw new ApiError(400, "Both people must be members of this house");
     }
     await withSettlementLock(houseId, () => tx(async (session) => {
-      // SQLite starts this transaction with BEGIN IMMEDIATE, so another
-      // process cannot read and settle the same balance before this insert.
-      // PostgreSQL's row lock serializes competing settlement writers. Other
-      // ledger changes can commit before or after this transaction and appear
-      // in the next household read.
-      if (databaseKind() === "postgres") {
-        await session.run("UPDATE houses SET id = id WHERE id = ?", [houseId]);
-      }
+      // Lock the house before reading. Receipt, bill, membership, and other
+      // settlement writes use the same lock before changing the household ledger.
+      await lockHouseholdLedger(session, houseId);
       const current = await householdInsight(houseId, session);
       const suggested = current.settlements.find(
         (entry) => entry.fromUserId === body.fromUserId && entry.toUserId === body.toUserId,

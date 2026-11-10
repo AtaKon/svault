@@ -104,7 +104,7 @@ await new Promise<void>((resolve) => {
 });
 
 const { app, apiErrorHandler } = await import("../index.js");
-const { all, closeDb, databaseKind, get, initDb, run, tx } = await import("../db.js");
+const { all, closeDb, databaseKind, get, initDb, lockHouseholdLedger, run, tx } = await import("../db.js");
 const { discardUploads } = await import("../upload.js");
 const { heuristicRecipe, parseIngredientLine, localIdeas } = await import("../services/recipe-local.js");
 const { heuristicReceipt } = await import("../services/receipt-local.js");
@@ -7932,6 +7932,27 @@ describe("insights, household split and admin console", () => {
       await assert.rejects(() => tx(async () => {
         await tx(async () => {}, { writeLock: true });
       }), /must be started at the outermost level/);
+    } else {
+      let releaseWrite!: () => void;
+      let writeLockAcquired!: () => void;
+      const waitToRelease = new Promise<void>((resolve) => { releaseWrite = resolve; });
+      const writeLockReady = new Promise<void>((resolve) => { writeLockAcquired = resolve; });
+      const writer = tx(async (session) => {
+        await lockHouseholdLedger(session, house.data.id);
+        await session.run("UPDATE houses SET name = ? WHERE id = ?", ["Locked settlement house", house.data.id]);
+        writeLockAcquired();
+        await waitToRelease;
+      });
+      await writeLockReady;
+      const reader = tx(async (session) => {
+        await lockHouseholdLedger(session, house.data.id);
+        return session.get<{ name: string }>("SELECT name FROM houses WHERE id = ?", [house.data.id]);
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      releaseWrite();
+      await writer;
+      assert.equal((await reader)?.name, "Locked settlement house");
+      await run("UPDATE houses SET name = ? WHERE id = ?", ["Settlement payments", house.data.id]);
     }
     const owner = await request("/api/auth/me");
     const ownerId = owner.data.user.id;
@@ -7978,6 +7999,7 @@ describe("insights, household split and admin console", () => {
       { fromUserId: "usr_not_a_member", toUserId: ownerId, amount: 0.1 },
       { fromUserId: memberId, toUserId: "usr_not_a_member", amount: 0.1 },
       { fromUserId: memberId, toUserId: ownerId, amount: 0.004 },
+      { fromUserId: memberId, toUserId: ownerId, amount: 0.005 },
       { fromUserId: memberId, toUserId: ownerId, amount: 0.51 },
     ];
     for (const body of invalidCases) {
@@ -7985,15 +8007,15 @@ describe("insights, household split and admin console", () => {
       assert.equal(rejected.status, 400, JSON.stringify({ body, response: rejected.data }));
     }
 
-    const roundedPartial = await request(path, {
+    const partialPayment = await request(path, {
       method: "POST",
-      body: { fromUserId: memberId, toUserId: ownerId, amount: 0.005 },
+      body: { fromUserId: memberId, toUserId: ownerId, amount: 0.01 },
     });
-    assert.equal(roundedPartial.status, 201, JSON.stringify(roundedPartial.data));
-    assert.equal(roundedPartial.data.balances.find((entry: any) => entry.userId === memberId).settled, 0.01);
-    assert.equal(roundedPartial.data.balances.find((entry: any) => entry.userId === memberId).balance, -0.49);
-    assert.equal(roundedPartial.data.balances.find((entry: any) => entry.userId === ownerId).balance, 0.49);
-    assert.equal(roundedPartial.data.settlements[0].amount, 0.49);
+    assert.equal(partialPayment.status, 201, JSON.stringify(partialPayment.data));
+    assert.equal(partialPayment.data.balances.find((entry: any) => entry.userId === memberId).settled, 0.01);
+    assert.equal(partialPayment.data.balances.find((entry: any) => entry.userId === memberId).balance, -0.49);
+    assert.equal(partialPayment.data.balances.find((entry: any) => entry.userId === ownerId).balance, 0.49);
+    assert.equal(partialPayment.data.settlements[0].amount, 0.49);
 
     const fullPayment = await request(path, {
       method: "POST",
@@ -8085,7 +8107,9 @@ describe("insights, household split and admin console", () => {
 
     await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [house.data.id, memberId]);
     ledger = await request(ledgerPath);
-    assert.equal(ledger.data.balances.find((entry: any) => entry.userId === ownerId).settled, -1.0);
+    assert.equal(ledger.data.balances.find((entry: any) => entry.userId === ownerId).settled, 0);
+    assert.equal(ledger.data.balances.find((entry: any) => entry.userId === ownerId).balance, 0);
+    assert.deepEqual(ledger.data.settlements, []);
   });
 
   it("reads an e-receipt without writing anything", async () => {
