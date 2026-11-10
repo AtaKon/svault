@@ -6786,6 +6786,28 @@ describe("dataset import", () => {
     assert.deepEqual(readdirSync(dir).filter((name) => !before.has(name)), []);
   });
 
+  it("removes temporary archive uploads after a successful preview", async () => {
+    const { archiveUploadDir } = await import("../upload.js");
+    const { readdirSync } = await import("node:fs");
+    const dir = archiveUploadDir();
+    const before = new Set(readdirSync(dir));
+    const zip = new JSZip();
+    zip.file("classes.txt", "apple\n");
+    zip.file("train/images/a.png", png());
+    zip.file("train/labels/a.txt", "0 0.5 0.5 0.2 0.2\n");
+    const archiveBuffer = await zip.generateAsync({ type: "nodebuffer" });
+    const archiveBytes = new Uint8Array(new ArrayBuffer(archiveBuffer.length));
+    archiveBytes.set(archiveBuffer);
+    const form = new FormData();
+    form.append("dataset", new Blob([archiveBytes.buffer], { type: "application/zip" }), "valid.zip");
+    const response = await fetch(`${base}/api/houses/${houseId}/photos/dataset/preview`, {
+      method: "POST", headers: { cookie }, body: form,
+    });
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).total, 1);
+    assert.deepEqual(readdirSync(dir).filter((name) => !before.has(name)), []);
+  });
+
   it("parses YOLO labels, classes and splits", async () => {
     const zip = new JSZip();
     zip.file("classes.txt", "apple\npear\n");

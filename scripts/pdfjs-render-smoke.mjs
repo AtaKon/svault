@@ -11,9 +11,11 @@ globalThis.Path2D ??= Path2D;
 const objects = [
   "<< /Type /Catalog /Pages 2 0 R >>",
   "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-  "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
-  "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-  "<< /Length 39 >>\nstream\nBT /F1 20 Tf 20 50 Td (PDF smoke) Tj ET\nendstream",
+  "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << >> /Contents 4 0 R >>",
+  (() => {
+    const content = "0 0 0 rg 20 20 80 50 re f\n";
+    return `<< /Length ${Buffer.byteLength(content)} >>\nstream\n${content}endstream`;
+  })(),
 ];
 let source = "%PDF-1.4\n";
 const offsets = [0];
@@ -34,7 +36,12 @@ try {
   const viewport = page.getViewport({ scale: 1 });
   const canvas = createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
   await page.render({ canvas, viewport }).promise;
-  assert.ok(canvas.toBuffer("image/png").byteLength > 200, "rendered output should contain the PDF page");
+  const pixels = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height).data;
+  let darkPixels = 0;
+  for (let index = 0; index < pixels.length; index += 4) {
+    if (pixels[index] < 32 && pixels[index + 1] < 32 && pixels[index + 2] < 32 && pixels[index + 3] > 200) darkPixels++;
+  }
+  assert.ok(darkPixels > 100, "rendered output should contain the PDF's black rectangle");
   console.log("PDF.js v6 rendered a one-page PDF successfully.");
 } finally {
   await task.destroy();

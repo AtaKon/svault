@@ -129,6 +129,7 @@ export function billPhotoName(name: string): string {
 export function billPhotoSize(width: number, height: number, maxEdge: number): { width: number; height: number } {
   const safeWidth = Number.isFinite(width) && width > 0 ? width : 1;
   const safeHeight = Number.isFinite(height) && height > 0 ? height : 1;
+  // An invalid edge must still produce a non-zero canvas, so clamp it to 1px.
   const safeEdge = Number.isFinite(maxEdge) && maxEdge > 0 ? maxEdge : 1;
   const scale = Math.min(1, safeEdge / Math.max(safeWidth, safeHeight));
   return {

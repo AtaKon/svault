@@ -168,15 +168,20 @@ export function archiveUploadDir(): string {
  * file is removed automatically once the response has been sent.
  */
 export function archiveUploader(field: string, maxBytes: number, access: UploadAccess): RequestHandler[] {
+  // Capture one resolved path for both Multer and the response cleanup hook so
+  // the cleanup boundary cannot drift from the directory receiving the file.
+  const dest = archiveUploadDir();
   const upload = multer({
     storage: multer.diskStorage({
-      destination: (_req, _file, cb) => cb(null, archiveUploadDir()),
+      destination: (_req, _file, cb) => cb(null, dest),
       filename: (_req, _file, cb) => cb(null, `${Date.now()}-${randomBytes(8).toString("hex")}.zip`),
     }),
     limits: { fileSize: maxBytes, files: 1 },
   });
   const cleanup: RequestHandler = (req, res, next) => {
-    res.on("close", () => discardFilesUnder(req, archiveUploadDir()));
+    // This callback runs after the route finishes, when Multer has populated
+    // req.file and the route has finished reading the archive.
+    res.on("close", () => discardFilesUnder(req, dest));
     next();
   };
   return [accessGuard(access), cleanup, upload.single(field)];
