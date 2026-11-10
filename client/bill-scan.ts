@@ -1,5 +1,5 @@
 import { parseBillText } from "@shared/bill-parser";
-import { isBillPdf, pdfItemsToText } from "@shared/bill-document";
+import { billPhotoName, billPhotoSize, isBillPdf, pdfItemsToText } from "@shared/bill-document";
 import type { BillParseResult } from "@shared/types";
 import { ocrImage } from "./ocr";
 
@@ -42,7 +42,7 @@ function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob | null> {
 
 /** Largest edge kept when a phone photo is re-encoded before upload. */
 const MAX_PHOTO_EDGE = 2600;
-const PASSTHROUGH_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+const PASSTHROUGH_TYPES = new Set(["image/jpeg", "image/jpg", "image/pjpeg", "image/png", "image/webp"]);
 
 /**
  * Re-encode a phone camera-roll photo (HEIC/HEIF, AVIF, GIF, BMP, TIFF) as
@@ -62,9 +62,7 @@ export async function prepareBillImage(file: File): Promise<File> {
     throw new Error("Unsupported bill image");
   }
   try {
-    const scale = Math.min(1, MAX_PHOTO_EDGE / Math.max(bitmap.width, bitmap.height));
-    const width = Math.max(1, Math.round(bitmap.width * scale));
-    const height = Math.max(1, Math.round(bitmap.height * scale));
+    const { width, height } = billPhotoSize(bitmap.width, bitmap.height, MAX_PHOTO_EDGE);
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
@@ -77,10 +75,9 @@ export async function prepareBillImage(file: File): Promise<File> {
     canvas.width = 0;
     canvas.height = 0;
     if (!blob) throw new Error("Unsupported bill image");
-    const name = `${file.name.replace(/\.[^.]+$/, "") || "bill"}.jpg`;
-    return new File([blob], name, { type: "image/jpeg", lastModified: Date.now() });
+    return new File([blob], billPhotoName(file.name), { type: "image/jpeg", lastModified: Date.now() });
   } finally {
-    bitmap.close?.();
+    bitmap.close();
   }
 }
 

@@ -6,6 +6,8 @@
  * OCR bundle.
  */
 
+import { sniffImageBytes } from "./image-sniff.js";
+
 interface PdfTextItem {
   str: string;
   transform: number[];
@@ -16,7 +18,16 @@ interface PdfTextItem {
 export const MAX_BILL_DOCUMENT_BYTES = 20 * 1024 * 1024;
 
 const IMAGE_FILE_EXTENSIONS = /\.(?:jpe?g|png|webp|gif|avif|heic|heif|bmp|tiff?)$/i;
-const HEIF_BRANDS = new Set(["avif", "avis", "heic", "heix", "hevc", "hevx", "heim", "heis", "mif1", "msf1"]);
+/**
+ * Image types the bill flow can keep or convert to JPEG. The picker advertises
+ * `image/*` so phone photo libraries show every photo, but this list is what
+ * `prepareBillImage` can actually handle; anything else is rejected on pick.
+ */
+const BILL_IMAGE_TYPES = new Set([
+  "image/jpeg", "image/jpg", "image/pjpeg",
+  "image/png", "image/webp", "image/gif", "image/avif",
+  "image/heic", "image/heif", "image/bmp", "image/tiff",
+]);
 const DOCUMENT_EXTENSIONS: Record<string, string> = {
   "application/pdf": "pdf",
   "image/jpeg": "jpg",
@@ -35,11 +46,7 @@ export function isBillPdf(file: File): boolean {
 
 export function isSupportedBillFile(file: File): boolean {
   if (isBillPdf(file)) return true;
-  // The server sniffs the real bytes, so accept any raster image: phone camera
-  // rolls hand over HEIC/HEIF and AVIF, which the client converts to JPEG before
-  // upload. SVG is a scriptable document, not a photo, and stays rejected.
-  if (file.type === "image/svg+xml") return false;
-  return file.type.startsWith("image/") || IMAGE_FILE_EXTENSIONS.test(file.name);
+  return BILL_IMAGE_TYPES.has(file.type) || IMAGE_FILE_EXTENSIONS.test(file.name);
 }
 
 /** Group PDF text runs into visual lines, keeping wide label/amount gaps. */
@@ -91,25 +98,28 @@ export function pdfItemsToText(items: unknown[]): string {
 /** Detect a stored bill document from its bytes, independent of headers. */
 export function documentMime(buffer: ArrayBuffer): string | null {
   if (buffer.byteLength < 12) return null;
-  const bytes = new Uint8Array(buffer, 0, 12);
-  const ascii = (start: number, end: number) => String.fromCharCode(...bytes.subarray(start, end));
-  if (ascii(0, 5) === "%PDF-") return "application/pdf";
-  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
-  if (bytes[0] === 0x89 && ascii(1, 4) === "PNG" &&
-    bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a) {
-    return "image/png";
-  }
-  if (ascii(0, 6) === "GIF87a" || ascii(0, 6) === "GIF89a") return "image/gif";
-  if (ascii(0, 4) === "RIFF" && ascii(8, 12) === "WEBP") return "image/webp";
-  if (ascii(4, 8) === "ftyp" && HEIF_BRANDS.has(ascii(8, 12))) {
-    return ascii(8, 12).startsWith("avi") ? "image/avif" : "image/heic";
-  }
-  if (ascii(0, 2) === "BM") return "image/bmp";
-  if ((bytes[0] === 0x49 && bytes[1] === 0x49 && bytes[2] === 0x2a && bytes[3] === 0x00) ||
-    (bytes[0] === 0x4d && bytes[1] === 0x4d && bytes[2] === 0x00 && bytes[3] === 0x2a)) {
-    return "image/tiff";
-  }
-  return null;
+  // HEIF/AVIF compatible brands live after the 12-byte header; scan the same
+  // 1024-byte prefix the server reads so a `mif1` phone photo resolves to the
+  // codec it actually carries.
+  const head = new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 1024));
+  if (String.fromCharCode(...head.subarray(0, 5)) === "%PDF-") return "application/pdf";
+  return sniffImageBytes(head);
+}
+
+/** JPEG name used when a phone photo is re-encoded before upload. */
+export function billPhotoName(name: string): string {
+  return `${name.replace(/\.[^.]+$/, "").trim() || "bill"}.jpg`;
+}
+
+/** Fit a photo inside `maxEdge` without ever upscaling it. */
+export function billPhotoSize(width: number, height: number, maxEdge: number): { width: number; height: number } {
+  const safeWidth = Number.isFinite(width) && width > 0 ? width : 1;
+  const safeHeight = Number.isFinite(height) && height > 0 ? height : 1;
+  const scale = Math.min(1, maxEdge / Math.max(safeWidth, safeHeight));
+  return {
+    width: Math.max(1, Math.round(safeWidth * scale)),
+    height: Math.max(1, Math.round(safeHeight * scale)),
+  };
 }
 
 /** Load a saved bill document back into a File so it can be re-read. */

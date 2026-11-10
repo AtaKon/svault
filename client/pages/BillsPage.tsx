@@ -155,6 +155,7 @@ export function BillsPage() {
     dueDate: string | null;
   } | null>(null);
   const [scanning, setScanning] = useState(false);
+  const [preparing, setPreparing] = useState(false);
   const [scanProgress, setScanProgress] = useState(0);
   const [readingBillId, setReadingBillId] = useState<string | null>(null);
   const [readingProgress, setReadingProgress] = useState(0);
@@ -269,13 +270,14 @@ export function BillsPage() {
   };
 
   const chooseFile = async (picked: File | null) => {
-    if (!picked || scanning) return;
+    if (!picked || scanning || preparing) return;
     if (!isSupportedBillFile(picked)) {
       toast.error(t("Choose a PDF or image bill"));
       return;
     }
     const run = prepareRun.current + 1;
     prepareRun.current = run;
+    setPreparing(true);
     let nextFile: File;
     try {
       // A phone camera roll can hand over HEIC/AVIF; the server and OCR worker
@@ -286,6 +288,8 @@ export function BillsPage() {
       if (import.meta.env.DEV) console.error("[bill-scan]", error);
       toast.error(t("This browser could not read that photo. Take a new photo or choose a JPEG or PNG."));
       return;
+    } finally {
+      if (run === prepareRun.current) setPreparing(false);
     }
     if (run !== prepareRun.current) return;
     setFile(nextFile);
@@ -496,11 +500,11 @@ export function BillsPage() {
             <Icon name="upload" size={19} className="text-muted" />
             <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-sm text-muted">
               <span>{file?.name ?? t("Drop a PDF or photo here or browse")}</span>
-              <input type="file" accept={DOCUMENT_ACCEPT} className="sr-only" disabled={readingBillId != null || scanning} onChange={(event) => { const nextFile = event.target.files?.[0] ?? null; event.target.value = ""; void chooseFile(nextFile); }} />
+              <input type="file" accept={DOCUMENT_ACCEPT} className="sr-only" disabled={readingBillId != null || scanning || preparing} onChange={(event) => { const nextFile = event.target.files?.[0] ?? null; event.target.value = ""; void chooseFile(nextFile); }} />
             </label>
             <label className="inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap text-xs font-medium text-brand hover:underline">
               <Icon name="camera" size={15} />{t("Take a photo")}
-              <input type="file" accept="image/*" capture="environment" className="sr-only" disabled={readingBillId != null || scanning} onChange={(event) => { const nextFile = event.target.files?.[0] ?? null; event.target.value = ""; void chooseFile(nextFile); }} />
+              <input type="file" accept="image/*" capture="environment" className="sr-only" disabled={readingBillId != null || scanning || preparing} onChange={(event) => { const nextFile = event.target.files?.[0] ?? null; event.target.value = ""; void chooseFile(nextFile); }} />
             </label>
             {file && !scanning && <Button type="button" size="sm" variant="ghost" onClick={() => { setFile(null); clearBreakdown(); }}>{t("Remove")}</Button>}
           </div>

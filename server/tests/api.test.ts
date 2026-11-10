@@ -110,7 +110,7 @@ const { heuristicRecipe, parseIngredientLine, localIdeas } = await import("../se
 const { heuristicReceipt } = await import("../services/receipt-local.js");
 const { billLinesTotal, parseBillNumber, parseBillText } = await import("../../shared/bill-parser.js");
 const { billHistory, extractBillMetrics } = await import("../../shared/bill-history.js");
-const { documentMime, fetchBillFile, isBillPdf, isSupportedBillFile, pdfItemsToText } = await import("../../shared/bill-document.js");
+const { billPhotoName, billPhotoSize, documentMime, fetchBillFile, isBillPdf, isSupportedBillFile, pdfItemsToText } = await import("../../shared/bill-document.js");
 const { parseLidlReceipt } = await import("../services/receipt-lidl.js");
 const { parseSklavenitisReceipt } = await import("../services/receipt-sklavenitis.js");
 const { selectReceiptTemplate } = await import("../services/receipt-templates.js");
@@ -1057,8 +1057,19 @@ describe("bill text parsing", () => {
     assert.equal(isSupportedBillFile(new File([], "IMG_0042.HEIC", { type: "" })), true, "an empty MIME type falls back to the extension");
     assert.equal(isSupportedBillFile(new File([], "bill.svg", { type: "image/svg+xml" })), false, "SVG is not a photo");
     assert.equal(isSupportedBillFile(new File([], "bill.svg", { type: "" })), false, "an SVG without a type is rejected by extension");
+    assert.equal(isSupportedBillFile(new File([], "icon.ico", { type: "image/x-icon" })), false, "unsupported image types are rejected before conversion");
     assert.equal(isSupportedBillFile(new File([], "bill.txt", { type: "text/plain" })), false);
     assert.equal(isSupportedBillFile(new File([], "bill.pdf", { type: "application/pdf" })), true);
+  });
+
+  it("names and fits a re-encoded phone photo", () => {
+    assert.equal(billPhotoName("IMG_0042.HEIC"), "IMG_0042.jpg");
+    assert.equal(billPhotoName("scan"), "scan.jpg");
+    assert.equal(billPhotoName(".hidden"), "bill.jpg");
+    assert.equal(billPhotoName("bill.final.tiff"), "bill.final.jpg");
+    assert.deepEqual(billPhotoSize(4032, 3024, 2600), { width: 2600, height: 1950 }, "a large phone photo is scaled down");
+    assert.deepEqual(billPhotoSize(800, 600, 2600), { width: 800, height: 600 }, "small photos are never upscaled");
+    assert.deepEqual(billPhotoSize(0, 0, 2600), { width: 1, height: 1 }, "a degenerate size still produces a valid canvas");
   });
 
   it("decodes a saved document from its bytes when the response has no useful type", async () => {
@@ -1086,6 +1097,17 @@ describe("bill text parsing", () => {
       assert.equal(documentMime(new Uint8Array([
         0, 0, 0, 0x1c, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63,
       ]).buffer), "image/heic");
+      // iPhones and some AVIF encoders use the generic mif1 major brand and put
+      // the real codec in the compatible brands after the minor version.
+      assert.equal(documentMime(new Uint8Array([
+        0, 0, 0, 20, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x69, 0x66, 0x31, 0, 0, 0, 0, 0x61, 0x76, 0x69, 0x66,
+      ]).buffer), "image/avif", "a mif1-branded AVIF is recognised by its compatible brand");
+      assert.equal(documentMime(new Uint8Array([
+        0, 0, 0, 20, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x69, 0x66, 0x31, 0, 0, 0, 0, 0x68, 0x65, 0x69, 0x63,
+      ]).buffer), "image/heic", "a mif1-branded iPhone HEIF is still HEIC");
+      assert.equal(documentMime(new Uint8Array([
+        0, 0, 0, 12, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x69, 0x66, 0x31,
+      ]).buffer), "image/heic", "a bare mif1 container falls back to HEIC");
       assert.equal(documentMime(new Uint8Array([0x42, 0x4d, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]).buffer), "image/bmp");
       assert.equal(documentMime(new Uint8Array([0x49, 0x49, 0x2a, 0x00, 0, 0, 0, 0, 0, 0, 0, 0]).buffer), "image/tiff");
       assert.equal(documentMime(new TextEncoder().encode("RIFF0000WAVE").buffer), null);
@@ -7707,6 +7729,17 @@ describe("insights, household split and admin console", () => {
     assert.match(heicResponse.headers.get("content-disposition") ?? "", /^inline;/);
     assert.equal((await request(`/api/bills/${heicBill.data.id}`, { method: "DELETE" })).status, 200);
 
+    const avif = new Blob([Buffer.from([
+      0, 0, 0, 20, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x69, 0x66, 0x31, 0, 0, 0, 0, 0x61, 0x76, 0x69, 0x66,
+    ])], { type: "image/avif" });
+    const avifBill = await request(`/api/houses/${billHouse}/bills`, { method: "POST", body: form(avif, "AVIF phone bill") });
+    assert.equal(avifBill.status, 201, "a mif1-branded AVIF photo is accepted");
+    const storedAvif = (await get<{ document: string }>("SELECT document FROM bills WHERE id = ?", [avifBill.data.id]))?.document;
+    assert.match(storedAvif ?? "", /\.avif$/, "the compatible brand decides the stored AVIF extension");
+    const avifResponse = await fetch(base + avifBill.data.document, { headers: { cookie } });
+    assert.equal(avifResponse.headers.get("content-type"), "image/avif");
+    assert.equal((await request(`/api/bills/${avifBill.data.id}`, { method: "DELETE" })).status, 200);
+
     const gifBill = await request(`/api/houses/${billHouse}/bills`, {
       method: "POST", body: form(new Blob([Buffer.from("GIF89a000000")], { type: "image/gif" }), "GIF bill"),
     });
@@ -7716,10 +7749,12 @@ describe("insights, household split and admin console", () => {
     assert.equal((await request(`/api/bills/${gifBill.data.id}`, { method: "DELETE" })).status, 200);
 
     const beforeSvg = files();
-    const svgBill = await request(`/api/houses/${billHouse}/bills`, {
-      method: "POST", body: form(new Blob(["<svg xmlns='http://www.w3.org/2000/svg'/>"], { type: "image/svg+xml" }), "SVG bill"),
-    });
+    const svgForm = form(new Blob(["<svg xmlns='http://www.w3.org/2000/svg'/>"], { type: "image/svg+xml" }), "SVG bill");
+    svgForm.delete("document");
+    svgForm.append("document", new Blob(["<svg xmlns='http://www.w3.org/2000/svg'/>"], { type: "image/svg+xml" }), "bill.svg");
+    const svgBill = await request(`/api/houses/${billHouse}/bills`, { method: "POST", body: svgForm });
     assert.equal(svgBill.status, 400, "SVG is not a supported bill photo");
+    assert.equal(svgBill.data.error, "Upload a PDF or image bill", "SVG is rejected before it reaches the disk");
     assert.deepEqual(files(), beforeSvg, "a rejected SVG leaves no file behind");
 
     const beforeImageFailure = files();

@@ -75,6 +75,14 @@ const DOCUMENT_EXTENSION: Record<string, string> = {
   "image/tiff": ".tif",
 };
 
+/** Image types the sniffer can return and the document route can serve. */
+const BILL_DOCUMENT_TYPES = new Set([
+  "application/pdf",
+  "image/jpeg", "image/jpg", "image/pjpeg",
+  "image/png", "image/webp", "image/gif", "image/avif",
+  "image/heic", "image/heif", "image/bmp", "image/tiff",
+]);
+
 /**
  * Detect a supported bill document from its leading bytes. Phone camera rolls
  * hand over HEIC/HEIF and AVIF, while the client converts them to JPEG; uploads
@@ -98,11 +106,9 @@ const billUpload = multer({
   limits: { fileSize: MAX_UPLOAD_BYTES, files: 1 },
   fileFilter: (_req, file, cb) => {
     const extension = path.extname(file.originalname).toLowerCase();
-    // The content sniff below is authoritative; this filter only keeps obvious
-    // non-documents away from disk. Accept any image type so phone camera-roll
-    // photos (HEIC/HEIF, AVIF, GIF, BMP, TIFF) survive to the sniffer.
-    const accepted = file.mimetype === "application/pdf" ||
-      file.mimetype.startsWith("image/") ||
+    // The content sniff below is authoritative, but keep the allowlist narrow so
+    // SVG and other image-like documents never reach the temp directory.
+    const accepted = BILL_DOCUMENT_TYPES.has(file.mimetype) ||
       [".pdf", ".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif", ".heic", ".heif", ".bmp", ".tif", ".tiff"].includes(extension);
     if (!accepted) return cb(new ApiError(400, "Upload a PDF or image bill"));
     cb(null, true);
