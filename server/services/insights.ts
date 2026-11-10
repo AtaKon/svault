@@ -466,14 +466,15 @@ export async function householdInsight(houseId: string): Promise<{
 
   // Recorded transfers reduce the outstanding balances without changing the
   // original receipts or bills that created those debts.
-  const transferRows = await all<any>(
+  const transferRows = await all<{ from_user_id: string; to_user_id: string; amount: number }>(
     "SELECT from_user_id, to_user_id, amount FROM household_settlements WHERE house_id = ? ORDER BY created_at",
     [houseId],
   );
   const transferBalance = new Map<string, number>();
   for (const transfer of transferRows) {
-    const from = String(transfer.from_user_id);
-    const to = String(transfer.to_user_id);
+    const from = transfer.from_user_id;
+    const to = transfer.to_user_id;
+    // Departed members are excluded from the active household ledger.
     if (!memberIds.has(from) || !memberIds.has(to)) continue;
     const amount = money(transfer.amount);
     transferBalance.set(from, (transferBalance.get(from) ?? 0) + amount);
@@ -484,6 +485,8 @@ export async function householdInsight(houseId: string): Promise<{
     const memberPaid = money(paid.get(member.id) ?? 0);
     const memberShare = money(owed.get(member.id) ?? 0);
     const memberSettled = money(transferBalance.get(member.id) ?? 0);
+    // A debtor's outgoing payment raises their negative balance toward zero;
+    // the recipient's balance falls by the same amount.
     return {
       userId: member.id,
       name: member.name,

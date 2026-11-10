@@ -7882,6 +7882,89 @@ describe("insights, household split and admin console", () => {
     );
   });
 
+  it("records household payments without over-settling under concurrent requests", async () => {
+    const house = await request("/api/houses", { method: "POST", body: { name: "Settlement payments", currency: "EUR" } });
+    assert.equal(house.status, 201);
+    const owner = await request("/api/auth/me");
+    const ownerId = owner.data.user.id;
+    const secondUser = await request("/api/auth/me", { auth: secondUserCookie });
+    const memberId = secondUser.data.user.id;
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
+      house.data.id,
+      memberId,
+      "member",
+      new Date().toISOString(),
+    ]);
+    const path = `/api/houses/${house.data.id}/insights/settlements`;
+    const ledgerPath = `/api/houses/${house.data.id}/insights/household`;
+    const receipt = async (day: number) => request(`/api/houses/${house.data.id}/receipts`, {
+      method: "POST",
+      body: {
+        vendorName: "Settlement Market",
+        purchasedAt: at(day),
+        currency: "EUR",
+        total: 1,
+        paidBy: ownerId,
+        splitWith: [ownerId, memberId],
+        lines: [{ description: "Shared item", quantity: 1, lineTotal: 1 }],
+      },
+    });
+
+    const firstReceipt = await receipt(6);
+    assert.equal(firstReceipt.status, 201, JSON.stringify(firstReceipt.data));
+    let ledger = await request(ledgerPath);
+    assert.deepEqual(ledger.data.settlements.map((entry: any) => [entry.fromUserId, entry.toUserId, entry.amount]), [
+      [memberId, ownerId, 0.5],
+    ]);
+    assert.equal(ledger.data.balances.find((entry: any) => entry.userId === memberId).balance, -0.5);
+    assert.equal(ledger.data.balances.find((entry: any) => entry.userId === ownerId).balance, 0.5);
+
+    const invalidCases = [
+      { fromUserId: memberId, toUserId: memberId, amount: 0.1 },
+      { fromUserId: "usr_not_a_member", toUserId: ownerId, amount: 0.1 },
+      { fromUserId: memberId, toUserId: "usr_not_a_member", amount: 0.1 },
+      { fromUserId: memberId, toUserId: ownerId, amount: 0.004 },
+      { fromUserId: memberId, toUserId: ownerId, amount: 0.51 },
+    ];
+    for (const body of invalidCases) {
+      const rejected = await request(path, { method: "POST", body });
+      assert.equal(rejected.status, 400, JSON.stringify({ body, response: rejected.data }));
+    }
+
+    const roundedPartial = await request(path, {
+      method: "POST",
+      body: { fromUserId: memberId, toUserId: ownerId, amount: 0.005 },
+    });
+    assert.equal(roundedPartial.status, 201, JSON.stringify(roundedPartial.data));
+    assert.equal(roundedPartial.data.balances.find((entry: any) => entry.userId === memberId).settled, 0.01);
+    assert.equal(roundedPartial.data.balances.find((entry: any) => entry.userId === memberId).balance, -0.49);
+    assert.equal(roundedPartial.data.balances.find((entry: any) => entry.userId === ownerId).balance, 0.49);
+    assert.equal(roundedPartial.data.settlements[0].amount, 0.49);
+
+    const fullPayment = await request(path, {
+      method: "POST",
+      body: { fromUserId: memberId, toUserId: ownerId, amount: 0.49 },
+    });
+    assert.equal(fullPayment.status, 201, JSON.stringify(fullPayment.data));
+    assert.deepEqual(fullPayment.data.settlements, []);
+    assert.equal(fullPayment.data.balances.find((entry: any) => entry.userId === memberId).balance, 0);
+    assert.equal(fullPayment.data.balances.find((entry: any) => entry.userId === ownerId).balance, 0);
+    assert.equal(fullPayment.data.balances.find((entry: any) => entry.userId === memberId).settled, 0.5);
+    assert.equal(fullPayment.data.balances.find((entry: any) => entry.userId === ownerId).settled, -0.5);
+
+    const secondReceipt = await receipt(7);
+    assert.equal(secondReceipt.status, 201, JSON.stringify(secondReceipt.data));
+    const concurrent = await Promise.all([
+      request(path, { method: "POST", body: { fromUserId: memberId, toUserId: ownerId, amount: 0.5 } }),
+      request(path, { method: "POST", body: { fromUserId: memberId, toUserId: ownerId, amount: 0.5 } }),
+    ]);
+    assert.deepEqual(concurrent.map((result) => result.status).sort(), [201, 400]);
+    ledger = await request(ledgerPath);
+    assert.deepEqual(ledger.data.settlements, []);
+    assert.equal(ledger.data.balances.find((entry: any) => entry.userId === memberId).balance, 0);
+    assert.equal(ledger.data.balances.find((entry: any) => entry.userId === ownerId).balance, 0);
+  });
+
   it("reads an e-receipt without writing anything", async () => {
     const parsed = await request(`/api/houses/${insightHouse}/receipts/e-receipt/parse`, {
       method: "POST",

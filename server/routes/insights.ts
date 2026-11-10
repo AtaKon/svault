@@ -83,6 +83,23 @@ const settlementBody = z.object({
   amount: z.number().positive().max(1e9),
 });
 
+const settlementTails = new Map<string, Promise<void>>();
+
+/** Serialize settlements per house in-process; the transaction also locks its house row for other processes. */
+async function withSettlementLock<T>(houseId: string, work: () => Promise<T>): Promise<T> {
+  const previous = settlementTails.get(houseId) ?? Promise.resolve();
+  let release!: () => void;
+  const tail = new Promise<void>((resolve) => { release = resolve; });
+  settlementTails.set(houseId, tail);
+  await previous;
+  try {
+    return await work();
+  } finally {
+    release();
+    if (settlementTails.get(houseId) === tail) settlementTails.delete(houseId);
+  }
+}
+
 insightRoutes.get(
   "/:houseId/insights/spend",
   handler(async (req, res) => {
@@ -106,12 +123,16 @@ insightRoutes.post(
     if (!memberIds.has(body.fromUserId) || !memberIds.has(body.toUserId)) {
       throw new ApiError(400, "Both people must be members of this house");
     }
-    await tx(async () => {
+    await withSettlementLock(houseId, () => tx(async () => {
+      // Acquire a write lock before reading the ledger. This row lock serializes
+      // competing settlements across Postgres connections and SQLite processes.
+      await run("UPDATE houses SET id = id WHERE id = ?", [houseId]);
       const current = await householdInsight(houseId);
       const suggested = current.settlements.find(
         (entry) => entry.fromUserId === body.fromUserId && entry.toUserId === body.toUserId,
       );
-      if (!suggested || amount > suggested.amount + 0.009) {
+      const suggestedAmount = suggested ? Math.round(suggested.amount * 100) / 100 : 0;
+      if (!suggested || amount > suggestedAmount) {
         throw new ApiError(400, "The payment cannot be greater than the current amount to settle");
       }
       await run(
@@ -119,7 +140,7 @@ insightRoutes.post(
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [newId("hst"), houseId, body.fromUserId, body.toUserId, amount, req.user!.id, now()],
       );
-    });
+    }));
     res.status(201).json(await householdInsight(houseId));
   }),
 );
