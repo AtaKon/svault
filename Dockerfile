@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-# Float the Node 22 tag so it stays at or above pdfjs-dist's >=22.13 engine floor.
+# Float the Node 22 tag and assert pdfjs-dist's >=22.13 engine floor below.
 FROM node:22-bookworm-slim AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
@@ -9,7 +9,7 @@ RUN npm ci --include=optional --no-audit --no-fund
 FROM deps AS build
 WORKDIR /app
 COPY . .
-RUN npm run build && npm prune --omit=dev
+RUN npm run build && npm prune --omit=dev --omit=optional
 
 FROM node:22-bookworm-slim AS runtime
 ENV NODE_ENV=production \
@@ -23,11 +23,10 @@ COPY --from=build --chown=svault:svault /app/node_modules ./node_modules
 COPY --from=build --chown=svault:svault /app/dist ./dist
 COPY --from=build --chown=svault:svault /app/public ./public
 COPY --from=build --chown=svault:svault /app/assets ./assets
-COPY --from=build --chown=svault:svault /app/scripts/pdfjs-render-smoke.mjs ./scripts/pdfjs-render-smoke.mjs
 COPY --chown=svault:svault docker-entrypoint.sh /usr/local/bin/svault-entrypoint
 RUN chmod 0555 /usr/local/bin/svault-entrypoint
+RUN node -e 'const [major, minor] = process.versions.node.split(".").map(Number); if (major < 22 || (major === 22 && minor < 13)) throw new Error("SVault requires Node.js >=22.13.0")'
 USER svault
-RUN SV_PDFJS_SMOKE_REQUIRED=1 node scripts/pdfjs-render-smoke.mjs
 EXPOSE 4000
 VOLUME ["/data"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

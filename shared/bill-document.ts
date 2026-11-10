@@ -132,7 +132,11 @@ export function billPhotoName(name: string): string {
   return `${stem || "bill"}.jpg`;
 }
 
-/** Fit a photo inside `maxEdge` without ever upscaling it. */
+/**
+ * Fit a photo inside `maxEdge` without ever upscaling it. Positive Infinity
+ * preserves source dimensions; callers allocating canvases for untrusted
+ * images must pass a finite edge to bound memory use.
+ */
 export function billPhotoSize(width: number, height: number, maxEdge: number): { width: number; height: number } {
   const safeWidth = Number.isFinite(width) && width > 0 ? width : 1;
   const safeHeight = Number.isFinite(height) && height > 0 ? height : 1;

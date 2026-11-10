@@ -1076,6 +1076,8 @@ describe("bill text parsing", () => {
     assert.deepEqual(billPhotoSize(100, 100, -5), { width: 1, height: 1 }, "a negative max edge never produces a zero canvas");
     assert.deepEqual(billPhotoSize(100, 100, Number.NaN), { width: 1, height: 1 }, "a non-finite max edge clamps to one pixel");
     assert.deepEqual(billPhotoSize(100, 100, Number.POSITIVE_INFINITY), { width: 100, height: 100 }, "an infinite max edge disables downscaling");
+    assert.deepEqual(billPhotoSize(100, 100, Number.NEGATIVE_INFINITY), { width: 1, height: 1 }, "a negative-infinite edge clamps to a valid minimum");
+    assert.deepEqual(billPhotoSize(100_000, 75_000, Number.MAX_SAFE_INTEGER), { width: 100_000, height: 75_000 }, "large finite bounds never upscale the source");
     assert.equal(billPhotoName("///"), "bill.jpg", "a separator-only name falls back to bill");
     assert.deepEqual(billPhotoSize(4032, 3024, 2600), { width: 2600, height: 1950 }, "a large phone photo is scaled down");
     assert.deepEqual(billPhotoSize(800, 600, 2600), { width: 800, height: 600 }, "small photos are never upscaled");
@@ -6847,12 +6849,22 @@ describe("dataset import", () => {
     }
 
     const outsideFile = path.join(dataDir, `outside-archive-${randomUUID()}.zip`);
+    const siblingDirectory = path.join(path.dirname(dir), `${path.basename(dir)}-evil`);
+    const siblingFile = path.join(siblingDirectory, "x.zip");
+    const beforeDirectory = existsSync(dir);
     writeFileSync(outsideFile, "must remain");
+    mkdirSync(siblingDirectory, { recursive: true });
+    writeFileSync(siblingFile, "sibling must remain");
     try {
       discardFilesUnder({ file: { path: outsideFile } } as any, dir);
       assert.equal(readFileSync(outsideFile, "utf8"), "must remain");
+      discardFilesUnder({ file: { path: siblingFile } } as any, dir);
+      assert.equal(readFileSync(siblingFile, "utf8"), "sibling must remain");
+      discardFilesUnder({ file: { path: dir } } as any, dir);
+      assert.equal(existsSync(dir), beforeDirectory, "cleanup never removes its destination directory");
     } finally {
       rmSync(outsideFile, { force: true });
+      rmSync(siblingDirectory, { recursive: true, force: true });
     }
   });
 

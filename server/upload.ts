@@ -171,17 +171,27 @@ export function archiveUploader(field: string, maxBytes: number, access: UploadA
   // Capture one absolute path for Multer and cleanup. This temp destination is
   // intentionally outside UPLOAD_DIR, so cleanup must use this exact boundary.
   const dest = path.resolve(archiveUploadDir());
+  const requestArchivePaths = new WeakMap<Request, string>();
   const upload = multer({
     storage: multer.diskStorage({
       destination: (_req, _file, cb) => cb(null, dest),
-      filename: (_req, _file, cb) => cb(null, `${Date.now()}-${randomBytes(8).toString("hex")}.zip`),
+      filename: (req, _file, cb) => {
+        const filename = `${Date.now()}-${randomBytes(8).toString("hex")}.zip`;
+        requestArchivePaths.set(req, path.join(dest, filename));
+        cb(null, filename);
+      },
     }),
     limits: { fileSize: maxBytes, files: 1 },
   });
   const cleanup: RequestHandler = (req, res, next) => {
     // Register before Multer so close cleanup also covers upload errors. On
     // successful uploads, req.file is populated by the time the response closes.
-    res.on("close", () => discardFilesUnder(req, dest));
+    res.on("close", () => {
+      discardFilesUnder(req, dest);
+      const trackedPath = requestArchivePaths.get(req);
+      if (trackedPath) discardFilesUnder({ file: { path: trackedPath } } as Request, dest);
+      requestArchivePaths.delete(req);
+    });
     next();
   };
   return [accessGuard(access), cleanup, upload.single(field)];
