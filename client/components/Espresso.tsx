@@ -168,7 +168,12 @@ function EquipmentSelect({
         const existing = list.find(
           (entry) => entry.kind === kind && entry.name.trim().toLowerCase() === trimmed.toLowerCase(),
         );
-        if (existing) onChange(existing.id);
+        if (!existing) {
+          // Keep the typed name so the user can retry after a failed refresh.
+          toast.error(t("Could not load the equipment"));
+          return;
+        }
+        onChange(existing.id);
         setCreating(false);
         setName("");
         toast.push(t("That name already exists; pick it from the list."));

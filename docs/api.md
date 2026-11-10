@@ -337,10 +337,11 @@ dial-in history, and the house-wide **Espresso log** screen lists every coffee. 
 seconds, temperature, pressure and TDS all accept decimals. `grindSetting`
 is free text so both `2.4` and `fine` work. `grinderId` and `machineId` reference saved equipment from
 `GET /api/houses/:houseId/espresso-equipment`; the server copies the equipment name into the `grinder`
-and `machine` snapshot fields. Sending `null` clears the pick and the snapshot, while omitting both keeps
-the shot unchanged. The free-text `grinder` and `machine` fields are still accepted for older clients:
-sending text without an id records that text and clears the saved-equipment link, because the shot is
-no longer tied to the saved equipment.
+and `machine` snapshot fields. Sending the id as `null` with the text also `null` clears both the pick
+and the recorded name; sending only the id as `null` clears the pick but keeps the recorded name;
+omitting both keeps the shot unchanged. The free-text `grinder` and `machine` fields are still
+accepted for older clients: sending text without an id records that text and clears the
+saved-equipment link, because the shot is no longer tied to the saved equipment.
 `tags` accepts an array or a comma-separated string; each
 tag is capped at 40 characters and the list at 20, and over-limit input is rejected rather than
 truncated. `brewedAt` must be between 2000-01-01 and one day in the future.

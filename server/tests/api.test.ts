@@ -2362,19 +2362,34 @@ describe("espresso equipment", () => {
     assert.equal(noop.data.grinder, "Still here");
     assert.equal(noop.data.machine, "Old machine");
 
-    // An explicit null pick with no text is the documented "clear this field" contract.
-    const clearedGrinder = await request(`/api/items/${coffeeId}/espresso-shots/${legacy.data.id}`, {
+    // Clearing only the id keeps the recorded name; clearing both removes it.
+    const unlinked = await request(`/api/items/${coffeeId}/espresso-shots/${legacy.data.id}`, {
       method: "PATCH",
       body: { grinderId: null },
     });
+    assert.equal(unlinked.status, 200);
+    assert.equal(unlinked.data.grinderId, null);
+    assert.equal(unlinked.data.grinder, "Still here");
+    assert.equal(unlinked.data.machine, "Old machine");
+
+    const clearedGrinder = await request(`/api/items/${coffeeId}/espresso-shots/${legacy.data.id}`, {
+      method: "PATCH",
+      body: { grinderId: null, grinder: null },
+    });
     assert.equal(clearedGrinder.status, 200);
-    assert.equal(clearedGrinder.data.grinderId, null);
     assert.equal(clearedGrinder.data.grinder, null);
-    assert.equal(clearedGrinder.data.machine, "Old machine");
+
+    const unlinkedMachine = await request(`/api/items/${coffeeId}/espresso-shots/${legacy.data.id}`, {
+      method: "PATCH",
+      body: { machineId: null },
+    });
+    assert.equal(unlinkedMachine.status, 200);
+    assert.equal(unlinkedMachine.data.machineId, null);
+    assert.equal(unlinkedMachine.data.machine, "Old machine");
 
     const cleared = await request(`/api/items/${coffeeId}/espresso-shots/${legacy.data.id}`, {
       method: "PATCH",
-      body: { machineId: null },
+      body: { machineId: null, machine: null },
     });
     assert.equal(cleared.status, 200);
     assert.equal(cleared.data.machine, null);
@@ -2852,6 +2867,8 @@ db.exec(\`
   INSERT INTO houses (id, name, created_at) VALUES ('hse_legacy', 'Legacy house', '2026-01-01');
   INSERT INTO items (id, house_id, name, created_at, updated_at)
     VALUES ('itm_legacy', 'hse_legacy', 'Legacy coffee', '2026-01-01', '2026-01-01');
+  INSERT INTO espresso_shots (id, house_id, item_id, brewed_at, rating, grinder, machine, created_at, updated_at)
+    VALUES ('esp_preexisting', 'hse_legacy', 'itm_legacy', '2026-01-01', 5, 'Old hand grinder', 'Old machine', '2026-01-01', '2026-01-01');
 \`);
 db.close();
 const { initDb, all, get, run, closeDb } = await import("./server/db.ts");
@@ -2872,6 +2889,7 @@ try {
 }
 await run("DELETE FROM espresso_equipment WHERE id IN ('eqp_legacy', 'eqp_machine')");
 const shot = await get("SELECT grinder_id, machine_id, grinder, machine FROM espresso_shots WHERE id = 'esp_legacy'");
+const preexisting = await get("SELECT grinder_id, machine_id, grinder, machine FROM espresso_shots WHERE id = 'esp_preexisting'");
 console.log(JSON.stringify({
   grinderColumn: Number(grinderColumn.n),
   machineColumn: Number(machineColumn.n),
@@ -2883,6 +2901,12 @@ console.log(JSON.stringify({
   machineId: shot.machine_id,
   grinder: shot.grinder,
   machine: shot.machine,
+  preexisting: {
+    grinderId: preexisting.grinder_id,
+    machineId: preexisting.machine_id,
+    grinder: preexisting.grinder,
+    machine: preexisting.machine,
+  },
 }));
 await closeDb();
 `;
@@ -2919,6 +2943,12 @@ await closeDb();
       assert.equal(result.machineId, null);
       assert.equal(result.grinder, "Legacy grinder");
       assert.equal(result.machine, "Legacy machine");
+      assert.deepEqual(result.preexisting, {
+        grinderId: null,
+        machineId: null,
+        grinder: "Old hand grinder",
+        machine: "Old machine",
+      });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

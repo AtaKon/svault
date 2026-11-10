@@ -247,6 +247,12 @@ function equipmentAlreadyExists(kind: "machine" | "grinder") {
   return new ApiError(409, kind === "machine" ? "That machine already exists" : "That grinder already exists");
 }
 
+/** Detect a database uniqueness violation without depending on a driver error code. */
+function isUniqueViolation(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /unique constraint|duplicate key value/i.test(message);
+}
+
 /** Reject an equipment id that is missing, belongs to another house, or is the wrong kind. */
 async function shotEquipment(houseId: string, equipmentId: string | null | undefined, kind: "machine" | "grinder") {
   if (!equipmentId) return null;
@@ -282,12 +288,12 @@ async function resolveShotEquipment(
     const equipment = await shotEquipment(houseId, idValue, kind);
     return { id: equipment.id, text: equipment.name };
   }
-  // A null or empty pick still accepts a legacy text snapshot. Clients that
-  // send only `grinderId: null` with no text clear both.
-  if (idValue !== undefined && textValue !== undefined) {
-    return { id: null, text: textValue || null };
+  if (idValue !== undefined) {
+    // An explicit text value wins, including null for an intentional clear.
+    if (textValue !== undefined) return { id: null, text: textValue || null };
+    // A partial client that only clears the id keeps the recorded name.
+    return { id: null, text: current.text };
   }
-  if (idValue !== undefined) return { id: null, text: null };
   if (textValue !== undefined) return { id: null, text: textValue || null };
   return current;
 }
@@ -871,7 +877,7 @@ inventoryRoutes.post(
       );
     } catch (error) {
       // The unique index can fire between the check and the insert.
-      if (await espressoEquipmentNameTaken(houseId, body.kind, body.name)) {
+      if (isUniqueViolation(error) && (await espressoEquipmentNameTaken(houseId, body.kind, body.name))) {
         throw equipmentAlreadyExists(body.kind);
       }
       throw error;
@@ -922,7 +928,11 @@ inventoryRoutes.patch(
       });
     } catch (error) {
       // The unique index can fire between the check and the update.
-      if (body.name && (await espressoEquipmentNameTaken(houseId, current.kind, body.name, current.id))) {
+      if (
+        isUniqueViolation(error) &&
+        body.name &&
+        (await espressoEquipmentNameTaken(houseId, current.kind, body.name, current.id))
+      ) {
         throw equipmentAlreadyExists(current.kind);
       }
       throw error;
