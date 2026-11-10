@@ -243,18 +243,24 @@ async function espressoEquipmentNameTaken(
   return Boolean(row);
 }
 
+function equipmentAlreadyExists(kind: "machine" | "grinder") {
+  return new ApiError(409, kind === "machine" ? "That machine already exists" : "That grinder already exists");
+}
+
 /** Reject an equipment id that is missing, belongs to another house, or is the wrong kind. */
 async function shotEquipment(houseId: string, equipmentId: string | null | undefined, kind: "machine" | "grinder") {
   if (!equipmentId) return null;
-  const row = await get<any>("SELECT * FROM espresso_equipment WHERE id = ? AND house_id = ? AND kind = ?", [
-    equipmentId,
-    houseId,
-    kind,
-  ]);
+  const row = await get<any>("SELECT * FROM espresso_equipment WHERE id = ? AND house_id = ?", [equipmentId, houseId]);
   if (!row) {
     throw new ApiError(
       400,
       kind === "machine" ? "That machine is not in this house" : "That grinder is not in this house",
+    );
+  }
+  if (row.kind !== kind) {
+    throw new ApiError(
+      400,
+      kind === "machine" ? "That equipment is a grinder, not a machine" : "That equipment is a machine, not a grinder",
     );
   }
   return row;
@@ -854,19 +860,22 @@ inventoryRoutes.post(
   handler(async (req, res) => {
     const { houseId } = await requireHouse(req, "member");
     const body = parseBody(espressoEquipmentBody, req.body);
-    if (await espressoEquipmentNameTaken(houseId, body.kind, body.name)) {
-      throw new ApiError(
-        409,
-        body.kind === "machine" ? "That machine already exists" : "That grinder already exists",
-      );
-    }
+    if (await espressoEquipmentNameTaken(houseId, body.kind, body.name)) throw equipmentAlreadyExists(body.kind);
     const id = newId("eqp");
     const stamp = now();
-    await run(
-      `INSERT INTO espresso_equipment (id, house_id, kind, name, brand, notes, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, houseId, body.kind, body.name, body.brand ?? null, body.notes ?? null, stamp, stamp],
-    );
+    try {
+      await run(
+        `INSERT INTO espresso_equipment (id, house_id, kind, name, brand, notes, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [id, houseId, body.kind, body.name, body.brand ?? null, body.notes ?? null, stamp, stamp],
+      );
+    } catch (error) {
+      // The unique index can fire between the check and the insert.
+      if (await espressoEquipmentNameTaken(houseId, body.kind, body.name)) {
+        throw equipmentAlreadyExists(body.kind);
+      }
+      throw error;
+    }
     res
       .status(201)
       .json(serializeEspressoEquipment(await get<any>("SELECT * FROM espresso_equipment WHERE id = ?", [id])));
@@ -880,38 +889,43 @@ inventoryRoutes.patch(
     const current = await espressoEquipmentRow(houseId, String(req.params.equipmentId));
     const body = parseBody(espressoEquipmentBody.partial().omit({ kind: true }), req.body);
     if (body.name && (await espressoEquipmentNameTaken(houseId, current.kind, body.name, current.id))) {
-      throw new ApiError(
-        409,
-        current.kind === "machine" ? "That machine already exists" : "That grinder already exists",
-      );
+      throw equipmentAlreadyExists(current.kind);
     }
     const name = body.name ?? current.name;
-    // The rename and its shot snapshots must land together, or a failure would
-    // leave the equipment renamed while past shots keep the old label.
-    await tx(async () => {
-      await run("UPDATE espresso_equipment SET name = ?, brand = ?, notes = ?, updated_at = ? WHERE id = ?", [
-        name,
-        body.brand === undefined ? current.brand : body.brand,
-        body.notes === undefined ? current.notes : body.notes,
-        now(),
-        current.id,
-      ]);
-      if (name !== current.name) {
-        if (current.kind === "grinder") {
-          await run("UPDATE espresso_shots SET grinder = ? WHERE grinder_id = ? AND house_id = ?", [
-            name,
-            current.id,
-            houseId,
-          ]);
-        } else {
-          await run("UPDATE espresso_shots SET machine = ? WHERE machine_id = ? AND house_id = ?", [
-            name,
-            current.id,
-            houseId,
-          ]);
+    try {
+      // The rename and its shot snapshots must land together, or a failure
+      // would leave the equipment renamed while past shots keep the old label.
+      await tx(async () => {
+        await run("UPDATE espresso_equipment SET name = ?, brand = ?, notes = ?, updated_at = ? WHERE id = ?", [
+          name,
+          body.brand === undefined ? current.brand : body.brand,
+          body.notes === undefined ? current.notes : body.notes,
+          now(),
+          current.id,
+        ]);
+        if (name !== current.name) {
+          if (current.kind === "grinder") {
+            await run("UPDATE espresso_shots SET grinder = ? WHERE grinder_id = ? AND house_id = ?", [
+              name,
+              current.id,
+              houseId,
+            ]);
+          } else {
+            await run("UPDATE espresso_shots SET machine = ? WHERE machine_id = ? AND house_id = ?", [
+              name,
+              current.id,
+              houseId,
+            ]);
+          }
         }
+      });
+    } catch (error) {
+      // The unique index can fire between the check and the update.
+      if (body.name && (await espressoEquipmentNameTaken(houseId, current.kind, body.name, current.id))) {
+        throw equipmentAlreadyExists(current.kind);
       }
-    });
+      throw error;
+    }
     res.json(serializeEspressoEquipment(await get<any>("SELECT * FROM espresso_equipment WHERE id = ?", [current.id])));
   }),
 );

@@ -2229,6 +2229,8 @@ const EL: Record<string, string> = {
   "That grinder already exists": "Αυτός ο μύλος υπάρχει ήδη.",
   "That machine is not in this house": "Αυτή η μηχανή δεν ανήκει σε αυτό το σπίτι.",
   "That grinder is not in this house": "Αυτός ο μύλος δεν ανήκει σε αυτό το σπίτι.",
+  "That equipment is a grinder, not a machine": "Ο εξοπλισμός είναι μύλος, όχι μηχανή.",
+  "That equipment is a machine, not a grinder": "Ο εξοπλισμός είναι μηχανή, όχι μύλος.",
   "That sign-in challenge expired; enter your password again": "Η πρόκληση σύνδεσης έληξε· πληκτρολόγησε ξανά τον κωδικό πρόσβασής σου.",
   "That suggested shop does not exist": "Το προτεινόμενο κατάστημα δεν υπάρχει.",
   "That username is already taken": "Αυτό το όνομα χρήστη χρησιμοποιείται ήδη.",

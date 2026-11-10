@@ -233,6 +233,7 @@ CREATE TABLE IF NOT EXISTS espresso_equipment (
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS espresso_equipment_house ON espresso_equipment(house_id, kind, name);
+CREATE UNIQUE INDEX IF NOT EXISTS espresso_equipment_name ON espresso_equipment(house_id, kind, lower(name));
 
 CREATE TABLE IF NOT EXISTS espresso_shots (
   id TEXT PRIMARY KEY,
