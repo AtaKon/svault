@@ -264,8 +264,8 @@ CREATE TABLE IF NOT EXISTS espresso_shots (
 CREATE INDEX IF NOT EXISTS espresso_shots_house ON espresso_shots(house_id, brewed_at);
 CREATE INDEX IF NOT EXISTS espresso_shots_item ON espresso_shots(item_id, brewed_at);
 CREATE INDEX IF NOT EXISTS espresso_shots_user ON espresso_shots(user_id, brewed_at);
-CREATE INDEX IF NOT EXISTS espresso_shots_grinder ON espresso_shots(grinder_id);
-CREATE INDEX IF NOT EXISTS espresso_shots_machine ON espresso_shots(machine_id);
+-- The grinder_id/machine_id indexes are created in POSTGRES_MIGRATIONS after
+-- the columns are added, because an upgraded table has no such columns yet.
 
 CREATE TABLE IF NOT EXISTS receipts (
   id TEXT PRIMARY KEY,

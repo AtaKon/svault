@@ -3010,6 +3010,12 @@ await closeDb();
         "ALTER TABLE espresso_shots ADD COLUMN IF NOT EXISTS machine_id TEXT REFERENCES espresso_equipment(id) ON DELETE SET NULL",
       ),
     );
+    // An upgraded table has no grinder_id/machine_id until the ALTERs run, so
+    // these indexes must not be part of the schema script that runs first.
+    assert.ok(!POSTGRES_SCHEMA.includes("espresso_shots_grinder"));
+    assert.ok(!POSTGRES_SCHEMA.includes("espresso_shots_machine"));
+    assert.ok(POSTGRES_MIGRATIONS.includes("CREATE INDEX IF NOT EXISTS espresso_shots_grinder ON espresso_shots(grinder_id)"));
+    assert.ok(POSTGRES_MIGRATIONS.includes("CREATE INDEX IF NOT EXISTS espresso_shots_machine ON espresso_shots(machine_id)"));
     assert.ok(POSTGRES_TABLE_ORDER.indexOf("espresso_equipment") > POSTGRES_TABLE_ORDER.indexOf("items"));
     assert.ok(POSTGRES_TABLE_ORDER.indexOf("espresso_shots") > POSTGRES_TABLE_ORDER.indexOf("espresso_equipment"));
     assert.ok(POSTGRES_TABLE_ORDER.indexOf("espresso_shots") > POSTGRES_TABLE_ORDER.indexOf("items"));
