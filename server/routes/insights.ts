@@ -3,7 +3,7 @@ import { z } from "zod";
 import { requireAuth } from "../auth.js";
 import { ApiError, handler, parseBody, requireHouse } from "../http.js";
 import { limitRequests, limiters, userOrIp } from "../rate-limit.js";
-import { all, get, parseJson } from "../db.js";
+import { all, get, newId, now, parseJson, run, tx } from "../db.js";
 import { lookupPosoKaneiBarcode, PosoKaneiUnavailableError } from "../services/posokanei.js";
 import { shoppingRow } from "../services/shopping.js";
 import {
@@ -77,11 +77,50 @@ const settingsBody = z.object({
   useItUpDays: z.number().int().min(1).max(60).optional(),
 });
 
+const settlementBody = z.object({
+  fromUserId: z.string().min(1).max(60),
+  toUserId: z.string().min(1).max(60),
+  amount: z.number().positive().max(1e9),
+});
+
 insightRoutes.get(
   "/:houseId/insights/spend",
   handler(async (req, res) => {
     const { houseId } = await requireHouse(req);
     res.json(await spendInsight(houseId, Number(req.query.months ?? 6)));
+  }),
+);
+
+insightRoutes.post(
+  "/:houseId/insights/settlements",
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req, "member");
+    const body = parseBody(settlementBody, req.body);
+    const amount = Math.round(body.amount * 100) / 100;
+    if (amount <= 0) throw new ApiError(400, "Enter a payment of at least 0.01");
+    if (body.fromUserId === body.toUserId) throw new ApiError(400, "Choose two different household members");
+    const memberIds = new Set((await all<{ user_id: string }>(
+      "SELECT user_id FROM house_members WHERE house_id = ?",
+      [houseId],
+    )).map((row) => row.user_id));
+    if (!memberIds.has(body.fromUserId) || !memberIds.has(body.toUserId)) {
+      throw new ApiError(400, "Both people must be members of this house");
+    }
+    await tx(async () => {
+      const current = await householdInsight(houseId);
+      const suggested = current.settlements.find(
+        (entry) => entry.fromUserId === body.fromUserId && entry.toUserId === body.toUserId,
+      );
+      if (!suggested || amount > suggested.amount + 0.009) {
+        throw new ApiError(400, "The payment cannot be greater than the current amount to settle");
+      }
+      await run(
+        `INSERT INTO household_settlements (id, house_id, from_user_id, to_user_id, amount, created_by, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [newId("hst"), houseId, body.fromUserId, body.toUserId, amount, req.user!.id, now()],
+      );
+    });
+    res.status(201).json(await householdInsight(houseId));
   }),
 );
 

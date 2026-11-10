@@ -464,16 +464,34 @@ export async function householdInsight(houseId: string): Promise<{
     });
   }
 
+  // Recorded transfers reduce the outstanding balances without changing the
+  // original receipts or bills that created those debts.
+  const transferRows = await all<any>(
+    "SELECT from_user_id, to_user_id, amount FROM household_settlements WHERE house_id = ? ORDER BY created_at",
+    [houseId],
+  );
+  const transferBalance = new Map<string, number>();
+  for (const transfer of transferRows) {
+    const from = String(transfer.from_user_id);
+    const to = String(transfer.to_user_id);
+    if (!memberIds.has(from) || !memberIds.has(to)) continue;
+    const amount = money(transfer.amount);
+    transferBalance.set(from, (transferBalance.get(from) ?? 0) + amount);
+    transferBalance.set(to, (transferBalance.get(to) ?? 0) - amount);
+  }
+
   const balances: HouseholdBalance[] = members.map((member) => {
     const memberPaid = money(paid.get(member.id) ?? 0);
     const memberShare = money(owed.get(member.id) ?? 0);
+    const memberSettled = money(transferBalance.get(member.id) ?? 0);
     return {
       userId: member.id,
       name: member.name,
       role: member.role,
       paid: memberPaid,
       share: memberShare,
-      balance: money(memberPaid - memberShare),
+      settled: memberSettled,
+      balance: money(memberPaid - memberShare + memberSettled),
     };
   });
 
