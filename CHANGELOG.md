@@ -28,7 +28,8 @@ All notable changes to SVault are documented here. The format follows
   fees, stamp duty) and consumption prices per kWh or m³. PDFs with a text layer are read directly;
   scanned PDFs and photos use the same on-device Tesseract OCR as receipts, so nothing is uploaded.
   The breakdown is reviewable before saving, stored with the bill, and can be re-read later. Bill
-  attachments now accept photos as well as PDFs.
+  attachments now accept photos as well as PDFs. A **Take a photo** button opens the phone camera, and
+  HEIC/HEIF, AVIF, GIF, BMP and TIFF photos are converted to JPEG in the browser before upload.
 - **Espresso log.** Mark a bag of coffee beans as espresso and keep a tasting history with 1-5 star
   ratings, roast level, grind setting and time, dose, yield, extraction time, water temperature,
   pressure, TDS, grinder, machine, flavour tags and notes. SVault computes the brew ratio and extraction

@@ -40,6 +40,50 @@ function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob | null> {
   return new Promise((resolve) => canvas.toBlob((blob) => resolve(blob), "image/jpeg", 0.92));
 }
 
+/** Largest edge kept when a phone photo is re-encoded before upload. */
+const MAX_PHOTO_EDGE = 2600;
+const PASSTHROUGH_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+
+/**
+ * Re-encode a phone camera-roll photo (HEIC/HEIF, AVIF, GIF, BMP, TIFF) as
+ * JPEG. iPhones hand HEIC files to the picker, which most desktop browsers and
+ * the local OCR worker cannot decode, and the server only serves a known set of
+ * image types. Converting once in the browser makes the scanned preview, the
+ * upload and a later re-read all work with the same bytes. The browser has the
+ * only decoder, so an unsupported format rejects instead of uploading a file
+ * that nothing can read.
+ */
+export async function prepareBillImage(file: File): Promise<File> {
+  if (isBillPdf(file) || PASSTHROUGH_TYPES.has(file.type)) return file;
+  let bitmap: ImageBitmap;
+  try {
+    bitmap = await createImageBitmap(file);
+  } catch {
+    throw new Error("Unsupported bill image");
+  }
+  try {
+    const scale = Math.min(1, MAX_PHOTO_EDGE / Math.max(bitmap.width, bitmap.height));
+    const width = Math.max(1, Math.round(bitmap.width * scale));
+    const height = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Unsupported bill image");
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
+    context.drawImage(bitmap, 0, 0, width, height);
+    const blob = await canvasToBlob(canvas);
+    canvas.width = 0;
+    canvas.height = 0;
+    if (!blob) throw new Error("Unsupported bill image");
+    const name = `${file.name.replace(/\.[^.]+$/, "") || "bill"}.jpg`;
+    return new File([blob], name, { type: "image/jpeg", lastModified: Date.now() });
+  } finally {
+    bitmap.close?.();
+  }
+}
+
 async function readPdf(
   file: File,
   onProgress: (progress: number, status: string) => void,

@@ -12,13 +12,13 @@ import { splitAmountEvenly } from "@shared/bill-splitting";
 import { ELECTRICITY_CONTRACT_COLORS } from "@shared/types";
 import type { BillBreakdownLine, BillParseResult, UtilityBill } from "@shared/types";
 import { fetchBillFile, isSupportedBillFile } from "@shared/bill-document";
-import { scanBillFile } from "@/bill-scan";
+import { prepareBillImage, scanBillFile } from "@/bill-scan";
 
 type Member = { userId: string; name: string; role: string };
 type Household = { currency: string; members: Member[] };
 const BILL_TYPES = BILL_TYPE_VALUES.map((value) => ({ value, label: BILL_TYPE_LABELS[value] }));
 const CONTRACT_COLOR_LABELS = { blue: "Blue", green: "Green", yellow: "Yellow", orange: "Orange" } as const;
-const DOCUMENT_ACCEPT = "application/pdf,image/jpeg,image/png,image/webp,.pdf,.jpg,.jpeg,.png,.webp";
+const DOCUMENT_ACCEPT = "application/pdf,image/*,.pdf,.jpg,.jpeg,.png,.webp,.gif,.avif,.heic,.heif,.bmp,.tif,.tiff";
 
 function breakdownSum(lines: BillBreakdownLine[]): number {
   return lines.reduce((sum, line) => {
@@ -160,7 +160,8 @@ export function BillsPage() {
   const [readingProgress, setReadingProgress] = useState(0);
   const scanRun = useRef(0);
   const readRun = useRef(0);
-  useEffect(() => () => { scanRun.current++; readRun.current++; }, []);
+  const prepareRun = useRef(0);
+  useEffect(() => () => { scanRun.current++; readRun.current++; prepareRun.current++; }, []);
 
   const load = useCallback(async () => {
     try {
@@ -267,12 +268,26 @@ export function BillsPage() {
     }
   };
 
-  const chooseFile = (nextFile: File | null) => {
-    if (!nextFile || scanning) return;
-    if (!isSupportedBillFile(nextFile)) {
+  const chooseFile = async (picked: File | null) => {
+    if (!picked || scanning) return;
+    if (!isSupportedBillFile(picked)) {
       toast.error(t("Choose a PDF or image bill"));
       return;
     }
+    const run = prepareRun.current + 1;
+    prepareRun.current = run;
+    let nextFile: File;
+    try {
+      // A phone camera roll can hand over HEIC/AVIF; the server and OCR worker
+      // need JPEG, so convert once here and use the same bytes everywhere.
+      nextFile = await prepareBillImage(picked);
+    } catch (error) {
+      if (run !== prepareRun.current) return;
+      if (import.meta.env.DEV) console.error("[bill-scan]", error);
+      toast.error(t("This browser could not read that photo. Take a new photo or choose a JPEG or PNG."));
+      return;
+    }
+    if (run !== prepareRun.current) return;
     setFile(nextFile);
     void readFile(nextFile);
   };
@@ -354,9 +369,17 @@ export function BillsPage() {
     try { await api(`/api/bills/${bill.id}`, { method: "DELETE" }); await load(); }
     catch (err) { toast.error(err instanceof Error ? t(err.message) : t("Could not delete the bill")); }
   };
-  const uploadDocument = async (bill: UtilityBill, nextFile: File) => {
-    if (!isSupportedBillFile(nextFile)) {
+  const uploadDocument = async (bill: UtilityBill, picked: File) => {
+    if (!isSupportedBillFile(picked)) {
       toast.error(t("Choose a PDF or image bill")); return;
+    }
+    let nextFile: File;
+    try {
+      nextFile = await prepareBillImage(picked);
+    } catch (error) {
+      if (import.meta.env.DEV) console.error("[bill-scan]", error);
+      toast.error(t("This browser could not read that photo. Take a new photo or choose a JPEG or PNG."));
+      return;
     }
     const form = new FormData(); form.set("document", nextFile);
     try { await api(`/api/houses/${house.id}/bills/${bill.id}/document`, { method: "POST", body: form }); await load(); }
@@ -375,8 +398,17 @@ export function BillsPage() {
         toast.error(t("Could not read the bill document"));
         return;
       }
+      let prepared: File;
+      try {
+        prepared = await prepareBillImage(saved);
+      } catch (error) {
+        if (import.meta.env.DEV) console.error("[bill-scan]", error);
+        if (run === readRun.current) toast.error(t("This browser could not read that photo. Take a new photo or choose a JPEG or PNG."));
+        return;
+      }
+      if (run !== readRun.current) return;
       const scan = await scanBillFile(
-        saved,
+        prepared,
         (progress) => { if (run === readRun.current) setReadingProgress(progress); },
         { currency: bill.currency },
       );
@@ -424,7 +456,7 @@ export function BillsPage() {
   };
   const dropFile = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault(); setDragging(false);
-    chooseFile(event.dataTransfer.files[0] ?? null);
+    void chooseFile(event.dataTransfer.files[0] ?? null);
   };
 
   const numericAmount = Number(amount);
@@ -464,7 +496,11 @@ export function BillsPage() {
             <Icon name="upload" size={19} className="text-muted" />
             <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-sm text-muted">
               <span>{file?.name ?? t("Drop a PDF or photo here or browse")}</span>
-              <input type="file" accept={DOCUMENT_ACCEPT} className="sr-only" disabled={readingBillId != null || scanning} onChange={(event) => { chooseFile(event.target.files?.[0] ?? null); event.target.value = ""; }} />
+              <input type="file" accept={DOCUMENT_ACCEPT} className="sr-only" disabled={readingBillId != null || scanning} onChange={(event) => { const nextFile = event.target.files?.[0] ?? null; event.target.value = ""; void chooseFile(nextFile); }} />
+            </label>
+            <label className="inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap text-xs font-medium text-brand hover:underline">
+              <Icon name="camera" size={15} />{t("Take a photo")}
+              <input type="file" accept="image/*" capture="environment" className="sr-only" disabled={readingBillId != null || scanning} onChange={(event) => { const nextFile = event.target.files?.[0] ?? null; event.target.value = ""; void chooseFile(nextFile); }} />
             </label>
             {file && !scanning && <Button type="button" size="sm" variant="ghost" onClick={() => { setFile(null); clearBreakdown(); }}>{t("Remove")}</Button>}
           </div>

@@ -15,16 +15,31 @@ interface PdfTextItem {
 /** Matches the server upload limit; protects re-read from oversized objects. */
 export const MAX_BILL_DOCUMENT_BYTES = 20 * 1024 * 1024;
 
+const IMAGE_FILE_EXTENSIONS = /\.(?:jpe?g|png|webp|gif|avif|heic|heif|bmp|tiff?)$/i;
+const HEIF_BRANDS = new Set(["avif", "avis", "heic", "heix", "hevc", "hevx", "heim", "heis", "mif1", "msf1"]);
+const DOCUMENT_EXTENSIONS: Record<string, string> = {
+  "application/pdf": "pdf",
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+  "image/gif": "gif",
+  "image/avif": "avif",
+  "image/heic": "heic",
+  "image/bmp": "bmp",
+  "image/tiff": "tif",
+};
+
 export function isBillPdf(file: File): boolean {
   return file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
 }
 
 export function isSupportedBillFile(file: File): boolean {
   if (isBillPdf(file)) return true;
-  return file.type === "image/jpeg" ||
-    file.type === "image/png" ||
-    file.type === "image/webp" ||
-    /\.(?:jpe?g|png|webp)$/i.test(file.name);
+  // The server sniffs the real bytes, so accept any raster image: phone camera
+  // rolls hand over HEIC/HEIF and AVIF, which the client converts to JPEG before
+  // upload. SVG is a scriptable document, not a photo, and stays rejected.
+  if (file.type === "image/svg+xml") return false;
+  return file.type.startsWith("image/") || IMAGE_FILE_EXTENSIONS.test(file.name);
 }
 
 /** Group PDF text runs into visual lines, keeping wide label/amount gaps. */
@@ -76,7 +91,7 @@ export function pdfItemsToText(items: unknown[]): string {
 /** Detect a stored bill document from its bytes, independent of headers. */
 export function documentMime(buffer: ArrayBuffer): string | null {
   if (buffer.byteLength < 12) return null;
-  const bytes = new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 12));
+  const bytes = new Uint8Array(buffer, 0, 12);
   const ascii = (start: number, end: number) => String.fromCharCode(...bytes.subarray(start, end));
   if (ascii(0, 5) === "%PDF-") return "application/pdf";
   if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
@@ -84,7 +99,16 @@ export function documentMime(buffer: ArrayBuffer): string | null {
     bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a) {
     return "image/png";
   }
+  if (ascii(0, 6) === "GIF87a" || ascii(0, 6) === "GIF89a") return "image/gif";
   if (ascii(0, 4) === "RIFF" && ascii(8, 12) === "WEBP") return "image/webp";
+  if (ascii(4, 8) === "ftyp" && HEIF_BRANDS.has(ascii(8, 12))) {
+    return ascii(8, 12).startsWith("avi") ? "image/avif" : "image/heic";
+  }
+  if (ascii(0, 2) === "BM") return "image/bmp";
+  if ((bytes[0] === 0x49 && bytes[1] === 0x49 && bytes[2] === 0x2a && bytes[3] === 0x00) ||
+    (bytes[0] === 0x4d && bytes[1] === 0x4d && bytes[2] === 0x00 && bytes[3] === 0x2a)) {
+    return "image/tiff";
+  }
   return null;
 }
 
@@ -102,6 +126,6 @@ export async function fetchBillFile(url: string, name: string): Promise<File | n
   // mislabel an error page or a truncated file.
   const type = documentMime(buffer);
   if (!type) return null;
-  const extension = type === "application/pdf" ? "pdf" : type === "image/png" ? "png" : type === "image/webp" ? "webp" : "jpg";
+  const extension = DOCUMENT_EXTENSIONS[type] ?? "jpg";
   return new File([buffer], `${name || "bill"}.${extension}`, { type });
 }

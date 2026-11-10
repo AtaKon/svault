@@ -54,19 +54,38 @@ const BILL_DOCUMENT_MIME: Record<string, string> = {
   ".jpeg": "image/jpeg",
   ".png": "image/png",
   ".webp": "image/webp",
+  ".gif": "image/gif",
+  ".avif": "image/avif",
+  ".heic": "image/heic",
+  ".bmp": "image/bmp",
+  ".tif": "image/tiff",
+  ".tiff": "image/tiff",
 };
 
-/** Detect a supported bill document from its leading bytes. */
-function documentKind(bytes: Buffer): "pdf" | "jpeg" | "png" | "webp" | null {
+/** Canonical extension for a sniffed document type; the name never comes from the client. */
+const DOCUMENT_EXTENSION: Record<string, string> = {
+  "application/pdf": ".pdf",
+  "image/jpeg": ".jpg",
+  "image/png": ".png",
+  "image/webp": ".webp",
+  "image/gif": ".gif",
+  "image/avif": ".avif",
+  "image/heic": ".heic",
+  "image/bmp": ".bmp",
+  "image/tiff": ".tif",
+};
+
+/**
+ * Detect a supported bill document from its leading bytes. Phone camera rolls
+ * hand over HEIC/HEIF and AVIF, while the client converts them to JPEG; uploads
+ * from scripts may still arrive in any type `sniffImage` recognises.
+ */
+function documentMime(bytes: Buffer): string | null {
   // Align with the client's re-read sniffer: short/truncated headers are not
   // treated as valid documents.
   if (bytes.length < 12) return null;
-  if (bytes.subarray(0, 5).toString("latin1") === "%PDF-") return "pdf";
-  const image = sniffImage(bytes);
-  if (image === "image/jpeg") return "jpeg";
-  if (image === "image/png") return "png";
-  if (image === "image/webp") return "webp";
-  return null;
+  if (bytes.subarray(0, 5).toString("latin1") === "%PDF-") return "application/pdf";
+  return sniffImage(bytes);
 }
 
 const billUpload = multer({
@@ -79,11 +98,12 @@ const billUpload = multer({
   limits: { fileSize: MAX_UPLOAD_BYTES, files: 1 },
   fileFilter: (_req, file, cb) => {
     const extension = path.extname(file.originalname).toLowerCase();
+    // The content sniff below is authoritative; this filter only keeps obvious
+    // non-documents away from disk. Accept any image type so phone camera-roll
+    // photos (HEIC/HEIF, AVIF, GIF, BMP, TIFF) survive to the sniffer.
     const accepted = file.mimetype === "application/pdf" ||
-      file.mimetype === "image/jpeg" ||
-      file.mimetype === "image/png" ||
-      file.mimetype === "image/webp" ||
-      [".pdf", ".jpg", ".jpeg", ".png", ".webp"].includes(extension);
+      file.mimetype.startsWith("image/") ||
+      [".pdf", ".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif", ".heic", ".heif", ".bmp", ".tif", ".tiff"].includes(extension);
     if (!accepted) return cb(new ApiError(400, "Upload a PDF or image bill"));
     cb(null, true);
   },
@@ -96,11 +116,11 @@ const verifyBillDocument: RequestHandler = (req, _res, next) => {
     const prefix = Buffer.alloc(1024);
     let bytesRead: number;
     try { bytesRead = fs.readSync(fd, prefix, 0, prefix.length, 0); } finally { fs.closeSync(fd); }
-    const kind = documentKind(prefix.subarray(0, bytesRead));
-    if (!kind) throw new ApiError(400, "That file is not a valid PDF or image");
+    const mime = documentMime(prefix.subarray(0, bytesRead));
+    const canonical = mime ? DOCUMENT_EXTENSION[mime] : undefined;
+    if (!mime || !canonical) throw new ApiError(400, "That file is not a valid PDF or image");
 
     // Store the extension that matches the real content, not the uploaded name.
-    const canonical = `.${{ pdf: "pdf", jpeg: "jpg", png: "png", webp: "webp" }[kind]}`;
     const nextName = `${req.file.filename.replace(/\.[^.]+$/, "")}${canonical}`;
     const nextPath = path.join(billDir, nextName);
     fs.renameSync(req.file.path, nextPath);
@@ -108,7 +128,7 @@ const verifyBillDocument: RequestHandler = (req, _res, next) => {
     req.file.path = nextPath;
     req.file.destination = billDir;
     req.file.originalname = nextName;
-    req.file.mimetype = BILL_DOCUMENT_MIME[canonical] ?? req.file.mimetype;
+    req.file.mimetype = mime;
   } catch (error) {
     discardUploads(req);
     return next(error instanceof ApiError ? error : new ApiError(400, "That file is not a valid PDF or image"));
