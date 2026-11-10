@@ -29,8 +29,8 @@ export interface DatabaseTransactionOptions {
  * Both implementations are asynchronous so a network-backed database does not
  * block the event loop. SQLite is wrapped in resolved promises; Postgres uses a
  * connection pool. Transactions are pinned to one connection (SQLite opens a
- * dedicated one) through AsyncLocalStorage, so concurrent requests cannot leak
- * into each other's transaction.
+ * dedicated one) through AsyncLocalStorage. Driver methods follow the current
+ * transaction context; the session passed to `tx` stays bound to that connection.
  */
 export interface DatabaseDriver extends DatabaseSession {
   readonly kind: DatabaseKind;

@@ -195,7 +195,7 @@ export class PostgresDriver implements DatabaseDriver {
     }
   }
 
-  private session(client: pg.Pool | pg.PoolClient): DatabaseSession {
+  private session(client: pg.PoolClient): DatabaseSession {
     const query = async (sql: string, params: unknown[] = []) =>
       client.query(toPostgresPlaceholders(sql), normaliseParams(params));
     return {

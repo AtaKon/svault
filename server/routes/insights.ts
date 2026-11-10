@@ -126,7 +126,9 @@ insightRoutes.post(
     await withSettlementLock(houseId, () => tx(async (session) => {
       // SQLite starts this transaction with BEGIN IMMEDIATE, so another
       // process cannot read and settle the same balance before this insert.
-      // PostgreSQL serializes writers with a row lock on the house.
+      // PostgreSQL's row lock serializes competing settlement writers. Other
+      // ledger changes can commit before or after this transaction and appear
+      // in the next household read.
       if (databaseKind() === "postgres") {
         await session.run("UPDATE houses SET id = id WHERE id = ?", [houseId]);
       }

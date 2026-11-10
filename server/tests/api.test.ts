@@ -7929,6 +7929,9 @@ describe("insights, household split and admin console", () => {
       assert.equal(await childExit, 0, childError);
       assert.equal(JSON.parse(childOutput.slice("ready\n".length)).name, "Locked settlement house");
       await run("UPDATE houses SET name = ? WHERE id = ?", ["Settlement payments", house.data.id]);
+      await assert.rejects(() => tx(async () => {
+        await tx(async () => {}, { writeLock: true });
+      }), /must be started at the outermost level/);
     }
     const owner = await request("/api/auth/me");
     const ownerId = owner.data.user.id;
@@ -8076,6 +8079,9 @@ describe("insights, household split and admin console", () => {
       body: { fromUserId: ownerId, toUserId: memberId, amount: 0.1 },
     });
     assert.equal(paymentToDepartingMember.status, 201, JSON.stringify(paymentToDepartingMember.data));
+    const netTransfers = await request(ledgerPath);
+    assert.equal(netTransfers.data.balances.find((entry: any) => entry.userId === memberId).settled, 1.0);
+    assert.equal(netTransfers.data.balances.find((entry: any) => entry.userId === ownerId).settled, -1.0);
 
     await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [house.data.id, memberId]);
     ledger = await request(ledgerPath);
