@@ -10,6 +10,7 @@ import { ApiError, handler, parseBody, requireHouse } from "../http.js";
 import { MAX_UPLOAD_BYTES, UPLOAD_DIR } from "../config.js";
 import { uploadPath, discardUploads, sniffImage } from "../upload.js";
 import { BILL_TYPE_VALUES } from "../../shared/bill-types.js";
+import { BILL_PHOTO_EXTENSIONS } from "../../shared/bill-document.js";
 import { ELECTRICITY_CONTRACT_COLORS } from "../../shared/types.js";
 import type { BillBreakdownLine, UtilityBill } from "../../shared/types.js";
 
@@ -74,10 +75,7 @@ const BILL_DOCUMENT_TYPES = new Set([
   // Aliases browsers may send before the sniffer normalises them.
   "image/jpg", "image/pjpeg", "image/heif",
 ]);
-const BILL_DOCUMENT_EXTENSIONS = new Set([
-  ...Object.values(DOCUMENT_EXTENSION),
-  ".jpeg", ".heif", ".tiff",
-]);
+const BILL_DOCUMENT_EXTENSIONS = new Set([".pdf", ...BILL_PHOTO_EXTENSIONS]);
 
 /**
  * Detect a supported bill document from its leading bytes. Phone camera rolls

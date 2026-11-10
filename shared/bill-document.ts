@@ -17,7 +17,12 @@ interface PdfTextItem {
 /** Matches the server upload limit; protects re-read from oversized objects. */
 export const MAX_BILL_DOCUMENT_BYTES = 20 * 1024 * 1024;
 
-const IMAGE_FILE_EXTENSIONS = /\.(?:jpe?g|png|webp|gif|avif|heic|heif|bmp|tiff?)$/i;
+/** Extensions the bill photo picker and uploader accept, shared with the server filter. */
+export const BILL_PHOTO_EXTENSIONS: ReadonlySet<string> = new Set([
+  ".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif",
+  ".heic", ".heif", ".bmp", ".tif", ".tiff",
+]);
+
 /**
  * Image types the bill flow can keep or convert to JPEG. The picker advertises
  * `image/*` so phone photo libraries show every photo, but this list is what
@@ -46,7 +51,9 @@ export function isBillPdf(file: File): boolean {
 
 export function isSupportedBillFile(file: File): boolean {
   if (isBillPdf(file)) return true;
-  return BILL_IMAGE_TYPES.has(file.type) || IMAGE_FILE_EXTENSIONS.test(file.name);
+  if (BILL_IMAGE_TYPES.has(file.type)) return true;
+  const dot = file.name.lastIndexOf(".");
+  return dot >= 0 && BILL_PHOTO_EXTENSIONS.has(file.name.slice(dot).toLowerCase());
 }
 
 /** Group PDF text runs into visual lines, keeping wide label/amount gaps. */

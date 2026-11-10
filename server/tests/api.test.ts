@@ -1079,7 +1079,7 @@ describe("bill text parsing", () => {
     const originalDocument = globals.document;
     const originalCreateImageBitmap = globals.createImageBitmap;
     let closed = false;
-    const canvas = {
+    const canvas: any = {
       width: 0,
       height: 0,
       getContext: () => ({
@@ -1108,6 +1108,17 @@ describe("bill text parsing", () => {
         (error: unknown) => error instanceof Error && error.message === BILL_PHOTO_HEIC_ERROR);
       const avif = new File([new Uint8Array([0, 0, 0, 0])], "bill.avif", { type: "image/avif" });
       await assert.rejects(() => prepareBillImage(avif),
+        (error: unknown) => error instanceof Error && error.message === BILL_PHOTO_DECODE_ERROR);
+
+      // The canvas path must fail with the decode code, not a raw DOM error.
+      const gif = new File(["GIF89a000000"], "bill.gif", { type: "image/gif" });
+      globals.createImageBitmap = async () => ({ width: 100, height: 100, close: () => undefined });
+      canvas.getContext = () => null;
+      await assert.rejects(() => prepareBillImage(gif),
+        (error: unknown) => error instanceof Error && error.message === BILL_PHOTO_DECODE_ERROR);
+      canvas.getContext = () => ({ imageSmoothingEnabled: false, imageSmoothingQuality: "", drawImage: () => undefined });
+      canvas.toBlob = (callback: (blob: Blob | null) => void) => callback(null);
+      await assert.rejects(() => prepareBillImage(gif),
         (error: unknown) => error instanceof Error && error.message === BILL_PHOTO_DECODE_ERROR);
     } finally {
       globals.document = originalDocument;
@@ -1167,6 +1178,18 @@ describe("bill text parsing", () => {
       assert.equal(documentMime(new Uint8Array([
         0, 0, 0x07, 0xd0, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x69, 0x66, 0x31, 0, 0, 0, 0, 0x6d, 0x69, 0x66, 0x31,
       ]).buffer), null, "a brand list that continues past the read window is rejected instead of guessed");
+      const boundary = new Uint8Array(1024);
+      boundary.set([0, 0, 4, 0], 0);
+      boundary.set(new TextEncoder().encode("ftyp"), 4);
+      boundary.set(new TextEncoder().encode("mif1"), 8);
+      boundary.set(new TextEncoder().encode("avif"), 1020);
+      assert.equal(documentMime(boundary.buffer), "image/avif", "a brand at the end of the 1024-byte window is read");
+      const beyondWindow = new Uint8Array(1024);
+      beyondWindow.set([0, 0, 4, 0x10], 0);
+      beyondWindow.set(new TextEncoder().encode("ftyp"), 4);
+      beyondWindow.set(new TextEncoder().encode("mif1"), 8);
+      beyondWindow.set(new TextEncoder().encode("mif1"), 1020);
+      assert.equal(documentMime(beyondWindow.buffer), null, "a brand list declaring more than the window is rejected");
       assert.equal(documentMime(new Uint8Array([0x42, 0x4d, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]).buffer), "image/bmp");
       assert.equal(documentMime(new Uint8Array([0x49, 0x49, 0x2a, 0x00, 0, 0, 0, 0, 0, 0, 0, 0]).buffer), "image/tiff");
       assert.equal(documentMime(new TextEncoder().encode("RIFF0000WAVE").buffer), null);
@@ -1192,6 +1215,29 @@ describe("bill text parsing", () => {
         headers: { "content-length": String(21 * 1024 * 1024) },
       })) as typeof fetch;
       assert.equal(await fetchBillFile("/api/houses/x/bills/y/document", "bill"), null, "oversized documents are rejected before buffering");
+
+      // Every stored type must survive fetchBillFile so a saved document can be re-read.
+      const roundTrips: Array<[string, Uint8Array, string]> = [
+        ["image/jpeg", new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0, 0, 0, 0, 0, 0]), "jpg"],
+        ["image/png", new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]), "png"],
+        ["image/webp", new TextEncoder().encode("RIFF0000WEBP"), "webp"],
+        ["image/gif", new TextEncoder().encode("GIF89a000000"), "gif"],
+        ["image/avif", new Uint8Array([0, 0, 0, 0x1c, 0x66, 0x74, 0x79, 0x70, 0x61, 0x76, 0x69, 0x66]), "avif"],
+        ["image/heic", new Uint8Array([0, 0, 0, 0x1c, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63]), "heic"],
+        ["image/bmp", new Uint8Array([0x42, 0x4d, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]), "bmp"],
+        ["image/tiff", new Uint8Array([0x49, 0x49, 0x2a, 0x00, 0, 0, 0, 0, 0, 0, 0, 0]), "tif"],
+        ["application/pdf", pdfBytes, "pdf"],
+      ];
+      for (const [mime, bytes, extension] of roundTrips) {
+        const body = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+        globalThis.fetch = (async () => new Response(body, {
+          status: 200,
+          headers: { "content-type": "application/octet-stream" },
+        })) as typeof fetch;
+        const file = await fetchBillFile("/api/houses/x/bills/y/document", "bill");
+        assert.equal(file?.type, mime, `${mime} re-reads from its bytes`);
+        assert.match(file?.name ?? "", new RegExp(`\\.${extension}$`), `${mime} keeps its canonical extension`);
+      }
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -7812,6 +7858,20 @@ describe("insights, household split and admin console", () => {
     const heifResponse = await fetch(base + heifBill.data.document, { headers: { cookie } });
     assert.equal(heifResponse.headers.get("content-type"), "image/heic");
     assert.equal((await request(`/api/bills/${heifBill.data.id}`, { method: "DELETE" })).status, 200);
+
+    // Browsers without a HEIC MIME report an empty type; the .heif extension must
+    // still pass the upload filter so the sniffer can classify the bytes.
+    const emptyTypeHeif = new File([Buffer.from([
+      0, 0, 0, 20, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x69, 0x66, 0x31, 0, 0, 0, 0, 0x68, 0x65, 0x69, 0x63,
+    ])], "photo.heif");
+    const emptyTypeForm = form(emptyTypeHeif, "Empty type HEIF");
+    emptyTypeForm.delete("document");
+    emptyTypeForm.append("document", emptyTypeHeif, "photo.heif");
+    const emptyTypeBill = await request(`/api/houses/${billHouse}/bills`, { method: "POST", body: emptyTypeForm });
+    assert.equal(emptyTypeBill.status, 201, "a .heif name with an empty MIME is accepted");
+    const storedEmptyType = (await get<{ document: string }>("SELECT document FROM bills WHERE id = ?", [emptyTypeBill.data.id]))?.document;
+    assert.match(storedEmptyType ?? "", /\.heic$/);
+    assert.equal((await request(`/api/bills/${emptyTypeBill.data.id}`, { method: "DELETE" })).status, 200);
 
     const tiff = new Blob([Buffer.from([0x49, 0x49, 0x2a, 0x00, 0, 0, 0, 0, 0, 0, 0, 0])], { type: "image/tiff" });
     const tiffForm = form(tiff, "TIFF bill scan");
