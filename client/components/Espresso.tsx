@@ -36,9 +36,9 @@ function localInput(iso: string): string {
 
 /** Accept both "18.5" and "18,5" so a decimal comma never becomes an empty field. */
 function numberOrNull(value: string): number | null {
-  const normalised = value.trim().replace(/\s/g, "").replace(/,/g, ".");
-  if (!normalised) return null;
-  const parsed = Number(normalised);
+  const trimmed = value.trim();
+  if (!trimmed || /\s/.test(trimmed)) return null;
+  const parsed = Number(trimmed.replace(/,/g, "."));
   return Number.isFinite(parsed) ? parsed : null;
 }
 

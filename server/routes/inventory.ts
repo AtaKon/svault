@@ -267,12 +267,17 @@ async function resolveShotEquipment(
   textValue: string | null | undefined,
   current: { id: string | null; text: string | null },
 ): Promise<{ id: string | null; text: string | null }> {
-  if (idValue !== undefined) {
-    if (!idValue) return { id: null, text: null };
+  if (idValue) {
     const equipment = await shotEquipment(houseId, idValue, kind);
-    return { id: equipment!.id, text: equipment!.name };
+    return { id: equipment.id, text: equipment.name };
   }
-  if (textValue !== undefined) return { id: null, text: textValue };
+  // A null or empty pick still accepts a legacy text snapshot. Clients that
+  // send only `grinderId: null` with no text clear both.
+  if (idValue !== undefined && textValue !== undefined) {
+    return { id: null, text: textValue || null };
+  }
+  if (idValue !== undefined) return { id: null, text: null };
+  if (textValue !== undefined) return { id: null, text: textValue || null };
   return current;
 }
 
