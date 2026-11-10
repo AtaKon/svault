@@ -1085,10 +1085,14 @@ describe("bill text parsing", () => {
     assert.deepEqual(billPhotoSize(100, 100, 0), { width: 1, height: 1 }, "a zero max edge never produces a zero canvas");
   });
 
-  it("maps every accepted bill photo suffix to a served MIME type", () => {
+  it("maps every accepted bill photo suffix to a served MIME type", async () => {
     assert.ok(BILL_DOCUMENT_MIME[".pdf"]);
     for (const extension of BILL_PHOTO_EXTENSIONS) {
       assert.ok(BILL_DOCUMENT_MIME[extension], `missing served MIME for ${extension}`);
+    }
+    const { DOCUMENT_EXTENSIONS } = await import("../../shared/bill-document.js");
+    for (const [mime, extension] of Object.entries(DOCUMENT_EXTENSIONS)) {
+      assert.equal(BILL_DOCUMENT_MIME[`.${extension}`], mime, `missing served extension for ${mime}`);
     }
   });
 

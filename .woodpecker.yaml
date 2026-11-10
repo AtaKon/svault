@@ -28,7 +28,7 @@ steps:
       - npm run typecheck
       # The SPA fallback test expects dist/client to exist.
       - npm run build
-      - npm test
+      - SV_PDFJS_SMOKE_REQUIRED=1 npm test
       - |
         NODE_ENV=production PORT=4100 DATA_DIR=./data-ci npm start &
         for attempt in $$(seq 1 30); do

@@ -73,15 +73,15 @@ function requestFiles(req: Request): Express.Multer.File[] {
   return [];
 }
 
-/** Delete every file multer stored for this request. */
+/** Delete request files only when they are strictly under the trusted Multer destination. */
 function discardFilesUnder(req: Request, root: string) {
   const uploadRoot = path.resolve(root);
   for (const file of requestFiles(req)) {
     if (!file.path) continue;
     const resolved = path.resolve(file.path);
     const relative = path.relative(uploadRoot, resolved);
-    // Multer writes inside UPLOAD_DIR. Never let a malformed request object
-    // turn this cleanup helper into an arbitrary file deletion primitive.
+    // Never let a malformed request object turn cleanup into an arbitrary
+    // file deletion primitive. Archive uploads use a separate temp destination.
     if (relative && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) {
       fs.rmSync(resolved, { force: true });
     }
@@ -156,7 +156,7 @@ export function uploader(prefix: UploadPrefix, access: UploadAccess = "member"):
   };
 }
 
-/** A temporary directory for large archive uploads (restore, dataset import). */
+/** A temporary directory for large archive uploads, separate from durable UPLOAD_DIR storage. */
 export function archiveUploadDir(): string {
   const dir = path.join(os.tmpdir(), "svault-uploads");
   fs.mkdirSync(dir, { recursive: true });
@@ -168,9 +168,9 @@ export function archiveUploadDir(): string {
  * file is removed automatically once the response has been sent.
  */
 export function archiveUploader(field: string, maxBytes: number, access: UploadAccess): RequestHandler[] {
-  // Capture one resolved path for both Multer and the response cleanup hook so
-  // the cleanup boundary cannot drift from the directory receiving the file.
-  const dest = archiveUploadDir();
+  // Capture one absolute path for Multer and cleanup. This temp destination is
+  // intentionally outside UPLOAD_DIR, so cleanup must use this exact boundary.
+  const dest = path.resolve(archiveUploadDir());
   const upload = multer({
     storage: multer.diskStorage({
       destination: (_req, _file, cb) => cb(null, dest),
@@ -179,12 +179,12 @@ export function archiveUploader(field: string, maxBytes: number, access: UploadA
     limits: { fileSize: maxBytes, files: 1 },
   });
   const cleanup: RequestHandler = (req, res, next) => {
-    // This callback runs after the route finishes, when Multer has populated
-    // req.file and the route has finished reading the archive.
+    // Register only after Multer completes, so req.file is populated before
+    // the response-close cleanup can run after the route finishes.
     res.on("close", () => discardFilesUnder(req, dest));
     next();
   };
-  return [accessGuard(access), cleanup, upload.single(field)];
+  return [accessGuard(access), upload.single(field), cleanup];
 }
 
 export function uploadPath(prefix: UploadPrefix, filename: string): string {

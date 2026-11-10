@@ -150,7 +150,7 @@ All notable changes to SVault are documented here. The format follows
 
 ### Fixed
 
-- Bill photo resizing now treats an infinite edge limit as “do not downscale”; invalid nonpositive or NaN limits still produce a valid minimum canvas.
+- Bill photo resizing now treats a positive-infinite edge limit as “do not downscale”; invalid nonpositive or NaN limits still produce a valid minimum canvas.
 - Deleting an item now removes its low-stock and expiry reminders, and the reminder scan
   cleans up orphaned reminders left behind by earlier deletions or restores.
 - Dashboard side panels stay inside their column when a recipe or item name has a long unbroken word.
