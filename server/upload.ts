@@ -74,8 +74,8 @@ function requestFiles(req: Request): Express.Multer.File[] {
 }
 
 /** Delete every file multer stored for this request. */
-export function discardUploads(req: Request) {
-  const uploadRoot = path.resolve(UPLOAD_DIR);
+function discardFilesUnder(req: Request, root: string) {
+  const uploadRoot = path.resolve(root);
   for (const file of requestFiles(req)) {
     if (!file.path) continue;
     const resolved = path.resolve(file.path);
@@ -86,6 +86,10 @@ export function discardUploads(req: Request) {
       fs.rmSync(resolved, { force: true });
     }
   }
+}
+
+export function discardUploads(req: Request) {
+  discardFilesUnder(req, UPLOAD_DIR);
 }
 
 /** Reject uploads whose content is not one of the accepted image formats. */
@@ -172,7 +176,7 @@ export function archiveUploader(field: string, maxBytes: number, access: UploadA
     limits: { fileSize: maxBytes, files: 1 },
   });
   const cleanup: RequestHandler = (req, res, next) => {
-    res.on("close", () => discardUploads(req));
+    res.on("close", () => discardFilesUnder(req, archiveUploadDir()));
     next();
   };
   return [accessGuard(access), cleanup, upload.single(field)];

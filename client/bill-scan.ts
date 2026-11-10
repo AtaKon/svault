@@ -72,7 +72,7 @@ async function readPdf(
       canvas.height = Math.max(1, Math.ceil(viewport.height));
       const context = canvas.getContext("2d");
       if (!context) return "";
-      // Pinned pdfjs-dist v5 takes the canvas element (canvasContext is legacy).
+      // Pass the canvas element directly to PDF.js.
       await page.render({ canvas, viewport }).promise;
       const blob = await canvasToBlob(canvas);
       canvas.width = 0;

@@ -72,19 +72,19 @@ export function MorePage() {
         </Button>
       </Card>
 
-      <div className="grid gap-2 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         {LINKS.map((link) => (
           <button
             key={link.to}
             onClick={() => navigate(link.to)}
-            className="flex items-center gap-3 rounded-xl border border-line bg-surface px-3.5 py-3 text-left transition-colors hover:bg-raised"
+            className="flex min-w-0 items-center gap-3 rounded-xl border border-line bg-surface px-3.5 py-3 text-left transition-colors hover:bg-raised"
           >
             <span className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-xl", link.tint)}>
               <Icon name={link.icon} size={18} />
             </span>
             <span className="min-w-0 flex-1">
-              <span className="block text-[13px] font-medium">{t(link.label)}</span>
-              <span className="block truncate text-[11px] text-muted">{t(link.description)}</span>
+              <span className="block break-words text-[13px] font-medium">{t(link.label)}</span>
+              <span className="block break-words text-[11px] text-muted">{t(link.description)}</span>
             </span>
             <Icon name="chevronRight" size={15} className="text-muted" />
           </button>
