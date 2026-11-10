@@ -26,8 +26,10 @@ export function sniffImageBytes(head: Uint8Array): string | null {
     if (mime) return mime;
   }
   if (head.length >= 14 && ascii(0, 2) === "BM") {
-    // A real BMP starts with a 14-byte file header: the reserved bytes are zero
-    // and both the declared file size and the pixel-array offset are plausible.
+    // A common Windows BMP starts with a 14-byte file header: the reserved
+    // bytes are zero and both the declared file size and the pixel-array offset
+    // are plausible. OS/2 headers with non-zero reserved fields are not needed
+    // for camera photos.
     const size = (head[2] | (head[3] << 8) | (head[4] << 16) | (head[5] << 24)) >>> 0;
     const offset = (head[10] | (head[11] << 8) | (head[12] << 16) | (head[13] << 24)) >>> 0;
     if (head[6] === 0 && head[7] === 0 && head[8] === 0 && head[9] === 0 && size >= 54 && offset >= 54) {
@@ -61,12 +63,13 @@ function ftypMime(head: Uint8Array, ascii: (start: number, end: number) => strin
       if (AVIF_BRANDS.has(brand)) return "image/avif";
       if (HEIC_BRANDS.has(brand)) heic = true;
     }
-    // If the brand list continues past the bytes we have, an AVIF brand may be
-    // beyond the window. Do not guess HEIC: reject instead of mislabelling.
-    if (declared === 0 || declared > head.length) return null;
-    // A generic mif1/msf1 container without a HEIC brand may hold another codec
-    // (for example JPEG 2000); only a real HEIC brand makes it a HEIC photo.
-    return heic ? "image/heic" : null;
+    // A HEIC brand already found in the scanned prefix is enough, even when the
+    // declared box continues past the read window.
+    if (heic) return "image/heic";
+    // Without a codec brand we cannot tell what the container holds. If the
+    // brand list continues past the bytes we have, an AVIF brand may be beyond
+    // the window; reject instead of guessing HEIC or AVIF.
+    return null;
   }
   return "image/heic";
 }

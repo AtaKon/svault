@@ -42,6 +42,7 @@ const DOCUMENT_EXTENSIONS: Record<string, string> = {
   "image/gif": "gif",
   "image/avif": "avif",
   "image/heic": "heic",
+  "image/heif": "heif",
   "image/bmp": "bmp",
   "image/tiff": "tif",
 };
@@ -116,7 +117,11 @@ export function documentMime(buffer: ArrayBuffer): string | null {
 
 /** JPEG name used when a phone photo is re-encoded before upload. */
 export function billPhotoName(name: string): string {
-  return `${name.replace(/\.[^.]+$/, "").trim() || "bill"}.jpg`;
+  // A picker normally hands over a basename, but never let a directory or a
+  // control character survive into the File name shown or sent upstream.
+  const base = (name.split(/[\\/]/).pop() ?? "").replace(/[\u0000-\u001f\u007f]/g, "").trim();
+  const stem = base.replace(/\.[^.]+$/, "").trim();
+  return `${stem || "bill"}.jpg`;
 }
 
 /** Fit a photo inside `maxEdge` without ever upscaling it. */

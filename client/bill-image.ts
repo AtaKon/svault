@@ -34,9 +34,10 @@ export async function prepareBillImage(file: File): Promise<File> {
   } catch {
     throw new Error(heic ? BILL_PHOTO_HEIC_ERROR : BILL_PHOTO_DECODE_ERROR);
   }
+  let canvas: HTMLCanvasElement | null = null;
   try {
     const { width, height } = billPhotoSize(bitmap.width, bitmap.height, MAX_PHOTO_EDGE);
-    const canvas = document.createElement("canvas");
+    canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
     const context = canvas.getContext("2d");
@@ -45,13 +46,16 @@ export async function prepareBillImage(file: File): Promise<File> {
     context.imageSmoothingQuality = "high";
     context.drawImage(bitmap, 0, 0, width, height);
     const blob = await canvasToJpeg(canvas);
-    canvas.width = 0;
-    canvas.height = 0;
     if (!blob) throw new Error(BILL_PHOTO_DECODE_ERROR);
     return new File([blob], billPhotoName(file.name), { type: "image/jpeg", lastModified: Date.now() });
   } catch {
     throw new Error(heic ? BILL_PHOTO_HEIC_ERROR : BILL_PHOTO_DECODE_ERROR);
   } finally {
+    // Release the large backing store on every path, not just success.
+    if (canvas) {
+      canvas.width = 0;
+      canvas.height = 0;
+    }
     bitmap.close();
   }
 }

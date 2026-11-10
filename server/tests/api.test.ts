@@ -1068,6 +1068,10 @@ describe("bill text parsing", () => {
     assert.equal(billPhotoName(".hidden"), "bill.jpg");
     assert.equal(billPhotoName("bill.final.tiff"), "bill.final.jpg");
     assert.equal(billPhotoName("a.b.c"), "a.b.jpg");
+    assert.equal(billPhotoName("../../etc/passwd"), "passwd.jpg", "path separators never survive");
+    assert.equal(billPhotoName("..\\..\\evil.heic"), "evil.jpg", "Windows separators never survive");
+    assert.equal(billPhotoName("  spaced  .jpg"), "spaced.jpg");
+    assert.equal(billPhotoName("evil\u0000name.jpg"), "evilname.jpg", "control characters are stripped");
     assert.deepEqual(billPhotoSize(4032, 3024, 2600), { width: 2600, height: 1950 }, "a large phone photo is scaled down");
     assert.deepEqual(billPhotoSize(800, 600, 2600), { width: 800, height: 600 }, "small photos are never upscaled");
     assert.deepEqual(billPhotoSize(0, 0, 2600), { width: 1, height: 1 }, "a degenerate size still produces a valid canvas");
@@ -1123,10 +1127,13 @@ describe("bill text parsing", () => {
       canvas.getContext = () => null;
       await assert.rejects(() => prepareBillImage(gif),
         (error: unknown) => error instanceof Error && error.message === BILL_PHOTO_DECODE_ERROR);
+      assert.equal(canvas.width, 0, "a failed conversion still clears the canvas");
+      assert.equal(canvas.height, 0);
       canvas.getContext = () => ({ imageSmoothingEnabled: false, imageSmoothingQuality: "", drawImage: () => undefined });
       canvas.toBlob = (callback: (blob: Blob | null) => void) => callback(null);
       await assert.rejects(() => prepareBillImage(gif),
         (error: unknown) => error instanceof Error && error.message === BILL_PHOTO_DECODE_ERROR);
+      assert.equal(canvas.width, 0, "a null blob still clears the canvas");
     } finally {
       globals.document = originalDocument;
       globals.createImageBitmap = originalCreateImageBitmap;
@@ -1185,6 +1192,9 @@ describe("bill text parsing", () => {
       assert.equal(documentMime(new Uint8Array([
         0, 0, 0x07, 0xd0, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x69, 0x66, 0x31, 0, 0, 0, 0, 0x6d, 0x69, 0x66, 0x31,
       ]).buffer), null, "a brand list that continues past the read window is rejected instead of guessed");
+      assert.equal(documentMime(new Uint8Array([
+        0, 0, 0x07, 0xd0, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x69, 0x66, 0x31, 0, 0, 0, 0, 0x68, 0x65, 0x69, 0x63,
+      ]).buffer), "image/heic", "a HEIC brand found before the window edge is enough");
       const boundary = new Uint8Array(1024);
       boundary.set([0, 0, 4, 0], 0);
       boundary.set(new TextEncoder().encode("ftyp"), 4);
@@ -1253,6 +1263,31 @@ describe("bill text parsing", () => {
       }
     } finally {
       globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("only reports image types the bill storage map knows", async () => {
+    const { sniffImage } = await import("../upload.js");
+    const allowed = new Set([
+      "image/jpeg", "image/png", "image/webp", "image/gif",
+      "image/avif", "image/heic", "image/bmp", "image/tiff",
+    ]);
+    const bmp = new Uint8Array(54);
+    bmp.set([0x42, 0x4d, 54, 0, 0, 0, 0, 0, 0, 0, 54, 0, 0, 0], 0);
+    const samples = [
+      new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0, 0, 0, 0, 0, 0]),
+      new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]),
+      new TextEncoder().encode("RIFF0000WEBP"),
+      new TextEncoder().encode("GIF89a000000"),
+      new Uint8Array([0, 0, 0, 0x1c, 0x66, 0x74, 0x79, 0x70, 0x61, 0x76, 0x69, 0x66]),
+      new Uint8Array([0, 0, 0, 0x1c, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63]),
+      bmp,
+      new Uint8Array([0x49, 0x49, 0x2a, 0x00, 0, 0, 0, 0, 0, 0, 0, 0]),
+      new TextEncoder().encode("BMW is not a bitmap"),
+    ];
+    for (const sample of samples) {
+      const mime = sniffImage(Buffer.from(sample));
+      assert.ok(mime === null || allowed.has(mime), `unexpected sniffer output ${mime}`);
     }
   });
 });
