@@ -60,7 +60,7 @@ const BILL_DOCUMENT_MIME: Record<string, string> = {
 const BILL_DOCUMENT_TYPES = new Set([
   ...Object.keys(DOCUMENT_EXTENSIONS),
   // Aliases browsers may send before the sniffer normalises them.
-  "image/jpg", "image/pjpeg",
+  "image/jpg", "image/pjpeg", "image/heif",
 ]);
 // Single source of truth: the shared picker list plus the PDF extension. The
 // local set is built once from the imported BILL_PHOTO_EXTENSIONS; there is no

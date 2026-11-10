@@ -6771,6 +6771,21 @@ describe("backup and restore", () => {
 describe("dataset import", () => {
   const png = () => encodePng(8, 8, Buffer.alloc(8 * 8 * 4, 180));
 
+  it("removes temporary archive uploads after a rejected preview", async () => {
+    const { archiveUploadDir } = await import("../upload.js");
+    const { readdirSync } = await import("node:fs");
+    const dir = archiveUploadDir();
+    const before = new Set(readdirSync(dir));
+    const form = new FormData();
+    form.append("dataset", new Blob(["not a zip"], { type: "application/zip" }), "bad.zip");
+    const response = await fetch(`${base}/api/houses/${houseId}/photos/dataset/preview`, {
+      method: "POST", headers: { cookie }, body: form,
+    });
+    assert.equal(response.status, 400);
+    await response.arrayBuffer();
+    assert.deepEqual(readdirSync(dir).filter((name) => !before.has(name)), []);
+  });
+
   it("parses YOLO labels, classes and splits", async () => {
     const zip = new JSZip();
     zip.file("classes.txt", "apple\npear\n");
