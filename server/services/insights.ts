@@ -470,30 +470,30 @@ export async function householdInsight(
 
   // Recorded transfers reduce the outstanding balances without changing the
   // original receipts or bills that created those debts.
-  const transferRows = await session.all<{ from_user_id: string; to_user_id: string; amount: number }>(
-    "SELECT from_user_id, to_user_id, amount FROM household_settlements WHERE house_id = ? ORDER BY created_at",
+  const transferRows = await session.all<{ from_user_id: string; to_user_id: string; amount_cents: number }>(
+    "SELECT from_user_id, to_user_id, amount_cents FROM household_settlements WHERE house_id = ? ORDER BY created_at",
     [houseId],
   );
   const transferBalance = new Map<string, number>();
   for (const transfer of transferRows) {
     const from = transfer.from_user_id;
     const to = transfer.to_user_id;
-    const amount = money(transfer.amount);
+    const amountCents = Number(transfer.amount_cents);
     // A transfer only offsets the live household ledger while both parties
     // are represented. Receipt shares are recalculated when someone leaves;
     // retaining only one side of the old transfer could invert the remaining
     // members' suggested obligations. The row is kept and takes effect again
     // if the same member rejoins alongside their original receipt shares.
     if (memberIds.has(from) && memberIds.has(to)) {
-      transferBalance.set(from, (transferBalance.get(from) ?? 0) + amount);
-      transferBalance.set(to, (transferBalance.get(to) ?? 0) - amount);
+      transferBalance.set(from, (transferBalance.get(from) ?? 0) + amountCents);
+      transferBalance.set(to, (transferBalance.get(to) ?? 0) - amountCents);
     }
   }
 
   const balances: HouseholdBalance[] = members.map((member) => {
     const memberPaid = money(paid.get(member.id) ?? 0);
     const memberShare = money(owed.get(member.id) ?? 0);
-    const memberSettled = money(transferBalance.get(member.id) ?? 0);
+    const memberSettled = money((transferBalance.get(member.id) ?? 0) / 100);
     // A debtor's outgoing payment raises their negative balance toward zero;
     // the recipient's balance falls by the same amount.
     return {

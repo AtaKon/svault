@@ -12,6 +12,8 @@ export type DatabaseKind = "sqlite" | "postgres";
 
 /** SQL operations bound to the connection that owns a transaction. */
 export interface DatabaseSession {
+  /** Database backend owning this pinned transaction connection. */
+  readonly kind: DatabaseKind;
   all<T = Record<string, any>>(sql: string, params?: unknown[]): Promise<T[]>;
   get<T = Record<string, any>>(sql: string, params?: unknown[]): Promise<T | undefined>;
   run(sql: string, params?: unknown[]): Promise<RunResult>;

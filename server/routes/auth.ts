@@ -149,7 +149,12 @@ authRoutes.post(
           "SELECT * FROM house_invites WHERE id = ? AND accepted_at IS NULL",
           [invite.id],
         );
-        if (!currentInvite || inviteExpired(currentInvite)) throw new ApiError(400, "That invite link is no longer valid");
+        if (!currentInvite || currentInvite.house_id !== invite.house_id || inviteExpired(currentInvite)) {
+          throw new ApiError(400, "That invite link is no longer valid");
+        }
+        if (currentInvite.email && currentInvite.email.toLowerCase() !== body.email) {
+          throw new ApiError(403, "This invite was sent to a different email address");
+        }
         await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING", [
           currentInvite.house_id,
           userId,
@@ -362,7 +367,12 @@ authRoutes.post(
         "SELECT * FROM house_invites WHERE id = ? AND accepted_at IS NULL",
         [invite.id],
       );
-      if (!currentInvite || inviteExpired(currentInvite)) throw new ApiError(404, "That invite link is no longer valid");
+      if (!currentInvite || currentInvite.house_id !== invite.house_id || inviteExpired(currentInvite)) {
+        throw new ApiError(404, "That invite link is no longer valid");
+      }
+      if (currentInvite.email && currentInvite.email.toLowerCase() !== req.user!.email.toLowerCase()) {
+        throw new ApiError(403, "This invite was sent to a different email address");
+      }
       const membership = await session.get(
         "SELECT user_id FROM house_members WHERE house_id = ? AND user_id = ?",
         [currentInvite.house_id, req.user!.id],

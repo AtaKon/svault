@@ -199,6 +199,7 @@ export class PostgresDriver implements DatabaseDriver {
     const query = async (sql: string, params: unknown[] = []) =>
       client.query(toPostgresPlaceholders(sql), normaliseParams(params));
     return {
+      kind: "postgres",
       all: async <T = Record<string, any>>(sql: string, params: unknown[] = []) =>
         (await query(sql, params)).rows as T[],
       get: async <T = Record<string, any>>(sql: string, params: unknown[] = []) =>

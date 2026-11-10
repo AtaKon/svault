@@ -97,7 +97,7 @@ insightRoutes.get(
 
 insightRoutes.post(
   "/:houseId/insights/settlements",
-  limitRequests(limiters.insights, userOrIp, "Too many settlement requests. Try again later."),
+  limitRequests(limiters.settlements, userOrIp, "Too many settlement requests. Try again later."),
   handler(async (req, res) => {
     const { houseId } = await requireHouse(req, "member");
     const body = parseBody(settlementBody, req.body);
@@ -109,12 +109,13 @@ insightRoutes.post(
       if (!await lockHouseholdLedger(session, houseId)) throw new ApiError(404, "House not found");
       const amountCents = Math.round(amount * 100);
       const prior = await session.get<{
+        settlement_id: string;
         from_user_id: string;
         to_user_id: string;
         amount_cents: number;
         created_by: string;
       }>(
-        `SELECT from_user_id, to_user_id, amount_cents, created_by
+        `SELECT settlement_id, from_user_id, to_user_id, amount_cents, created_by
          FROM household_settlement_requests WHERE house_id = ? AND idempotency_key = ?`,
         [houseId, body.idempotencyKey],
       );
@@ -123,7 +124,15 @@ insightRoutes.post(
             Number(prior.amount_cents) !== amountCents || prior.created_by !== req.user!.id) {
           throw new ApiError(409, "This idempotency key was already used for a different payment");
         }
-        return { insight: await householdInsight(houseId, session), replayed: true };
+        return {
+          replayed: true,
+          settlement: {
+            id: prior.settlement_id,
+            fromUserId: prior.from_user_id,
+            toUserId: prior.to_user_id,
+            amount: Number(prior.amount_cents) / 100,
+          },
+        };
       }
       const memberIds = new Set((await session.all<{ user_id: string }>(
         "SELECT user_id FROM house_members WHERE house_id = ?",
@@ -145,9 +154,9 @@ insightRoutes.post(
       }
       const settlementId = newId("hst");
       await session.run(
-        `INSERT INTO household_settlements (id, house_id, from_user_id, to_user_id, amount, created_by, created_at)
+        `INSERT INTO household_settlements (id, house_id, from_user_id, to_user_id, amount_cents, created_by, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [settlementId, houseId, body.fromUserId, body.toUserId, amountCents / 100, req.user!.id, now()],
+        [settlementId, houseId, body.fromUserId, body.toUserId, amountCents, req.user!.id, now()],
       );
       await session.run(
         `INSERT INTO household_settlement_requests
@@ -157,7 +166,11 @@ insightRoutes.post(
       );
       return { insight: await householdInsight(houseId, session), replayed: false };
     }, { writeLock: true });
-    res.status(result.replayed ? 200 : 201).json(result.insight);
+    if (result.replayed) {
+      res.status(200).json({ replayed: true, settlement: result.settlement });
+    } else {
+      res.status(201).json(result.insight);
+    }
   }),
 );
 

@@ -328,7 +328,7 @@ CREATE TABLE IF NOT EXISTS household_settlements (
   house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
   from_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   to_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  amount DOUBLE PRECISION NOT NULL CHECK (amount > 0),
+  amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
   created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL,
   CHECK (from_user_id <> to_user_id)

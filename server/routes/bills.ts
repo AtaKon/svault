@@ -432,7 +432,7 @@ billRoutes.post("/:houseId/bills", requireHouseBillMember, billUpload.single("do
     // retain the document if a follow-up query cannot prove it is unreferenced.
     if (filename) {
       try {
-        const reference = await get("SELECT id FROM bills WHERE document = ?", [filename]);
+        const reference = await get("SELECT id FROM bills WHERE house_id = ? AND document = ?", [created.house_id, filename]);
         if (!reference) await deleteDocument(filename);
       } catch {
         // Keep the upload when the database outcome cannot be confirmed.

@@ -132,16 +132,27 @@ export function InsightsPage() {
     const key = `${settlement.fromUserId}:${settlement.toUserId}`;
     setSettling(key);
     try {
-      const updated = await api<HouseholdData>(`/api/houses/${house.id}/insights/settlements`, {
-        method: "POST",
-        body: {
-          idempotencyKey: crypto.randomUUID(),
-          fromUserId: settlement.fromUserId,
-          toUserId: settlement.toUserId,
-          amount: settlement.amount,
+      const result = await api<HouseholdData | { replayed: true; settlement: { id: string; fromUserId: string; toUserId: string; amount: number } }>(
+        `/api/houses/${house.id}/insights/settlements`,
+        {
+          method: "POST",
+          body: {
+            idempotencyKey: crypto.randomUUID(),
+            fromUserId: settlement.fromUserId,
+            toUserId: settlement.toUserId,
+            amount: Math.round(settlement.amount * 100) / 100,
+          },
         },
-      });
-      setHousehold(updated);
+      );
+      if ("replayed" in result) {
+        try {
+          await load();
+        } catch {
+          // The original payment was already recorded; keep that outcome visible.
+        }
+      } else {
+        setHousehold(result);
+      }
       toast.success(t("Payment recorded"));
     } catch (err) {
       toast.error(err instanceof Error ? t(err.message) : t("Could not record the payment"));

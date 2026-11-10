@@ -8747,14 +8747,25 @@ describe("insights, household split and admin console", () => {
       partialPaymentKey,
     );
     assert.equal(partialPaymentReplay.status, 200, JSON.stringify(partialPaymentReplay.data));
-    assert.equal(partialPaymentReplay.data.balances.find((entry: any) => entry.userId === memberId).settled, 0.01);
+    assert.equal(partialPaymentReplay.data.replayed, true);
+    assert.equal(partialPaymentReplay.data.settlement.amount, 0.01);
+    ledger = await request(ledgerPath);
+    assert.equal(ledger.data.balances.find((entry: any) => entry.userId === memberId).settled, 0.01);
     const reusedKey = await postSettlement(
       { fromUserId: memberId, toUserId: ownerId, amount: 0.02 },
       partialPaymentKey,
     );
     assert.equal(reusedKey.status, 409);
 
-    const fullPayment = await postSettlement({ fromUserId: memberId, toUserId: ownerId, amount: 0.49 });
+    const noisyCentsPayment = await postSettlement({
+      fromUserId: memberId,
+      toUserId: ownerId,
+      amount: 0.1 + 0.2,
+    });
+    assert.equal(noisyCentsPayment.status, 201, JSON.stringify(noisyCentsPayment.data));
+    assert.equal(noisyCentsPayment.data.balances.find((entry: any) => entry.userId === memberId).settled, 0.31);
+
+    const fullPayment = await postSettlement({ fromUserId: memberId, toUserId: ownerId, amount: 0.19 });
     assert.equal(fullPayment.status, 201, JSON.stringify(fullPayment.data));
     assert.deepEqual(fullPayment.data.settlements, []);
     assert.equal(fullPayment.data.balances.find((entry: any) => entry.userId === memberId).balance, 0);
@@ -8894,19 +8905,19 @@ describe("insights, household split and admin console", () => {
     assert.deepEqual(rejoinedLedger.data.settlements, []);
 
     const previousRateLimit = process.env.SV_RATE_LIMIT;
-    const previousInsightsLimit = process.env.SV_RATE_LIMIT_INSIGHTS;
+    const previousSettlementsLimit = process.env.SV_RATE_LIMIT_SETTLEMENTS;
     process.env.SV_RATE_LIMIT = "on";
-    process.env.SV_RATE_LIMIT_INSIGHTS = "1/60";
-    limiters.insights.reset(`user:${ownerId}`);
+    process.env.SV_RATE_LIMIT_SETTLEMENTS = "1/60";
+    limiters.settlements.reset(`user:${ownerId}`);
     try {
       const firstLimitedRequest = await postSettlement({ fromUserId: memberId, toUserId: ownerId, amount: 0.01 });
       assert.equal(firstLimitedRequest.status, 400, JSON.stringify(firstLimitedRequest.data));
       const secondLimitedRequest = await postSettlement({ fromUserId: memberId, toUserId: ownerId, amount: 0.01 });
       assert.equal(secondLimitedRequest.status, 429, JSON.stringify(secondLimitedRequest.data));
     } finally {
-      limiters.insights.reset(`user:${ownerId}`);
-      if (previousInsightsLimit === undefined) delete process.env.SV_RATE_LIMIT_INSIGHTS;
-      else process.env.SV_RATE_LIMIT_INSIGHTS = previousInsightsLimit;
+      limiters.settlements.reset(`user:${ownerId}`);
+      if (previousSettlementsLimit === undefined) delete process.env.SV_RATE_LIMIT_SETTLEMENTS;
+      else process.env.SV_RATE_LIMIT_SETTLEMENTS = previousSettlementsLimit;
       if (previousRateLimit === undefined) delete process.env.SV_RATE_LIMIT;
       else process.env.SV_RATE_LIMIT = previousRateLimit;
     }

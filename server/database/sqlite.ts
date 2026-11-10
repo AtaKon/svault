@@ -373,6 +373,7 @@ COMMIT;`);
 
   private session(conn: DatabaseSync): DatabaseSession {
     return {
+      kind: "sqlite",
       all: async <T = Record<string, any>>(sql: string, params: unknown[] = []) =>
         conn.prepare(sql).all(...normaliseParams(params)) as unknown as T[],
       get: async <T = Record<string, any>>(sql: string, params: unknown[] = []) =>
@@ -780,7 +781,7 @@ CREATE TABLE IF NOT EXISTS household_settlements (
   house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
   from_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   to_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  amount REAL NOT NULL CHECK (amount > 0),
+  amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
   created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL,
   CHECK (from_user_id <> to_user_id)
