@@ -272,9 +272,16 @@ export function BillsPage() {
     }
   };
 
-  const photoErrorMessage = (error: unknown) => error instanceof Error && error.message === BILL_PHOTO_HEIC_ERROR
-    ? t("This browser cannot read HEIC photos. Take a photo with the camera button or choose a JPEG or PNG.")
-    : t("This browser could not read that photo. Take a new photo or choose a JPEG or PNG.");
+  const photoErrorMessage = (error: unknown, saved = false) => {
+    if (error instanceof Error && error.message === BILL_PHOTO_HEIC_ERROR) {
+      return saved
+        ? t("This browser cannot read the saved HEIC photo. Upload a JPEG version to read it again.")
+        : t("This browser cannot read HEIC photos. Take a photo with the camera button or choose a JPEG or PNG.");
+    }
+    return saved
+      ? t("This browser could not read the saved photo. Upload a JPEG version to read it again.")
+      : t("This browser could not read that photo. Take a new photo or choose a JPEG or PNG.");
+  };
 
   const chooseFile = async (picked: File | null) => {
     if (!picked || scanning || preparing) return;
@@ -429,7 +436,7 @@ export function BillsPage() {
         prepared = await prepareBillImage(saved);
       } catch (error) {
         if (import.meta.env.DEV) console.error("[bill-scan]", error);
-        if (run === readRun.current) toast.error(photoErrorMessage(error));
+        if (run === readRun.current) toast.error(photoErrorMessage(error, true));
         return;
       }
       if (run !== readRun.current) return;

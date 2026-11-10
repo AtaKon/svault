@@ -155,6 +155,8 @@ const EL: Record<string, string> = {
   "Could not read the bill document": "Δεν ήταν δυνατή η ανάγνωση του εγγράφου λογαριασμού",
   "This browser could not read that photo. Take a new photo or choose a JPEG or PNG.": "Αυτό το πρόγραμμα περιήγησης δεν μπόρεσε να διαβάσει τη φωτογραφία. Τράβηξε νέα φωτογραφία ή επίλεξε JPEG ή PNG.",
   "This browser cannot read HEIC photos. Take a photo with the camera button or choose a JPEG or PNG.": "Αυτό το πρόγραμμα περιήγησης δεν μπορεί να διαβάσει φωτογραφίες HEIC. Τράβηξε φωτογραφία με το κουμπί της κάμερας ή επίλεξε JPEG ή PNG.",
+  "This browser cannot read the saved HEIC photo. Upload a JPEG version to read it again.": "Αυτό το πρόγραμμα περιήγησης δεν μπορεί να διαβάσει την αποθηκευμένη φωτογραφία HEIC. Ανέβασε έκδοση JPEG για να τη διαβάσεις ξανά.",
+  "This browser could not read the saved photo. Upload a JPEG version to read it again.": "Αυτό το πρόγραμμα περιήγησης δεν μπόρεσε να διαβάσει την αποθηκευμένη φωτογραφία. Ανέβασε έκδοση JPEG για να τη διαβάσεις ξανά.",
   "No amount or breakdown was recognised in this document.": "Δεν αναγνωρίστηκε ποσό ή ανάλυση σε αυτό το έγγραφο.",
   "No new breakdown was recognised; the saved bill was left unchanged.": "Δεν αναγνωρίστηκε νέα ανάλυση· ο αποθηκευμένος λογαριασμός έμεινε ως έχει.",
   "Replace the saved breakdown with the newly recognised values?": "Αντικατάσταση της αποθηκευμένης ανάλυσης με τις νέες αναγνωρισμένες τιμές;",

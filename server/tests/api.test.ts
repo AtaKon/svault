@@ -1224,6 +1224,9 @@ describe("bill text parsing", () => {
       badBmpOffset.set([0x42, 0x4d, 54, 0, 0, 0, 0, 0, 0, 0, 40, 0, 0, 0], 0);
       assert.equal(documentMime(badBmpOffset.buffer), null, "a BMP pixel offset below the header is rejected");
       assert.equal(documentMime(new TextEncoder().encode("GIF89a").buffer), null, "a document shorter than the 12-byte floor is rejected");
+      assert.equal(documentMime(new Uint8Array([
+        0, 0, 0, 18, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x69, 0x66, 0x31, 0, 0, 0, 0, 0x61, 0x76,
+      ]).buffer), null, "a declared size that cuts a compatible brand in half is rejected");
       assert.equal(documentMime(new Uint8Array([0x49, 0x49, 0x2a, 0x00, 0, 0, 0, 0, 0, 0, 0, 0]).buffer), "image/tiff");
       assert.equal(documentMime(new TextEncoder().encode("RIFF0000WAVE").buffer), null);
       assert.equal(documentMime(new Uint8Array([]).buffer), null);
@@ -1287,28 +1290,23 @@ describe("bill text parsing", () => {
     assert.equal(documentMime(large.buffer), null, "documentMime is deliberately bounded to the 1024-byte window");
   });
 
-  it("only reports image types the bill storage map knows", async () => {
+  it("classifies every supported image in the bill storage map", async () => {
     const { sniffImage } = await import("../upload.js");
-    const allowed = new Set([
-      "image/jpeg", "image/png", "image/webp", "image/gif",
-      "image/avif", "image/heic", "image/bmp", "image/tiff",
-    ]);
     const bmp = new Uint8Array(54);
     bmp.set([0x42, 0x4d, 54, 0, 0, 0, 0, 0, 0, 0, 54, 0, 0, 0], 0);
-    const samples = [
-      new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0, 0, 0, 0, 0, 0]),
-      new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]),
-      new TextEncoder().encode("RIFF0000WEBP"),
-      new TextEncoder().encode("GIF89a000000"),
-      new Uint8Array([0, 0, 0, 0x1c, 0x66, 0x74, 0x79, 0x70, 0x61, 0x76, 0x69, 0x66]),
-      new Uint8Array([0, 0, 0, 0x1c, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63]),
-      bmp,
-      new Uint8Array([0x49, 0x49, 0x2a, 0x00, 0, 0, 0, 0, 0, 0, 0, 0]),
-      new TextEncoder().encode("BMW is not a bitmap"),
+    const samples: Array<[Uint8Array, string | null]> = [
+      [new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0, 0, 0, 0, 0, 0]), "image/jpeg"],
+      [new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]), "image/png"],
+      [new TextEncoder().encode("RIFF0000WEBP"), "image/webp"],
+      [new TextEncoder().encode("GIF89a000000"), "image/gif"],
+      [new Uint8Array([0, 0, 0, 0x1c, 0x66, 0x74, 0x79, 0x70, 0x61, 0x76, 0x69, 0x66]), "image/avif"],
+      [new Uint8Array([0, 0, 0, 0x1c, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63]), "image/heic"],
+      [bmp, "image/bmp"],
+      [new Uint8Array([0x49, 0x49, 0x2a, 0x00, 0, 0, 0, 0, 0, 0, 0, 0]), "image/tiff"],
+      [new TextEncoder().encode("BMW is not a bitmap"), null],
     ];
-    for (const sample of samples) {
-      const mime = sniffImage(Buffer.from(sample));
-      assert.ok(mime === null || allowed.has(mime), `unexpected sniffer output ${mime}`);
+    for (const [sample, expected] of samples) {
+      assert.equal(sniffImage(Buffer.from(sample)), expected, `sniffImage should classify ${expected}`);
     }
   });
 });
@@ -7913,6 +7911,42 @@ describe("insights, household split and admin console", () => {
     const avifResponse = await fetch(base + avifBill.data.document, { headers: { cookie } });
     assert.equal(avifResponse.headers.get("content-type"), "image/avif");
     assert.equal((await request(`/api/bills/${avifBill.data.id}`, { method: "DELETE" })).status, 200);
+
+    // A brand deep in a longer ftyp box proves the upload guard reads more than
+    // the old 32-byte head (here `avif` sits at offset 40).
+    const longFtyp = Buffer.alloc(60);
+    longFtyp.set([0, 0, 0, 60, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x69, 0x66, 0x31], 0);
+    for (let offset = 16; offset < 60; offset += 4) longFtyp.set(Buffer.from("mif1"), offset);
+    longFtyp.set(Buffer.from("avif"), 40);
+    const longAvif = new Blob([longFtyp], { type: "image/avif" });
+    const longAvifForm = form(longAvif, "Long brand AVIF");
+    longAvifForm.delete("document");
+    longAvifForm.append("document", longAvif, "long.avif");
+    const longAvifBill = await request(`/api/houses/${billHouse}/bills`, { method: "POST", body: longAvifForm });
+    assert.equal(longAvifBill.status, 201, "a brand beyond the old 32-byte head is still classified");
+    const storedLongAvif = (await get<{ document: string }>("SELECT document FROM bills WHERE id = ?", [longAvifBill.data.id]))?.document;
+    assert.match(storedLongAvif ?? "", /\.avif$/);
+    assert.equal((await request(`/api/bills/${longAvifBill.data.id}`, { method: "DELETE" })).status, 200);
+
+    const jpegBytes = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0, 0, 0, 0, 0, 0]);
+    const jpegForm = form(new Blob([jpegBytes], { type: "image/jpeg" }), "JPEG extension alias");
+    jpegForm.delete("document");
+    jpegForm.append("document", new Blob([jpegBytes], { type: "image/jpeg" }), "bill.jpeg");
+    const jpegBill = await request(`/api/houses/${billHouse}/bills`, { method: "POST", body: jpegForm });
+    assert.equal(jpegBill.status, 201, "a .jpeg original name still passes the filter");
+    const storedJpeg = (await get<{ document: string }>("SELECT document FROM bills WHERE id = ?", [jpegBill.data.id]))?.document;
+    assert.match(storedJpeg ?? "", /\.jpg$/);
+    assert.equal((await request(`/api/bills/${jpegBill.data.id}`, { method: "DELETE" })).status, 200);
+
+    const tiffAlias = Buffer.from([0x49, 0x49, 0x2a, 0x00, 0, 0, 0, 0, 0, 0, 0, 0]);
+    const tiffAliasForm = form(new Blob([tiffAlias], { type: "image/tiff" }), "TIFF extension alias");
+    tiffAliasForm.delete("document");
+    tiffAliasForm.append("document", new Blob([tiffAlias], { type: "image/tiff" }), "bill.tiff");
+    const tiffAliasBill = await request(`/api/houses/${billHouse}/bills`, { method: "POST", body: tiffAliasForm });
+    assert.equal(tiffAliasBill.status, 201, "a .tiff original name still passes the filter");
+    const storedTiffAlias = (await get<{ document: string }>("SELECT document FROM bills WHERE id = ?", [tiffAliasBill.data.id]))?.document;
+    assert.match(storedTiffAlias ?? "", /\.tif$/);
+    assert.equal((await request(`/api/bills/${tiffAliasBill.data.id}`, { method: "DELETE" })).status, 200);
 
     const heif = new Blob([Buffer.from([
       0, 0, 0, 20, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x69, 0x66, 0x31, 0, 0, 0, 0, 0x68, 0x65, 0x69, 0x63,
