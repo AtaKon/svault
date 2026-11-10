@@ -3,7 +3,7 @@ import { z } from "zod";
 import { requireAuth } from "../auth.js";
 import { ApiError, handler, parseBody, requireHouse } from "../http.js";
 import { limitRequests, limiters, userOrIp } from "../rate-limit.js";
-import { all, get, newId, now, parseJson, tx } from "../db.js";
+import { all, databaseKind, get, newId, now, parseJson, tx } from "../db.js";
 import { lookupPosoKaneiBarcode, PosoKaneiUnavailableError } from "../services/posokanei.js";
 import { shoppingRow } from "../services/shopping.js";
 import {
@@ -124,9 +124,12 @@ insightRoutes.post(
       throw new ApiError(400, "Both people must be members of this house");
     }
     await withSettlementLock(houseId, () => tx(async (session) => {
-      // Acquire a write lock before reading the ledger. This row lock serializes
-      // competing settlements across Postgres connections and SQLite processes.
-      await session.run("UPDATE houses SET id = id WHERE id = ?", [houseId]);
+      // SQLite starts this transaction with BEGIN IMMEDIATE, so another
+      // process cannot read and settle the same balance before this insert.
+      // PostgreSQL serializes writers with a row lock on the house.
+      if (databaseKind() === "postgres") {
+        await session.run("UPDATE houses SET id = id WHERE id = ?", [houseId]);
+      }
       const current = await householdInsight(houseId, session);
       const suggested = current.settlements.find(
         (entry) => entry.fromUserId === body.fromUserId && entry.toUserId === body.toUserId,
@@ -140,7 +143,7 @@ insightRoutes.post(
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [newId("hst"), houseId, body.fromUserId, body.toUserId, amount, req.user!.id, now()],
       );
-    }));
+    }, { writeLock: true }));
     res.status(201).json(await householdInsight(houseId));
   }),
 );

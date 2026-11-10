@@ -144,7 +144,11 @@ export function InsightsPage() {
       toast.success(t("Payment recorded"));
     } catch (err) {
       toast.error(err instanceof Error ? t(err.message) : t("Could not record the payment"));
-      await load();
+      try {
+        await load();
+      } catch {
+        // Keep the original payment error visible if refreshing also fails.
+      }
     } finally {
       setSettling(null);
     }
@@ -514,7 +518,7 @@ export function InsightsPage() {
                 </span>
                 <span className="min-w-0 flex-1 truncate">{member.name}</span>
                 <span className="text-[11px] text-muted">{t("paid ")}{' '}{money(member.paid, household.currency)}</span>
-                {member.settled !== 0 && <span className="text-[10px] text-muted">{t("net sent ")}{member.settled > 0 ? "+" : ""}{money(member.settled, household.currency)}</span>}
+                {member.settled !== 0 && <span className="text-[10px] text-muted">{member.settled > 0 ? t("sent ") : t("received ")}{money(Math.abs(member.settled), household.currency)}</span>}
                 <span className={cn("w-20 text-right tabular-nums", member.balance > 0.009 ? "text-brand" : member.balance < -0.009 ? "text-danger" : "text-muted")}>
                   {member.balance > 0.009 ? "+" : ""}
                   {money(member.balance, household.currency)}
@@ -529,7 +533,7 @@ export function InsightsPage() {
                 <div key={`${settlement.fromUserId}:${settlement.toUserId}`} className="mt-1 flex items-center gap-2 text-[12px]">
                   <span className="min-w-0 flex-1">{settlement.fromName} → {settlement.toName} · <span className="font-medium">{money(settlement.amount, household.currency)}</span></span>
                   <Button size="sm" variant="secondary" disabled={settling !== null} onClick={() => void recordSettlement(settlement)}>
-                    {settling === `${settlement.fromUserId}:${settlement.toUserId}` ? t("Recording…") : t("Record payment")}
+                    {settling === `${settlement.fromUserId}:${settlement.toUserId}` ? t("Recording…") : t("Record full payment")}
                   </Button>
                 </div>
               ))}

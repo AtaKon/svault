@@ -3,7 +3,7 @@ import pg from "pg";
 import { DATABASE_URL, PG_POOL_SIZE, PG_SSL } from "../config.js";
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA } from "./postgres-schema.js";
 import { applyPendingPostgresRestore } from "./postgres-restore.js";
-import type { DatabaseDriver, DatabaseSession, RunResult } from "./types.js";
+import type { DatabaseDriver, DatabaseSession, DatabaseTransactionOptions, RunResult } from "./types.js";
 
 const { Pool } = pg;
 
@@ -153,7 +153,7 @@ export class PostgresDriver implements DatabaseDriver {
     await this.client().query(sql);
   }
 
-  async tx<T>(fn: (session: DatabaseSession) => Promise<T>): Promise<T> {
+  async tx<T>(fn: (session: DatabaseSession) => Promise<T>, _options?: DatabaseTransactionOptions): Promise<T> {
     const existing = txStorage.getStore();
     if (existing) {
       const savepoint = `sp_${existing.depth}`;

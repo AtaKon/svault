@@ -18,6 +18,11 @@ export interface DatabaseSession {
   exec(sql: string): Promise<void>;
 }
 
+export interface DatabaseTransactionOptions {
+  /** Acquire SQLite's write reservation before running any transaction reads. */
+  writeLock?: boolean;
+}
+
 /**
  * The database surface used by the rest of the server.
  *
@@ -37,7 +42,7 @@ export interface DatabaseDriver extends DatabaseSession {
   /** Execute one or more statements without binding parameters. */
   exec(sql: string): Promise<void>;
   /** Run `fn` inside a transaction; nested calls use savepoints. */
-  tx<T>(fn: (session: DatabaseSession) => Promise<T>): Promise<T>;
+  tx<T>(fn: (session: DatabaseSession) => Promise<T>, options?: DatabaseTransactionOptions): Promise<T>;
   /** Table names in the current schema (used by backup and migrations). */
   tables(): Promise<string[]>;
   close(): Promise<void>;

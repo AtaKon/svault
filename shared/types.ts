@@ -1242,7 +1242,7 @@ export interface HouseholdBalance {
   role: string;
   paid: number;
   share: number;
-  /** Net amount this member has settled with other members; positive means paid out. */
+  /** Net settlement cash flow; positive means paid out, negative means received. */
   settled: number;
   /** Positive means the house owes this person money. */
   balance: number;

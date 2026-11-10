@@ -1,7 +1,7 @@
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createHmac, createSign, generateKeyPairSync } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -104,7 +104,7 @@ await new Promise<void>((resolve) => {
 });
 
 const { app, apiErrorHandler } = await import("../index.js");
-const { all, closeDb, get, initDb, run } = await import("../db.js");
+const { all, closeDb, databaseKind, get, initDb, run, tx } = await import("../db.js");
 const { discardUploads } = await import("../upload.js");
 const { heuristicRecipe, parseIngredientLine, localIdeas } = await import("../services/recipe-local.js");
 const { heuristicReceipt } = await import("../services/receipt-local.js");
@@ -7885,6 +7885,51 @@ describe("insights, household split and admin console", () => {
   it("records household payments without over-settling under concurrent requests", async () => {
     const house = await request("/api/houses", { method: "POST", body: { name: "Settlement payments", currency: "EUR" } });
     assert.equal(house.status, 201);
+    if (databaseKind() === "sqlite") {
+      let releaseWrite!: () => void;
+      let writeLockAcquired!: () => void;
+      const waitToRelease = new Promise<void>((resolve) => { releaseWrite = resolve; });
+      const writeLockReady = new Promise<void>((resolve) => { writeLockAcquired = resolve; });
+      const writer = tx(async (session) => {
+        await session.run("UPDATE houses SET name = ? WHERE id = ?", ["Locked settlement house", house.data.id]);
+        writeLockAcquired();
+        await waitToRelease;
+      }, { writeLock: true });
+      await writeLockReady;
+
+      const childSource = `import { SqliteDriver } from "./server/database/sqlite.ts";
+        const db = new SqliteDriver();
+        process.stdout.write("ready\\n");
+        const row = await db.tx((session) => session.get("SELECT name FROM houses WHERE id = ?", [${JSON.stringify(house.data.id)}]), { writeLock: true });
+        process.stdout.write(JSON.stringify(row));`;
+      const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", childSource], {
+        cwd: process.cwd(),
+        env: process.env,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let childOutput = "";
+      let childError = "";
+      let childReady!: () => void;
+      const childReadyPromise = new Promise<void>((resolve) => { childReady = resolve; });
+      child.stdout.setEncoding("utf8");
+      child.stderr.setEncoding("utf8");
+      child.stdout.on("data", (chunk) => {
+        childOutput += chunk;
+        if (childOutput.includes("ready")) childReady();
+      });
+      child.stderr.on("data", (chunk) => { childError += chunk; });
+      const childExit = new Promise<number>((resolve, reject) => {
+        child.once("error", reject);
+        child.once("close", (code) => resolve(code ?? 1));
+      });
+      await childReadyPromise;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      releaseWrite();
+      await writer;
+      assert.equal(await childExit, 0, childError);
+      assert.equal(JSON.parse(childOutput.slice("ready\n".length)).name, "Locked settlement house");
+      await run("UPDATE houses SET name = ? WHERE id = ?", ["Settlement payments", house.data.id]);
+    }
     const owner = await request("/api/auth/me");
     const ownerId = owner.data.user.id;
     const secondUser = await request("/api/auth/me", { auth: secondUserCookie });

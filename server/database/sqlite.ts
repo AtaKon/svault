@@ -5,7 +5,7 @@ import path from "node:path";
 import { DB_FILE, PRE_RESTORE_DIR, PRE_RESTORE_KEEP, UPLOAD_DIR, ensureDirs } from "../config.js";
 import { pruneOldFiles } from "../services/restore-files.js";
 import { RESERVED_ATTRIBUTE_KEYS } from "../../shared/types.js";
-import type { DatabaseDriver, DatabaseSession, RunResult } from "./types.js";
+import type { DatabaseDriver, DatabaseSession, DatabaseTransactionOptions, RunResult } from "./types.js";
 
 /** A restore is staged by the API and applied before SQLite is opened. */
 export function applyPendingSqliteRestore() {
@@ -45,6 +45,7 @@ function parseJson<T>(value: unknown, fallback: T): T {
 interface SqliteTx {
   conn: DatabaseSync;
   depth: number;
+  writeLock: boolean;
 }
 
 const txStorage = new AsyncLocalStorage<SqliteTx>();
@@ -315,9 +316,12 @@ COMMIT;`);
     this.conn().exec(sql);
   }
 
-  async tx<T>(fn: (session: DatabaseSession) => Promise<T>): Promise<T> {
+  async tx<T>(fn: (session: DatabaseSession) => Promise<T>, options?: DatabaseTransactionOptions): Promise<T> {
     const existing = txStorage.getStore();
     if (existing) {
+      if (options?.writeLock && !existing.writeLock) {
+        throw new Error("A SQLite write-locked transaction must be started at the outermost level");
+      }
       const savepoint = `sp_${existing.depth}`;
       existing.conn.exec(`SAVEPOINT ${savepoint}`);
       existing.depth++;
@@ -342,8 +346,9 @@ COMMIT;`);
     // or join its uncommitted writes. WAL keeps readers available.
     const conn = new DatabaseSync(DB_FILE);
     conn.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
-    conn.exec("BEGIN");
-    const context: SqliteTx = { conn, depth: 0 };
+    const writeLock = options?.writeLock === true;
+    conn.exec(writeLock ? "BEGIN IMMEDIATE" : "BEGIN");
+    const context: SqliteTx = { conn, depth: 0, writeLock };
     try {
       const result = await txStorage.run(context, () => fn(this.session(conn)));
       conn.exec("COMMIT");
