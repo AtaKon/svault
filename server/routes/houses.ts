@@ -352,7 +352,7 @@ houseRoutes.delete(
     await tx(async (session) => {
       if (!await lockHouseholdLedger(session, houseId)) throw new ApiError(404, "House not found");
       await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [houseId, targetId]);
-    });
+    }, { writeLock: true });
     res.json({ ok: true });
   }),
 );
@@ -404,7 +404,7 @@ houseRoutes.post(
     await tx(async (session) => {
       if (!await lockHouseholdLedger(session, houseId)) throw new ApiError(404, "House not found");
       await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [houseId, req.user!.id]);
-    });
+    }, { writeLock: true });
     res.json({ ok: true });
   }),
 );

@@ -34,6 +34,18 @@ function money(value: unknown): number {
   return Number.isFinite(n) ? round(n, 2) : 0;
 }
 
+function addEvenShares(owed: Map<string, number>, total: number, splitWith: string[]) {
+  if (!splitWith.length) return;
+  const shares = splitAmountEvenly(total, splitWith.length);
+  if (shares.length !== splitWith.length) {
+    throw new Error("Household ledger split did not return one cent-exact share per member");
+  }
+  for (let index = 0; index < splitWith.length; index++) {
+    const userId = splitWith[index]!;
+    owed.set(userId, (owed.get(userId) ?? 0) + shares[index]!);
+  }
+}
+
 function monthKeys(count: number): string[] {
   const keys: string[] = [];
   const cursor = new Date();
@@ -427,10 +439,7 @@ export async function householdInsight(
     );
     const splitWith = participants.length ? participants : fallback;
     if (payer && memberIds.has(payer)) paid.set(payer, (paid.get(payer) ?? 0) + total);
-    splitAmountEvenly(total, splitWith.length).forEach((share, index) => {
-      const id = splitWith[index];
-      if (id) owed.set(id, (owed.get(id) ?? 0) + share);
-    });
+    addEvenShares(owed, total, splitWith);
     if (settled.length < 20) {
       settled.push({
         id: row.id,
@@ -462,10 +471,7 @@ export async function householdInsight(
     const splitWith = selected.length ? selected : [...memberIds];
     if (!splitWith.length) continue;
     if (payer) paid.set(payer, (paid.get(payer) ?? 0) + total);
-    splitAmountEvenly(total, splitWith.length).forEach((share, index) => {
-      const id = splitWith[index];
-      if (id) owed.set(id, (owed.get(id) ?? 0) + share);
-    });
+    addEvenShares(owed, total, splitWith);
   }
 
   // Recorded transfers reduce the outstanding balances without changing the

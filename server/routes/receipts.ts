@@ -988,7 +988,7 @@ receiptRoutes.post(
         const finalSubtotal = subtotal ?? (finalTotal != null && tax != null ? round(finalTotal - tax, 2) : null);
         await run("UPDATE receipts SET total = ?, subtotal = ? WHERE id = ?", [finalTotal, finalSubtotal, receiptId]);
       }
-    });
+    }, { writeLock: true });
 
     for (const itemId of touchedItems) await afterStockChange(itemId);
     // Price alerts are best effort: a new receipt must never fail because an
@@ -1235,7 +1235,7 @@ singleReceiptRoutes.patch(
         JSON.stringify(splitWith),
         receipt.id,
       ]);
-    });
+    }, { writeLock: true });
     res.json(await receiptDetail(houseId, receipt.id));
   }),
 );
@@ -1252,7 +1252,7 @@ singleReceiptRoutes.delete(
         reverted = await revertReceiptStock({ receiptId: receipt.id, houseId, userId: req.user!.id });
       }
       await run("DELETE FROM receipts WHERE id = ?", [receipt.id]);
-    });
+    }, { writeLock: true });
     for (const entry of reverted) await afterStockChange(entry.itemId);
     // The image goes too, unless another receipt record shares the same file.
     const imageRemoved = await removeReceiptImageIfUnused(receipt.image);

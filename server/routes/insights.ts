@@ -99,6 +99,8 @@ insightRoutes.post(
   "/:houseId/insights/settlements",
   limitRequests(limiters.settlements, userOrIp, "Too many settlement requests. Try again later."),
   handler(async (req, res) => {
+    // Shared household bookkeeping: any edit-capable member may record a
+    // transfer between any two current members, even when they are not a party.
     const { houseId } = await requireHouse(req, "member");
     const body = parseBody(settlementBody, req.body);
     const amount = body.amount;

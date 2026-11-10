@@ -8056,6 +8056,17 @@ describe("insights, household split and admin console", () => {
     assert.deepEqual(splitAmountEvenly(-1, 2), []);
     assert.deepEqual(splitAmountEvenly(1, 0), []);
     assert.deepEqual(splitAmountEvenly(1, 2.5), []);
+    for (const amount of [0, 0.01, 0.02, 0.05, 1, 10.01, 999_999_999.99]) {
+      for (const participantCount of [1, 2, 3, 5, 12]) {
+        const shares = splitAmountEvenly(amount, participantCount);
+        assert.equal(shares.length, participantCount, `${amount} split ${participantCount} ways`);
+        assert.equal(
+          shares.reduce((sum, share) => sum + Math.round(share * 100), 0),
+          Math.round(amount * 100),
+          `${amount} split ${participantCount} ways must preserve cents`,
+        );
+      }
+    }
   });
 
   it("makes upload cleanup safe to repeat", async () => {
@@ -8906,10 +8917,10 @@ describe("insights, household split and admin console", () => {
 
     const previousRateLimit = process.env.SV_RATE_LIMIT;
     const previousSettlementsLimit = process.env.SV_RATE_LIMIT_SETTLEMENTS;
-    process.env.SV_RATE_LIMIT = "on";
-    process.env.SV_RATE_LIMIT_SETTLEMENTS = "1/60";
-    limiters.settlements.reset(`user:${ownerId}`);
     try {
+      process.env.SV_RATE_LIMIT = "on";
+      process.env.SV_RATE_LIMIT_SETTLEMENTS = "1/60";
+      limiters.settlements.reset(`user:${ownerId}`);
       const firstLimitedRequest = await postSettlement({ fromUserId: memberId, toUserId: ownerId, amount: 0.01 });
       assert.equal(firstLimitedRequest.status, 400, JSON.stringify(firstLimitedRequest.data));
       const secondLimitedRequest = await postSettlement({ fromUserId: memberId, toUserId: ownerId, amount: 0.01 });

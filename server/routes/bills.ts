@@ -426,7 +426,7 @@ billRoutes.post("/:houseId/bills", requireHouseBillMember, billUpload.single("do
         created.due_date, created.paid_by, created.split_with, created.document, created.notes, created.subtotal, created.tax_total,
         created.breakdown, created.ocr_text, created.source, req.user!.id, created.created_at,
       ]);
-    });
+    }, { writeLock: true });
   } catch (error) {
     // Rollback normally removes the row. A commit error can be ambiguous, so
     // retain the document if a follow-up query cannot prove it is unreferenced.
@@ -504,7 +504,7 @@ singleBillRoutes.patch("/:billId", handler(async (req, res) => {
       source,
       current.id,
     ]);
-  });
+  }, { writeLock: true });
   res.json(serialize(await requireBillRow(current.id, houseId)));
 }));
 
@@ -591,7 +591,7 @@ singleBillRoutes.delete("/:billId", handler(async (req, res) => {
   await tx(async (session) => {
     if (!await lockHouseholdLedger(session, houseId)) throw new ApiError(404, "House not found");
     await run("DELETE FROM bills WHERE id = ?", [bill.id]);
-  });
+  }, { writeLock: true });
   await deleteDocument(bill.document);
   res.json({ ok: true });
 }));

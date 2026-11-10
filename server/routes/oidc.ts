@@ -113,7 +113,7 @@ async function findOrCreateIdentity(claims: Record<string, any>) {
           userId,
           now(),
         ]);
-      });
+      }, { writeLock: true });
     } else {
       await createHouse({ userId, name: `${String(claims.name ?? email.split("@")[0]).split(" ")[0]}'s Home` });
     }
