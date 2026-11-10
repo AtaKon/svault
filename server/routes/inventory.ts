@@ -888,6 +888,7 @@ inventoryRoutes.patch(
     const { houseId } = await requireHouse(req, "member");
     const current = await espressoEquipmentRow(houseId, String(req.params.equipmentId));
     const body = parseBody(espressoEquipmentBody.partial().omit({ kind: true }), req.body);
+    if (Object.keys(body).length === 0) throw new ApiError(400, "Nothing to update");
     if (body.name && (await espressoEquipmentNameTaken(houseId, current.kind, body.name, current.id))) {
       throw equipmentAlreadyExists(current.kind);
     }

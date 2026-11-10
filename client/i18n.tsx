@@ -2226,6 +2226,7 @@ const EL: Record<string, string> = {
   "That person is not in this house": "Αυτό το άτομο δεν ανήκει σε αυτό το σπίτι.",
   "That shop already exists": "Αυτό το κατάστημα υπάρχει ήδη.",
   "Equipment not found": "Ο εξοπλισμός δεν βρέθηκε.",
+  "Nothing to update": "Δεν υπάρχει κάτι για ενημέρωση.",
   "That machine already exists": "Αυτή η μηχανή υπάρχει ήδη.",
   "That grinder already exists": "Αυτός ο μύλος υπάρχει ήδη.",
   "That machine is not in this house": "Αυτή η μηχανή δεν ανήκει σε αυτό το σπίτι.",

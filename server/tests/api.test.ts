@@ -2,7 +2,7 @@ import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createHmac, createSign, generateKeyPairSync } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { splitAmountEvenly } from "../../shared/bill-splitting.js";
@@ -2406,6 +2406,8 @@ describe("espresso equipment", () => {
       body: { name: "Second machine" },
     });
     assert.equal(sameNameOtherKind.status, 200);
+    const renamedList = await request(`/api/houses/${houseId}/espresso-equipment`);
+    assert.equal(renamedList.data.find((entry: any) => entry.id === tempGrinder.data.id).name, "Second machine");
 
     const me = await request("/api/auth/me", { auth: secondUserCookie });
     const theirHouseId = me.data.houses.find((house: any) => house.role === "owner").id;
@@ -2514,6 +2516,12 @@ describe("espresso equipment", () => {
       body: { kind: "toaster", name: "Toast" },
     });
     assert.equal(badKind.status, 400);
+    const emptyPatch = await request(`/api/houses/${houseId}/espresso-equipment/${machineId}`, {
+      method: "PATCH",
+      body: {},
+    });
+    assert.equal(emptyPatch.status, 400);
+    assert.equal(emptyPatch.data.error, "Nothing to update");
 
     const [first, second] = await Promise.all([
       request(`/api/houses/${houseId}/espresso-equipment`, {
@@ -2574,6 +2582,14 @@ describe("espresso equipment", () => {
         await request(`/api/items/${coffeeId}/espresso-shots/${ok.data.id}`, { method: "DELETE" });
       }
     }
+
+    const precise = await request(`/api/items/${coffeeId}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 3, doseGrams: 18.555 },
+    });
+    assert.equal(precise.status, 201);
+    assert.equal(precise.data.doseGrams, 18.555);
+    await request(`/api/items/${coffeeId}/espresso-shots/${precise.data.id}`, { method: "DELETE" });
   });
 
   it("renames equipment and keeps the shot snapshot in sync", async () => {
@@ -2848,6 +2864,12 @@ const fkOn = await get("PRAGMA foreign_keys");
 await run("INSERT INTO espresso_equipment (id, house_id, kind, name, created_at, updated_at) VALUES ('eqp_legacy', 'hse_legacy', 'grinder', 'Legacy grinder', '2026-01-01', '2026-01-01')");
 await run("INSERT INTO espresso_equipment (id, house_id, kind, name, created_at, updated_at) VALUES ('eqp_machine', 'hse_legacy', 'machine', 'Legacy machine', '2026-01-01', '2026-01-01')");
 await run("INSERT INTO espresso_shots (id, house_id, item_id, brewed_at, rating, grinder_id, machine_id, grinder, machine, created_at, updated_at) VALUES ('esp_legacy', 'hse_legacy', 'itm_legacy', '2026-01-01', 4, 'eqp_legacy', 'eqp_machine', 'Legacy grinder', 'Legacy machine', '2026-01-01', '2026-01-01')");
+let bogusRejected = false;
+try {
+  await run("INSERT INTO espresso_shots (id, house_id, item_id, brewed_at, rating, grinder_id, created_at, updated_at) VALUES ('esp_bogus', 'hse_legacy', 'itm_legacy', '2026-01-01', 4, 'eqp_missing', '2026-01-01', '2026-01-01')");
+} catch {
+  bogusRejected = true;
+}
 await run("DELETE FROM espresso_equipment WHERE id IN ('eqp_legacy', 'eqp_machine')");
 const shot = await get("SELECT grinder_id, machine_id, grinder, machine FROM espresso_shots WHERE id = 'esp_legacy'");
 console.log(JSON.stringify({
@@ -2855,6 +2877,7 @@ console.log(JSON.stringify({
   machineColumn: Number(machineColumn.n),
   uniqueIndex: uniqueIndex?.name ?? null,
   foreignKeys: Number(fkOn.foreign_keys),
+  bogusRejected,
   fks: fks.map((entry) => entry.from + ":" + entry.table + ":" + entry.on_delete),
   grinderId: shot.grinder_id,
   machineId: shot.machine_id,
@@ -2887,6 +2910,7 @@ await closeDb();
       assert.equal(result.machineColumn, 1);
       assert.equal(result.uniqueIndex, "espresso_equipment_name");
       assert.equal(result.foreignKeys, 1);
+      assert.equal(result.bogusRejected, true);
       assert.deepEqual(result.fks, [
         "grinder_id:espresso_equipment:SET NULL",
         "machine_id:espresso_equipment:SET NULL",
@@ -2925,6 +2949,18 @@ await closeDb();
     assert.ok(POSTGRES_TABLE_ORDER.indexOf("espresso_shots") > POSTGRES_TABLE_ORDER.indexOf("users"));
     assert.ok(POSTGRES_TABLE_ORDER.indexOf("espresso_shots") > POSTGRES_TABLE_ORDER.indexOf("houses"));
     assert.ok(POSTGRES_TABLE_ORDER.indexOf("espresso_shots") < POSTGRES_TABLE_ORDER.indexOf("receipts"));
+
+    // Both drivers must create the schema before the migrations that reference it.
+    const postgresSource = readFileSync(path.resolve("server/database/postgres.ts"), "utf8");
+    assert.ok(
+      postgresSource.indexOf("migrationClient.query(POSTGRES_SCHEMA)") <
+        postgresSource.indexOf("for (const statement of POSTGRES_MIGRATIONS)"),
+    );
+    const sqliteSource = readFileSync(path.resolve("server/database/sqlite.ts"), "utf8");
+    assert.ok(
+      sqliteSource.indexOf("conn.exec(SCHEMA)") <
+        sqliteSource.indexOf('ensureColumn("espresso_shots", "grinder_id"'),
+    );
   });
 });
 

@@ -138,7 +138,7 @@ function EquipmentSelect({
   onChange: (next: string) => void;
   equipment: EspressoEquipment[];
   onCreated: (created: EspressoEquipment) => void;
-  onRefresh: () => Promise<void>;
+  onRefresh: () => Promise<EspressoEquipment[]>;
   canCreate: boolean;
 }) {
   const { t } = useI18n();
@@ -163,8 +163,12 @@ function EquipmentSelect({
       onCreated(created);
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {
-        // The name exists already, so show it instead of leaving the form open.
-        await onRefresh();
+        // The name exists already, so pick it instead of leaving the form open.
+        const list = await onRefresh();
+        const existing = list.find(
+          (entry) => entry.kind === kind && entry.name.trim().toLowerCase() === trimmed.toLowerCase(),
+        );
+        if (existing) onChange(existing.id);
         setCreating(false);
         setName("");
         toast.push(t("That name already exists; pick it from the list."));
@@ -270,11 +274,14 @@ export function EspressoShotSheet({
   const { house, can } = useHouse();
   const canManage = can("member");
 
-  const loadEquipment = useCallback(async () => {
+  const loadEquipment = useCallback(async (): Promise<EspressoEquipment[]> => {
     try {
-      setEquipment(await api<EspressoEquipment[]>(`/api/houses/${house.id}/espresso-equipment`));
+      const list = await api<EspressoEquipment[]>(`/api/houses/${house.id}/espresso-equipment`);
+      setEquipment(list);
+      return list;
     } catch {
       // The sheet still works without saved equipment; logging a shot should not block.
+      return [];
     }
   }, [house.id]);
 
