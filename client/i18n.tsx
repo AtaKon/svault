@@ -2237,6 +2237,8 @@ const EL: Record<string, string> = {
   "Both people must be members of this house": "Και τα δύο άτομα πρέπει να είναι μέλη αυτού του σπιτιού.",
   "The payment cannot be greater than the current amount to settle": "Η πληρωμή δεν μπορεί να υπερβαίνει το τρέχον ποσό προς τακτοποίηση.",
   "There is no outstanding payment between these people": "Δεν υπάρχει εκκρεμής πληρωμή μεταξύ αυτών των ατόμων.",
+  "This idempotency key was already used for a different payment": "Αυτό το κλειδί πληρωμής έχει ήδη χρησιμοποιηθεί για διαφορετική πληρωμή.",
+  "Too many settlement requests. Try again later.": "Υπερβολικά πολλές αιτήσεις τακτοποίησης. Δοκιμάστε ξανά αργότερα.",
   "Equipment not found": "Ο εξοπλισμός δεν βρέθηκε.",
   "Nothing to update": "Δεν υπάρχει κάτι για ενημέρωση.",
   "That machine already exists": "Αυτή η μηχανή υπάρχει ήδη.",

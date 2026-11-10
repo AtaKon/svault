@@ -135,6 +135,7 @@ export function InsightsPage() {
       const updated = await api<HouseholdData>(`/api/houses/${house.id}/insights/settlements`, {
         method: "POST",
         body: {
+          idempotencyKey: crypto.randomUUID(),
           fromUserId: settlement.fromUserId,
           toUserId: settlement.toUserId,
           amount: settlement.amount,

@@ -827,7 +827,7 @@ receiptRoutes.post(
     });
 
     await tx(async (session) => {
-      await lockHouseholdLedger(session, houseId);
+      if (!await lockHouseholdLedger(session, houseId)) throw new ApiError(404, "House not found");
       await run(
         `INSERT INTO receipts
           (id, house_id, vendor_id, vendor_name, purchased_at, currency, total, subtotal, tax, tax_breakdown,
@@ -1229,7 +1229,7 @@ singleReceiptRoutes.patch(
         : body.paidBy ?? receipt.created_by ?? null;
     const splitWith = body.splitWith === undefined ? parseJson<string[]>(receipt.split_with, []) : body.splitWith;
     await tx(async (session) => {
-      await lockHouseholdLedger(session, houseId);
+      if (!await lockHouseholdLedger(session, houseId)) throw new ApiError(404, "House not found");
       await run("UPDATE receipts SET paid_by = ?, split_with = ? WHERE id = ?", [
         paidBy,
         JSON.stringify(splitWith),
@@ -1247,7 +1247,7 @@ singleReceiptRoutes.delete(
     const revertStock = ["1", "true", "yes"].includes(String(req.query.revertStock ?? "").toLowerCase());
     let reverted: ReceiptStockRevert[] = [];
     await tx(async (session) => {
-      await lockHouseholdLedger(session, houseId);
+      if (!await lockHouseholdLedger(session, houseId)) throw new ApiError(404, "House not found");
       if (revertStock) {
         reverted = await revertReceiptStock({ receiptId: receipt.id, houseId, userId: req.user!.id });
       }

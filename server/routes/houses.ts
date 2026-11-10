@@ -350,7 +350,7 @@ houseRoutes.delete(
     if (targetRole === "owner") throw new ApiError(400, "The owner cannot be removed");
     if (role === "admin" && targetRole === "admin") throw new ApiError(403, "Only the owner can remove an admin");
     await tx(async (session) => {
-      await lockHouseholdLedger(session, houseId);
+      if (!await lockHouseholdLedger(session, houseId)) throw new ApiError(404, "House not found");
       await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [houseId, targetId]);
     });
     res.json({ ok: true });
@@ -402,7 +402,7 @@ houseRoutes.post(
       if (owners.length <= 1) throw new ApiError(400, "Transfer this house to someone else before leaving");
     }
     await tx(async (session) => {
-      await lockHouseholdLedger(session, houseId);
+      if (!await lockHouseholdLedger(session, houseId)) throw new ApiError(404, "House not found");
       await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [houseId, req.user!.id]);
     });
     res.json({ ok: true });

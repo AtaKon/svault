@@ -1,6 +1,6 @@
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { createHmac, createSign, generateKeyPairSync } from "node:crypto";
+import { createHmac, createSign, generateKeyPairSync, randomUUID } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1999,6 +1999,11 @@ describe("espresso log", () => {
       auth: secondUserCookie,
     });
     assert.equal(accepted.status, 200);
+    const acceptedAgain = await request(`/api/auth/invites/${invite.data.invite.code}/accept`, {
+      method: "POST",
+      auth: secondUserCookie,
+    });
+    assert.equal(acceptedAgain.status, 404);
     const me = await request("/api/auth/me", { auth: secondUserCookie });
     memberUserId = me.data.user.id;
 
@@ -8073,6 +8078,7 @@ describe("insights, household split and admin console", () => {
     assert.ok(POSTGRES_TABLE_ORDER.indexOf("users") < POSTGRES_TABLE_ORDER.indexOf("bills"));
     assert.ok(POSTGRES_TABLE_ORDER.indexOf("houses") < POSTGRES_TABLE_ORDER.indexOf("bills"));
     assert.ok(POSTGRES_TABLE_ORDER.indexOf("house_members") < POSTGRES_TABLE_ORDER.indexOf("bills"));
+    assert.ok(POSTGRES_TABLE_ORDER.indexOf("household_settlements") < POSTGRES_TABLE_ORDER.indexOf("household_settlement_requests"));
   });
 
   it("keeps PostgreSQL fresh and upgraded ledger confirmation defaults aligned", () => {
@@ -8690,6 +8696,10 @@ describe("insights, household split and admin console", () => {
     ]);
     const path = `/api/houses/${house.data.id}/insights/settlements`;
     const ledgerPath = `/api/houses/${house.data.id}/insights/household`;
+    const postSettlement = (body: Record<string, unknown>, idempotencyKey = randomUUID()) => request(path, {
+      method: "POST",
+      body: { ...body, idempotencyKey },
+    });
     const receipt = async (day: number) => request(`/api/houses/${house.data.id}/receipts`, {
       method: "POST",
       body: {
@@ -8721,24 +8731,30 @@ describe("insights, household split and admin console", () => {
       { fromUserId: memberId, toUserId: ownerId, amount: 0.51 },
     ];
     for (const body of invalidCases) {
-      const rejected = await request(path, { method: "POST", body });
+      const rejected = await postSettlement(body);
       assert.equal(rejected.status, 400, JSON.stringify({ body, response: rejected.data }));
     }
 
-    const partialPayment = await request(path, {
-      method: "POST",
-      body: { fromUserId: memberId, toUserId: ownerId, amount: 0.01 },
-    });
+    const partialPaymentKey = randomUUID();
+    const partialPayment = await postSettlement({ fromUserId: memberId, toUserId: ownerId, amount: 0.01 }, partialPaymentKey);
     assert.equal(partialPayment.status, 201, JSON.stringify(partialPayment.data));
     assert.equal(partialPayment.data.balances.find((entry: any) => entry.userId === memberId).settled, 0.01);
     assert.equal(partialPayment.data.balances.find((entry: any) => entry.userId === memberId).balance, -0.49);
     assert.equal(partialPayment.data.balances.find((entry: any) => entry.userId === ownerId).balance, 0.49);
     assert.equal(partialPayment.data.settlements[0].amount, 0.49);
+    const partialPaymentReplay = await postSettlement(
+      { fromUserId: memberId, toUserId: ownerId, amount: 0.01 },
+      partialPaymentKey,
+    );
+    assert.equal(partialPaymentReplay.status, 200, JSON.stringify(partialPaymentReplay.data));
+    assert.equal(partialPaymentReplay.data.balances.find((entry: any) => entry.userId === memberId).settled, 0.01);
+    const reusedKey = await postSettlement(
+      { fromUserId: memberId, toUserId: ownerId, amount: 0.02 },
+      partialPaymentKey,
+    );
+    assert.equal(reusedKey.status, 409);
 
-    const fullPayment = await request(path, {
-      method: "POST",
-      body: { fromUserId: memberId, toUserId: ownerId, amount: 0.49 },
-    });
+    const fullPayment = await postSettlement({ fromUserId: memberId, toUserId: ownerId, amount: 0.49 });
     assert.equal(fullPayment.status, 201, JSON.stringify(fullPayment.data));
     assert.deepEqual(fullPayment.data.settlements, []);
     assert.equal(fullPayment.data.balances.find((entry: any) => entry.userId === memberId).balance, 0);
@@ -8761,10 +8777,7 @@ describe("insights, household split and admin console", () => {
     assert.equal(newDebtReceipt.status, 201, JSON.stringify(newDebtReceipt.data));
     ledger = await request(ledgerPath);
     assert.equal(ledger.data.settlements[0].amount, 0.1);
-    const settledAfterNewDebt = await request(path, {
-      method: "POST",
-      body: { fromUserId: memberId, toUserId: ownerId, amount: 0.1 },
-    });
+    const settledAfterNewDebt = await postSettlement({ fromUserId: memberId, toUserId: ownerId, amount: 0.1 });
     assert.equal(settledAfterNewDebt.status, 201, JSON.stringify(settledAfterNewDebt.data));
     assert.deepEqual(settledAfterNewDebt.data.settlements, []);
 
@@ -8785,10 +8798,7 @@ describe("insights, household split and admin console", () => {
     assert.deepEqual(ledger.data.settlements.map((entry: any) => [entry.fromUserId, entry.toUserId, entry.amount]), [
       [ownerId, memberId, 0.2],
     ]);
-    const counterflowPayment = await request(path, {
-      method: "POST",
-      body: { fromUserId: ownerId, toUserId: memberId, amount: 0.2 },
-    });
+    const counterflowPayment = await postSettlement({ fromUserId: ownerId, toUserId: memberId, amount: 0.2 });
     assert.equal(counterflowPayment.status, 201, JSON.stringify(counterflowPayment.data));
     assert.deepEqual(counterflowPayment.data.settlements, []);
 
@@ -8807,18 +8817,15 @@ describe("insights, household split and admin console", () => {
     assert.equal(centReceipt.status, 201, JSON.stringify(centReceipt.data));
     ledger = await request(ledgerPath);
     assert.deepEqual(ledger.data.settlements, []);
-    const noSubCentDebt = await request(path, {
-      method: "POST",
-      body: { fromUserId: memberId, toUserId: ownerId, amount: 0.01 },
-    });
+    const noSubCentDebt = await postSettlement({ fromUserId: memberId, toUserId: ownerId, amount: 0.01 });
     assert.equal(noSubCentDebt.status, 400);
     assert.equal(noSubCentDebt.data.error, "There is no outstanding payment between these people");
 
     const secondReceipt = await receipt(7);
     assert.equal(secondReceipt.status, 201, JSON.stringify(secondReceipt.data));
     const concurrent = await Promise.all([
-      request(path, { method: "POST", body: { fromUserId: memberId, toUserId: ownerId, amount: 0.5 } }),
-      request(path, { method: "POST", body: { fromUserId: memberId, toUserId: ownerId, amount: 0.5 } }),
+      postSettlement({ fromUserId: memberId, toUserId: ownerId, amount: 0.5 }),
+      postSettlement({ fromUserId: memberId, toUserId: ownerId, amount: 0.5 }),
     ]);
     assert.deepEqual(concurrent.map((result) => result.status).sort(), [201, 400]);
     assert.deepEqual(concurrent.find((result) => result.status === 201)?.data.settlements, []);
@@ -8840,10 +8847,7 @@ describe("insights, household split and admin console", () => {
       },
     });
     assert.equal(memberPaidReceipt.status, 201, JSON.stringify(memberPaidReceipt.data));
-    const paymentToDepartingMember = await request(path, {
-      method: "POST",
-      body: { fromUserId: ownerId, toUserId: memberId, amount: 0.1 },
-    });
+    const paymentToDepartingMember = await postSettlement({ fromUserId: ownerId, toUserId: memberId, amount: 0.1 });
     assert.equal(paymentToDepartingMember.status, 201, JSON.stringify(paymentToDepartingMember.data));
     const netTransfers = await request(ledgerPath);
     assert.equal(netTransfers.data.balances.find((entry: any) => entry.userId === memberId).settled, 0.8);
@@ -8866,10 +8870,7 @@ describe("insights, household split and admin console", () => {
     assert.deepEqual(ledger.data.settlements.map((entry: any) => [entry.fromUserId, entry.toUserId, entry.amount]), [
       [ownerId, memberId, 1],
     ]);
-    const paidDepartingCreditor = await request(path, {
-      method: "POST",
-      body: { fromUserId: ownerId, toUserId: memberId, amount: 1 },
-    });
+    const paidDepartingCreditor = await postSettlement({ fromUserId: ownerId, toUserId: memberId, amount: 1 });
     assert.equal(paidDepartingCreditor.status, 201, JSON.stringify(paidDepartingCreditor.data));
     const beforeCreditorLeaves = await request(ledgerPath);
     assert.equal(beforeCreditorLeaves.data.balances.find((entry: any) => entry.userId === memberId).settled, -0.2);
@@ -8891,6 +8892,24 @@ describe("insights, household split and admin console", () => {
     assert.equal(rejoinedLedger.data.balances.find((entry: any) => entry.userId === memberId).settled, -0.2);
     assert.equal(rejoinedLedger.data.balances.find((entry: any) => entry.userId === ownerId).settled, 0.2);
     assert.deepEqual(rejoinedLedger.data.settlements, []);
+
+    const previousRateLimit = process.env.SV_RATE_LIMIT;
+    const previousInsightsLimit = process.env.SV_RATE_LIMIT_INSIGHTS;
+    process.env.SV_RATE_LIMIT = "on";
+    process.env.SV_RATE_LIMIT_INSIGHTS = "1/60";
+    limiters.insights.reset(`user:${ownerId}`);
+    try {
+      const firstLimitedRequest = await postSettlement({ fromUserId: memberId, toUserId: ownerId, amount: 0.01 });
+      assert.equal(firstLimitedRequest.status, 400, JSON.stringify(firstLimitedRequest.data));
+      const secondLimitedRequest = await postSettlement({ fromUserId: memberId, toUserId: ownerId, amount: 0.01 });
+      assert.equal(secondLimitedRequest.status, 429, JSON.stringify(secondLimitedRequest.data));
+    } finally {
+      limiters.insights.reset(`user:${ownerId}`);
+      if (previousInsightsLimit === undefined) delete process.env.SV_RATE_LIMIT_INSIGHTS;
+      else process.env.SV_RATE_LIMIT_INSIGHTS = previousInsightsLimit;
+      if (previousRateLimit === undefined) delete process.env.SV_RATE_LIMIT;
+      else process.env.SV_RATE_LIMIT = previousRateLimit;
+    }
   });
 
   it("reads an e-receipt without writing anything", async () => {

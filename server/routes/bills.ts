@@ -419,7 +419,7 @@ billRoutes.post("/:houseId/bills", requireHouseBillMember, billUpload.single("do
 
   try {
     await tx(async (session) => {
-      await lockHouseholdLedger(session, created.house_id);
+      if (!await lockHouseholdLedger(session, created.house_id)) throw new ApiError(404, "House not found");
       await run(`INSERT INTO bills (id, house_id, name, bill_type, contract_color, consumption_kwh, consumption_m3, municipal_charges, state_charges, category, ledger_confirmed, amount, currency, due_date, paid_by, split_with, document, notes, subtotal, tax_total, breakdown, ocr_text, source, created_by, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
         created.id, created.house_id, created.name, created.bill_type, created.contract_color, created.consumption_kwh, created.consumption_m3, created.municipal_charges, created.state_charges, created.category, created.ledger_confirmed, created.amount, created.currency,
@@ -486,7 +486,7 @@ singleBillRoutes.patch("/:billId", handler(async (req, res) => {
   const nextSubtotal = body.subtotal === undefined ? (clearScanTotals ? null : current.subtotal) : body.subtotal;
   const nextTaxTotal = body.taxTotal === undefined ? (clearScanTotals ? null : current.tax_total) : body.taxTotal;
   await tx(async (session) => {
-    await lockHouseholdLedger(session, houseId);
+    if (!await lockHouseholdLedger(session, houseId)) throw new ApiError(404, "House not found");
     await run(`UPDATE bills SET name = ?, bill_type = ?, contract_color = ?, consumption_kwh = ?, consumption_m3 = ?, municipal_charges = ?, state_charges = ?, category = ?, ledger_confirmed = ?, amount = ?, due_date = ?, paid_by = ?, split_with = ?, notes = ?,
       subtotal = ?, tax_total = ?, breakdown = ?, ocr_text = ?, source = ? WHERE id = ?`, [
       body.name ?? current.name, nextBillType ?? "other", contractColor ?? null,
@@ -589,7 +589,7 @@ billRoutes.get("/:houseId/bills/:billId/document", handler(async (req, res) => {
 singleBillRoutes.delete("/:billId", handler(async (req, res) => {
   const { houseId, bill } = await billAccess(req, "member");
   await tx(async (session) => {
-    await lockHouseholdLedger(session, houseId);
+    if (!await lockHouseholdLedger(session, houseId)) throw new ApiError(404, "House not found");
     await run("DELETE FROM bills WHERE id = ?", [bill.id]);
   });
   await deleteDocument(bill.document);

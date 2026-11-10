@@ -3,7 +3,7 @@ import { z } from "zod";
 import { requireAuth } from "../auth.js";
 import { ApiError, handler, parseBody, requireHouse } from "../http.js";
 import { limitRequests, limiters, userOrIp } from "../rate-limit.js";
-import { all, databaseKind, get, lockHouseholdLedger, newId, now, parseJson, tx } from "../db.js";
+import { all, get, lockHouseholdLedger, newId, now, parseJson, tx } from "../db.js";
 import { lookupPosoKaneiBarcode, PosoKaneiUnavailableError } from "../services/posokanei.js";
 import { shoppingRow } from "../services/shopping.js";
 import {
@@ -78,6 +78,7 @@ const settingsBody = z.object({
 });
 
 const settlementBody = z.object({
+  idempotencyKey: z.string().uuid(),
   fromUserId: z.string().min(1).max(60),
   toUserId: z.string().min(1).max(60),
   amount: z.number().finite().positive().max(1e9).refine(
@@ -85,23 +86,6 @@ const settlementBody = z.object({
     "Enter an amount in whole cents",
   ),
 });
-
-const settlementTails = new Map<string, Promise<void>>();
-
-/** Queue SQLite's synchronous writers locally; BEGIN IMMEDIATE also locks across processes. */
-async function withSettlementLock<T>(houseId: string, work: () => Promise<T>): Promise<T> {
-  const previous = settlementTails.get(houseId) ?? Promise.resolve();
-  let release!: () => void;
-  const tail = new Promise<void>((resolve) => { release = resolve; });
-  settlementTails.set(houseId, tail);
-  await previous;
-  try {
-    return await work();
-  } finally {
-    release();
-    if (settlementTails.get(houseId) === tail) settlementTails.delete(houseId);
-  }
-}
 
 insightRoutes.get(
   "/:houseId/insights/spend",
@@ -113,15 +97,34 @@ insightRoutes.get(
 
 insightRoutes.post(
   "/:houseId/insights/settlements",
+  limitRequests(limiters.insights, userOrIp, "Too many settlement requests. Try again later."),
   handler(async (req, res) => {
     const { houseId } = await requireHouse(req, "member");
     const body = parseBody(settlementBody, req.body);
     const amount = body.amount;
     if (body.fromUserId === body.toUserId) throw new ApiError(400, "Choose two different household members");
-    const recordPayment = () => tx(async (session) => {
+    const result = await tx(async (session) => {
       // Lock the house before reading. Receipt, bill, membership, and other
       // settlement writes use the same lock before changing the household ledger.
       if (!await lockHouseholdLedger(session, houseId)) throw new ApiError(404, "House not found");
+      const amountCents = Math.round(amount * 100);
+      const prior = await session.get<{
+        from_user_id: string;
+        to_user_id: string;
+        amount_cents: number;
+        created_by: string;
+      }>(
+        `SELECT from_user_id, to_user_id, amount_cents, created_by
+         FROM household_settlement_requests WHERE house_id = ? AND idempotency_key = ?`,
+        [houseId, body.idempotencyKey],
+      );
+      if (prior) {
+        if (prior.from_user_id !== body.fromUserId || prior.to_user_id !== body.toUserId ||
+            Number(prior.amount_cents) !== amountCents || prior.created_by !== req.user!.id) {
+          throw new ApiError(409, "This idempotency key was already used for a different payment");
+        }
+        return { insight: await householdInsight(houseId, session), replayed: true };
+      }
       const memberIds = new Set((await session.all<{ user_id: string }>(
         "SELECT user_id FROM house_members WHERE house_id = ?",
         [houseId],
@@ -136,21 +139,25 @@ insightRoutes.post(
       if (!suggested) {
         throw new ApiError(400, "There is no outstanding payment between these people");
       }
-      const suggestedAmount = Math.round(suggested.amount * 100) / 100;
-      if (amount > suggestedAmount) {
+      const suggestedAmountCents = Math.round(suggested.amount * 100);
+      if (amountCents > suggestedAmountCents) {
         throw new ApiError(400, "The payment cannot be greater than the current amount to settle");
       }
+      const settlementId = newId("hst");
       await session.run(
         `INSERT INTO household_settlements (id, house_id, from_user_id, to_user_id, amount, created_by, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [newId("hst"), houseId, body.fromUserId, body.toUserId, amount, req.user!.id, now()],
+        [settlementId, houseId, body.fromUserId, body.toUserId, amountCents / 100, req.user!.id, now()],
       );
-      return householdInsight(houseId, session);
+      await session.run(
+        `INSERT INTO household_settlement_requests
+         (house_id, idempotency_key, settlement_id, from_user_id, to_user_id, amount_cents, created_by, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [houseId, body.idempotencyKey, settlementId, body.fromUserId, body.toUserId, amountCents, req.user!.id, now()],
+      );
+      return { insight: await householdInsight(houseId, session), replayed: false };
     }, { writeLock: true });
-    const updated = databaseKind() === "sqlite"
-      ? await withSettlementLock(houseId, recordPayment)
-      : await recordPayment();
-    res.status(201).json(await updated);
+    res.status(result.replayed ? 200 : 201).json(result.insight);
   }),
 );
 

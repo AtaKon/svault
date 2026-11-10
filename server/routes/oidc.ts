@@ -107,7 +107,7 @@ async function findOrCreateIdentity(claims: Record<string, any>) {
     );
     if (OIDC.defaultHouseId && await get("SELECT id FROM houses WHERE id = ?", [OIDC.defaultHouseId])) {
       await tx(async (session) => {
-        await lockHouseholdLedger(session, OIDC.defaultHouseId!);
+        if (!await lockHouseholdLedger(session, OIDC.defaultHouseId!)) throw new ApiError(404, "House not found");
         await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, 'member', ?)", [
           OIDC.defaultHouseId!,
           userId,

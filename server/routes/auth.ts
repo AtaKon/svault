@@ -144,14 +144,23 @@ authRoutes.post(
         now(),
       ]);
       if (invite) {
-        await lockHouseholdLedger(session, invite.house_id);
+        if (!await lockHouseholdLedger(session, invite.house_id)) throw new ApiError(404, "House not found");
+        const currentInvite = await session.get<any>(
+          "SELECT * FROM house_invites WHERE id = ? AND accepted_at IS NULL",
+          [invite.id],
+        );
+        if (!currentInvite || inviteExpired(currentInvite)) throw new ApiError(400, "That invite link is no longer valid");
         await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING", [
-          invite.house_id,
+          currentInvite.house_id,
           userId,
-          invite.role,
+          currentInvite.role,
           now(),
         ]);
-        await run("UPDATE house_invites SET accepted_at = ?, accepted_by = ? WHERE id = ?", [now(), userId, invite.id]);
+        const accepted = await session.run(
+          "UPDATE house_invites SET accepted_at = ?, accepted_by = ? WHERE id = ? AND accepted_at IS NULL",
+          [now(), userId, currentInvite.id],
+        );
+        if (accepted.changes !== 1) throw new ApiError(400, "That invite link is no longer valid");
       } else {
         const fallback = body.houseName?.trim() || `${body.name.split(" ")[0]}'s Home`;
         await createHouse({ userId, name: fallback });
@@ -348,21 +357,30 @@ authRoutes.post(
     }
     let memberAdded = false;
     await tx(async (session) => {
-      await lockHouseholdLedger(session, invite.house_id);
+      if (!await lockHouseholdLedger(session, invite.house_id)) throw new ApiError(404, "House not found");
+      const currentInvite = await session.get<any>(
+        "SELECT * FROM house_invites WHERE id = ? AND accepted_at IS NULL",
+        [invite.id],
+      );
+      if (!currentInvite || inviteExpired(currentInvite)) throw new ApiError(404, "That invite link is no longer valid");
       const membership = await session.get(
         "SELECT user_id FROM house_members WHERE house_id = ? AND user_id = ?",
-        [invite.house_id, req.user!.id],
+        [currentInvite.house_id, req.user!.id],
       );
       if (!membership) {
         await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
-          invite.house_id,
+          currentInvite.house_id,
           req.user!.id,
-          invite.role as Role,
+          currentInvite.role as Role,
           now(),
         ]);
         memberAdded = true;
       }
-      await run("UPDATE house_invites SET accepted_at = ?, accepted_by = ? WHERE id = ?", [now(), req.user!.id, invite.id]);
+      const accepted = await session.run(
+        "UPDATE house_invites SET accepted_at = ?, accepted_by = ? WHERE id = ? AND accepted_at IS NULL",
+        [now(), req.user!.id, currentInvite.id],
+      );
+      if (accepted.changes !== 1) throw new ApiError(404, "That invite link is no longer valid");
     });
     if (memberAdded) {
       try {
