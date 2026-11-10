@@ -365,11 +365,15 @@ export function EspressoShotSheet({
     }
     const numeric = [grindSeconds, doseGrams, yieldGrams, extractionSeconds, waterTempC, pressureBar, tdsPercent];
     if (numeric.some((value) => value.trim() && numberOrNull(value) == null)) {
-      toast.error(t("Use numbers only for grams, seconds and percentages"));
+      toast.error(t("Use numbers only; a dot or comma is fine for decimals"));
       return;
     }
     const grinder = equipmentPayload(grinderPick);
     const machine = equipmentPayload(machinePick);
+    // Leave untouched equipment out of the PATCH so a legacy free-text label is
+    // never cleared by an edit that did not change the picker.
+    const grinderChanged = !shot || grinderPick !== equipmentPick(shot.grinderId, shot.grinder);
+    const machineChanged = !shot || machinePick !== equipmentPick(shot.machineId, shot.machine);
     setSaving(true);
     try {
       const body = {
@@ -384,10 +388,10 @@ export function EspressoShotSheet({
         waterTempC: numberOrNull(waterTempC),
         pressureBar: numberOrNull(pressureBar),
         tdsPercent: numberOrNull(tdsPercent),
-        grinderId: grinder.id,
-        machineId: machine.id,
-        grinder: grinder.text,
-        machine: machine.text,
+        grinderId: grinderChanged ? grinder.id : undefined,
+        machineId: machineChanged ? machine.id : undefined,
+        grinder: grinderChanged ? grinder.text : undefined,
+        machine: machineChanged ? machine.text : undefined,
         tastingNotes: tastingNotes.trim() || null,
         tags: tags
           .split(",")
@@ -857,18 +861,17 @@ export function EspressoEquipmentSheet({ open, onClose }: { open: boolean; onClo
       description={t("Save your setup once, then pick it when logging a shot.")}
     >
       <div className="space-y-5 pb-2">
-        {!can("member") ? (
+        {loading ? (
+          <div className="flex items-center gap-2 text-xs text-muted">
+            <Spinner size={14} /> {t("Loading…")}
+          </div>
+        ) : !can("member") ? (
           <p className="text-xs text-muted">{t("Ask a household member to add machines and grinders.")}</p>
         ) : (
           <>
             <EquipmentSection kind="machine" title={t("Espresso machines")} items={machines} onSave={save} onDelete={remove} />
             <EquipmentSection kind="grinder" title={t("Grinders")} items={grinders} onSave={save} onDelete={remove} />
           </>
-        )}
-        {loading && (
-          <div className="flex items-center gap-2 text-xs text-muted">
-            <Spinner size={14} /> {t("Loading…")}
-          </div>
         )}
       </div>
     </Sheet>

@@ -225,6 +225,11 @@ async function espressoEquipmentRow(houseId: string, equipmentId: string) {
   return row;
 }
 
+/**
+ * Case-insensitive duplicate guard. The table has no unique index, so this is
+ * best-effort under two concurrent writes; a household write is serial enough
+ * in practice.
+ */
 async function espressoEquipmentNameTaken(
   houseId: string,
   kind: "machine" | "grinder",

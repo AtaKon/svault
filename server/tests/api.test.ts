@@ -1938,6 +1938,11 @@ describe("espresso log", () => {
       body: { rating: 3, doseGrams: "18,5" },
     });
     assert.equal(commaDose.status, 400);
+    const hugeDose = await request(`/api/items/${coffeeId}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 3, doseGrams: 500 },
+    });
+    assert.equal(hugeDose.status, 400);
   });
 
   it("keeps the log inside its house", async () => {
@@ -2320,6 +2325,8 @@ describe("espresso equipment", () => {
     assert.equal(legacy.data.grinderId, null);
     assert.equal(legacy.data.grinder, "Hand grinder");
 
+    // The shot form omits unchanged equipment fields, so a plain rating edit
+    // must not touch the legacy label.
     const ratingOnly = await request(`/api/items/${coffeeId}/espresso-shots/${legacy.data.id}`, {
       method: "PATCH",
       body: { rating: 3 },
@@ -2377,7 +2384,13 @@ describe("espresso equipment", () => {
     });
     assert.equal(duplicate.status, 409);
 
-    const sameNameOtherKind = await request(`/api/houses/${houseId}/espresso-equipment/${grinderId}`, {
+    // Names are unique per kind: the same name may exist as a grinder.
+    const tempGrinder = await request(`/api/houses/${houseId}/espresso-equipment`, {
+      method: "POST",
+      body: { kind: "grinder", name: "Temp grinder" },
+    });
+    assert.equal(tempGrinder.status, 201);
+    const sameNameOtherKind = await request(`/api/houses/${houseId}/espresso-equipment/${tempGrinder.data.id}`, {
       method: "PATCH",
       body: { name: "Second machine" },
     });
@@ -2421,7 +2434,11 @@ describe("espresso equipment", () => {
     assert.equal(missing.data.error, "That machine is not in this house");
 
     await request(`/api/houses/${houseId}/espresso-equipment/${second.data.id}`, { method: "DELETE" });
-    await request(`/api/houses/${houseId}/espresso-equipment/${grinderId}`, { method: "PATCH", body: { name: "Eureka Mignon" } });
+    await request(`/api/houses/${houseId}/espresso-equipment/${tempGrinder.data.id}`, { method: "DELETE" });
+    await request(`/api/houses/${theirHouseId}/espresso-equipment/${theirs.data.id}`, {
+      method: "DELETE",
+      auth: secondUserCookie,
+    });
   });
 
   it("rejects equipment of the wrong kind or from another house", async () => {
@@ -2461,6 +2478,18 @@ describe("espresso equipment", () => {
       body: { machineId: "eqp_missing" },
     });
     assert.equal(missingPatch.status, 400);
+
+    // Symmetric check for the grinder field.
+    const wrongGrinderKind = await request(`/api/items/${coffeeId}/espresso-shots/${shotId}`, {
+      method: "PATCH",
+      body: { grinderId: machineId },
+    });
+    assert.equal(wrongGrinderKind.status, 400);
+
+    await request(`/api/houses/${theirHouseId}/espresso-equipment/${theirs.data.id}`, {
+      method: "DELETE",
+      auth: secondUserCookie,
+    });
   });
 
   it("renames equipment and keeps the shot snapshot in sync", async () => {
@@ -2474,6 +2503,32 @@ describe("espresso equipment", () => {
     const shot = log.data.shots.find((entry: any) => entry.id === shotId);
     assert.equal(shot.grinder, "Eureka Mignon Specialita");
     assert.equal(shot.grinderId, grinderId);
+    assert.equal(shot.machine, "Lelit Mara X");
+  });
+
+  it("updates the grinder snapshot when a different grinder is picked", async () => {
+    const second = await request(`/api/houses/${houseId}/espresso-equipment`, {
+      method: "POST",
+      body: { kind: "grinder", name: "Second grinder" },
+    });
+    assert.equal(second.status, 201);
+    const fresh = await request(`/api/items/${coffeeId}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 3, grinderId, machineId },
+    });
+    assert.equal(fresh.status, 201);
+
+    const repicked = await request(`/api/items/${coffeeId}/espresso-shots/${fresh.data.id}`, {
+      method: "PATCH",
+      body: { grinderId: second.data.id },
+    });
+    assert.equal(repicked.status, 200);
+    assert.equal(repicked.data.grinderId, second.data.id);
+    assert.equal(repicked.data.grinder, "Second grinder");
+    assert.equal(repicked.data.machine, "Lelit Mara X");
+
+    await request(`/api/items/${coffeeId}/espresso-shots/${fresh.data.id}`, { method: "DELETE" });
+    await request(`/api/houses/${houseId}/espresso-equipment/${second.data.id}`, { method: "DELETE" });
   });
 
   it("keeps shot names after equipment is deleted", async () => {

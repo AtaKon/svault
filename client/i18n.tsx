@@ -106,7 +106,7 @@ const EL: Record<string, string> = {
   "Could not delete the equipment": "Δεν διαγράφηκε ο εξοπλισμός",
   "Delete “{name}”? Shots that used it keep the name.": "Διαγραφή «{name}»; Τα shots που το χρησιμοποίησαν κρατούν το όνομα.",
   "Ask a household member to add machines and grinders.": "Ζήτησε από ένα μέλος του σπιτιού να προσθέσει μηχανές και μύλους.",
-  "Use numbers only for grams, seconds and percentages": "Χρησιμοποίησε μόνο αριθμούς για γραμμάρια, δευτερόλεπτα και ποσοστά",
+  "Use numbers only; a dot or comma is fine for decimals": "Χρησιμοποίησε μόνο αριθμούς· τελεία ή κόμμα επιτρέπεται για δεκαδικά",
   "Decimals are fine, e.g. 18.5 g or 28.4 s.": "Τα δεκαδικά επιτρέπονται, π.χ. 18,5 g ή 28,4 s.",
   "Household finances": "Οικονομικά σπιτιού",
   "Bills & splitting": "Λογαριασμοί και μοίρασμα",
