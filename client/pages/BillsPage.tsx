@@ -162,7 +162,8 @@ export function BillsPage() {
   const scanRun = useRef(0);
   const readRun = useRef(0);
   const prepareRun = useRef(0);
-  useEffect(() => () => { scanRun.current++; readRun.current++; prepareRun.current++; }, []);
+  const uploadRun = useRef(0);
+  useEffect(() => () => { scanRun.current++; readRun.current++; prepareRun.current++; uploadRun.current++; }, []);
 
   const load = useCallback(async () => {
     try {
@@ -377,6 +378,8 @@ export function BillsPage() {
     if (!isSupportedBillFile(picked)) {
       toast.error(t("Choose a PDF or image bill")); return;
     }
+    const run = uploadRun.current + 1;
+    uploadRun.current = run;
     let nextFile: File;
     try {
       nextFile = await prepareBillImage(picked);
@@ -385,9 +388,14 @@ export function BillsPage() {
       toast.error(t("This browser could not read that photo. Take a new photo or choose a JPEG or PNG."));
       return;
     }
+    if (run !== uploadRun.current) return;
     const form = new FormData(); form.set("document", nextFile);
-    try { await api(`/api/houses/${house.id}/bills/${bill.id}/document`, { method: "POST", body: form }); await load(); }
-    catch (err) { toast.error(err instanceof Error ? t(err.message) : t("Could not upload the bill document")); }
+    try {
+      await api(`/api/houses/${house.id}/bills/${bill.id}/document`, { method: "POST", body: form });
+      // A later attach or a navigation wins; never reload for a stale upload.
+      if (run !== uploadRun.current) return;
+      await load();
+    } catch (err) { toast.error(err instanceof Error ? t(err.message) : t("Could not upload the bill document")); }
   };
   const readSavedBill = async (bill: UtilityBill) => {
     if (!bill.document || readingBillId) return;

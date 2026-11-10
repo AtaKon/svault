@@ -1108,6 +1108,16 @@ describe("bill text parsing", () => {
       assert.equal(documentMime(new Uint8Array([
         0, 0, 0, 12, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x69, 0x66, 0x31,
       ]).buffer), "image/heic", "a bare mif1 container falls back to HEIC");
+      assert.equal(documentMime(new Uint8Array([
+        0, 0, 0, 0, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x69, 0x66, 0x31, 0, 0, 0, 0, 0x61, 0x76, 0x69, 0x66,
+      ]).buffer), "image/avif", "a size-0 ftyp box scans compatible brands to the end of the window");
+      assert.equal(documentMime(new Uint8Array([
+        0, 0, 0, 32, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x69, 0x66, 0x31, 0, 0, 0, 0,
+        0x6d, 0x69, 0x66, 0x31, 0x6d, 0x73, 0x66, 0x31, 0x61, 0x76, 0x69, 0x66,
+      ]).buffer), "image/avif", "the codec can appear after several compatible brands");
+      assert.equal(documentMime(new Uint8Array([
+        0, 0, 0, 16, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x69, 0x66, 0x31, 0, 0, 0, 0, 0x61, 0x76, 0x69, 0x66,
+      ]).buffer), "image/heic", "bytes of the next box are not scanned as compatible brands");
       assert.equal(documentMime(new Uint8Array([0x42, 0x4d, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]).buffer), "image/bmp");
       assert.equal(documentMime(new Uint8Array([0x49, 0x49, 0x2a, 0x00, 0, 0, 0, 0, 0, 0, 0, 0]).buffer), "image/tiff");
       assert.equal(documentMime(new TextEncoder().encode("RIFF0000WAVE").buffer), null);
@@ -7739,6 +7749,45 @@ describe("insights, household split and admin console", () => {
     const avifResponse = await fetch(base + avifBill.data.document, { headers: { cookie } });
     assert.equal(avifResponse.headers.get("content-type"), "image/avif");
     assert.equal((await request(`/api/bills/${avifBill.data.id}`, { method: "DELETE" })).status, 200);
+
+    const heif = new Blob([Buffer.from([
+      0, 0, 0, 20, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x69, 0x66, 0x31, 0, 0, 0, 0, 0x68, 0x65, 0x69, 0x63,
+    ])], { type: "image/heif" });
+    const heifForm = form(heif, "HEIF phone bill");
+    heifForm.delete("document");
+    heifForm.append("document", heif, "bill.heif");
+    const heifBill = await request(`/api/houses/${billHouse}/bills`, { method: "POST", body: heifForm });
+    assert.equal(heifBill.status, 201, "an image/heif MIME is accepted");
+    const storedHeif = (await get<{ document: string }>("SELECT document FROM bills WHERE id = ?", [heifBill.data.id]))?.document;
+    assert.match(storedHeif ?? "", /\.heic$/, "a HEIF upload is stored under the canonical HEIC extension");
+    const heifResponse = await fetch(base + heifBill.data.document, { headers: { cookie } });
+    assert.equal(heifResponse.headers.get("content-type"), "image/heic");
+    assert.equal((await request(`/api/bills/${heifBill.data.id}`, { method: "DELETE" })).status, 200);
+
+    const tiff = new Blob([Buffer.from([0x49, 0x49, 0x2a, 0x00, 0, 0, 0, 0, 0, 0, 0, 0])], { type: "image/tiff" });
+    const tiffForm = form(tiff, "TIFF bill scan");
+    tiffForm.delete("document");
+    tiffForm.append("document", tiff, "bill.tif");
+    const tiffBill = await request(`/api/houses/${billHouse}/bills`, { method: "POST", body: tiffForm });
+    assert.equal(tiffBill.status, 201, "a TIFF scan is accepted");
+    const storedTiff = (await get<{ document: string }>("SELECT document FROM bills WHERE id = ?", [tiffBill.data.id]))?.document;
+    assert.match(storedTiff ?? "", /\.tif$/, "a TIFF scan keeps its canonical extension");
+    const tiffResponse = await fetch(base + tiffBill.data.document, { headers: { cookie } });
+    assert.equal(tiffResponse.headers.get("content-type"), "image/tiff");
+    assert.equal((await request(`/api/bills/${tiffBill.data.id}`, { method: "DELETE" })).status, 200);
+
+    // The uploaded name and MIME never decide the stored type: the bytes do.
+    const lying = new Blob([Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0, 0, 0, 0, 0, 0])], { type: "image/heic" });
+    const lyingForm = form(lying, "Renamed JPEG");
+    lyingForm.delete("document");
+    lyingForm.append("document", lying, "bill.heic");
+    const lyingBill = await request(`/api/houses/${billHouse}/bills`, { method: "POST", body: lyingForm });
+    assert.equal(lyingBill.status, 201, "a mislabelled photo is still accepted by content");
+    const storedLying = (await get<{ document: string }>("SELECT document FROM bills WHERE id = ?", [lyingBill.data.id]))?.document;
+    assert.match(storedLying ?? "", /\.jpg$/, "a .heic name over JPEG bytes is stored as JPEG");
+    const lyingResponse = await fetch(base + lyingBill.data.document, { headers: { cookie } });
+    assert.equal(lyingResponse.headers.get("content-type"), "image/jpeg");
+    assert.equal((await request(`/api/bills/${lyingBill.data.id}`, { method: "DELETE" })).status, 200);
 
     const gifBill = await request(`/api/houses/${billHouse}/bills`, {
       method: "POST", body: form(new Blob([Buffer.from("GIF89a000000")], { type: "image/gif" }), "GIF bill"),
