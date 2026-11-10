@@ -25,7 +25,15 @@ export function sniffImageBytes(head: Uint8Array): string | null {
     const mime = ftypMime(head, ascii);
     if (mime) return mime;
   }
-  if (head.length >= 2 && ascii(0, 2) === "BM") return "image/bmp";
+  if (head.length >= 14 && ascii(0, 2) === "BM") {
+    // A real BMP starts with a 14-byte file header: the reserved bytes are zero
+    // and both the declared file size and the pixel-array offset are plausible.
+    const size = (head[2] | (head[3] << 8) | (head[4] << 16) | (head[5] << 24)) >>> 0;
+    const offset = (head[10] | (head[11] << 8) | (head[12] << 16) | (head[13] << 24)) >>> 0;
+    if (head[6] === 0 && head[7] === 0 && head[8] === 0 && head[9] === 0 && size >= 54 && offset >= 54) {
+      return "image/bmp";
+    }
+  }
   if (head.length >= 4 && ((head[0] === 0x49 && head[1] === 0x49 && head[2] === 0x2a && head[3] === 0x00) ||
     (head[0] === 0x4d && head[1] === 0x4d && head[2] === 0x00 && head[3] === 0x2a))) {
     return "image/tiff";
@@ -47,12 +55,18 @@ function ftypMime(head: Uint8Array, ascii: (start: number, end: number) => strin
     // size bounds the compatible-brand list. Never read past the declared box.
     const declared = ((head[0] << 24) | (head[1] << 16) | (head[2] << 8) | head[3]) >>> 0;
     const end = declared === 0 ? head.length : Math.min(head.length, declared);
+    let heic = false;
     for (let offset = 16; offset + 4 <= end; offset += 4) {
-      if (AVIF_BRANDS.has(ascii(offset, offset + 4))) return "image/avif";
+      const brand = ascii(offset, offset + 4);
+      if (AVIF_BRANDS.has(brand)) return "image/avif";
+      if (HEIC_BRANDS.has(brand)) heic = true;
     }
     // If the brand list continues past the bytes we have, an AVIF brand may be
     // beyond the window. Do not guess HEIC: reject instead of mislabelling.
     if (declared === 0 || declared > head.length) return null;
+    // A generic mif1/msf1 container without a HEIC brand may hold another codec
+    // (for example JPEG 2000); only a real HEIC brand makes it a HEIC photo.
+    return heic ? "image/heic" : null;
   }
   return "image/heic";
 }

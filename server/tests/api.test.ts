@@ -1071,6 +1071,8 @@ describe("bill text parsing", () => {
     assert.deepEqual(billPhotoSize(4032, 3024, 2600), { width: 2600, height: 1950 }, "a large phone photo is scaled down");
     assert.deepEqual(billPhotoSize(800, 600, 2600), { width: 800, height: 600 }, "small photos are never upscaled");
     assert.deepEqual(billPhotoSize(0, 0, 2600), { width: 1, height: 1 }, "a degenerate size still produces a valid canvas");
+    assert.deepEqual(billPhotoSize(-100, Number.NaN, 2600), { width: 1, height: 1 }, "negative and non-finite dimensions never reach the canvas");
+    assert.deepEqual(billPhotoSize(100, 100, 0), { width: 1, height: 1 }, "a zero max edge never produces a zero canvas");
   });
 
   it("converts a decodable phone photo to JPEG and reports an unsupported HEIC", async () => {
@@ -1097,6 +1099,11 @@ describe("bill text parsing", () => {
       assert.equal(converted.type, "image/jpeg");
       assert.equal(converted.name, "IMG_0042.jpg");
       assert.ok(closed, "the decoded bitmap is released");
+
+      canvas.toBlob = (callback: (blob: Blob | null) => void) => callback(new Blob(["png"], { type: "image/png" }));
+      const forced = await prepareBillImage(new File([new Uint8Array([0])], "IMG_0100.heic", { type: "image/heic" }));
+      assert.equal(forced.type, "image/jpeg", "the File type is forced to JPEG even when toBlob ignores the requested type");
+      canvas.toBlob = (callback: (blob: Blob | null) => void) => callback(new Blob(["jpeg"], { type: "image/jpeg" }));
 
       const jpeg = new File(["jpeg"], "bill.jpg", { type: "image/jpeg" });
       assert.strictEqual(await prepareBillImage(jpeg), jpeg, "web-native photos pass through untouched");
@@ -1161,7 +1168,7 @@ describe("bill text parsing", () => {
       ]).buffer), "image/heic", "a mif1-branded iPhone HEIF is still HEIC");
       assert.equal(documentMime(new Uint8Array([
         0, 0, 0, 12, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x69, 0x66, 0x31,
-      ]).buffer), "image/heic", "a bare mif1 container falls back to HEIC");
+      ]).buffer), null, "a bare mif1 container without a HEIC brand is rejected");
       assert.equal(documentMime(new Uint8Array([
         0, 0, 0, 0, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x69, 0x66, 0x31, 0, 0, 0, 0, 0x61, 0x76, 0x69, 0x66,
       ]).buffer), "image/avif", "a size-0 ftyp box scans compatible brands to the end of the window");
@@ -1171,7 +1178,7 @@ describe("bill text parsing", () => {
       ]).buffer), "image/avif", "the codec can appear after several compatible brands");
       assert.equal(documentMime(new Uint8Array([
         0, 0, 0, 16, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x69, 0x66, 0x31, 0, 0, 0, 0, 0x61, 0x76, 0x69, 0x66,
-      ]).buffer), "image/heic", "bytes of the next box are not scanned as compatible brands");
+      ]).buffer), null, "bytes of the next box are not scanned as compatible brands");
       assert.equal(documentMime(new Uint8Array([
         0, 0, 0, 0, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x69, 0x66, 0x31, 0, 0, 0, 0, 0x6d, 0x69, 0x66, 0x31,
       ]).buffer), null, "an open-ended brand list with no codec is rejected instead of guessed");
@@ -1190,7 +1197,13 @@ describe("bill text parsing", () => {
       beyondWindow.set(new TextEncoder().encode("mif1"), 8);
       beyondWindow.set(new TextEncoder().encode("mif1"), 1020);
       assert.equal(documentMime(beyondWindow.buffer), null, "a brand list declaring more than the window is rejected");
-      assert.equal(documentMime(new Uint8Array([0x42, 0x4d, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]).buffer), "image/bmp");
+      const bmpHeader = () => {
+        const bytes = new Uint8Array(54);
+        bytes.set([0x42, 0x4d, 54, 0, 0, 0, 0, 0, 0, 0, 54, 0, 0, 0], 0);
+        return bytes;
+      };
+      assert.equal(documentMime(bmpHeader().buffer), "image/bmp");
+      assert.equal(documentMime(new TextEncoder().encode("BMW is not a bitmap at all").buffer), null, "BM text is not a BMP");
       assert.equal(documentMime(new Uint8Array([0x49, 0x49, 0x2a, 0x00, 0, 0, 0, 0, 0, 0, 0, 0]).buffer), "image/tiff");
       assert.equal(documentMime(new TextEncoder().encode("RIFF0000WAVE").buffer), null);
       assert.equal(documentMime(new Uint8Array([]).buffer), null);
@@ -1224,7 +1237,7 @@ describe("bill text parsing", () => {
         ["image/gif", new TextEncoder().encode("GIF89a000000"), "gif"],
         ["image/avif", new Uint8Array([0, 0, 0, 0x1c, 0x66, 0x74, 0x79, 0x70, 0x61, 0x76, 0x69, 0x66]), "avif"],
         ["image/heic", new Uint8Array([0, 0, 0, 0x1c, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63]), "heic"],
-        ["image/bmp", new Uint8Array([0x42, 0x4d, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]), "bmp"],
+        ["image/bmp", bmpHeader(), "bmp"],
         ["image/tiff", new Uint8Array([0x49, 0x49, 0x2a, 0x00, 0, 0, 0, 0, 0, 0, 0, 0]), "tif"],
         ["application/pdf", pdfBytes, "pdf"],
       ];
@@ -7885,7 +7898,9 @@ describe("insights, household split and admin console", () => {
     assert.equal(tiffResponse.headers.get("content-type"), "image/tiff");
     assert.equal((await request(`/api/bills/${tiffBill.data.id}`, { method: "DELETE" })).status, 200);
 
-    const bmp = new Blob([Buffer.from([0x42, 0x4d, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])], { type: "image/bmp" });
+    const bmpBytes = Buffer.alloc(54);
+    bmpBytes.set([0x42, 0x4d, 54, 0, 0, 0, 0, 0, 0, 0, 54, 0, 0, 0], 0);
+    const bmp = new Blob([bmpBytes], { type: "image/bmp" });
     const bmpForm = form(bmp, "BMP bill scan");
     bmpForm.delete("document");
     bmpForm.append("document", bmp, "bill.bmp");
@@ -7940,6 +7955,15 @@ describe("insights, household split and admin console", () => {
     assert.equal(svgBill.status, 400, "SVG is not a supported bill photo");
     assert.equal(svgBill.data.error, "Upload a PDF or image bill", "SVG is rejected before it reaches the disk");
     assert.deepEqual(files(), beforeSvg, "a rejected SVG leaves no file behind");
+
+    // A JPEG name/MIME cannot smuggle SVG bytes past the content sniffer.
+    const beforeFakeJpeg = files();
+    const fakeJpegForm = form(new Blob(["<svg xmlns='http://www.w3.org/2000/svg'/>"], { type: "image/jpeg" }), "Fake JPEG");
+    fakeJpegForm.delete("document");
+    fakeJpegForm.append("document", new Blob(["<svg xmlns='http://www.w3.org/2000/svg'/>"], { type: "image/jpeg" }), "bill.jpg");
+    const fakeJpegBill = await request(`/api/houses/${billHouse}/bills`, { method: "POST", body: fakeJpegForm });
+    assert.equal(fakeJpegBill.status, 400, "SVG bytes under a JPEG name are rejected by the sniffer");
+    assert.deepEqual(files(), beforeFakeJpeg, "the fake JPEG leaves no file behind");
 
     const beforeImageFailure = files();
     await run(`CREATE TRIGGER reject_bill_insert BEFORE INSERT ON bills

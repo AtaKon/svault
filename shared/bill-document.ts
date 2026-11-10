@@ -24,11 +24,12 @@ export const BILL_PHOTO_EXTENSIONS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Image types the bill flow can keep or convert to JPEG. The picker advertises
- * `image/*` so phone photo libraries show every photo, but this list is what
- * `prepareBillImage` can actually handle; anything else is rejected on pick.
+ * Input image types the picker and converter accept. This is not the stored
+ * type list: `image/heif`, `image/jpg` and similar arrive from browsers and are
+ * normalised to JPEG by `prepareBillImage`, while `DOCUMENT_EXTENSIONS` keys
+ * below are only the types the server sniffer can return.
  */
-const BILL_IMAGE_TYPES = new Set([
+const BILL_INPUT_TYPES = new Set([
   "image/jpeg", "image/jpg", "image/pjpeg",
   "image/png", "image/webp", "image/gif", "image/avif",
   "image/heic", "image/heif", "image/bmp", "image/tiff",
@@ -51,7 +52,7 @@ export function isBillPdf(file: File): boolean {
 
 export function isSupportedBillFile(file: File): boolean {
   if (isBillPdf(file)) return true;
-  if (BILL_IMAGE_TYPES.has(file.type)) return true;
+  if (BILL_INPUT_TYPES.has(file.type)) return true;
   const dot = file.name.lastIndexOf(".");
   return dot >= 0 && BILL_PHOTO_EXTENSIONS.has(file.name.slice(dot).toLowerCase());
 }
