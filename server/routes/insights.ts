@@ -80,7 +80,7 @@ const settingsBody = z.object({
 const settlementBody = z.object({
   fromUserId: z.string().min(1).max(60),
   toUserId: z.string().min(1).max(60),
-  amount: z.number().positive().max(1e9),
+  amount: z.number().finite().positive().max(1e9),
 });
 
 const settlementTails = new Map<string, Promise<void>>();
@@ -126,6 +126,7 @@ insightRoutes.post(
     await withSettlementLock(houseId, () => tx(async () => {
       // Acquire a write lock before reading the ledger. This row lock serializes
       // competing settlements across Postgres connections and SQLite processes.
+      // The database helpers pin householdInsight reads to this transaction's connection.
       await run("UPDATE houses SET id = id WHERE id = ?", [houseId]);
       const current = await householdInsight(houseId);
       const suggested = current.settlements.find(

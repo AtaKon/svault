@@ -423,10 +423,10 @@ export async function householdInsight(houseId: string): Promise<{
     );
     const splitWith = participants.length ? participants : fallback;
     if (payer && memberIds.has(payer)) paid.set(payer, (paid.get(payer) ?? 0) + total);
-    if (splitWith.length) {
-      const share = total / splitWith.length;
-      for (const id of splitWith) owed.set(id, (owed.get(id) ?? 0) + share);
-    }
+    splitAmountEvenly(total, splitWith.length).forEach((share, index) => {
+      const id = splitWith[index];
+      if (id) owed.set(id, (owed.get(id) ?? 0) + share);
+    });
     if (settled.length < 20) {
       settled.push({
         id: row.id,
@@ -474,11 +474,11 @@ export async function householdInsight(houseId: string): Promise<{
   for (const transfer of transferRows) {
     const from = transfer.from_user_id;
     const to = transfer.to_user_id;
-    // Departed members are excluded from the active household ledger.
-    if (!memberIds.has(from) || !memberIds.has(to)) continue;
     const amount = money(transfer.amount);
-    transferBalance.set(from, (transferBalance.get(from) ?? 0) + amount);
-    transferBalance.set(to, (transferBalance.get(to) ?? 0) - amount);
+    // Keep the active member's side of a transfer if the counterparty later
+    // leaves the house; removing a member must not erase cash they already paid.
+    if (memberIds.has(from)) transferBalance.set(from, (transferBalance.get(from) ?? 0) + amount);
+    if (memberIds.has(to)) transferBalance.set(to, (transferBalance.get(to) ?? 0) - amount);
   }
 
   const balances: HouseholdBalance[] = members.map((member) => {
