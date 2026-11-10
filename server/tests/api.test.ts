@@ -2688,6 +2688,24 @@ describe("espresso equipment", () => {
     await request(`/api/houses/${houseId}/espresso-equipment/${secondMachine.data.id}`, { method: "DELETE" });
   });
 
+  it("clears a saved picker when only the text is sent as null", async () => {
+    const fresh = await request(`/api/items/${coffeeId}/espresso-shots`, {
+      method: "POST",
+      body: { rating: 3, grinderId, machineId },
+    });
+    assert.equal(fresh.status, 201);
+    const cleared = await request(`/api/items/${coffeeId}/espresso-shots/${fresh.data.id}`, {
+      method: "PATCH",
+      body: { grinder: null },
+    });
+    assert.equal(cleared.status, 200);
+    assert.equal(cleared.data.grinderId, null);
+    assert.equal(cleared.data.grinder, null);
+    assert.equal(cleared.data.machineId, machineId);
+    assert.equal(cleared.data.machine, "Lelit Mara X");
+    await request(`/api/items/${coffeeId}/espresso-shots/${fresh.data.id}`, { method: "DELETE" });
+  });
+
   it("keeps shot names after equipment is deleted", async () => {
     const second = await request(`/api/items/${coffeeId}/espresso-shots`, {
       method: "POST",
@@ -2893,7 +2911,7 @@ await initDb();
 const grinderColumn = await get("SELECT COUNT(*) AS n FROM pragma_table_info('espresso_shots') WHERE name = 'grinder_id'");
 const machineColumn = await get("SELECT COUNT(*) AS n FROM pragma_table_info('espresso_shots') WHERE name = 'machine_id'");
 const fks = await all("SELECT \\"table\\", \\"from\\", on_delete FROM pragma_foreign_key_list('espresso_shots') WHERE \\"from\\" IN ('grinder_id', 'machine_id') ORDER BY \\"from\\"");
-const uniqueIndex = await get("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'espresso_equipment_name'");
+const uniqueIndex = await get("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND name = 'espresso_equipment_name'");
 const fkOn = await get("PRAGMA foreign_keys");
 await run("INSERT INTO espresso_equipment (id, house_id, kind, name, created_at, updated_at) VALUES ('eqp_legacy', 'hse_legacy', 'grinder', 'Legacy grinder', '2026-01-01', '2026-01-01')");
 await run("INSERT INTO espresso_equipment (id, house_id, kind, name, created_at, updated_at) VALUES ('eqp_machine', 'hse_legacy', 'machine', 'Legacy machine', '2026-01-01', '2026-01-01')");
@@ -2911,6 +2929,7 @@ console.log(JSON.stringify({
   grinderColumn: Number(grinderColumn.n),
   machineColumn: Number(machineColumn.n),
   uniqueIndex: uniqueIndex?.name ?? null,
+  uniqueIndexSql: uniqueIndex?.sql ?? null,
   foreignKeys: Number(fkOn.foreign_keys),
   bogusRejected,
   fks: fks.map((entry) => entry.from + ":" + entry.table + ":" + entry.on_delete),
@@ -2950,6 +2969,7 @@ await closeDb();
       assert.equal(result.grinderColumn, 1);
       assert.equal(result.machineColumn, 1);
       assert.equal(result.uniqueIndex, "espresso_equipment_name");
+      assert.match(result.uniqueIndexSql, /espresso_equipment\(house_id, kind, lower\(name\)\)/i);
       assert.equal(result.foreignKeys, 1);
       assert.equal(result.bogusRejected, true);
       assert.deepEqual(result.fks, [
