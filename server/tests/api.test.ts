@@ -8665,6 +8665,7 @@ describe("insights, household split and admin console", () => {
       assert.equal((await reader)?.name, "Locked settlement house");
       await run("UPDATE houses SET name = ? WHERE id = ?", ["Settlement payments", house.data.id]);
     }
+    assert.equal(await tx((session) => lockHouseholdLedger(session, "hse_missing")), false);
     const owner = await request("/api/auth/me");
     const ownerId = owner.data.user.id;
     const secondUser = await request("/api/auth/me", { auth: secondUserCookie });
@@ -8814,6 +8815,7 @@ describe("insights, household split and admin console", () => {
       request(path, { method: "POST", body: { fromUserId: memberId, toUserId: ownerId, amount: 0.5 } }),
     ]);
     assert.deepEqual(concurrent.map((result) => result.status).sort(), [201, 400]);
+    assert.deepEqual(concurrent.find((result) => result.status === 201)?.data.settlements, []);
     ledger = await request(ledgerPath);
     assert.deepEqual(ledger.data.settlements, []);
     assert.equal(ledger.data.balances.find((entry: any) => entry.userId === memberId).balance, 0);

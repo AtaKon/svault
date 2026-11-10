@@ -65,12 +65,12 @@ export function tx<T>(fn: (session: DatabaseSession) => Promise<T>, options?: Da
  * Lock the house inside a transaction before any household-ledger reads/writes.
  * Postgres uses a row lock; SQLite's UPDATE takes the database write reservation.
  */
-export async function lockHouseholdLedger(session: DatabaseSession, houseId: string): Promise<void> {
+export async function lockHouseholdLedger(session: DatabaseSession, houseId: string): Promise<boolean> {
   if (active().kind === "postgres") {
-    await session.get("SELECT id FROM houses WHERE id = ? FOR UPDATE", [houseId]);
-    return;
+    return Boolean(await session.get("SELECT id FROM houses WHERE id = ? FOR UPDATE", [houseId]));
   }
   await session.run("UPDATE houses SET id = id WHERE id = ?", [houseId]);
+  return Boolean(await session.get("SELECT id FROM houses WHERE id = ?", [houseId]));
 }
 
 export function tables(): Promise<string[]> {

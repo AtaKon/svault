@@ -121,7 +121,7 @@ insightRoutes.post(
     const recordPayment = () => tx(async (session) => {
       // Lock the house before reading. Receipt, bill, membership, and other
       // settlement writes use the same lock before changing the household ledger.
-      await lockHouseholdLedger(session, houseId);
+      if (!await lockHouseholdLedger(session, houseId)) throw new ApiError(404, "House not found");
       const memberIds = new Set((await session.all<{ user_id: string }>(
         "SELECT user_id FROM house_members WHERE house_id = ?",
         [houseId],
@@ -145,10 +145,12 @@ insightRoutes.post(
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [newId("hst"), houseId, body.fromUserId, body.toUserId, amount, req.user!.id, now()],
       );
+      return householdInsight(houseId, session);
     }, { writeLock: true });
-    if (databaseKind() === "sqlite") await withSettlementLock(houseId, recordPayment);
-    else await recordPayment();
-    res.status(201).json(await householdInsight(houseId));
+    const updated = databaseKind() === "sqlite"
+      ? await withSettlementLock(houseId, recordPayment)
+      : await recordPayment();
+    res.status(201).json(await updated);
   }),
 );
 

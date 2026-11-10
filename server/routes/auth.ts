@@ -365,7 +365,11 @@ authRoutes.post(
       await run("UPDATE house_invites SET accepted_at = ?, accepted_by = ? WHERE id = ?", [now(), req.user!.id, invite.id]);
     });
     if (memberAdded) {
-      await notifyHouseAdded(req.user!.id, invite.house_id, invite.role as Role, invite.created_by);
+      try {
+        await notifyHouseAdded(req.user!.id, invite.house_id, invite.role as Role, invite.created_by);
+      } catch {
+        // Membership is committed; a notification failure must not make acceptance appear to fail.
+      }
     }
     res.json(await userPayload(req.user!.id));
   }),

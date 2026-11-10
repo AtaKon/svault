@@ -19,7 +19,7 @@ export interface DatabaseSession {
 }
 
 export interface DatabaseTransactionOptions {
-  /** Acquire SQLite's write reservation before running any transaction reads. */
+  /** Acquire SQLite's write reservation before running any transaction reads; Postgres callers use row locks. */
   writeLock?: boolean;
 }
 
