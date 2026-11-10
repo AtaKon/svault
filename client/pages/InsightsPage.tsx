@@ -41,6 +41,7 @@ export function InsightsPage() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [settling, setSettling] = useState<string | null>(null);
   const [editingBudget, setEditingBudget] = useState(false);
   const editingBudgetRef = useRef(false);
   const [budget, setBudget] = useState("0");
@@ -124,6 +125,44 @@ export function InsightsPage() {
       toast.error(err instanceof Error ? t(err.message) : t("Could not check prices"));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const recordSettlement = async (settlement: HouseholdSettlement) => {
+    const key = `${settlement.fromUserId}:${settlement.toUserId}`;
+    setSettling(key);
+    try {
+      const result = await api<HouseholdData | { replayed: true; settlement: { id: string; fromUserId: string; toUserId: string; amount: number } }>(
+        `/api/houses/${house.id}/insights/settlements`,
+        {
+          method: "POST",
+          body: {
+            idempotencyKey: crypto.randomUUID(),
+            fromUserId: settlement.fromUserId,
+            toUserId: settlement.toUserId,
+            amount: Math.round(settlement.amount * 100) / 100,
+          },
+        },
+      );
+      if ("replayed" in result) {
+        try {
+          await load();
+        } catch {
+          // The original payment was already recorded; keep that outcome visible.
+        }
+      } else {
+        setHousehold(result);
+      }
+      toast.success(t("Payment recorded"));
+    } catch (err) {
+      toast.error(err instanceof Error ? t(err.message) : t("Could not record the payment"));
+      try {
+        await load();
+      } catch {
+        // Keep the original payment error visible if refreshing also fails.
+      }
+    } finally {
+      setSettling(null);
     }
   };
 
@@ -482,7 +521,7 @@ export function InsightsPage() {
 
         <Card className="p-4">
           <h2 className="font-display text-lg">{t("Household split")}</h2>
-          <p className="text-[11px] text-muted">{t("Who paid for receipts and who still owes what")}</p>
+          <p className="text-[11px] text-muted">{t("Who paid for receipts and who still owes what")}. {t("Only transfers between current members affect this balance.")}</p>
           <div className="mt-3 space-y-1.5">
             {household.balances.map((member) => (
               <div key={member.userId} className="flex items-center gap-2 text-sm">
@@ -491,6 +530,8 @@ export function InsightsPage() {
                 </span>
                 <span className="min-w-0 flex-1 truncate">{member.name}</span>
                 <span className="text-[11px] text-muted">{t("paid ")}{' '}{money(member.paid, household.currency)}</span>
+                {member.settled > 0.009 && <span className="text-[10px] text-muted">{t("Net sent {amount}", { amount: money(member.settled, household.currency) })}</span>}
+                {member.settled < -0.009 && <span className="text-[10px] text-muted">{t("Net received {amount}", { amount: money(Math.abs(member.settled), household.currency) })}</span>}
                 <span className={cn("w-20 text-right tabular-nums", member.balance > 0.009 ? "text-brand" : member.balance < -0.009 ? "text-danger" : "text-muted")}>
                   {member.balance > 0.009 ? "+" : ""}
                   {money(member.balance, household.currency)}
@@ -501,9 +542,12 @@ export function InsightsPage() {
           {household.settlements.length > 0 && (
             <div className="mt-3 rounded-lg bg-raised/60 p-2.5">
               <div className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted">{t("Settle up")}</div>
-              {household.settlements.map((settlement, index) => (
-                <div key={index} className="mt-1 text-[12px]">
-                  {settlement.fromName} → {settlement.toName} · <span className="font-medium">{money(settlement.amount, household.currency)}</span>
+              {household.settlements.map((settlement) => (
+                <div key={`${settlement.fromUserId}:${settlement.toUserId}`} className="mt-1 flex items-center gap-2 text-[12px]">
+                  <span className="min-w-0 flex-1">{settlement.fromName} → {settlement.toName} · <span className="font-medium">{money(settlement.amount, household.currency)}</span></span>
+                  <Button size="sm" variant="secondary" disabled={settling !== null} onClick={() => void recordSettlement(settlement)}>
+                    {settling === `${settlement.fromUserId}:${settlement.toUserId}` ? t("Recording…") : t("Record full payment")}
+                  </Button>
                 </div>
               ))}
             </div>

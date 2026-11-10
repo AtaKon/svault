@@ -5,7 +5,7 @@ import path from "node:path";
 import { DB_FILE, PRE_RESTORE_DIR, PRE_RESTORE_KEEP, UPLOAD_DIR, ensureDirs } from "../config.js";
 import { pruneOldFiles } from "../services/restore-files.js";
 import { RESERVED_ATTRIBUTE_KEYS } from "../../shared/types.js";
-import type { DatabaseDriver, RunResult } from "./types.js";
+import type { DatabaseDriver, DatabaseSession, DatabaseTransactionOptions, RunResult } from "./types.js";
 
 /** A restore is staged by the API and applied before SQLite is opened. */
 export function applyPendingSqliteRestore() {
@@ -45,6 +45,7 @@ function parseJson<T>(value: unknown, fallback: T): T {
 interface SqliteTx {
   conn: DatabaseSync;
   depth: number;
+  writeLock: boolean;
 }
 
 const txStorage = new AsyncLocalStorage<SqliteTx>();
@@ -321,14 +322,17 @@ COMMIT;`);
     this.conn().exec(sql);
   }
 
-  async tx<T>(fn: () => Promise<T>): Promise<T> {
+  async tx<T>(fn: (session: DatabaseSession) => Promise<T>, options?: DatabaseTransactionOptions): Promise<T> {
     const existing = txStorage.getStore();
     if (existing) {
+      if (options?.writeLock && !existing.writeLock) {
+        throw new Error("A SQLite write-locked transaction must be started at the outermost level");
+      }
       const savepoint = `sp_${existing.depth}`;
       existing.conn.exec(`SAVEPOINT ${savepoint}`);
       existing.depth++;
       try {
-        const result = await fn();
+        const result = await fn(this.session(existing.conn));
         existing.depth--;
         existing.conn.exec(`RELEASE ${savepoint}`);
         return result;
@@ -348,10 +352,11 @@ COMMIT;`);
     // or join its uncommitted writes. WAL keeps readers available.
     const conn = new DatabaseSync(DB_FILE);
     conn.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
-    conn.exec("BEGIN");
-    const context: SqliteTx = { conn, depth: 0 };
+    const writeLock = options?.writeLock === true;
+    conn.exec(writeLock ? "BEGIN IMMEDIATE" : "BEGIN");
+    const context: SqliteTx = { conn, depth: 0, writeLock };
     try {
-      const result = await txStorage.run(context, fn);
+      const result = await txStorage.run(context, () => fn(this.session(conn)));
       conn.exec("COMMIT");
       return result;
     } catch (error) {
@@ -364,6 +369,21 @@ COMMIT;`);
     } finally {
       conn.close();
     }
+  }
+
+  private session(conn: DatabaseSync): DatabaseSession {
+    return {
+      kind: "sqlite",
+      all: async <T = Record<string, any>>(sql: string, params: unknown[] = []) =>
+        conn.prepare(sql).all(...normaliseParams(params)) as unknown as T[],
+      get: async <T = Record<string, any>>(sql: string, params: unknown[] = []) =>
+        conn.prepare(sql).get(...normaliseParams(params)) as unknown as T | undefined,
+      run: async (sql: string, params: unknown[] = []) => {
+        const result = conn.prepare(sql).run(...normaliseParams(params)) as any;
+        return { changes: Number(result?.changes ?? 0), lastInsertRowid: result?.lastInsertRowid };
+      },
+      exec: async (sql: string) => { conn.exec(sql); },
+    };
   }
 
   async tables(): Promise<string[]> {
@@ -755,6 +775,30 @@ CREATE TABLE IF NOT EXISTS bills (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS bills_house ON bills(house_id, due_date, created_at);
+
+CREATE TABLE IF NOT EXISTS household_settlements (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  from_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  to_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  CHECK (from_user_id <> to_user_id)
+);
+CREATE INDEX IF NOT EXISTS household_settlements_house ON household_settlements(house_id, created_at);
+
+CREATE TABLE IF NOT EXISTS household_settlement_requests (
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  idempotency_key TEXT NOT NULL,
+  settlement_id TEXT NOT NULL UNIQUE REFERENCES household_settlements(id) ON DELETE CASCADE,
+  from_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  to_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+  created_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (house_id, idempotency_key)
+);
 
 CREATE TABLE IF NOT EXISTS receipt_lines (
   id TEXT PRIMARY KEY,

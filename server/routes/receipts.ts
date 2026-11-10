@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { AI_ENV } from "../config.js";
-import { all, get, newId, now, parseJson, run, tx } from "../db.js";
+import { all, get, lockHouseholdLedger, newId, now, parseJson, run, tx } from "../db.js";
 import { requireAuth, memberRole, roleAtLeast } from "../auth.js";
 import { ApiError, handler, intParam, parseBody, requireHouse } from "../http.js";
 import { aiParseReceipt, resolveAi } from "../ai.js";
@@ -826,7 +826,8 @@ receiptRoutes.post(
       return { line, rawDescription, mapping, offCode: product?.code ?? wanted, product };
     });
 
-    await tx(async () => {
+    await tx(async (session) => {
+      if (!await lockHouseholdLedger(session, houseId)) throw new ApiError(404, "House not found");
       await run(
         `INSERT INTO receipts
           (id, house_id, vendor_id, vendor_name, purchased_at, currency, total, subtotal, tax, tax_breakdown,
@@ -987,7 +988,7 @@ receiptRoutes.post(
         const finalSubtotal = subtotal ?? (finalTotal != null && tax != null ? round(finalTotal - tax, 2) : null);
         await run("UPDATE receipts SET total = ?, subtotal = ? WHERE id = ?", [finalTotal, finalSubtotal, receiptId]);
       }
-    });
+    }, { writeLock: true });
 
     for (const itemId of touchedItems) await afterStockChange(itemId);
     // Price alerts are best effort: a new receipt must never fail because an
@@ -1227,11 +1228,14 @@ singleReceiptRoutes.patch(
         ? receipt.paid_by ?? receipt.created_by ?? null
         : body.paidBy ?? receipt.created_by ?? null;
     const splitWith = body.splitWith === undefined ? parseJson<string[]>(receipt.split_with, []) : body.splitWith;
-    await run("UPDATE receipts SET paid_by = ?, split_with = ? WHERE id = ?", [
-      paidBy,
-      JSON.stringify(splitWith),
-      receipt.id,
-    ]);
+    await tx(async (session) => {
+      if (!await lockHouseholdLedger(session, houseId)) throw new ApiError(404, "House not found");
+      await run("UPDATE receipts SET paid_by = ?, split_with = ? WHERE id = ?", [
+        paidBy,
+        JSON.stringify(splitWith),
+        receipt.id,
+      ]);
+    }, { writeLock: true });
     res.json(await receiptDetail(houseId, receipt.id));
   }),
 );
@@ -1242,12 +1246,13 @@ singleReceiptRoutes.delete(
     const { receipt, houseId } = await receiptAccess(req, "member");
     const revertStock = ["1", "true", "yes"].includes(String(req.query.revertStock ?? "").toLowerCase());
     let reverted: ReceiptStockRevert[] = [];
-    await tx(async () => {
+    await tx(async (session) => {
+      if (!await lockHouseholdLedger(session, houseId)) throw new ApiError(404, "House not found");
       if (revertStock) {
         reverted = await revertReceiptStock({ receiptId: receipt.id, houseId, userId: req.user!.id });
       }
       await run("DELETE FROM receipts WHERE id = ?", [receipt.id]);
-    });
+    }, { writeLock: true });
     for (const entry of reverted) await afterStockChange(entry.itemId);
     // The image goes too, unless another receipt record shares the same file.
     const imageRemoved = await removeReceiptImageIfUnused(receipt.image);

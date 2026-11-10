@@ -146,6 +146,8 @@ export const limiters = {
   ai: new RateLimiter("AI", { max: 60, windowMs: 10 * 60_000 }),
   /** Repeated insight scans, which walk receipt and movement history. */
   insights: new RateLimiter("INSIGHTS", { max: 60, windowMs: 10 * 60_000 }),
+  /** Writes that record household settlement transfers. */
+  settlements: new RateLimiter("SETTLEMENTS", { max: 30, windowMs: 10 * 60_000 }),
   /** Unofficial upstream barcode price lookups are tightly rate limited. */
   posokanei: new RateLimiter("POSOKANEI", { max: 2, windowMs: 15 * 60_000 }),
   posokaneiGlobal: new RateLimiter("POSOKANEI_GLOBAL", { max: 3, windowMs: 15 * 60_000 }),

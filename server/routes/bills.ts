@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
-import { all, get, newId, now, parseJson, run } from "../db.js";
+import { all, get, lockHouseholdLedger, newId, now, parseJson, run, tx } from "../db.js";
 import { memberRole, roleAtLeast, requireAuth } from "../auth.js";
 import { ApiError, handler, parseBody, requireHouse } from "../http.js";
 import { MAX_UPLOAD_BYTES, UPLOAD_DIR } from "../config.js";
@@ -418,16 +418,26 @@ billRoutes.post("/:houseId/bills", requireHouseBillMember, billUpload.single("do
   }
 
   try {
-    await run(`INSERT INTO bills (id, house_id, name, bill_type, contract_color, consumption_kwh, consumption_m3, municipal_charges, state_charges, category, ledger_confirmed, amount, currency, due_date, paid_by, split_with, document, notes, subtotal, tax_total, breakdown, ocr_text, source, created_by, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
-      created.id, created.house_id, created.name, created.bill_type, created.contract_color, created.consumption_kwh, created.consumption_m3, created.municipal_charges, created.state_charges, created.category, created.ledger_confirmed, created.amount, created.currency,
-      created.due_date, created.paid_by, created.split_with, created.document, created.notes, created.subtotal, created.tax_total,
-      created.breakdown, created.ocr_text, created.source, req.user!.id, created.created_at,
-    ]);
+    await tx(async (session) => {
+      if (!await lockHouseholdLedger(session, created.house_id)) throw new ApiError(404, "House not found");
+      await run(`INSERT INTO bills (id, house_id, name, bill_type, contract_color, consumption_kwh, consumption_m3, municipal_charges, state_charges, category, ledger_confirmed, amount, currency, due_date, paid_by, split_with, document, notes, subtotal, tax_total, breakdown, ocr_text, source, created_by, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+        created.id, created.house_id, created.name, created.bill_type, created.contract_color, created.consumption_kwh, created.consumption_m3, created.municipal_charges, created.state_charges, created.category, created.ledger_confirmed, created.amount, created.currency,
+        created.due_date, created.paid_by, created.split_with, created.document, created.notes, created.subtotal, created.tax_total,
+        created.breakdown, created.ocr_text, created.source, req.user!.id, created.created_at,
+      ]);
+    }, { writeLock: true });
   } catch (error) {
-    // The insert may have committed despite a driver error; remove the upload
-    // only if a follow-up query confirms that no row references it.
-    if (filename) await deleteDocument(filename);
+    // Rollback normally removes the row. A commit error can be ambiguous, so
+    // retain the document if a follow-up query cannot prove it is unreferenced.
+    if (filename) {
+      try {
+        const reference = await get("SELECT id FROM bills WHERE house_id = ? AND document = ?", [created.house_id, filename]);
+        if (!reference) await deleteDocument(filename);
+      } catch {
+        // Keep the upload when the database outcome cannot be confirmed.
+      }
+    }
     throw error;
   }
   // Return the validated insert values directly; a post-insert read is both
@@ -475,23 +485,26 @@ singleBillRoutes.patch("/:billId", handler(async (req, res) => {
   const clearScanTotals = providedBreakdown !== undefined && breakdown.length === 0;
   const nextSubtotal = body.subtotal === undefined ? (clearScanTotals ? null : current.subtotal) : body.subtotal;
   const nextTaxTotal = body.taxTotal === undefined ? (clearScanTotals ? null : current.tax_total) : body.taxTotal;
-  await run(`UPDATE bills SET name = ?, bill_type = ?, contract_color = ?, consumption_kwh = ?, consumption_m3 = ?, municipal_charges = ?, state_charges = ?, category = ?, ledger_confirmed = ?, amount = ?, due_date = ?, paid_by = ?, split_with = ?, notes = ?,
-    subtotal = ?, tax_total = ?, breakdown = ?, ocr_text = ?, source = ? WHERE id = ?`, [
-    body.name ?? current.name, nextBillType ?? "other", contractColor ?? null,
-    body.consumptionKwh === undefined ? current.consumption_kwh : body.consumptionKwh,
-    body.consumptionM3 === undefined ? current.consumption_m3 : body.consumptionM3,
-    body.municipalCharges === undefined ? current.municipal_charges : body.municipalCharges,
-    body.stateCharges === undefined ? current.state_charges : body.stateCharges,
-    category, ledgerConfirmed ? 1 : 0, body.amount ?? current.amount,
-    body.dueDate === undefined ? current.due_date : body.dueDate || null, paidBy ?? null, JSON.stringify(people),
-    body.notes === undefined ? current.notes : body.notes || null,
-    nextSubtotal,
-    nextTaxTotal,
-    JSON.stringify(breakdown),
-    nextOcrText,
-    source,
-    current.id,
-  ]);
+  await tx(async (session) => {
+    if (!await lockHouseholdLedger(session, houseId)) throw new ApiError(404, "House not found");
+    await run(`UPDATE bills SET name = ?, bill_type = ?, contract_color = ?, consumption_kwh = ?, consumption_m3 = ?, municipal_charges = ?, state_charges = ?, category = ?, ledger_confirmed = ?, amount = ?, due_date = ?, paid_by = ?, split_with = ?, notes = ?,
+      subtotal = ?, tax_total = ?, breakdown = ?, ocr_text = ?, source = ? WHERE id = ?`, [
+      body.name ?? current.name, nextBillType ?? "other", contractColor ?? null,
+      body.consumptionKwh === undefined ? current.consumption_kwh : body.consumptionKwh,
+      body.consumptionM3 === undefined ? current.consumption_m3 : body.consumptionM3,
+      body.municipalCharges === undefined ? current.municipal_charges : body.municipalCharges,
+      body.stateCharges === undefined ? current.state_charges : body.stateCharges,
+      category, ledgerConfirmed ? 1 : 0, body.amount ?? current.amount,
+      body.dueDate === undefined ? current.due_date : body.dueDate || null, paidBy ?? null, JSON.stringify(people),
+      body.notes === undefined ? current.notes : body.notes || null,
+      nextSubtotal,
+      nextTaxTotal,
+      JSON.stringify(breakdown),
+      nextOcrText,
+      source,
+      current.id,
+    ]);
+  }, { writeLock: true });
   res.json(serialize(await requireBillRow(current.id, houseId)));
 }));
 
@@ -574,8 +587,11 @@ billRoutes.get("/:houseId/bills/:billId/document", handler(async (req, res) => {
 }));
 
 singleBillRoutes.delete("/:billId", handler(async (req, res) => {
-  const { bill } = await billAccess(req, "member");
-  await run("DELETE FROM bills WHERE id = ?", [bill.id]);
+  const { houseId, bill } = await billAccess(req, "member");
+  await tx(async (session) => {
+    if (!await lockHouseholdLedger(session, houseId)) throw new ApiError(404, "House not found");
+    await run("DELETE FROM bills WHERE id = ?", [bill.id]);
+  }, { writeLock: true });
   await deleteDocument(bill.document);
   res.json({ ok: true });
 }));

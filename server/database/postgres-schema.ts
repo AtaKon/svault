@@ -323,6 +323,30 @@ CREATE TABLE IF NOT EXISTS bills (
 );
 CREATE INDEX IF NOT EXISTS bills_house ON bills(house_id, due_date, created_at);
 
+CREATE TABLE IF NOT EXISTS household_settlements (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  from_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  to_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  CHECK (from_user_id <> to_user_id)
+);
+CREATE INDEX IF NOT EXISTS household_settlements_house ON household_settlements(house_id, created_at);
+
+CREATE TABLE IF NOT EXISTS household_settlement_requests (
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  idempotency_key TEXT NOT NULL,
+  settlement_id TEXT NOT NULL UNIQUE REFERENCES household_settlements(id) ON DELETE CASCADE,
+  from_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  to_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+  created_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (house_id, idempotency_key)
+);
+
 CREATE TABLE IF NOT EXISTS stock_lots (
   id TEXT PRIMARY KEY,
   item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
@@ -879,6 +903,8 @@ export const POSTGRES_TABLE_ORDER = [
   "espresso_shots",
   "receipts",
   "bills",
+  "household_settlements",
+  "household_settlement_requests",
   "stock_lots",
   "stock_movements",
   "receipt_lines",

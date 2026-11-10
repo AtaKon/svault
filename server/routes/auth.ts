@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
-import { get, newId, now, run, tx } from "../db.js";
+import { get, lockHouseholdLedger, newId, now, run, tx } from "../db.js";
 import {
   createSession,
   hashPassword,
@@ -11,7 +11,6 @@ import {
   clearedCookie,
   verifyPassword,
   userHouses,
-  memberRole,
 } from "../auth.js";
 import { parseBody, handler, ApiError } from "../http.js";
 import { serializeHouse } from "../serialize.js";
@@ -127,14 +126,11 @@ authRoutes.post(
       throw new ApiError(403, "Registration on this server needs an invite link from a house admin.");
     }
     const invite = body.inviteCode
-      ? await get<any>("SELECT * FROM house_invites WHERE code = ? AND accepted_at IS NULL", [body.inviteCode])
+      ? await get<any>("SELECT * FROM house_invites WHERE code = ?", [body.inviteCode])
       : undefined;
-    if (body.inviteCode && (!invite || inviteExpired(invite))) throw new ApiError(400, "That invite link is no longer valid");
-    if (invite?.email && invite.email.toLowerCase() !== body.email) {
-      throw new ApiError(403, "This invite was sent to a different email address");
-    }
+    if (body.inviteCode && !invite) throw new ApiError(400, "That invite link is no longer valid");
 
-    await tx(async () => {
+    await tx(async (session) => {
       await run("INSERT INTO users (id, email, username, name, password_hash, is_admin, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", [
         userId,
         body.email,
@@ -145,18 +141,33 @@ authRoutes.post(
         now(),
       ]);
       if (invite) {
+        if (!await lockHouseholdLedger(session, invite.house_id)) throw new ApiError(404, "House not found");
+        const currentInvite = await session.get<any>(
+          "SELECT * FROM house_invites WHERE id = ? AND accepted_at IS NULL",
+          [invite.id],
+        );
+        if (!currentInvite || currentInvite.house_id !== invite.house_id || inviteExpired(currentInvite)) {
+          throw new ApiError(400, "That invite link is no longer valid");
+        }
+        if (currentInvite.email && currentInvite.email.toLowerCase() !== body.email) {
+          throw new ApiError(403, "This invite was sent to a different email address");
+        }
         await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING", [
-          invite.house_id,
+          currentInvite.house_id,
           userId,
-          invite.role,
+          currentInvite.role,
           now(),
         ]);
-        await run("UPDATE house_invites SET accepted_at = ?, accepted_by = ? WHERE id = ?", [now(), userId, invite.id]);
+        const accepted = await session.run(
+          "UPDATE house_invites SET accepted_at = ?, accepted_by = ? WHERE id = ? AND accepted_at IS NULL",
+          [now(), userId, currentInvite.id],
+        );
+        if (accepted.changes !== 1) throw new ApiError(400, "That invite link is no longer valid");
       } else {
         const fallback = body.houseName?.trim() || `${body.name.split(" ")[0]}'s Home`;
         await createHouse({ userId, name: fallback });
       }
-    });
+    }, { writeLock: Boolean(invite) });
 
     if (invite) await notifyHouseAdded(userId, invite.house_id, invite.role as Role, invite.created_by);
 
@@ -346,16 +357,46 @@ authRoutes.post(
     if (invite.email && invite.email.toLowerCase() !== req.user!.email.toLowerCase()) {
       throw new ApiError(403, "This invite was sent to a different email address");
     }
-    if (!await memberRole(req.user!.id, invite.house_id)) {
-      await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
-        invite.house_id,
-        req.user!.id,
-        invite.role as Role,
-        now(),
-      ]);
-      await notifyHouseAdded(req.user!.id, invite.house_id, invite.role as Role, invite.created_by);
+    let memberAdded = false;
+    await tx(async (session) => {
+      if (!await lockHouseholdLedger(session, invite.house_id)) throw new ApiError(404, "House not found");
+      const currentInvite = await session.get<any>(
+        "SELECT * FROM house_invites WHERE id = ? AND accepted_at IS NULL",
+        [invite.id],
+      );
+      if (!currentInvite || currentInvite.house_id !== invite.house_id || inviteExpired(currentInvite)) {
+        throw new ApiError(404, "That invite link is no longer valid");
+      }
+      if (currentInvite.email && currentInvite.email.toLowerCase() !== req.user!.email.toLowerCase()) {
+        throw new ApiError(403, "This invite was sent to a different email address");
+      }
+      const membership = await session.get(
+        "SELECT user_id FROM house_members WHERE house_id = ? AND user_id = ?",
+        [currentInvite.house_id, req.user!.id],
+      );
+      if (!membership) {
+        await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
+          currentInvite.house_id,
+          req.user!.id,
+          currentInvite.role as Role,
+          now(),
+        ]);
+        memberAdded = true;
+      }
+      const accepted = await session.run(
+        "UPDATE house_invites SET accepted_at = ?, accepted_by = ? WHERE id = ? AND accepted_at IS NULL",
+        [now(), req.user!.id, currentInvite.id],
+      );
+      if (accepted.changes !== 1) throw new ApiError(404, "That invite link is no longer valid");
+    }, { writeLock: true });
+    if (memberAdded) {
+      try {
+        await notifyHouseAdded(req.user!.id, invite.house_id, invite.role as Role, invite.created_by);
+      } catch {
+        // Membership is committed; a notification failure must not make acceptance appear to fail.
+        console.warn("Invite accepted, but the house-added notification could not be delivered");
+      }
     }
-    await run("UPDATE house_invites SET accepted_at = ?, accepted_by = ? WHERE id = ?", [now(), req.user!.id, invite.id]);
     res.json(await userPayload(req.user!.id));
   }),
 );

@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { DATABASE_KIND } from "./config.js";
 import { createDatabase } from "./database/index.js";
-import type { DatabaseDriver, DatabaseKind, RunResult } from "./database/types.js";
+import type { DatabaseDriver, DatabaseKind, DatabaseSession, DatabaseTransactionOptions, RunResult } from "./database/types.js";
 import { usernameFromEmail, usernameWithSuffix } from "./username.js";
 
 export type Row = Record<string, any>;
@@ -57,8 +57,20 @@ export function exec(sql: string): Promise<void> {
 }
 
 /** Run `fn` inside a transaction; nested calls use savepoints. */
-export function tx<T>(fn: () => Promise<T>): Promise<T> {
-  return active().tx(fn);
+export function tx<T>(fn: (session: DatabaseSession) => Promise<T>, options?: DatabaseTransactionOptions): Promise<T> {
+  return active().tx(fn, options);
+}
+
+/**
+ * Lock the house inside a transaction before any household-ledger reads/writes.
+ * Postgres uses a row lock; SQLite's UPDATE takes the database write reservation.
+ */
+export async function lockHouseholdLedger(session: DatabaseSession, houseId: string): Promise<boolean> {
+  if (session.kind === "postgres") {
+    return Boolean(await session.get("SELECT id FROM houses WHERE id = ? FOR UPDATE", [houseId]));
+  }
+  await session.run("UPDATE houses SET id = id WHERE id = ?", [houseId]);
+  return Boolean(await session.get("SELECT id FROM houses WHERE id = ?", [houseId]));
 }
 
 export function tables(): Promise<string[]> {

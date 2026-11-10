@@ -1,4 +1,5 @@
 import { all, get, parseJson, run } from "../db.js";
+import type { DatabaseSession } from "../database/types.js";
 import { convert, round } from "../units.js";
 import { createNotification } from "./notifications.js";
 import { normalizeName } from "./shopping.js";
@@ -31,6 +32,18 @@ function clamp(value: number, min: number, max: number): number {
 function money(value: unknown): number {
   const n = typeof value === "number" ? value : Number(value);
   return Number.isFinite(n) ? round(n, 2) : 0;
+}
+
+function addEvenShares(owed: Map<string, number>, total: number, splitWith: string[]) {
+  if (!splitWith.length) return;
+  const shares = splitAmountEvenly(total, splitWith.length);
+  if (shares.length !== splitWith.length) {
+    throw new Error("Household ledger split did not return one cent-exact share per member");
+  }
+  for (let index = 0; index < splitWith.length; index++) {
+    const userId = splitWith[index]!;
+    owed.set(userId, (owed.get(userId) ?? 0) + shares[index]!);
+  }
 }
 
 function monthKeys(count: number): string[] {
@@ -364,7 +377,10 @@ export async function scanPriceAlerts(houseId: string): Promise<number> {
 
 /* ------------------------------------------------------------- household */
 
-export async function householdInsight(houseId: string): Promise<{
+export async function householdInsight(
+  houseId: string,
+  session: Pick<DatabaseSession, "all" | "get"> = { all, get },
+): Promise<{
   currency: string;
   /** Everyone in the house, including members with no receipts yet. */
   members: { userId: string; name: string; role: string }[];
@@ -381,9 +397,9 @@ export async function householdInsight(houseId: string): Promise<{
     participantNames: string[];
   }[];
 }> {
-  const house = await get<{ currency: string }>("SELECT currency FROM houses WHERE id = ?", [houseId]);
+  const house = await session.get<{ currency: string }>("SELECT currency FROM houses WHERE id = ?", [houseId]);
   const currency = house?.currency ?? "EUR";
-  const members = await all<{ id: string; name: string; role: string }>(
+  const members = await session.all<{ id: string; name: string; role: string }>(
     `SELECT u.id, u.name, m.role FROM house_members m JOIN users u ON u.id = m.user_id
      WHERE m.house_id = ? ORDER BY m.created_at`,
     [houseId],
@@ -391,7 +407,7 @@ export async function householdInsight(houseId: string): Promise<{
   const memberIds = new Set(members.map((member) => member.id));
   const names = new Map(members.map((member) => [member.id, member.name]));
 
-  const rows = await all<any>(
+  const rows = await session.all<any>(
     `SELECT r.id, r.purchased_at, r.created_at, r.total, r.paid_by, r.split_with, r.created_by,
        COALESCE(v.name, r.vendor_name) AS vendor_name
      FROM receipts r LEFT JOIN vendors v ON v.id = r.vendor_id
@@ -423,10 +439,7 @@ export async function householdInsight(houseId: string): Promise<{
     );
     const splitWith = participants.length ? participants : fallback;
     if (payer && memberIds.has(payer)) paid.set(payer, (paid.get(payer) ?? 0) + total);
-    if (splitWith.length) {
-      const share = total / splitWith.length;
-      for (const id of splitWith) owed.set(id, (owed.get(id) ?? 0) + share);
-    }
+    addEvenShares(owed, total, splitWith);
     if (settled.length < 20) {
       settled.push({
         id: row.id,
@@ -443,7 +456,7 @@ export async function householdInsight(houseId: string): Promise<{
 
   // Utility bills contribute to the household ledger only when explicitly
   // categorised as shared. Personal bills remain visible in Bills & splitting.
-  const bills = await all<any>(
+  const bills = await session.all<any>(
     `SELECT amount, paid_by, split_with FROM bills
      WHERE house_id = ? AND category = 'to_split' AND ledger_confirmed = 1 ORDER BY created_at`,
     [houseId],
@@ -458,22 +471,45 @@ export async function householdInsight(houseId: string): Promise<{
     const splitWith = selected.length ? selected : [...memberIds];
     if (!splitWith.length) continue;
     if (payer) paid.set(payer, (paid.get(payer) ?? 0) + total);
-    splitAmountEvenly(total, splitWith.length).forEach((share, index) => {
-      const id = splitWith[index];
-      if (id) owed.set(id, (owed.get(id) ?? 0) + share);
-    });
+    addEvenShares(owed, total, splitWith);
+  }
+
+  // Recorded transfers reduce the outstanding balances without changing the
+  // original receipts or bills that created those debts.
+  const transferRows = await session.all<{ from_user_id: string; to_user_id: string; amount_cents: number }>(
+    "SELECT from_user_id, to_user_id, amount_cents FROM household_settlements WHERE house_id = ? ORDER BY created_at",
+    [houseId],
+  );
+  const transferBalance = new Map<string, number>();
+  for (const transfer of transferRows) {
+    const from = transfer.from_user_id;
+    const to = transfer.to_user_id;
+    const amountCents = Number(transfer.amount_cents);
+    // A transfer only offsets the live household ledger while both parties
+    // are represented. Receipt shares are recalculated when someone leaves;
+    // retaining only one side of the old transfer could invert the remaining
+    // members' suggested obligations. The row is kept and takes effect again
+    // if the same member rejoins alongside their original receipt shares.
+    if (memberIds.has(from) && memberIds.has(to)) {
+      transferBalance.set(from, (transferBalance.get(from) ?? 0) + amountCents);
+      transferBalance.set(to, (transferBalance.get(to) ?? 0) - amountCents);
+    }
   }
 
   const balances: HouseholdBalance[] = members.map((member) => {
     const memberPaid = money(paid.get(member.id) ?? 0);
     const memberShare = money(owed.get(member.id) ?? 0);
+    const memberSettled = money((transferBalance.get(member.id) ?? 0) / 100);
+    // A debtor's outgoing payment raises their negative balance toward zero;
+    // the recipient's balance falls by the same amount.
     return {
       userId: member.id,
       name: member.name,
       role: member.role,
       paid: memberPaid,
       share: memberShare,
-      balance: money(memberPaid - memberShare),
+      settled: memberSettled,
+      balance: money(memberPaid - memberShare + memberSettled),
     };
   });
 

@@ -1,7 +1,7 @@
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { createHmac, createSign, generateKeyPairSync } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { createHmac, createSign, generateKeyPairSync, randomUUID } from "node:crypto";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -104,7 +104,7 @@ await new Promise<void>((resolve) => {
 });
 
 const { app, apiErrorHandler } = await import("../index.js");
-const { all, closeDb, get, initDb, run } = await import("../db.js");
+const { all, closeDb, databaseKind, get, initDb, lockHouseholdLedger, run, tx } = await import("../db.js");
 const { discardUploads } = await import("../upload.js");
 const { heuristicRecipe, parseIngredientLine, localIdeas } = await import("../services/recipe-local.js");
 const { heuristicReceipt } = await import("../services/receipt-local.js");
@@ -1999,6 +1999,11 @@ describe("espresso log", () => {
       auth: secondUserCookie,
     });
     assert.equal(accepted.status, 200);
+    const acceptedAgain = await request(`/api/auth/invites/${invite.data.invite.code}/accept`, {
+      method: "POST",
+      auth: secondUserCookie,
+    });
+    assert.equal(acceptedAgain.status, 404);
     const me = await request("/api/auth/me", { auth: secondUserCookie });
     memberUserId = me.data.user.id;
 
@@ -8051,6 +8056,17 @@ describe("insights, household split and admin console", () => {
     assert.deepEqual(splitAmountEvenly(-1, 2), []);
     assert.deepEqual(splitAmountEvenly(1, 0), []);
     assert.deepEqual(splitAmountEvenly(1, 2.5), []);
+    for (const amount of [0, 0.01, 0.02, 0.05, 1, 10.01, 999_999_999.99]) {
+      for (const participantCount of [1, 2, 3, 5, 12]) {
+        const shares = splitAmountEvenly(amount, participantCount);
+        assert.equal(shares.length, participantCount, `${amount} split ${participantCount} ways`);
+        assert.equal(
+          shares.reduce((sum, share) => sum + Math.round(share * 100), 0),
+          Math.round(amount * 100),
+          `${amount} split ${participantCount} ways must preserve cents`,
+        );
+      }
+    }
   });
 
   it("makes upload cleanup safe to repeat", async () => {
@@ -8073,6 +8089,7 @@ describe("insights, household split and admin console", () => {
     assert.ok(POSTGRES_TABLE_ORDER.indexOf("users") < POSTGRES_TABLE_ORDER.indexOf("bills"));
     assert.ok(POSTGRES_TABLE_ORDER.indexOf("houses") < POSTGRES_TABLE_ORDER.indexOf("bills"));
     assert.ok(POSTGRES_TABLE_ORDER.indexOf("house_members") < POSTGRES_TABLE_ORDER.indexOf("bills"));
+    assert.ok(POSTGRES_TABLE_ORDER.indexOf("household_settlements") < POSTGRES_TABLE_ORDER.indexOf("household_settlement_requests"));
   });
 
   it("keeps PostgreSQL fresh and upgraded ledger confirmation defaults aligned", () => {
@@ -8593,6 +8610,328 @@ describe("insights, household split and admin console", () => {
       household.data.settlements.reduce((sum: number, entry: any) => sum + entry.amount, 0),
       20,
     );
+  });
+
+  it("records household payments without over-settling under concurrent requests", async () => {
+    const house = await request("/api/houses", { method: "POST", body: { name: "Settlement payments", currency: "EUR" } });
+    assert.equal(house.status, 201);
+    if (databaseKind() === "sqlite") {
+      let releaseWrite!: () => void;
+      let writeLockAcquired!: () => void;
+      const waitToRelease = new Promise<void>((resolve) => { releaseWrite = resolve; });
+      const writeLockReady = new Promise<void>((resolve) => { writeLockAcquired = resolve; });
+      const writer = tx(async (session) => {
+        await lockHouseholdLedger(session, house.data.id);
+        await session.run("UPDATE houses SET name = ? WHERE id = ?", ["Locked settlement house", house.data.id]);
+        writeLockAcquired();
+        await waitToRelease;
+      });
+      await writeLockReady;
+
+      const childSource = `import { SqliteDriver } from "./server/database/sqlite.ts";
+        const db = new SqliteDriver();
+        process.stdout.write("ready\\n");
+        const row = await db.tx(async (session) => {
+          await session.run("UPDATE houses SET id = id WHERE id = ?", [${JSON.stringify(house.data.id)}]);
+          return session.get("SELECT name FROM houses WHERE id = ?", [${JSON.stringify(house.data.id)}]);
+        });
+        process.stdout.write(JSON.stringify(row));`;
+      const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", childSource], {
+        cwd: process.cwd(),
+        env: { ...process.env, DATA_DIR: dataDir },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let childOutput = "";
+      let childError = "";
+      let childReady!: () => void;
+      const childReadyPromise = new Promise<void>((resolve) => { childReady = resolve; });
+      child.stdout.setEncoding("utf8");
+      child.stderr.setEncoding("utf8");
+      child.stdout.on("data", (chunk) => {
+        childOutput += chunk;
+        if (childOutput.includes("ready")) childReady();
+      });
+      child.stderr.on("data", (chunk) => { childError += chunk; });
+      const childExit = new Promise<number>((resolve, reject) => {
+        child.once("error", reject);
+        child.once("close", (code) => resolve(code ?? 1));
+      });
+      await childReadyPromise;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      releaseWrite();
+      await writer;
+      assert.equal(await childExit, 0, childError);
+      assert.equal(JSON.parse(childOutput.slice("ready\n".length)).name, "Locked settlement house");
+      await run("UPDATE houses SET name = ? WHERE id = ?", ["Settlement payments", house.data.id]);
+      await assert.rejects(() => tx(async () => {
+        await tx(async () => {}, { writeLock: true });
+      }), /must be started at the outermost level/);
+    } else {
+      let releaseWrite!: () => void;
+      let writeLockAcquired!: () => void;
+      const waitToRelease = new Promise<void>((resolve) => { releaseWrite = resolve; });
+      const writeLockReady = new Promise<void>((resolve) => { writeLockAcquired = resolve; });
+      const writer = tx(async (session) => {
+        await lockHouseholdLedger(session, house.data.id);
+        await session.run("UPDATE houses SET name = ? WHERE id = ?", ["Locked settlement house", house.data.id]);
+        writeLockAcquired();
+        await waitToRelease;
+      });
+      await writeLockReady;
+      const reader = tx(async (session) => {
+        await lockHouseholdLedger(session, house.data.id);
+        return session.get<{ name: string }>("SELECT name FROM houses WHERE id = ?", [house.data.id]);
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      releaseWrite();
+      await writer;
+      assert.equal((await reader)?.name, "Locked settlement house");
+      await run("UPDATE houses SET name = ? WHERE id = ?", ["Settlement payments", house.data.id]);
+    }
+    assert.equal(await tx((session) => lockHouseholdLedger(session, "hse_missing")), false);
+    const owner = await request("/api/auth/me");
+    const ownerId = owner.data.user.id;
+    const secondUser = await request("/api/auth/me", { auth: secondUserCookie });
+    const memberId = secondUser.data.user.id;
+    const notMember = await request(`/api/houses/${house.data.id}/insights/settlements`, {
+      method: "POST",
+      auth: secondUserCookie,
+      body: { fromUserId: ownerId, toUserId: memberId, amount: 0.01 },
+    });
+    assert.equal(notMember.status, 404);
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
+      house.data.id,
+      memberId,
+      "member",
+      new Date().toISOString(),
+    ]);
+    const path = `/api/houses/${house.data.id}/insights/settlements`;
+    const ledgerPath = `/api/houses/${house.data.id}/insights/household`;
+    const postSettlement = (body: Record<string, unknown>, idempotencyKey = randomUUID()) => request(path, {
+      method: "POST",
+      body: { ...body, idempotencyKey },
+    });
+    const receipt = async (day: number) => request(`/api/houses/${house.data.id}/receipts`, {
+      method: "POST",
+      body: {
+        vendorName: "Settlement Market",
+        purchasedAt: at(day),
+        currency: "EUR",
+        total: 1,
+        paidBy: ownerId,
+        splitWith: [ownerId, memberId],
+        lines: [{ description: "Shared item", quantity: 1, lineTotal: 1 }],
+      },
+    });
+
+    const firstReceipt = await receipt(6);
+    assert.equal(firstReceipt.status, 201, JSON.stringify(firstReceipt.data));
+    let ledger = await request(ledgerPath);
+    assert.deepEqual(ledger.data.settlements.map((entry: any) => [entry.fromUserId, entry.toUserId, entry.amount]), [
+      [memberId, ownerId, 0.5],
+    ]);
+    assert.equal(ledger.data.balances.find((entry: any) => entry.userId === memberId).balance, -0.5);
+    assert.equal(ledger.data.balances.find((entry: any) => entry.userId === ownerId).balance, 0.5);
+
+    const invalidCases = [
+      { fromUserId: memberId, toUserId: memberId, amount: 0.1 },
+      { fromUserId: "usr_not_a_member", toUserId: ownerId, amount: 0.1 },
+      { fromUserId: memberId, toUserId: "usr_not_a_member", amount: 0.1 },
+      { fromUserId: memberId, toUserId: ownerId, amount: 0.004 },
+      { fromUserId: memberId, toUserId: ownerId, amount: 0.005 },
+      { fromUserId: memberId, toUserId: ownerId, amount: 0.51 },
+    ];
+    for (const body of invalidCases) {
+      const rejected = await postSettlement(body);
+      assert.equal(rejected.status, 400, JSON.stringify({ body, response: rejected.data }));
+    }
+
+    const partialPaymentKey = randomUUID();
+    const partialPayment = await postSettlement({ fromUserId: memberId, toUserId: ownerId, amount: 0.01 }, partialPaymentKey);
+    assert.equal(partialPayment.status, 201, JSON.stringify(partialPayment.data));
+    assert.equal(partialPayment.data.balances.find((entry: any) => entry.userId === memberId).settled, 0.01);
+    assert.equal(partialPayment.data.balances.find((entry: any) => entry.userId === memberId).balance, -0.49);
+    assert.equal(partialPayment.data.balances.find((entry: any) => entry.userId === ownerId).balance, 0.49);
+    assert.equal(partialPayment.data.settlements[0].amount, 0.49);
+    const partialPaymentReplay = await postSettlement(
+      { fromUserId: memberId, toUserId: ownerId, amount: 0.01 },
+      partialPaymentKey,
+    );
+    assert.equal(partialPaymentReplay.status, 200, JSON.stringify(partialPaymentReplay.data));
+    assert.equal(partialPaymentReplay.data.replayed, true);
+    assert.equal(partialPaymentReplay.data.settlement.amount, 0.01);
+    ledger = await request(ledgerPath);
+    assert.equal(ledger.data.balances.find((entry: any) => entry.userId === memberId).settled, 0.01);
+    const reusedKey = await postSettlement(
+      { fromUserId: memberId, toUserId: ownerId, amount: 0.02 },
+      partialPaymentKey,
+    );
+    assert.equal(reusedKey.status, 409);
+
+    const noisyCentsPayment = await postSettlement({
+      fromUserId: memberId,
+      toUserId: ownerId,
+      amount: 0.1 + 0.2,
+    });
+    assert.equal(noisyCentsPayment.status, 201, JSON.stringify(noisyCentsPayment.data));
+    assert.equal(noisyCentsPayment.data.balances.find((entry: any) => entry.userId === memberId).settled, 0.31);
+
+    const fullPayment = await postSettlement({ fromUserId: memberId, toUserId: ownerId, amount: 0.19 });
+    assert.equal(fullPayment.status, 201, JSON.stringify(fullPayment.data));
+    assert.deepEqual(fullPayment.data.settlements, []);
+    assert.equal(fullPayment.data.balances.find((entry: any) => entry.userId === memberId).balance, 0);
+    assert.equal(fullPayment.data.balances.find((entry: any) => entry.userId === ownerId).balance, 0);
+    assert.equal(fullPayment.data.balances.find((entry: any) => entry.userId === memberId).settled, 0.5);
+    assert.equal(fullPayment.data.balances.find((entry: any) => entry.userId === ownerId).settled, -0.5);
+
+    const newDebtReceipt = await request(`/api/houses/${house.data.id}/receipts`, {
+      method: "POST",
+      body: {
+        vendorName: "Settlement Market",
+        purchasedAt: at(8),
+        currency: "EUR",
+        total: 0.2,
+        paidBy: ownerId,
+        splitWith: [ownerId, memberId],
+        lines: [{ description: "New shared item", quantity: 1, lineTotal: 0.2 }],
+      },
+    });
+    assert.equal(newDebtReceipt.status, 201, JSON.stringify(newDebtReceipt.data));
+    ledger = await request(ledgerPath);
+    assert.equal(ledger.data.settlements[0].amount, 0.1);
+    const settledAfterNewDebt = await postSettlement({ fromUserId: memberId, toUserId: ownerId, amount: 0.1 });
+    assert.equal(settledAfterNewDebt.status, 201, JSON.stringify(settledAfterNewDebt.data));
+    assert.deepEqual(settledAfterNewDebt.data.settlements, []);
+
+    const debtReducingReceipt = await request(`/api/houses/${house.data.id}/receipts`, {
+      method: "POST",
+      body: {
+        vendorName: "Member Paid Market",
+        purchasedAt: at(8),
+        currency: "EUR",
+        total: 0.4,
+        paidBy: memberId,
+        splitWith: [ownerId, memberId],
+        lines: [{ description: "Shared item", quantity: 1, lineTotal: 0.4 }],
+      },
+    });
+    assert.equal(debtReducingReceipt.status, 201, JSON.stringify(debtReducingReceipt.data));
+    ledger = await request(ledgerPath);
+    assert.deepEqual(ledger.data.settlements.map((entry: any) => [entry.fromUserId, entry.toUserId, entry.amount]), [
+      [ownerId, memberId, 0.2],
+    ]);
+    const counterflowPayment = await postSettlement({ fromUserId: ownerId, toUserId: memberId, amount: 0.2 });
+    assert.equal(counterflowPayment.status, 201, JSON.stringify(counterflowPayment.data));
+    assert.deepEqual(counterflowPayment.data.settlements, []);
+
+    const centReceipt = await request(`/api/houses/${house.data.id}/receipts`, {
+      method: "POST",
+      body: {
+        vendorName: "Cent Market",
+        purchasedAt: at(9),
+        currency: "EUR",
+        total: 0.01,
+        paidBy: ownerId,
+        splitWith: [ownerId, memberId],
+        lines: [{ description: "One cent", quantity: 1, lineTotal: 0.01 }],
+      },
+    });
+    assert.equal(centReceipt.status, 201, JSON.stringify(centReceipt.data));
+    ledger = await request(ledgerPath);
+    assert.deepEqual(ledger.data.settlements, []);
+    const noSubCentDebt = await postSettlement({ fromUserId: memberId, toUserId: ownerId, amount: 0.01 });
+    assert.equal(noSubCentDebt.status, 400);
+    assert.equal(noSubCentDebt.data.error, "There is no outstanding payment between these people");
+
+    const secondReceipt = await receipt(7);
+    assert.equal(secondReceipt.status, 201, JSON.stringify(secondReceipt.data));
+    const concurrent = await Promise.all([
+      postSettlement({ fromUserId: memberId, toUserId: ownerId, amount: 0.5 }),
+      postSettlement({ fromUserId: memberId, toUserId: ownerId, amount: 0.5 }),
+    ]);
+    assert.deepEqual(concurrent.map((result) => result.status).sort(), [201, 400]);
+    assert.deepEqual(concurrent.find((result) => result.status === 201)?.data.settlements, []);
+    ledger = await request(ledgerPath);
+    assert.deepEqual(ledger.data.settlements, []);
+    assert.equal(ledger.data.balances.find((entry: any) => entry.userId === memberId).balance, 0);
+    assert.equal(ledger.data.balances.find((entry: any) => entry.userId === ownerId).balance, 0);
+
+    const memberPaidReceipt = await request(`/api/houses/${house.data.id}/receipts`, {
+      method: "POST",
+      body: {
+        vendorName: "Member Paid Market",
+        purchasedAt: at(10),
+        currency: "EUR",
+        total: 0.2,
+        paidBy: memberId,
+        splitWith: [ownerId, memberId],
+        lines: [{ description: "Shared item", quantity: 1, lineTotal: 0.2 }],
+      },
+    });
+    assert.equal(memberPaidReceipt.status, 201, JSON.stringify(memberPaidReceipt.data));
+    const paymentToDepartingMember = await postSettlement({ fromUserId: ownerId, toUserId: memberId, amount: 0.1 });
+    assert.equal(paymentToDepartingMember.status, 201, JSON.stringify(paymentToDepartingMember.data));
+    const netTransfers = await request(ledgerPath);
+    assert.equal(netTransfers.data.balances.find((entry: any) => entry.userId === memberId).settled, 0.8);
+    assert.equal(netTransfers.data.balances.find((entry: any) => entry.userId === ownerId).settled, -0.8);
+
+    const departingCreditorReceipt = await request(`/api/houses/${house.data.id}/receipts`, {
+      method: "POST",
+      body: {
+        vendorName: "Departing Creditor Market",
+        purchasedAt: at(11),
+        currency: "EUR",
+        total: 2,
+        paidBy: memberId,
+        splitWith: [ownerId, memberId],
+        lines: [{ description: "Shared item", quantity: 1, lineTotal: 2 }],
+      },
+    });
+    assert.equal(departingCreditorReceipt.status, 201, JSON.stringify(departingCreditorReceipt.data));
+    ledger = await request(ledgerPath);
+    assert.deepEqual(ledger.data.settlements.map((entry: any) => [entry.fromUserId, entry.toUserId, entry.amount]), [
+      [ownerId, memberId, 1],
+    ]);
+    const paidDepartingCreditor = await postSettlement({ fromUserId: ownerId, toUserId: memberId, amount: 1 });
+    assert.equal(paidDepartingCreditor.status, 201, JSON.stringify(paidDepartingCreditor.data));
+    const beforeCreditorLeaves = await request(ledgerPath);
+    assert.equal(beforeCreditorLeaves.data.balances.find((entry: any) => entry.userId === memberId).settled, -0.2);
+    assert.equal(beforeCreditorLeaves.data.balances.find((entry: any) => entry.userId === memberId).balance, 0);
+
+    await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [house.data.id, memberId]);
+    ledger = await request(ledgerPath);
+    assert.equal(ledger.data.balances.find((entry: any) => entry.userId === ownerId).settled, 0);
+    assert.equal(ledger.data.balances.find((entry: any) => entry.userId === ownerId).balance, 0);
+    assert.deepEqual(ledger.data.settlements, []);
+
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
+      house.data.id,
+      memberId,
+      "member",
+      new Date().toISOString(),
+    ]);
+    const rejoinedLedger = await request(ledgerPath);
+    assert.equal(rejoinedLedger.data.balances.find((entry: any) => entry.userId === memberId).settled, -0.2);
+    assert.equal(rejoinedLedger.data.balances.find((entry: any) => entry.userId === ownerId).settled, 0.2);
+    assert.deepEqual(rejoinedLedger.data.settlements, []);
+
+    const previousRateLimit = process.env.SV_RATE_LIMIT;
+    const previousSettlementsLimit = process.env.SV_RATE_LIMIT_SETTLEMENTS;
+    try {
+      process.env.SV_RATE_LIMIT = "on";
+      process.env.SV_RATE_LIMIT_SETTLEMENTS = "1/60";
+      limiters.settlements.reset(`user:${ownerId}`);
+      const firstLimitedRequest = await postSettlement({ fromUserId: memberId, toUserId: ownerId, amount: 0.01 });
+      assert.equal(firstLimitedRequest.status, 400, JSON.stringify(firstLimitedRequest.data));
+      const secondLimitedRequest = await postSettlement({ fromUserId: memberId, toUserId: ownerId, amount: 0.01 });
+      assert.equal(secondLimitedRequest.status, 429, JSON.stringify(secondLimitedRequest.data));
+    } finally {
+      limiters.settlements.reset(`user:${ownerId}`);
+      if (previousSettlementsLimit === undefined) delete process.env.SV_RATE_LIMIT_SETTLEMENTS;
+      else process.env.SV_RATE_LIMIT_SETTLEMENTS = previousSettlementsLimit;
+      if (previousRateLimit === undefined) delete process.env.SV_RATE_LIMIT;
+      else process.env.SV_RATE_LIMIT = previousRateLimit;
+    }
   });
 
   it("reads an e-receipt without writing anything", async () => {

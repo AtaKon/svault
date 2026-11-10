@@ -3,7 +3,7 @@ import { z } from "zod";
 import { requireAuth } from "../auth.js";
 import { ApiError, handler, parseBody, requireHouse } from "../http.js";
 import { limitRequests, limiters, userOrIp } from "../rate-limit.js";
-import { all, get, parseJson } from "../db.js";
+import { all, get, lockHouseholdLedger, newId, now, parseJson, tx } from "../db.js";
 import { lookupPosoKaneiBarcode, PosoKaneiUnavailableError } from "../services/posokanei.js";
 import { shoppingRow } from "../services/shopping.js";
 import {
@@ -77,11 +77,102 @@ const settingsBody = z.object({
   useItUpDays: z.number().int().min(1).max(60).optional(),
 });
 
+const settlementBody = z.object({
+  idempotencyKey: z.string().uuid(),
+  fromUserId: z.string().min(1).max(60),
+  toUserId: z.string().min(1).max(60),
+  amount: z.number().finite().positive().max(1e9).refine(
+    (value) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-7,
+    "Enter an amount in whole cents",
+  ),
+});
+
 insightRoutes.get(
   "/:houseId/insights/spend",
   handler(async (req, res) => {
     const { houseId } = await requireHouse(req);
     res.json(await spendInsight(houseId, Number(req.query.months ?? 6)));
+  }),
+);
+
+insightRoutes.post(
+  "/:houseId/insights/settlements",
+  limitRequests(limiters.settlements, userOrIp, "Too many settlement requests. Try again later."),
+  handler(async (req, res) => {
+    // Shared household bookkeeping: any edit-capable member may record a
+    // transfer between any two current members, even when they are not a party.
+    const { houseId } = await requireHouse(req, "member");
+    const body = parseBody(settlementBody, req.body);
+    const amount = body.amount;
+    if (body.fromUserId === body.toUserId) throw new ApiError(400, "Choose two different household members");
+    const result = await tx(async (session) => {
+      // Lock the house before reading. Receipt, bill, membership, and other
+      // settlement writes use the same lock before changing the household ledger.
+      if (!await lockHouseholdLedger(session, houseId)) throw new ApiError(404, "House not found");
+      const amountCents = Math.round(amount * 100);
+      const prior = await session.get<{
+        settlement_id: string;
+        from_user_id: string;
+        to_user_id: string;
+        amount_cents: number;
+        created_by: string;
+      }>(
+        `SELECT settlement_id, from_user_id, to_user_id, amount_cents, created_by
+         FROM household_settlement_requests WHERE house_id = ? AND idempotency_key = ?`,
+        [houseId, body.idempotencyKey],
+      );
+      if (prior) {
+        if (prior.from_user_id !== body.fromUserId || prior.to_user_id !== body.toUserId ||
+            Number(prior.amount_cents) !== amountCents || prior.created_by !== req.user!.id) {
+          throw new ApiError(409, "This idempotency key was already used for a different payment");
+        }
+        return {
+          replayed: true,
+          settlement: {
+            id: prior.settlement_id,
+            fromUserId: prior.from_user_id,
+            toUserId: prior.to_user_id,
+            amount: Number(prior.amount_cents) / 100,
+          },
+        };
+      }
+      const memberIds = new Set((await session.all<{ user_id: string }>(
+        "SELECT user_id FROM house_members WHERE house_id = ?",
+        [houseId],
+      )).map((row) => row.user_id));
+      if (!memberIds.has(body.fromUserId) || !memberIds.has(body.toUserId)) {
+        throw new ApiError(400, "Both people must be members of this house");
+      }
+      const current = await householdInsight(houseId, session);
+      const suggested = current.settlements.find(
+        (entry) => entry.fromUserId === body.fromUserId && entry.toUserId === body.toUserId,
+      );
+      if (!suggested) {
+        throw new ApiError(400, "There is no outstanding payment between these people");
+      }
+      const suggestedAmountCents = Math.round(suggested.amount * 100);
+      if (amountCents > suggestedAmountCents) {
+        throw new ApiError(400, "The payment cannot be greater than the current amount to settle");
+      }
+      const settlementId = newId("hst");
+      await session.run(
+        `INSERT INTO household_settlements (id, house_id, from_user_id, to_user_id, amount_cents, created_by, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [settlementId, houseId, body.fromUserId, body.toUserId, amountCents, req.user!.id, now()],
+      );
+      await session.run(
+        `INSERT INTO household_settlement_requests
+         (house_id, idempotency_key, settlement_id, from_user_id, to_user_id, amount_cents, created_by, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [houseId, body.idempotencyKey, settlementId, body.fromUserId, body.toUserId, amountCents, req.user!.id, now()],
+      );
+      return { insight: await householdInsight(houseId, session), replayed: false };
+    }, { writeLock: true });
+    if (result.replayed) {
+      res.status(200).json({ replayed: true, settlement: result.settlement });
+    } else {
+      res.status(201).json(result.insight);
+    }
   }),
 );
 
