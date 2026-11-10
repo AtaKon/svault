@@ -226,9 +226,9 @@ async function espressoEquipmentRow(houseId: string, equipmentId: string) {
 }
 
 /**
- * Case-insensitive duplicate guard. The table has no unique index, so this is
- * best-effort under two concurrent writes; a household write is serial enough
- * in practice.
+ * Friendly duplicate check for the normal path. The unique index on
+ * `(house_id, kind, lower(name))` is the real guarantee; callers re-check in a
+ * catch block to map a constraint race to the same 409 response.
  */
 async function espressoEquipmentNameTaken(
   houseId: string,

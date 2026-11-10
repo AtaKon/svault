@@ -2526,6 +2526,8 @@ describe("espresso equipment", () => {
       }),
     ]);
     assert.deepEqual([first.status, second.status].sort(), [201, 409]);
+    const failed = first.status === 409 ? first : second;
+    assert.equal(failed.data.error, "That machine already exists");
     const created = first.status === 201 ? first : second;
     await request(`/api/houses/${houseId}/espresso-equipment/${created.data.id}`, { method: "DELETE" });
 
@@ -2556,13 +2558,21 @@ describe("espresso equipment", () => {
         body: { rating: 3, [field]: maximum + 1 },
       });
       assert.equal(over.status, 400, `${field} over the maximum`);
-      const ok = await request(`/api/items/${coffeeId}/espresso-shots`, {
+      const negative = await request(`/api/items/${coffeeId}/espresso-shots`, {
         method: "POST",
-        body: { rating: 3, [field]: 1.5 },
+        body: { rating: 3, [field]: -0.5 },
       });
-      assert.equal(ok.status, 201, `${field} accepts decimals`);
-      assert.equal(ok.data[field], 1.5, `${field} keeps its decimal`);
-      await request(`/api/items/${coffeeId}/espresso-shots/${ok.data.id}`, { method: "DELETE" });
+      assert.equal(negative.status, 400, `${field} below zero`);
+
+      for (const value of [0, 1.5, maximum]) {
+        const ok = await request(`/api/items/${coffeeId}/espresso-shots`, {
+          method: "POST",
+          body: { rating: 3, [field]: value },
+        });
+        assert.equal(ok.status, 201, `${field} accepts ${value}`);
+        assert.equal(ok.data[field], value, `${field} keeps ${value}`);
+        await request(`/api/items/${coffeeId}/espresso-shots/${ok.data.id}`, { method: "DELETE" });
+      }
     }
   });
 
@@ -2615,6 +2625,16 @@ describe("espresso equipment", () => {
     assert.equal(machineChanged.data.grinderId, second.data.id);
     assert.equal(machineChanged.data.grinder, "Second grinder");
 
+    // Free text without an id replaces the saved-equipment link.
+    const textOnly = await request(`/api/items/${coffeeId}/espresso-shots/${fresh.data.id}`, {
+      method: "PATCH",
+      body: { grinder: "Manual text" },
+    });
+    assert.equal(textOnly.status, 200);
+    assert.equal(textOnly.data.grinderId, null);
+    assert.equal(textOnly.data.grinder, "Manual text");
+    assert.equal(textOnly.data.machine, "Second machine");
+
     await request(`/api/items/${coffeeId}/espresso-shots/${fresh.data.id}`, { method: "DELETE" });
     await request(`/api/houses/${houseId}/espresso-equipment/${second.data.id}`, { method: "DELETE" });
     await request(`/api/houses/${houseId}/espresso-equipment/${secondMachine.data.id}`, { method: "DELETE" });
@@ -2645,6 +2665,10 @@ describe("espresso equipment", () => {
   });
 
   after(async () => {
+    const equipment = await request(`/api/houses/${houseId}/espresso-equipment`);
+    for (const entry of equipment.data) {
+      await request(`/api/houses/${houseId}/espresso-equipment/${entry.id}`, { method: "DELETE" });
+    }
     await request(`/api/items/${coffeeId}`, { method: "DELETE" });
   });
 });
@@ -2820,6 +2844,7 @@ const grinderColumn = await get("SELECT COUNT(*) AS n FROM pragma_table_info('es
 const machineColumn = await get("SELECT COUNT(*) AS n FROM pragma_table_info('espresso_shots') WHERE name = 'machine_id'");
 const fks = await all("SELECT \\"table\\", \\"from\\", on_delete FROM pragma_foreign_key_list('espresso_shots') WHERE \\"from\\" IN ('grinder_id', 'machine_id') ORDER BY \\"from\\"");
 const uniqueIndex = await get("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'espresso_equipment_name'");
+const fkOn = await get("PRAGMA foreign_keys");
 await run("INSERT INTO espresso_equipment (id, house_id, kind, name, created_at, updated_at) VALUES ('eqp_legacy', 'hse_legacy', 'grinder', 'Legacy grinder', '2026-01-01', '2026-01-01')");
 await run("INSERT INTO espresso_equipment (id, house_id, kind, name, created_at, updated_at) VALUES ('eqp_machine', 'hse_legacy', 'machine', 'Legacy machine', '2026-01-01', '2026-01-01')");
 await run("INSERT INTO espresso_shots (id, house_id, item_id, brewed_at, rating, grinder_id, machine_id, grinder, machine, created_at, updated_at) VALUES ('esp_legacy', 'hse_legacy', 'itm_legacy', '2026-01-01', 4, 'eqp_legacy', 'eqp_machine', 'Legacy grinder', 'Legacy machine', '2026-01-01', '2026-01-01')");
@@ -2829,6 +2854,7 @@ console.log(JSON.stringify({
   grinderColumn: Number(grinderColumn.n),
   machineColumn: Number(machineColumn.n),
   uniqueIndex: uniqueIndex?.name ?? null,
+  foreignKeys: Number(fkOn.foreign_keys),
   fks: fks.map((entry) => entry.from + ":" + entry.table + ":" + entry.on_delete),
   grinderId: shot.grinder_id,
   machineId: shot.machine_id,
@@ -2860,6 +2886,7 @@ await closeDb();
       assert.equal(result.grinderColumn, 1);
       assert.equal(result.machineColumn, 1);
       assert.equal(result.uniqueIndex, "espresso_equipment_name");
+      assert.equal(result.foreignKeys, 1);
       assert.deepEqual(result.fks, [
         "grinder_id:espresso_equipment:SET NULL",
         "machine_id:espresso_equipment:SET NULL",

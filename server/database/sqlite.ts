@@ -142,6 +142,8 @@ export class SqliteDriver implements DatabaseDriver {
     ensureColumn("receipt_lines", "off_project", "TEXT NOT NULL DEFAULT 'off'");
     ensureColumn("catalog_mappings", "off_project", "TEXT NOT NULL DEFAULT 'off'");
     ensureColumn("items", "espresso", "INTEGER NOT NULL DEFAULT 0");
+    // SCHEMA above has already created espresso_equipment, so the foreign key
+    // target exists before these columns are added to an upgraded database.
     ensureColumn("espresso_shots", "grinder_id", "TEXT REFERENCES espresso_equipment(id) ON DELETE SET NULL");
     ensureColumn("espresso_shots", "machine_id", "TEXT REFERENCES espresso_equipment(id) ON DELETE SET NULL");
     conn.exec("CREATE INDEX IF NOT EXISTS items_off ON items(off_code)");

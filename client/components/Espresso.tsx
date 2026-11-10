@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { api } from "@/api";
+import { ApiError, api } from "@/api";
 import { useAuth, useHouse } from "@/state";
 import { useI18n } from "@/i18n";
 import { Badge, Button, Card, Field, IconButton, Input, Select, Sheet, Spinner, Textarea, cn } from "@/components/ui";
@@ -129,6 +129,7 @@ function EquipmentSelect({
   onChange,
   equipment,
   onCreated,
+  onRefresh,
   canCreate,
 }: {
   kind: EspressoEquipmentKind;
@@ -137,6 +138,7 @@ function EquipmentSelect({
   onChange: (next: string) => void;
   equipment: EspressoEquipment[];
   onCreated: (created: EspressoEquipment) => void;
+  onRefresh: () => Promise<void>;
   canCreate: boolean;
 }) {
   const { t } = useI18n();
@@ -160,7 +162,15 @@ function EquipmentSelect({
       setName("");
       onCreated(created);
     } catch (error) {
-      toast.error(error instanceof Error ? t(error.message) : t("Could not save the equipment"));
+      if (error instanceof ApiError && error.status === 409) {
+        // The name exists already, so show it instead of leaving the form open.
+        await onRefresh();
+        setCreating(false);
+        setName("");
+        toast.push(t("That name already exists; pick it from the list."));
+      } else {
+        toast.error(error instanceof Error ? t(error.message) : t("Could not save the equipment"));
+      }
     } finally {
       setSaving(false);
     }
@@ -260,20 +270,17 @@ export function EspressoShotSheet({
   const { house, can } = useHouse();
   const canManage = can("member");
 
+  const loadEquipment = useCallback(async () => {
+    try {
+      setEquipment(await api<EspressoEquipment[]>(`/api/houses/${house.id}/espresso-equipment`));
+    } catch {
+      // The sheet still works without saved equipment; logging a shot should not block.
+    }
+  }, [house.id]);
+
   useEffect(() => {
-    if (!open) return;
-    let active = true;
-    api<EspressoEquipment[]>(`/api/houses/${house.id}/espresso-equipment`)
-      .then((list) => {
-        if (active) setEquipment(list);
-      })
-      .catch(() => {
-        // The sheet still works without saved equipment; logging a shot should not block.
-      });
-    return () => {
-      active = false;
-    };
-  }, [open, house.id]);
+    if (open) void loadEquipment();
+  }, [open, loadEquipment]);
 
   const addEquipment = (created: EspressoEquipment) => {
     setEquipment((current) =>
@@ -365,7 +372,7 @@ export function EspressoShotSheet({
     }
     const numeric = [grindSeconds, doseGrams, yieldGrams, extractionSeconds, waterTempC, pressureBar, tdsPercent];
     if (numeric.some((value) => value.trim() && numberOrNull(value) == null)) {
-      toast.error(t("Use numbers only; a dot or comma is fine for decimals"));
+      toast.error(t("Use numbers without spaces; a dot or comma is fine for decimals"));
       return;
     }
     const grinder = equipmentPayload(grinderPick);
@@ -536,6 +543,7 @@ export function EspressoShotSheet({
             onChange={setGrinderPick}
             equipment={grinders}
             onCreated={addEquipment}
+            onRefresh={loadEquipment}
             canCreate={canManage}
           />
           <EquipmentSelect
@@ -545,6 +553,7 @@ export function EspressoShotSheet({
             onChange={setMachinePick}
             equipment={machines}
             onCreated={addEquipment}
+            onRefresh={loadEquipment}
             canCreate={canManage}
           />
         </div>
@@ -834,6 +843,7 @@ export function EspressoEquipmentSheet({ open, onClose }: { open: boolean; onClo
       await load();
       return true;
     } catch (error) {
+      if (error instanceof ApiError && error.status === 409) await load();
       toast.error(error instanceof Error ? t(error.message) : t("Could not save the equipment"));
       return false;
     }
