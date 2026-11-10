@@ -10,6 +10,7 @@ import { ApiError, handler, parseBody, requireHouse } from "../http.js";
 import { MAX_UPLOAD_BYTES, UPLOAD_DIR } from "../config.js";
 import { uploadPath, discardUploads, sniffImage } from "../upload.js";
 import { BILL_TYPE_VALUES } from "../../shared/bill-types.js";
+import { BILL_PHOTO_EXTENSIONS } from "../../shared/bill-document.js";
 import { ELECTRICITY_CONTRACT_COLORS } from "../../shared/types.js";
 import type { BillBreakdownLine, UtilityBill } from "../../shared/types.js";
 
@@ -48,25 +49,48 @@ interface BillRow {
 const billDir = path.join(UPLOAD_DIR, "bills");
 fs.mkdirSync(billDir, { recursive: true });
 
-const BILL_DOCUMENT_MIME: Record<string, string> = {
-  ".pdf": "application/pdf",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".png": "image/png",
-  ".webp": "image/webp",
+/** Canonical extension for a sniffed document type; the name never comes from the client. */
+const DOCUMENT_EXTENSION: Record<string, string> = {
+  "application/pdf": ".pdf",
+  "image/jpeg": ".jpg",
+  "image/png": ".png",
+  "image/webp": ".webp",
+  "image/gif": ".gif",
+  "image/avif": ".avif",
+  "image/heic": ".heic",
+  "image/bmp": ".bmp",
+  "image/tiff": ".tif",
 };
 
-/** Detect a supported bill document from its leading bytes. */
-function documentKind(bytes: Buffer): "pdf" | "jpeg" | "png" | "webp" | null {
+/** Extension → MIME for serving stored documents, derived from the one map above. */
+const BILL_DOCUMENT_MIME: Record<string, string> = {
+  ...Object.fromEntries(Object.entries(DOCUMENT_EXTENSION).map(([mime, extension]) => [extension, mime])),
+  ".jpeg": "image/jpeg",
+  ".tiff": "image/tiff",
+};
+
+/** Upload types the file filter accepts; the sniffer still decides what is stored. */
+const BILL_DOCUMENT_TYPES = new Set([
+  ...Object.keys(DOCUMENT_EXTENSION),
+  // Aliases browsers may send before the sniffer normalises them.
+  "image/jpg", "image/pjpeg", "image/heif",
+]);
+// Single source of truth: the shared picker list plus the PDF extension. The
+// local set is built once from the imported BILL_PHOTO_EXTENSIONS; there is no
+// second declaration of the imported binding.
+const BILL_DOCUMENT_EXTENSIONS = new Set([".pdf", ...BILL_PHOTO_EXTENSIONS]);
+
+/**
+ * Detect a supported bill document from its leading bytes. Phone camera rolls
+ * hand over HEIC/HEIF and AVIF, while the client converts them to JPEG; uploads
+ * from scripts may still arrive in any type `sniffImage` recognises.
+ */
+function documentMime(bytes: Buffer): string | null {
   // Align with the client's re-read sniffer: short/truncated headers are not
   // treated as valid documents.
   if (bytes.length < 12) return null;
-  if (bytes.subarray(0, 5).toString("latin1") === "%PDF-") return "pdf";
-  const image = sniffImage(bytes);
-  if (image === "image/jpeg") return "jpeg";
-  if (image === "image/png") return "png";
-  if (image === "image/webp") return "webp";
-  return null;
+  if (bytes.subarray(0, 5).toString("latin1") === "%PDF-") return "application/pdf";
+  return sniffImage(bytes);
 }
 
 const billUpload = multer({
@@ -79,11 +103,9 @@ const billUpload = multer({
   limits: { fileSize: MAX_UPLOAD_BYTES, files: 1 },
   fileFilter: (_req, file, cb) => {
     const extension = path.extname(file.originalname).toLowerCase();
-    const accepted = file.mimetype === "application/pdf" ||
-      file.mimetype === "image/jpeg" ||
-      file.mimetype === "image/png" ||
-      file.mimetype === "image/webp" ||
-      [".pdf", ".jpg", ".jpeg", ".png", ".webp"].includes(extension);
+    // The content sniff below is authoritative, but keep the allowlist narrow so
+    // SVG and other image-like documents never reach the temp directory.
+    const accepted = BILL_DOCUMENT_TYPES.has(file.mimetype) || BILL_DOCUMENT_EXTENSIONS.has(extension);
     if (!accepted) return cb(new ApiError(400, "Upload a PDF or image bill"));
     cb(null, true);
   },
@@ -96,11 +118,11 @@ const verifyBillDocument: RequestHandler = (req, _res, next) => {
     const prefix = Buffer.alloc(1024);
     let bytesRead: number;
     try { bytesRead = fs.readSync(fd, prefix, 0, prefix.length, 0); } finally { fs.closeSync(fd); }
-    const kind = documentKind(prefix.subarray(0, bytesRead));
-    if (!kind) throw new ApiError(400, "That file is not a valid PDF or image");
+    const mime = documentMime(prefix.subarray(0, bytesRead));
+    const canonical = mime ? DOCUMENT_EXTENSION[mime] : undefined;
+    if (!mime || !canonical) throw new ApiError(400, "That file is not a valid PDF or image");
 
     // Store the extension that matches the real content, not the uploaded name.
-    const canonical = `.${{ pdf: "pdf", jpeg: "jpg", png: "png", webp: "webp" }[kind]}`;
     const nextName = `${req.file.filename.replace(/\.[^.]+$/, "")}${canonical}`;
     const nextPath = path.join(billDir, nextName);
     fs.renameSync(req.file.path, nextPath);
@@ -108,7 +130,7 @@ const verifyBillDocument: RequestHandler = (req, _res, next) => {
     req.file.path = nextPath;
     req.file.destination = billDir;
     req.file.originalname = nextName;
-    req.file.mimetype = BILL_DOCUMENT_MIME[canonical] ?? req.file.mimetype;
+    req.file.mimetype = mime;
   } catch (error) {
     discardUploads(req);
     return next(error instanceof ApiError ? error : new ApiError(400, "That file is not a valid PDF or image"));

@@ -6,6 +6,7 @@ import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import { MAX_UPLOAD_BYTES, UPLOAD_DIR } from "./config.js";
 import { ApiError, requireHouse } from "./http.js";
+import { sniffImageBytes } from "../shared/image-sniff.js";
 import type { Role } from "../shared/types.js";
 
 export type UploadPrefix = "photos" | "items" | "recipes" | "receipts" | "bills";
@@ -44,32 +45,17 @@ export const IMAGE_EXTENSIONS = new Set([
   ".tiff",
 ]);
 
-const HEIF_BRANDS = new Set(["avif", "avis", "heic", "heix", "hevc", "hevx", "heim", "heis", "mif1", "msf1"]);
-
 /**
  * Identify an image from its magic bytes. Returns a MIME type for the formats
  * SVault accepts, or null for anything else (HTML, SVG, scripts, archives...).
+ * The byte-level work lives in `shared/image-sniff.ts` so the server guards and
+ * the browser's saved-document re-read cannot drift apart.
  */
 export function sniffImage(head: Buffer): string | null {
-  if (head.length >= 3 && head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) return "image/jpeg";
-  if (head.length >= 8 && head.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
-    return "image/png";
-  }
-  const ascii = (start: number, end: number) => head.subarray(start, end).toString("latin1");
-  if (head.length >= 6 && (ascii(0, 6) === "GIF87a" || ascii(0, 6) === "GIF89a")) return "image/gif";
-  if (head.length >= 12 && ascii(0, 4) === "RIFF" && ascii(8, 12) === "WEBP") return "image/webp";
-  if (head.length >= 12 && ascii(4, 8) === "ftyp" && HEIF_BRANDS.has(ascii(8, 12))) {
-    return ascii(8, 12).startsWith("avi") ? "image/avif" : "image/heic";
-  }
-  if (head.length >= 2 && ascii(0, 2) === "BM") return "image/bmp";
-  if (head.length >= 4 && (head.subarray(0, 4).equals(Buffer.from([0x49, 0x49, 0x2a, 0x00])) ||
-    head.subarray(0, 4).equals(Buffer.from([0x4d, 0x4d, 0x00, 0x2a])))) {
-    return "image/tiff";
-  }
-  return null;
+  return sniffImageBytes(head);
 }
 
-function readHead(file: string, bytes = 32): Buffer {
+function readHead(file: string, bytes = 1024): Buffer {
   const fd = fs.openSync(file, "r");
   try {
     const buffer = Buffer.alloc(bytes);

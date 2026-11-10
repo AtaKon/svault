@@ -6,6 +6,8 @@
  * OCR bundle.
  */
 
+import { sniffImageBytes } from "./image-sniff.js";
+
 interface PdfTextItem {
   str: string;
   transform: number[];
@@ -15,16 +17,45 @@ interface PdfTextItem {
 /** Matches the server upload limit; protects re-read from oversized objects. */
 export const MAX_BILL_DOCUMENT_BYTES = 20 * 1024 * 1024;
 
+/** Extensions the bill photo picker and uploader accept, shared with the server filter. */
+export const BILL_PHOTO_EXTENSIONS: ReadonlySet<string> = new Set([
+  ".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif",
+  ".heic", ".heif", ".bmp", ".tif", ".tiff",
+]);
+
+/**
+ * Input image types the picker and converter accept. This is not the stored
+ * type list: `image/heif`, `image/jpg` and similar arrive from browsers and are
+ * normalised to JPEG by `prepareBillImage`, while `DOCUMENT_EXTENSIONS` keys
+ * below are only the types the server sniffer can return.
+ */
+const BILL_INPUT_TYPES = new Set([
+  "image/jpeg", "image/jpg", "image/pjpeg",
+  "image/png", "image/webp", "image/gif", "image/avif",
+  "image/heic", "image/heif", "image/bmp", "image/tiff",
+]);
+const DOCUMENT_EXTENSIONS: Record<string, string> = {
+  "application/pdf": "pdf",
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+  "image/gif": "gif",
+  "image/avif": "avif",
+  "image/heic": "heic",
+  "image/heif": "heif",
+  "image/bmp": "bmp",
+  "image/tiff": "tif",
+};
+
 export function isBillPdf(file: File): boolean {
   return file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
 }
 
 export function isSupportedBillFile(file: File): boolean {
   if (isBillPdf(file)) return true;
-  return file.type === "image/jpeg" ||
-    file.type === "image/png" ||
-    file.type === "image/webp" ||
-    /\.(?:jpe?g|png|webp)$/i.test(file.name);
+  if (BILL_INPUT_TYPES.has(file.type)) return true;
+  const dot = file.name.lastIndexOf(".");
+  return dot >= 0 && BILL_PHOTO_EXTENSIONS.has(file.name.slice(dot).toLowerCase());
 }
 
 /** Group PDF text runs into visual lines, keeping wide label/amount gaps. */
@@ -76,16 +107,32 @@ export function pdfItemsToText(items: unknown[]): string {
 /** Detect a stored bill document from its bytes, independent of headers. */
 export function documentMime(buffer: ArrayBuffer): string | null {
   if (buffer.byteLength < 12) return null;
-  const bytes = new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 12));
-  const ascii = (start: number, end: number) => String.fromCharCode(...bytes.subarray(start, end));
-  if (ascii(0, 5) === "%PDF-") return "application/pdf";
-  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
-  if (bytes[0] === 0x89 && ascii(1, 4) === "PNG" &&
-    bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a) {
-    return "image/png";
-  }
-  if (ascii(0, 4) === "RIFF" && ascii(8, 12) === "WEBP") return "image/webp";
-  return null;
+  // HEIF/AVIF compatible brands live after the 12-byte header; scan the same
+  // 1024-byte prefix the server reads so a `mif1` phone photo resolves to the
+  // codec it actually carries.
+  const head = new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 1024));
+  if (String.fromCharCode(...head.subarray(0, 5)) === "%PDF-") return "application/pdf";
+  return sniffImageBytes(head);
+}
+
+/** JPEG name used when a phone photo is re-encoded before upload. */
+export function billPhotoName(name: string): string {
+  // A picker normally hands over a basename, but never let a directory or a
+  // control character survive into the File name shown or sent upstream.
+  const base = (name.split(/[\\/]/).pop() ?? "").replace(/[\u0000-\u001f\u007f]/g, "").trim();
+  const stem = base.replace(/\.[^.]+$/, "").trim();
+  return `${stem || "bill"}.jpg`;
+}
+
+/** Fit a photo inside `maxEdge` without ever upscaling it. */
+export function billPhotoSize(width: number, height: number, maxEdge: number): { width: number; height: number } {
+  const safeWidth = Number.isFinite(width) && width > 0 ? width : 1;
+  const safeHeight = Number.isFinite(height) && height > 0 ? height : 1;
+  const scale = Math.min(1, maxEdge / Math.max(safeWidth, safeHeight));
+  return {
+    width: Math.max(1, Math.round(safeWidth * scale)),
+    height: Math.max(1, Math.round(safeHeight * scale)),
+  };
 }
 
 /** Load a saved bill document back into a File so it can be re-read. */
@@ -102,6 +149,6 @@ export async function fetchBillFile(url: string, name: string): Promise<File | n
   // mislabel an error page or a truncated file.
   const type = documentMime(buffer);
   if (!type) return null;
-  const extension = type === "application/pdf" ? "pdf" : type === "image/png" ? "png" : type === "image/webp" ? "webp" : "jpg";
+  const extension = DOCUMENT_EXTENSIONS[type] ?? "jpg";
   return new File([buffer], `${name || "bill"}.${extension}`, { type });
 }

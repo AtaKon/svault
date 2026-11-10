@@ -13,12 +13,13 @@ import { ELECTRICITY_CONTRACT_COLORS } from "@shared/types";
 import type { BillBreakdownLine, BillParseResult, UtilityBill } from "@shared/types";
 import { fetchBillFile, isSupportedBillFile } from "@shared/bill-document";
 import { scanBillFile } from "@/bill-scan";
+import { BILL_PHOTO_HEIC_ERROR, prepareBillImage } from "@/bill-image";
 
 type Member = { userId: string; name: string; role: string };
 type Household = { currency: string; members: Member[] };
 const BILL_TYPES = BILL_TYPE_VALUES.map((value) => ({ value, label: BILL_TYPE_LABELS[value] }));
 const CONTRACT_COLOR_LABELS = { blue: "Blue", green: "Green", yellow: "Yellow", orange: "Orange" } as const;
-const DOCUMENT_ACCEPT = "application/pdf,image/jpeg,image/png,image/webp,.pdf,.jpg,.jpeg,.png,.webp";
+const DOCUMENT_ACCEPT = "application/pdf,image/*,.pdf,.jpg,.jpeg,.png,.webp,.gif,.avif,.heic,.heif,.bmp,.tif,.tiff";
 
 function breakdownSum(lines: BillBreakdownLine[]): number {
   return lines.reduce((sum, line) => {
@@ -155,12 +156,16 @@ export function BillsPage() {
     dueDate: string | null;
   } | null>(null);
   const [scanning, setScanning] = useState(false);
+  const [preparing, setPreparing] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [scanProgress, setScanProgress] = useState(0);
   const [readingBillId, setReadingBillId] = useState<string | null>(null);
   const [readingProgress, setReadingProgress] = useState(0);
   const scanRun = useRef(0);
   const readRun = useRef(0);
-  useEffect(() => () => { scanRun.current++; readRun.current++; }, []);
+  const prepareRun = useRef(0);
+  const uploadRun = useRef(0);
+  useEffect(() => () => { scanRun.current++; readRun.current++; prepareRun.current++; uploadRun.current++; }, []);
 
   const load = useCallback(async () => {
     try {
@@ -267,12 +272,40 @@ export function BillsPage() {
     }
   };
 
-  const chooseFile = (nextFile: File | null) => {
-    if (!nextFile || scanning) return;
-    if (!isSupportedBillFile(nextFile)) {
+  const photoErrorMessage = (error: unknown, saved = false) => {
+    if (error instanceof Error && error.message === BILL_PHOTO_HEIC_ERROR) {
+      return saved
+        ? t("This browser cannot read the saved HEIC photo. Upload a JPEG version to read it again.")
+        : t("This browser cannot read HEIC photos. Take a photo with the camera button or choose a JPEG or PNG.");
+    }
+    return saved
+      ? t("This browser could not read the saved photo. Upload a JPEG version to read it again.")
+      : t("This browser could not read that photo. Take a new photo or choose a JPEG or PNG.");
+  };
+
+  const chooseFile = async (picked: File | null) => {
+    if (!picked || scanning || preparing) return;
+    if (!isSupportedBillFile(picked)) {
       toast.error(t("Choose a PDF or image bill"));
       return;
     }
+    const run = prepareRun.current + 1;
+    prepareRun.current = run;
+    setPreparing(true);
+    let nextFile: File;
+    try {
+      // A phone camera roll can hand over HEIC/AVIF; the server and OCR worker
+      // need JPEG, so convert once here and use the same bytes everywhere.
+      nextFile = await prepareBillImage(picked);
+    } catch (error) {
+      if (run !== prepareRun.current) return;
+      if (import.meta.env.DEV) console.error("[bill-scan]", error);
+      toast.error(photoErrorMessage(error));
+      return;
+    } finally {
+      if (run === prepareRun.current) setPreparing(false);
+    }
+    if (run !== prepareRun.current) return;
     setFile(nextFile);
     void readFile(nextFile);
   };
@@ -354,13 +387,36 @@ export function BillsPage() {
     try { await api(`/api/bills/${bill.id}`, { method: "DELETE" }); await load(); }
     catch (err) { toast.error(err instanceof Error ? t(err.message) : t("Could not delete the bill")); }
   };
-  const uploadDocument = async (bill: UtilityBill, nextFile: File) => {
-    if (!isSupportedBillFile(nextFile)) {
+  const uploadDocument = async (bill: UtilityBill, picked: File) => {
+    if (uploading) return;
+    if (!isSupportedBillFile(picked)) {
       toast.error(t("Choose a PDF or image bill")); return;
     }
-    const form = new FormData(); form.set("document", nextFile);
-    try { await api(`/api/houses/${house.id}/bills/${bill.id}/document`, { method: "POST", body: form }); await load(); }
-    catch (err) { toast.error(err instanceof Error ? t(err.message) : t("Could not upload the bill document")); }
+    const run = uploadRun.current + 1;
+    uploadRun.current = run;
+    setUploading(true);
+    try {
+      let nextFile: File;
+      try {
+        nextFile = await prepareBillImage(picked);
+      } catch (error) {
+        if (run === uploadRun.current) {
+          if (import.meta.env.DEV) console.error("[bill-scan]", error);
+          toast.error(photoErrorMessage(error));
+        }
+        return;
+      }
+      if (run !== uploadRun.current) return;
+      const form = new FormData(); form.set("document", nextFile);
+      await api(`/api/houses/${house.id}/bills/${bill.id}/document`, { method: "POST", body: form });
+      // A later attach or a navigation wins; never reload for a stale upload.
+      if (run !== uploadRun.current) return;
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? t(err.message) : t("Could not upload the bill document"));
+    } finally {
+      if (run === uploadRun.current) setUploading(false);
+    }
   };
   const readSavedBill = async (bill: UtilityBill) => {
     if (!bill.document || readingBillId) return;
@@ -375,8 +431,17 @@ export function BillsPage() {
         toast.error(t("Could not read the bill document"));
         return;
       }
+      let prepared: File;
+      try {
+        prepared = await prepareBillImage(saved);
+      } catch (error) {
+        if (import.meta.env.DEV) console.error("[bill-scan]", error);
+        if (run === readRun.current) toast.error(photoErrorMessage(error, true));
+        return;
+      }
+      if (run !== readRun.current) return;
       const scan = await scanBillFile(
-        saved,
+        prepared,
         (progress) => { if (run === readRun.current) setReadingProgress(progress); },
         { currency: bill.currency },
       );
@@ -424,7 +489,7 @@ export function BillsPage() {
   };
   const dropFile = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault(); setDragging(false);
-    chooseFile(event.dataTransfer.files[0] ?? null);
+    void chooseFile(event.dataTransfer.files[0] ?? null);
   };
 
   const numericAmount = Number(amount);
@@ -464,7 +529,11 @@ export function BillsPage() {
             <Icon name="upload" size={19} className="text-muted" />
             <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-sm text-muted">
               <span>{file?.name ?? t("Drop a PDF or photo here or browse")}</span>
-              <input type="file" accept={DOCUMENT_ACCEPT} className="sr-only" disabled={readingBillId != null || scanning} onChange={(event) => { chooseFile(event.target.files?.[0] ?? null); event.target.value = ""; }} />
+              <input type="file" accept={DOCUMENT_ACCEPT} className="sr-only" disabled={readingBillId != null || scanning || preparing} onChange={(event) => { const nextFile = event.target.files?.[0] ?? null; event.target.value = ""; void chooseFile(nextFile); }} />
+            </label>
+            <label className="inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap text-xs font-medium text-brand hover:underline">
+              <Icon name="camera" size={15} />{t("Take a photo")}
+              <input type="file" accept="image/*" capture="environment" className="sr-only" disabled={readingBillId != null || scanning || preparing} onChange={(event) => { const nextFile = event.target.files?.[0] ?? null; event.target.value = ""; void chooseFile(nextFile); }} />
             </label>
             {file && !scanning && <Button type="button" size="sm" variant="ghost" onClick={() => { setFile(null); clearBreakdown(); }}>{t("Remove")}</Button>}
           </div>
@@ -516,7 +585,7 @@ export function BillsPage() {
             {bill.billType === "electricity" && <Field label={t("Electricity contract color")} className="w-44"><Select value={bill.contractColor ?? ""} onChange={(e) => void patchBill(bill, { contractColor: e.target.value || null })}><option value="">{t("Not specified")}</option>{ELECTRICITY_CONTRACT_COLORS.map((color) => <option key={color} value={color}>{t(CONTRACT_COLOR_LABELS[color])}</option>)}</Select></Field>}
             <Field label={t("Category")} className="w-44"><Select value={bill.category} onChange={(e) => changeCategory(bill, e.target.value as UtilityBill["category"])}><option value="to_split">{t("To be split")}</option><option value="personal">{t("Personal")}</option></Select></Field>
             {bill.category === "to_split" && <><Field label={t("Paid by")} className="w-44"><Select value={bill.paidBy ?? ""} onChange={(e) => void patchBill(bill, { paidBy: e.target.value })}>{household?.members.map((member) => <option key={member.userId} value={member.userId}>{member.name}</option>)}</Select></Field><Field label={t("Split between")} className="min-w-[220px] flex-1"><div className="flex flex-wrap gap-2">{household?.members.map((member) => <label key={member.userId} className="flex cursor-pointer items-center gap-1.5 text-xs"><input type="checkbox" checked={bill.splitWith.includes(member.userId)} onChange={(event) => { if (!event.target.checked && bill.splitWith.length === 1) { toast.error(t("Select at least one person to split the bill.")); return; } const next = event.target.checked ? [...bill.splitWith, member.userId] : bill.splitWith.filter((id) => id !== member.userId); void patchBill(bill, { splitWith: next }); }} />{member.name}</label>)}</div></Field></>}
-            {bill.document ? <a className="inline-flex items-center gap-2 text-sm font-medium text-brand hover:underline" href={bill.document} target="_blank" rel="noreferrer"><Icon name="receipt" size={16}/>{t("View bill document")}</a> : <label className="inline-flex cursor-pointer items-center gap-2 text-sm font-medium text-brand hover:underline"><Icon name="upload" size={16}/>{t("Attach document")}<input type="file" accept={DOCUMENT_ACCEPT} className="sr-only" onChange={(event) => { const nextFile = event.target.files?.[0]; if (nextFile) void uploadDocument(bill, nextFile); event.target.value = ""; }} /></label>}
+            {bill.document ? <a className="inline-flex items-center gap-2 text-sm font-medium text-brand hover:underline" href={bill.document} target="_blank" rel="noreferrer"><Icon name="receipt" size={16}/>{t("View bill document")}</a> : <label className="inline-flex cursor-pointer items-center gap-2 text-sm font-medium text-brand hover:underline"><Icon name="upload" size={16}/>{t("Attach document")}<input type="file" accept={DOCUMENT_ACCEPT} className="sr-only" disabled={uploading} onChange={(event) => { const nextFile = event.target.files?.[0]; if (nextFile) void uploadDocument(bill, nextFile); event.target.value = ""; }} /></label>}
             {bill.document && <Button type="button" size="sm" variant="ghost" icon="scan" loading={readingBillId === bill.id} disabled={readingBillId != null || scanning} onClick={() => void readSavedBill(bill)}>{t("Read document")}{readingBillId === bill.id ? ` ${Math.round(readingProgress * 100)}%` : ""}</Button>}
           </div>
         </Card>;
