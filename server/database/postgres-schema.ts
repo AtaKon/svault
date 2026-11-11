@@ -631,6 +631,7 @@ CREATE TABLE IF NOT EXISTS recipes (
   image TEXT,
   source_image TEXT,
   ocr_text TEXT,
+  source_url TEXT,
   source TEXT NOT NULL DEFAULT 'manual',
   ai_notes TEXT,
   ai_cost DOUBLE PRECISION,
@@ -822,6 +823,7 @@ export const POSTGRES_MIGRATIONS: string[] = [
   "ALTER TABLE espresso_shots ADD COLUMN IF NOT EXISTS machine_id TEXT REFERENCES espresso_equipment(id) ON DELETE SET NULL",
   "CREATE INDEX IF NOT EXISTS espresso_shots_grinder ON espresso_shots(grinder_id)",
   "CREATE INDEX IF NOT EXISTS espresso_shots_machine ON espresso_shots(machine_id)",
+  "ALTER TABLE recipes ADD COLUMN IF NOT EXISTS source_url TEXT",
   // POSTGRES_SCHEMA creates bills on fresh installs; this atomically upgrades
   // an existing bills table created before ledger_confirmed was introduced.
   `DO $$

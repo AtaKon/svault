@@ -38,7 +38,7 @@ export function RecipeFormPage() {
   const [imageBusy, setImageBusy] = useState(false);
   const [sourceImage, setSourceImage] = useState<string | null>(null);
   const [ocrText, setOcrText] = useState<string | null>(null);
-  const [source, setSource] = useState<"manual" | "scan" | "ai">("manual");
+  const [source, setSource] = useState<"manual" | "scan" | "ai" | "import">("manual");
   const [aiNotes, setAiNotes] = useState<string | null>(null);
   const [favorite, setFavorite] = useState(false);
   const [ingredients, setIngredients] = useState<IngredientRow[]>([{ name: "", quantity: "", unit: "", optional: false }]);
@@ -305,7 +305,7 @@ export function RecipeFormPage() {
             <label className="flex items-center justify-between gap-3 text-sm">
               {t("Favourite ")}<input type="checkbox" checked={favorite} onChange={(e) => setFavorite(e.target.checked)} className="h-5 w-5 accent-[var(--sv-brand)]" />
             </label>
-            {source !== "manual" && <Badge tone="brand">{t("Imported from ")}{' '}{source === "scan" ? t("a scan") : t("AI")}</Badge>}
+            {source !== "manual" && <Badge tone="brand">{t("Imported from ")}{' '}{source === "scan" ? t("a scan") : source === "import" ? t("a link") : t("AI")}</Badge>}
             {sourceImage && (
               <div>
                 <div className="text-[11px] font-semibold uppercase tracking-wide text-muted">{t("Original scan")}</div>
@@ -323,6 +323,13 @@ export function RecipeFormPage() {
                 <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap rounded-lg bg-raised p-2 text-[10px] leading-relaxed">{ocrText}</pre>
               </details>
             )}
+          </Card>
+
+          <Card className="p-4">
+            <h2 className="font-display text-lg">{t("Import from a link")}</h2>
+            <p className="mt-1 text-xs text-muted">{t("Paste a recipe URL and pull in ingredients and steps automatically.")}</p>
+            <Button type="button" variant="secondary" size="sm" icon="download" className="mt-3" onClick={() => navigate("/recipes/import")}>
+              {t("Open importer ")}</Button>
           </Card>
 
           <Card className="p-4">

@@ -180,8 +180,8 @@ Browser notifications are sent by the client while a tab is open. There is no pu
 - When a provider is configured but fails, callers fall back to local parsing/suggestions and return a
   warning instead of failing the request. The failure is still visible in the AI call log.
 
-What uses AI: recipe scan cleanup, receipt parsing, recipe completion and food ideas. What never does:
-stock, prices, barcodes, reminders, photo labelling and authentication.
+What uses AI: recipe scan cleanup, recipe link import clean-up, receipt parsing, recipe completion and
+food ideas. What never does: stock, prices, barcodes, reminders, photo labelling and authentication.
 
 ## OCR and scanning
 

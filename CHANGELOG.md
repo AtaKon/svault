@@ -8,6 +8,26 @@ All notable changes to SVault are documented here. The format follows
 
 ### Added
 
+- **Recipe portion, weight and calorie estimates.** Recipes now estimate the total prepared weight and
+  the weight of one portion in grams alongside the existing calorie and macro panel. Volume uses a
+  typical density per ingredient and countable units a typical piece weight, with coverage reported so
+  the estimate is honest about what it could convert. Calories fall back to a built-in per-100 g
+  reference table for ingredients that are not tracked in the inventory, so imported recipes are not
+  blank. The shared helpers live in `shared/recipe-grams.ts` and are used by both the API and the web
+  client.
+- **Cook mode.** A dedicated screen at `/recipes/:id/cook` scales a recipe to any number of portions
+  (add, remove, ×2, ÷2), converts every ingredient to grams while keeping the original measure
+  underneath, and shows per-portion and total weight and calories. Ingredients and steps can be ticked
+  off, and the screen stays awake where the browser supports the Wake Lock API. The saved recipe is
+  not modified.
+- **Import a recipe from a link.** Paste a public recipe URL on **Kitchen -> Import link**. The server
+  reads schema.org `Recipe` JSON-LD when the site publishes it, falls back to a tolerant page-text
+  read, and structures the copy through the configured AI provider when available. Imported recipes
+  keep their `sourceUrl` and may use the page's cover image. The new endpoint is
+  `POST /api/houses/:houseId/recipes/import`; recipe `source` gains the value `import` and the
+  `recipes` table gains `source_url` on both SQLite and PostgreSQL. Imports follow redirects one hop
+  at a time so every target is checked by the outbound guard, and a stored `sourceUrl` is validated
+  the same way before it is saved.
 - Open Food Facts lookups now cover all four databases: Open Food Facts, Open Beauty Facts, Open Pet
   Food Facts and Open Products Facts. A universal barcode lookup reports which project owns the
   product, the shared cache is keyed by project, and product cards show a Food/Beauty/Pet food/Products

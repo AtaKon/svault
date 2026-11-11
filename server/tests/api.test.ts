@@ -107,6 +107,11 @@ const { app, apiErrorHandler } = await import("../index.js");
 const { all, closeDb, databaseKind, get, initDb, lockHouseholdLedger, run, tx } = await import("../db.js");
 const { discardUploads } = await import("../upload.js");
 const { heuristicRecipe, parseIngredientLine, localIdeas } = await import("../services/recipe-local.js");
+const { estimateIngredientGrams, gramsLabel, recipePortion, scaledQuantity } = await import("../../shared/recipe-grams.js");
+const { scaledCalories } = await import("../../shared/recipe-calories.js");
+const { REFERENCE_FOOD_COUNT, referenceNutrition } = await import("../services/food-reference.js");
+const { recipeNutrition } = await import("../services/nutrition.js");
+const { decodeEntities, importRecipeFromUrl, isoDurationMinutes, normaliseRecipeUrl, parseRecipePage, parseRecipeYield, readJsonLd } = await import("../services/recipe-import.js");
 const { heuristicReceipt } = await import("../services/receipt-local.js");
 const { billLinesTotal, parseBillNumber, parseBillText } = await import("../../shared/bill-parser.js");
 const { billHistory, extractBillMetrics } = await import("../../shared/bill-history.js");
@@ -544,6 +549,291 @@ describe("recipe text parsing", () => {
     assert.equal(ideas.ideas[0].title, "Pancakes");
     assert.equal(ideas.ideas[0].source, "recipe");
     assert.ok(ideas.ideas[0].missing.some((entry) => entry.name === "sugar"));
+  });
+});
+
+describe("recipe weight and calorie estimates", () => {
+  it("converts mass, volume and countable lines to grams", () => {
+    assert.deepEqual(estimateIngredientGrams({ name: "flour", quantity: 200, unit: "g" }), { grams: 200, estimated: false });
+    assert.equal(estimateIngredientGrams({ name: "flour", quantity: 1, unit: "cup" }).grams, 127.2);
+    assert.equal(estimateIngredientGrams({ name: "eggs", quantity: 2, unit: "pcs" }).grams, 100);
+    assert.equal(estimateIngredientGrams({ name: "garlic", quantity: 2, unit: "clove" }).grams, 10);
+    assert.equal(estimateIngredientGrams({ name: "mystery", quantity: 1, unit: "furlong" }).grams, null);
+  });
+
+  it("estimates a portion weight and reports coverage", () => {
+    const portion = recipePortion(
+      [
+        { name: "flour", quantity: 200, unit: "g" },
+        { name: "eggs", quantity: 2, unit: "pcs" },
+        { name: "milk", quantity: 200, unit: "ml" },
+        { name: "mystery", quantity: 1, unit: "furlong" },
+      ],
+      2,
+    );
+    assert.equal(portion.totalGrams, 506);
+    assert.equal(portion.perServingGrams, 253);
+    assert.equal(portion.covered, 3);
+    assert.equal(portion.ingredients, 4);
+    assert.equal(portion.coverage, 0.75);
+  });
+
+  it("keeps container units and import-style numbers honest", () => {
+    // A head of garlic is not a clove: the container unit beats the piece weight.
+    assert.equal(estimateIngredientGrams({ name: "garlic", quantity: 1, unit: "head" }).grams, 500);
+    assert.equal(estimateIngredientGrams({ name: "garlic", quantity: 2, unit: "clove" }).grams, 10);
+    assert.equal(estimateIngredientGrams({ name: "flour", quantity: 1, unit: "kg" }).grams, 1000);
+    assert.equal(estimateIngredientGrams({ name: "flour", quantity: 1, unit: "lb" }).grams, 453.6);
+    // A comma can be a decimal separator ("1,5 l") or a thousands separator ("1,000 ml").
+    assert.equal(estimateIngredientGrams({ name: "water", quantity: "1,5" as unknown as number, unit: "l" }).grams, 1500);
+    assert.equal(estimateIngredientGrams({ name: "water", quantity: "1,000" as unknown as number, unit: "ml" }).grams, 1000);
+    // Greek words that start with "αβγ" are not an egg.
+    assert.equal(estimateIngredientGrams({ name: "αβγολέμονο", quantity: 1, unit: null }).grams, null);
+    // An unknown density falls back to water rather than refusing to estimate.
+    assert.equal(estimateIngredientGrams({ name: "mystery veg", quantity: 1, unit: "cup" }).grams, 240);
+  });
+
+  it("scales portions and labels weights", () => {
+    assert.equal(scaledQuantity(200, 4, 8), 400);
+    assert.equal(scaledQuantity(200, null, 8), 200, "unknown servings are not multiplied");
+    assert.equal(scaledQuantity(200, 0, 8), 200);
+    assert.equal(scaledQuantity(null, 4, 8), null);
+    assert.equal(gramsLabel(1000), "1 kg");
+    assert.equal(gramsLabel(10), "10 g");
+    assert.equal(gramsLabel(0.5), "0.5 g");
+    assert.equal(gramsLabel(null), "—");
+    const empty = recipePortion([], 4);
+    assert.equal(empty.totalGrams, null);
+    assert.equal(empty.perServingGrams, null);
+    assert.equal(empty.coverage, 0);
+  });
+
+  it("derives consistent calories for a scaled cook session", () => {
+    const doubled = scaledCalories({ totalKcal: 1600, perServingKcal: 400 }, 4, 8);
+    assert.equal(doubled.totalKcal, 3200);
+    assert.equal(doubled.perPortionKcal, 400);
+    assert.equal((doubled.perPortionKcal ?? 0) * 8, doubled.totalKcal);
+    const fromPerServing = scaledCalories({ totalKcal: null, perServingKcal: 250 }, 4, 2);
+    assert.equal(fromPerServing.totalKcal, 500);
+    assert.equal(fromPerServing.perPortionKcal, 250);
+    const unknown = scaledCalories({ totalKcal: 900, perServingKcal: null }, null, 6);
+    assert.equal(unknown.totalKcal, 900);
+    assert.equal(unknown.perPortionKcal, 150);
+    assert.deepEqual(scaledCalories({ totalKcal: null, perServingKcal: null }, 4, 2), { totalKcal: null, perPortionKcal: null });
+  });
+
+  it("falls back to the food reference when nothing is tracked", () => {
+    const nutrition = recipeNutrition([{ name: "bananas", quantity: 2, unit: "pcs" }], [], 2);
+    assert.ok(nutrition);
+    assert.equal(nutrition.matched, 0);
+    assert.equal(nutrition.referenceMatched, 1);
+    assert.equal(nutrition.total.energyKcal, 214);
+    assert.equal(nutrition.perServing?.energyKcal, 107);
+    assert.equal(nutrition.coverage, 1, "reference-backed ingredients still count towards coverage");
+    assert.ok(referenceNutrition("bananas"));
+    assert.equal(referenceNutrition("an unknown ingredient"), null);
+    assert.ok(REFERENCE_FOOD_COUNT > 50);
+    // Word boundaries keep seasonings from matching similar-looking foods.
+    assert.ok(referenceNutrition("black pepper"));
+    assert.equal(referenceNutrition("pepperoni"), null);
+  });
+});
+
+describe("recipe link import", () => {
+  it("rejects an oversized streamed page without a Content-Length", async () => {
+    const originalFetch = globalThis.fetch;
+    const previous = process.env.SV_OUTBOUND_ALLOW_PRIVATE;
+    process.env.SV_OUTBOUND_ALLOW_PRIVATE = "true";
+    globalThis.fetch = (async () => new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array(3_000_001));
+        controller.close();
+      },
+    }), { headers: { "content-type": "text/html" } })) as typeof fetch;
+    try {
+      await assert.rejects(importRecipeFromUrl("https://example.com/recipe"), /page is too large/);
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (previous === undefined) delete process.env.SV_OUTBOUND_ALLOW_PRIVATE;
+      else process.env.SV_OUTBOUND_ALLOW_PRIVATE = previous;
+    }
+  });
+
+  it("normalises links and ISO durations", () => {
+    assert.equal(normaliseRecipeUrl("example.com/recipe"), "https://example.com/recipe");
+    assert.equal(normaliseRecipeUrl("https://example.com/r#notes"), "https://example.com/r");
+    assert.equal(isoDurationMinutes("PT1H30M"), 90);
+    assert.equal(isoDurationMinutes("PT45M"), 45);
+    assert.equal(isoDurationMinutes("nonsense"), null);
+    assert.equal(isoDurationMinutes("PT"), null, "an empty duration is not a time");
+    assert.equal(isoDurationMinutes("P1DT2H"), 1560);
+    assert.equal(isoDurationMinutes("PT90S"), 2);
+    assert.equal(parseRecipeYield("4-6 servings"), 4);
+    assert.equal(parseRecipeYield("2,5"), 3);
+    assert.equal(parseRecipeYield(["6"]), 6);
+    assert.equal(parseRecipeYield({ value: "8 portions" }), 8);
+    assert.equal(parseRecipeYield("no number"), null);
+    assert.equal(decodeEntities("&#x110000;"), "", "out-of-range code points are dropped");
+    assert.equal(decodeEntities("&amp; &unknown;"), "& &unknown;");
+  });
+
+  it("reads a schema.org Recipe JSON-LD block", () => {
+    const html = `<!doctype html><html><head>
+      <title>Fallback title</title>
+      <meta property="og:image" content="https://example.com/cover.jpg">
+      <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "Recipe",
+        "name": "Test Moussaka",
+        "description": "A test recipe",
+        "recipeYield": "4 servings",
+        "prepTime": "PT20M",
+        "cookTime": "PT45M",
+        "recipeIngredient": ["2 eggs", "1 kg eggplant", "200 ml olive oil"],
+        "recipeInstructions": [
+          { "@type": "HowToStep", "text": "Slice the eggplant." },
+          { "@type": "HowToStep", "text": "Bake for 45 minutes." }
+        ],
+        "keywords": "greek, dinner",
+        "image": "https://example.com/moussaka.jpg"
+      }
+      </script></head><body><h1>Test Moussaka</h1></body></html>`;
+    const result = parseRecipePage(html, "https://example.com/moussaka");
+    assert.equal(result.provider, "structured");
+    assert.equal(result.draft.title, "Test Moussaka");
+    assert.equal(result.draft.servings, 4);
+    assert.equal(result.draft.prepMinutes, 20);
+    assert.equal(result.draft.cookMinutes, 45);
+    assert.equal(result.draft.ingredients.length, 3);
+    assert.equal(result.draft.ingredients[1].name, "eggplant");
+    assert.equal(result.draft.ingredients[1].quantity, 1);
+    assert.equal(result.draft.ingredients[1].unit, "kg");
+    assert.deepEqual(result.draft.tags, ["greek", "dinner"]);
+    assert.equal(result.draft.steps.length, 2);
+    assert.equal(result.draft.steps[1].timerSeconds, 2700);
+    assert.equal(result.image, "https://example.com/moussaka.jpg");
+  });
+
+  it("repairs broken JSON-LD and flattens HowToSection steps", () => {
+    const trailing = readJsonLd(`<script type="application/ld+json">{"@type":"Recipe","name":"Trailing",}</script>`);
+    assert.equal((trailing[0] as Record<string, unknown>).name, "Trailing");
+    const concatenated = readJsonLd(
+      `<script type="application/ld+json">{"@type":"Recipe","name":"One"}{"@type":"Recipe","name":"Two"}</script>`,
+    );
+    assert.deepEqual(
+      concatenated.map((block) => (block as Record<string, unknown>).name),
+      ["One", "Two"],
+    );
+
+    const html = `<html><head><title>Nested</title>
+      <meta content="https://example.com/a.jpg" property="og:image">
+      <script type="application/ld+json">
+      {"@type":"Recipe","name":"Nested","recipeIngredient":["1 egg"],
+       "recipeInstructions":[{"@type":"HowToSection","name":"Base","itemListElement":[
+         {"@type":"HowToStep","text":"Beat the egg."},{"@type":"HowToStep","text":"Cook it."}]}]}
+      </script></head><body></body></html>`;
+    const result = parseRecipePage(html, "https://example.com/nested");
+    assert.equal(result.provider, "structured");
+    assert.equal(result.image, "https://example.com/a.jpg", "meta content before property is read too");
+    assert.deepEqual(
+      result.draft.steps.map((step) => step.text),
+      ["Beat the egg.", "Cook it."],
+    );
+  });
+
+  it("falls back to a text read when no JSON-LD exists", () => {
+    const html = `<html><head><title>Simple Soup</title></head><body>
+      <h1>Simple Soup</h1>
+      <h2>Ingredients</h2><ul><li>2 carrots</li><li>1 l stock</li></ul>
+      <h2>Method</h2><ol><li>Chop the carrots.</li><li>Simmer for 20 minutes.</li></ol>
+    </body></html>`;
+    const result = parseRecipePage(html, "https://example.com/soup");
+    assert.equal(result.provider, "html");
+    assert.match(result.warning ?? "", /rough text read/);
+    assert.ok(result.draft.ingredients.length >= 2);
+    assert.ok(result.draft.steps.length >= 1);
+  });
+
+  it("refuses a redirect to a private address", async () => {
+    const originalFetch = globalThis.fetch;
+    const previous = process.env.SV_OUTBOUND_ALLOW_PRIVATE;
+    process.env.SV_OUTBOUND_ALLOW_PRIVATE = "false";
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response(null, { status: 302, headers: { location: "http://127.0.0.1:9/secret" } });
+    }) as typeof fetch;
+    try {
+      await assert.rejects(importRecipeFromUrl("http://93.184.216.34/recipe"), /private or local network/i);
+      assert.equal(calls, 1, "the private hop must be rejected before it is fetched");
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (previous === undefined) delete process.env.SV_OUTBOUND_ALLOW_PRIVATE;
+      else process.env.SV_OUTBOUND_ALLOW_PRIVATE = previous;
+    }
+  });
+
+  it("validates a stored source link", async () => {
+    const previous = process.env.SV_OUTBOUND_ALLOW_PRIVATE;
+    process.env.SV_OUTBOUND_ALLOW_PRIVATE = "false";
+    try {
+      const rejected = await request(`/api/houses/${houseId}/recipes`, {
+        method: "POST",
+        body: { title: "Private link", sourceUrl: "http://127.0.0.1/private" },
+      });
+      assert.equal(rejected.status, 400);
+      assert.match(rejected.data.error, /private or local network/i);
+
+      const accepted = await request(`/api/houses/${houseId}/recipes`, {
+        method: "POST",
+        body: { title: "Public link", sourceUrl: "http://93.184.216.34/recipe#notes" },
+      });
+      assert.equal(accepted.status, 201);
+      assert.equal(accepted.data.sourceUrl, "http://93.184.216.34/recipe");
+      assert.equal((await request(`/api/recipes/${accepted.data.id}`, { method: "DELETE" })).status, 200);
+    } finally {
+      if (previous === undefined) delete process.env.SV_OUTBOUND_ALLOW_PRIVATE;
+      else process.env.SV_OUTBOUND_ALLOW_PRIVATE = previous;
+    }
+  });
+
+  it("structures a text-only page with the configured provider", async () => {
+    const created = await request("/api/houses", { method: "POST", body: { name: "Import AI house", currency: "EUR" } });
+    assert.equal(created.status, 201);
+    const aiHouse = created.data.id;
+    try {
+      const configured = await request(`/api/houses/${aiHouse}`, {
+        method: "PATCH",
+        body: { settings: { ai: { enabled: true, baseUrl: aiBase, apiKey: "test-key", model: "mock-model" } } },
+      });
+      assert.equal(configured.status, 200);
+
+      const pageServer = http.createServer((_req, res) => {
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        res.end("<html><head><title>Plain soup</title></head><body><h1>Soup</h1><p>Boil water and add salt.</p></body></html>");
+      });
+      await new Promise<void>((resolve) => pageServer.listen(0, "127.0.0.1", () => resolve()));
+      const pageAddress = pageServer.address();
+      if (!pageAddress || typeof pageAddress === "string") throw new Error("no import page address");
+      try {
+        const preview = await request(`/api/houses/${aiHouse}/recipes/import`, {
+          method: "POST",
+          body: { url: `http://127.0.0.1:${pageAddress.port}/soup` },
+        });
+        assert.equal(preview.status, 200);
+        assert.equal(preview.data.provider, "ai");
+        assert.equal(preview.data.warning, null);
+        assert.equal(preview.data.draft.title, "AI pancakes");
+        assert.equal(preview.data.draft.ingredients[0].name, "Flour");
+        assert.ok(preview.data.aiCost > 0);
+      } finally {
+        await new Promise<void>((resolve, reject) => pageServer.close((error) => (error ? reject(error) : resolve())));
+      }
+    } finally {
+      // Do not leave an extra house behind for tests that count the owner's houses.
+      await request(`/api/houses/${aiHouse}`, { method: "DELETE" });
+    }
   });
 });
 
@@ -4886,6 +5176,69 @@ describe("recipes", () => {
     assert.equal(recipe.data.nutrition.matched, 1);
     assert.equal(recipe.data.nutrition.ingredients, 2);
     assert.equal(recipe.data.nutrition.coverage, 0.5);
+    assert.equal(recipe.data.portion.totalGrams, 300);
+    assert.equal(recipe.data.portion.perServingGrams, 150);
+    assert.equal(recipe.data.portion.covered, 2);
+  });
+
+  it("imports a recipe from a pasted link", async () => {
+    const html = `<!doctype html><html><head><title>Imported Moussaka</title>
+      <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "Recipe",
+        "name": "Imported Moussaka",
+        "recipeYield": "4",
+        "prepTime": "PT20M",
+        "cookTime": "PT45M",
+        "recipeIngredient": ["2 eggs", "1 kg eggplant", "200 ml olive oil"],
+        "recipeInstructions": ["Slice the eggplant.", "Bake for 45 minutes."],
+        "image": "https://example.com/moussaka.jpg"
+      }
+      </script></head><body></body></html>`;
+    const pageServer = http.createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(html);
+    });
+    await new Promise<void>((resolve) => pageServer.listen(0, "127.0.0.1", () => resolve()));
+    const pageAddress = pageServer.address();
+    if (!pageAddress || typeof pageAddress === "string") throw new Error("no import page address");
+    const link = `http://127.0.0.1:${pageAddress.port}/moussaka`;
+    try {
+      const preview = await request(`/api/houses/${houseId}/recipes/import`, { method: "POST", body: { url: link } });
+      assert.equal(preview.status, 200);
+      assert.equal(preview.data.provider, "structured");
+      assert.equal(preview.data.saved, false);
+      assert.equal(preview.data.sourceUrl, link);
+      assert.equal(preview.data.draft.title, "Imported Moussaka");
+      assert.equal(preview.data.draft.servings, 4);
+      assert.equal(preview.data.draft.source, "import");
+      assert.equal(preview.data.draft.ingredients.length, 3);
+      assert.equal(preview.data.image, "https://example.com/moussaka.jpg");
+
+      const saved = await request(`/api/houses/${houseId}/recipes/import`, { method: "POST", body: { url: link, save: true } });
+      assert.equal(saved.status, 201);
+      assert.equal(saved.data.saved, true);
+      assert.equal(saved.data.recipe.source, "import");
+      assert.equal(saved.data.recipe.sourceUrl, link);
+      assert.equal(saved.data.recipe.image, "https://example.com/moussaka.jpg");
+      assert.equal(saved.data.recipe.portion.totalGrams, 1284);
+      assert.equal(saved.data.recipe.portion.perServingGrams, 321);
+
+      const removed = await request(`/api/recipes/${saved.data.recipe.id}`, { method: "DELETE" });
+      assert.equal(removed.status, 200);
+    } finally {
+      await new Promise<void>((resolve, reject) => pageServer.close((error) => (error ? reject(error) : resolve())));
+    }
+  });
+
+  it("rejects an unreachable import link", async () => {
+    const res = await request(`/api/houses/${houseId}/recipes/import`, {
+      method: "POST",
+      body: { url: "ftp://example.com/recipe" },
+    });
+    assert.equal(res.status, 400);
+    assert.match(res.data.error, /http/i);
   });
 });
 

@@ -176,7 +176,7 @@ request gets `429 Too Many Requests` with a `Retry-After` header.
 | `TWO_FACTOR` | `20/600` per IP | `POST /api/auth/2fa/verify` (each challenge also allows only 5 wrong codes) |
 | `PASSKEY` | `30/600` per IP | passkey sign-in options and verification |
 | `INVITE` | `30/600` per IP | invite lookup and accept |
-| `AI` | `60/600` per user | receipt and recipe scans, intake parse, ideas, recipe completion, AI connection test |
+| `AI` | `60/600` per user | receipt and recipe scans, recipe link imports, intake parse, ideas, recipe completion, AI connection test |
 
 Override with `SV_RATE_LIMIT_<NAME>=<max>/<seconds>`. Limits are keyed by `req.ip`, which honours one
 reverse-proxy hop (`X-Forwarded-For`); make sure your proxy sets it, otherwise every client shares the

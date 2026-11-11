@@ -34,7 +34,8 @@ dataset — all from one PWA that runs in a single Docker container.
 | **Meal planner** | A seven-day breakfast/lunch/dinner/snack grid. Pick saved recipes or food ideas, scale servings per slot, duplicate a meal, and turn the week's missing ingredients into the shopping list. |
 | **CSV import** | Bring a spreadsheet in with automatic column mapping, a dry-run preview and per-line errors. Supports comma/semicolon, quoted fields, BOM, CRLF and decimal commas; commits create normal stock movements. |
 | **Low stock & expiry reminders** | Set a reorder point, get a reminder when it is reached. Expiring batches warn you days ahead. Checked on every stock change plus every 30 minutes. Deliver to the bell, the browser, ntfy, Apprise or a signed webhook. |
-| **Recipes, digitised** | Photograph a handwritten card: English & Greek OCR runs on-device (Tesseract, no upload), then AI or a local parser rebuilds the ingredients and steps. "Improve with AI" fills gaps and rewrites steps. |
+| **Recipes, digitised** | Photograph a handwritten card: English & Greek OCR runs on-device (Tesseract, no upload), then AI or a local parser rebuilds the ingredients and steps. "Improve with AI" fills gaps and rewrites steps. Paste a recipe link to import it from a cooking site, with schema.org data read exactly and a text fallback. |
+| **Calories, portions and cook mode** | Recipe nutrition is estimated from linked OpenFoodFacts or hand-entered panels, with a built-in reference table for untracked ingredients. Every recipe also estimates whole-recipe and per-portion weight in grams. Cook mode scales the portions up or down, converts every ingredient to grams, and keeps a tick-off step list on screen while you cook. |
 | **Cook what you have** | Meal suggestions built from current stock and saved recipes, with realistic missing-ingredient lists — AI or fully local. |
 | **AI call log** | Turn on developer mode to inspect every AI request: operation, model, tokens, cost, duration, retries, errors and truncated prompt/response previews. Failed calls are included, filters cover the whole house for admins, and the same records stream to stdout as structured JSON for Docker, Loki or Grafana. |
 | **Vision datasets** | Upload photos into folders, draw boxes, name labels, assign train/val/test splits, and export a ready-to-train YOLO or COCO zip (classes, `data.yaml`, manifest included). Import existing YOLO/COCO datasets with a class-mapping preview and review queue. |
@@ -201,6 +202,7 @@ local text models expect. On Linux hosts replace `host.docker.internal` with you
 What AI actually powers:
 
 - **Recipe scan cleanup** — fixes OCR errors and structures ingredients/steps.
+- **Recipe link import** — structures page copy when a site has no schema.org recipe data.
 - **Improve recipe** — fills missing quantities, times and temperatures; notes what changed.
 - **Food ideas** — suggestions from current stock and saved recipes, with missing essentials.
 
@@ -235,6 +237,10 @@ Stock, barcodes, price history, reminders and photo labelling never call AI.
    - without one: a tolerant local parser (sections, quantities, fractions, timers, titles).
 4. Save, then edit anything, or press **Improve with AI** to fill missing quantities/timings.
 5. Ingredient availability is matched loosely against stock ("eggs" ↔ "Free-range eggs").
+6. Paste a link on **Import link**: `POST /recipes/import` reads schema.org JSON-LD exactly, falls back
+   to page text, and uses the AI provider to structure it when one is configured.
+7. The recipe page estimates nutrition (linked panels plus a built-in reference table) and weight in
+   grams. **Cook mode** scales portions, shows every ingredient in grams, and keeps a tick-off list.
 
 ### Food ideas
 
@@ -279,7 +285,7 @@ POST /api/items/:id/stock                    (add | remove | waste | set | move)
 GET  /api/items/:id/movements
 GET  /api/houses/:id/recipes                 POST /api/houses/:id/recipes
 POST /api/houses/:id/recipes/scan            POST /api/houses/:id/recipes/upload
-POST /api/recipes/:id/ai
+POST /api/houses/:id/recipes/import          POST /api/recipes/:id/ai
 GET  /api/houses/:id/ideas                   POST /api/houses/:id/ideas
 GET  /api/houses/:id/shopping                POST /api/houses/:id/shopping/from-recipe
 POST /api/houses/:id/shopping/from-low-stock POST /api/houses/:id/shopping/:entryId/check
@@ -307,7 +313,7 @@ POST /api/items/:id/espresso-shots           PATCH/DELETE /api/items/:id/espress
 - **Shopping list** – grouped, unit-aware lines from recipes, low stock and the plan; check into stock.
 - **Meal plan** – seven-day grid per house with scaled servings and one-click shopping list.
 - **Bulk intake** – receipt text/photo or barcode queue, editable review table, atomic commit.
-- **Kitchen** – recipes with stock coverage, full recipe view, scan, favourites.
+- **Kitchen** – recipes with stock coverage, calories and portion weight, full recipe view, link import, scan, cook mode, favourites.
 - **Ideas** – prompt chips, AI/local meal cards, save as recipe.
 - **Photo library** – folders, upload, box labelling, splits, dataset export.
 - **Reminders** – low stock & expiry, browser opt-in, ntfy/Apprise/webhook channels.

@@ -637,7 +637,9 @@ export interface Recipe {
   image: string | null;
   sourceImage: string | null;
   ocrText: string | null;
-  source: "manual" | "scan" | "ai";
+  /** Where an imported recipe came from, when it was pasted as a link. */
+  sourceUrl: string | null;
+  source: "manual" | "scan" | "ai" | "import";
   aiNotes: string | null;
   /** USD spent on AI for this recipe (scan cleanup, polish). */
   aiCost?: number | null;
@@ -646,8 +648,23 @@ export interface Recipe {
   createdAt: string;
   updatedAt: string;
   match?: RecipeMatch;
+  /** Estimated prepared weight of the recipe and of one portion. */
+  portion?: RecipePortion | null;
   /** Nutrition estimated from the ingredients that link to tracked items. */
   nutrition?: RecipeNutrition | null;
+}
+
+export interface RecipePortion {
+  /** Estimated weight of the whole recipe, in grams. */
+  totalGrams: number | null;
+  /** Estimated weight of one portion, in grams. */
+  perServingGrams: number | null;
+  servings: number | null;
+  /** Ingredients whose grams could be estimated. */
+  covered: number;
+  ingredients: number;
+  /** covered / ingredients, rounded to two decimals. */
+  coverage: number;
 }
 
 export interface RecipeNutrition {
@@ -656,9 +673,11 @@ export interface RecipeNutrition {
   servings: number | null;
   /** Number of ingredients considered for the estimate. */
   ingredients: number;
-  /** Ingredients whose item had usable nutrition data and a compatible amount. */
+  /** Ingredients that used a nutrition panel from a tracked item. */
   matched: number;
-  /** matched / ingredients, rounded to two decimals. */
+  /** How many of the matched ingredients used the built-in food reference. */
+  referenceMatched?: number;
+  /** (matched + referenceMatched) / ingredients, rounded to two decimals. */
   coverage: number;
 }
 
