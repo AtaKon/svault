@@ -638,7 +638,7 @@ export interface Recipe {
   sourceImage: string | null;
   ocrText: string | null;
   /** Where an imported recipe came from, when it was pasted as a link. */
-  sourceUrl?: string | null;
+  sourceUrl: string | null;
   source: "manual" | "scan" | "ai" | "import";
   aiNotes: string | null;
   /** USD spent on AI for this recipe (scan cleanup, polish). */
@@ -673,11 +673,11 @@ export interface RecipeNutrition {
   servings: number | null;
   /** Number of ingredients considered for the estimate. */
   ingredients: number;
-  /** Ingredients that contributed nutrition data. */
+  /** Ingredients that used a nutrition panel from a tracked item. */
   matched: number;
   /** How many of the matched ingredients used the built-in food reference. */
   referenceMatched?: number;
-  /** matched / ingredients, rounded to two decimals. */
+  /** (matched + referenceMatched) / ingredients, rounded to two decimals. */
   coverage: number;
 }
 

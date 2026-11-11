@@ -2030,6 +2030,7 @@ const EL: Record<string, string> = {
   "Includes typical values for ingredients that are not in your inventory.": "Περιλαμβάνει τυπικές τιμές για υλικά που δεν βρίσκονται στο απόθεμά σου.",
   "No estimate yet. Ingredients are estimated from items with a nutrition panel, then from a small reference table of common foods. Link an OpenFoodFacts product or enter label values to make it exact. ": "Δεν υπάρχει ακόμη εκτίμηση. Τα υλικά εκτιμώνται από αντικείμενα με διατροφικό πίνακα και έπειτα από έναν μικρό πίνακα αναφοράς κοινών τροφίμων. Σύνδεσε ένα προϊόν OpenFoodFacts ή πρόσθεσε τις τιμές της ετικέτας για ακρίβεια. ",
   "Weight estimated for {covered} of {total} ingredients. Volume is converted with a typical density and countable units with a typical piece weight.": "Το βάρος εκτιμήθηκε για {covered} από {total} υλικά. Ο όγκος μετατρέπεται με τυπική πυκνότητα και οι μετρήσιμες μονάδες με τυπικό βάρος τεμαχίου.",
+  "None of the ingredient lines can be converted to weight yet. Use a mass or volume unit to get an estimate.": "Καμία γραμμή υλικού δεν μπορεί ακόμη να μετατραπεί σε βάρος. Χρησιμοποίησε μονάδα μάζας ή όγκου για εκτίμηση.",
   "Cook mode: scale portions, weigh in grams": "Λειτουργία μαγειρέματος: κλιμάκωση μερίδων, ζύγιση σε γραμμάρια",
   "Import link": "Εισαγωγή συνδέσμου",
   "Import a link": "Εισαγωγή συνδέσμου",

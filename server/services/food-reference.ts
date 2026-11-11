@@ -103,8 +103,8 @@ const FOODS: [RegExp, ReferenceFacts][] = [
   [/juice|χυμός/i, { energyKcal: 45, proteins: 0.7, fat: 0.2, carbohydrates: 10 }],
   [/vinegar|ξίδι/i, { energyKcal: 21, proteins: 0, fat: 0, carbohydrates: 0.9 }],
   [/cinnamon|κανέλα/i, { energyKcal: 247, proteins: 4, fat: 1.2, carbohydrates: 81, fiber: 53 }],
-  [/pepper|πιπέρι/i, { energyKcal: 251, proteins: 10, fat: 3.3, carbohydrates: 64, fiber: 25 }],
-  [/salt|αλάτι/i, { energyKcal: 0, proteins: 0, fat: 0, carbohydrates: 0, salt: 100 }],
+  [/\bpepper\b|πιπέρι/i, { energyKcal: 251, proteins: 10, fat: 3.3, carbohydrates: 64, fiber: 25 }],
+  [/\bsalt\b|αλάτι/i, { energyKcal: 0, proteins: 0, fat: 0, carbohydrates: 0, salt: 100 }],
 ];
 
 function normalise(name: string): string {

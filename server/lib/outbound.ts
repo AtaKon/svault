@@ -17,6 +17,50 @@ export function outboundRedirectMode(): RequestRedirect {
   return outboundAllowPrivate() ? "follow" : "error";
 }
 
+/** How many redirect hops a user-supplied link may take. */
+const MAX_REDIRECTS = 5;
+
+const REDIRECT_STATUS = new Set([301, 302, 303, 307, 308]);
+
+/**
+ * Fetch a URL that came from a user and re-validate every redirect hop.
+ *
+ * `redirect: "follow"` would let a public URL bounce to a private address after
+ * the guard on the first URL already passed, so hops are followed by hand here
+ * and each one goes through `assertOutboundUrl`. The host is still resolved
+ * twice (once by the guard, once by fetch), which leaves the same narrow
+ * DNS-rebinding window as the other outbound callers; instances that accept
+ * untrusted links should keep `SV_OUTBOUND_ALLOW_PRIVATE=false`.
+ */
+export async function fetchOutbound(
+  rawUrl: string,
+  init: RequestInit & { label: string },
+): Promise<{ response: Response; url: string }> {
+  let current = new URL(rawUrl);
+  const { label, ...requestInit } = init;
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
+    await assertOutboundUrl(current.toString(), label);
+    const response = await fetch(current, { ...requestInit, redirect: "manual" });
+    if (!REDIRECT_STATUS.has(response.status)) return { response, url: current.toString() };
+    const location = response.headers.get("location");
+    if (!location) return { response, url: current.toString() };
+    if (hop === MAX_REDIRECTS) {
+      await response.body?.cancel();
+      throw new OutboundBlockedError(`${label} redirects too many times`);
+    }
+    let next: URL;
+    try {
+      next = new URL(location, current);
+    } catch {
+      await response.body?.cancel();
+      throw new OutboundBlockedError(`${label} redirects to an invalid address`);
+    }
+    await response.body?.cancel();
+    current = next;
+  }
+  throw new OutboundBlockedError(`${label} redirects too many times`);
+}
+
 export class OutboundBlockedError extends Error {}
 
 function ipv4Private(address: string): boolean {

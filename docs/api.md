@@ -784,7 +784,8 @@ Recipe body:
 ```
 
 `source` is `manual`, `scan`, `ai` or `import`. Imported recipes also carry `sourceUrl`, and an
-imported cover image may be the remote page image.
+imported cover image may be the remote page image. A `sourceUrl` is normalised and checked against
+the server's outbound policy before it is stored, so a private target is rejected with `400`.
 
 Import body:
 
@@ -795,7 +796,9 @@ Import body:
 Without `save`, the response contains `draft`. With `save: true`, it also contains `recipe`. The
 response includes `provider` (`structured`, `html` or `ai`), `sourceUrl`, `image`, an optional
 `warning` and `aiCost`. `structured` means the page published schema.org Recipe data; `html` is a
-rough text read; `ai` means the page text was structured by the configured provider.
+rough text read; `ai` means the page text was structured by the configured provider. The web app
+previews without `save` and then creates the edited recipe with `POST /api/houses/:houseId/recipes`,
+so the changes made on the preview are kept; `sourceUrl` is the final address after redirects.
 
 Scan body:
 

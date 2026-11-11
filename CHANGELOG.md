@@ -25,7 +25,9 @@ All notable changes to SVault are documented here. The format follows
   read, and structures the copy through the configured AI provider when available. Imported recipes
   keep their `sourceUrl` and may use the page's cover image. The new endpoint is
   `POST /api/houses/:houseId/recipes/import`; recipe `source` gains the value `import` and the
-  `recipes` table gains `source_url` on both SQLite and PostgreSQL.
+  `recipes` table gains `source_url` on both SQLite and PostgreSQL. Imports follow redirects one hop
+  at a time so every target is checked by the outbound guard, and a stored `sourceUrl` is validated
+  the same way before it is saved.
 - Open Food Facts lookups now cover all four databases: Open Food Facts, Open Beauty Facts, Open Pet
   Food Facts and Open Products Facts. A universal barcode lookup reports which project owns the
   product, the shared cache is keyed by project, and product cards show a Food/Beauty/Pet food/Products

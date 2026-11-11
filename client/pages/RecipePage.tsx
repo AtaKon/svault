@@ -341,7 +341,7 @@ export function RecipePage() {
                   <NutritionRows values={recipe.nutrition.perServing ?? recipe.nutrition.total} />
                 </div>
                 <p className="mt-2 text-[11px] leading-relaxed text-muted">
-                  {t("Estimated from ")}{' '}{recipe.nutrition.matched} {' '}{t(" of ")}{' '}{recipe.nutrition.ingredients} {' '}{t(" ingredients ")}{recipe.nutrition.coverage < 1
+                  {t("Estimated from ")}{' '}{recipe.nutrition.matched + (recipe.nutrition.referenceMatched ?? 0)} {' '}{t(" of ")}{' '}{recipe.nutrition.ingredients} {' '}{t(" ingredients ")}{recipe.nutrition.coverage < 1
                     ? t(" — add nutrition to the remaining items for a closer number.")
                     : "."}
                   {recipe.nutrition.referenceMatched
@@ -353,22 +353,28 @@ export function RecipePage() {
               <p className="text-xs leading-relaxed text-muted">
                 {t("No estimate yet. Ingredients are estimated from items with a nutrition panel, then from a small reference table of common foods. Link an OpenFoodFacts product or enter label values to make it exact. ")}</p>
             )}
-            {recipe.portion?.totalGrams != null && (
+            {recipe.portion && recipe.portion.ingredients > 0 && (
               <div className="mt-3 border-t border-line pt-3">
                 <div className="flex items-center justify-between gap-2">
                   <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">{t("Portion weight")}</div>
                   <Badge tone="outline">{t("estimated")}</Badge>
                 </div>
-                <div className="mt-2 grid grid-cols-2 gap-2">
-                  <div className="rounded-xl bg-raised px-3 py-2">
-                    <div className="text-[10px] uppercase tracking-wide text-muted">{t("Whole recipe")}</div>
-                    <div className="font-display text-xl">{gramsLabel(recipe.portion.totalGrams)}</div>
+                {recipe.portion.totalGrams != null ? (
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    <div className="rounded-xl bg-raised px-3 py-2">
+                      <div className="text-[10px] uppercase tracking-wide text-muted">{t("Whole recipe")}</div>
+                      <div className="font-display text-xl">{gramsLabel(recipe.portion.totalGrams)}</div>
+                    </div>
+                    <div className="rounded-xl bg-raised px-3 py-2">
+                      <div className="text-[10px] uppercase tracking-wide text-muted">{t("Per portion")}</div>
+                      <div className="font-display text-xl">{gramsLabel(recipe.portion.perServingGrams)}</div>
+                    </div>
                   </div>
-                  <div className="rounded-xl bg-raised px-3 py-2">
-                    <div className="text-[10px] uppercase tracking-wide text-muted">{t("Per portion")}</div>
-                    <div className="font-display text-xl">{gramsLabel(recipe.portion.perServingGrams)}</div>
-                  </div>
-                </div>
+                ) : (
+                  <p className="mt-2 text-[11px] leading-relaxed text-muted">
+                    {t("None of the ingredient lines can be converted to weight yet. Use a mass or volume unit to get an estimate.")}
+                  </p>
+                )}
                 <p className="mt-2 text-[11px] leading-relaxed text-muted">
                   {t("Weight estimated for {covered} of {total} ingredients. Volume is converted with a typical density and countable units with a typical piece weight.", {
                     covered: recipe.portion.covered,

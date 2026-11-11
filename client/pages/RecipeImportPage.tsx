@@ -73,9 +73,30 @@ export function RecipeImportPage() {
     if (!draft || !result) return;
     setSaving(true);
     try {
+      // Send only the fields a recipe owns: the import draft also carries empty
+      // scan fields, and the source link/image must come from the import result.
       const recipe = await api<Recipe>(`/api/houses/${house.id}/recipes`, {
         method: "POST",
-        body: { ...draft, source: "import", sourceUrl: result.sourceUrl, image: result.image, aiCost: result.aiCost },
+        body: {
+          title: draft.title,
+          description: draft.description,
+          servings: draft.servings,
+          prepMinutes: draft.prepMinutes,
+          cookMinutes: draft.cookMinutes,
+          tags: draft.tags,
+          steps: draft.steps,
+          ingredients: draft.ingredients.map(({ name, quantity, unit, optional, note }) => ({
+            name,
+            quantity,
+            unit,
+            optional,
+            note,
+          })),
+          source: "import",
+          sourceUrl: result.sourceUrl,
+          image: result.image,
+          aiCost: result.aiCost,
+        },
       });
       toast.success(t("Recipe imported"));
       navigate(`/recipes/${recipe.id}`, { replace: true });
@@ -145,7 +166,7 @@ export function RecipeImportPage() {
             )}
             <div className="space-y-3 p-4">
               <div className="flex flex-wrap items-center gap-1.5">
-                <Badge tone={result.provider === "structured" ? "brand" : result.provider === "ai" ? "brand" : "warn"}>{providerLabel}</Badge>
+                <Badge tone={result.provider === "html" ? "warn" : "brand"}>{providerLabel}</Badge>
                 {draft.servings ? <Badge tone="outline">{plural(draft.servings, "serving")}</Badge> : null}
                 {draft.prepMinutes || draft.cookMinutes ? (
                   <Badge tone="outline">{minutesLabel((draft.prepMinutes ?? 0) + (draft.cookMinutes ?? 0))}</Badge>

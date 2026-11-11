@@ -8,7 +8,8 @@ import { recipeMatch, serializeRecipe, stockQuantity } from "../serialize.js";
 import { aiCleanRecipe, aiCompleteRecipe, fileToDataUrl, resolveAi } from "../ai.js";
 import { normaliseNutrition, recipeNutrition, type NutritionSourceItem } from "../services/nutrition.js";
 import { heuristicRecipe, normaliseRecipeDraft, type ParsedRecipe } from "../services/recipe-local.js";
-import { RecipeImportError, importRecipeFromUrl } from "../services/recipe-import.js";
+import { RecipeImportError, importRecipeFromUrl, normaliseRecipeUrl } from "../services/recipe-import.js";
+import { OutboundBlockedError, assertOutboundUrl } from "../lib/outbound.js";
 import { recipePortion } from "../../shared/recipe-grams.js";
 import { removeUnreferencedUploads } from "../services/upload-cleanup.js";
 import { uploader, uploadPath } from "../upload.js";
@@ -147,7 +148,31 @@ function normaliseIngredientList(ings: z.infer<typeof ingredientSchema>[] | Pars
     }));
 }
 
+/**
+ * Normalise and vet a stored source link. Invalid or disallowed targets are a
+ * client error rather than a silent drop, so the user knows the link was not kept.
+ */
+async function validateSourceUrl(raw: string | null): Promise<string | null> {
+  if (!raw) return null;
+  let normalised: string;
+  try {
+    normalised = normaliseRecipeUrl(raw);
+  } catch (error) {
+    throw new ApiError(400, error instanceof Error ? error.message : "That does not look like a valid link");
+  }
+  try {
+    await assertOutboundUrl(normalised, "The recipe link");
+  } catch (error) {
+    if (error instanceof OutboundBlockedError) throw new ApiError(400, error.message);
+    throw error;
+  }
+  return normalised;
+}
+
 export async function saveRecipe(houseId: string, userId: string, body: z.infer<typeof recipeInput>, existingId?: string): Promise<string> {
+  // A stored source link is rendered for every member, so only keep links the
+  // server itself would be willing to open (same policy as the importer).
+  const sourceUrl = await validateSourceUrl(body.sourceUrl ?? null);
   const steps = (body.steps ?? []).map((s) =>
     typeof s === "string" ? { text: s, timerSeconds: null } : { text: s.text, timerSeconds: s.timerSeconds ?? null },
   );
@@ -181,7 +206,7 @@ export async function saveRecipe(houseId: string, userId: string, body: z.infer<
           body.image ?? null,
           body.sourceImage ?? null,
           body.ocrText ?? null,
-          body.sourceUrl ?? null,
+          sourceUrl,
           body.source ?? "manual",
           body.aiNotes ?? null,
           aiCost,
@@ -209,7 +234,7 @@ export async function saveRecipe(houseId: string, userId: string, body: z.infer<
           body.image ?? null,
           body.sourceImage ?? null,
           body.ocrText ?? null,
-          body.sourceUrl ?? null,
+          sourceUrl,
           body.source ?? "manual",
           body.aiNotes ?? null,
           aiCost,

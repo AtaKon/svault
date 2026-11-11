@@ -288,7 +288,6 @@ export function recipeNutrition(
     const grams = estimateIngredientGrams(ingredient).grams;
     const reference = grams != null ? referenceNutrition(ingredient.name) : null;
     if (!reference || grams == null) continue;
-    matched += 1;
     referenceMatched += 1;
     const referenceValues = reference as Partial<Record<NutrientKey, number>>;
     for (const key of NUTRIENT_KEYS) {
@@ -299,7 +298,7 @@ export function recipeNutrition(
     }
   }
 
-  if (!matched) return null;
+  if (!matched && !referenceMatched) return null;
   for (const key of NUTRIENT_KEYS) {
     if (!seen.has(key)) totals[key] = null;
   }
@@ -314,6 +313,6 @@ export function recipeNutrition(
     ingredients: ingredients.length,
     matched,
     referenceMatched,
-    coverage: round(matched / Math.max(1, ingredients.length), 2),
+    coverage: round((matched + referenceMatched) / Math.max(1, ingredients.length), 2),
   };
 }

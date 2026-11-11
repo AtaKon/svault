@@ -11,11 +11,12 @@ import {
   recipePortion,
   scaledQuantity,
 } from "@shared/recipe-grams";
+import { scaledCalories } from "@shared/recipe-calories";
 import type { Recipe } from "@shared/types";
 import { useI18n } from "@/i18n";
 
 /** Scale an ingredient line and keep a readable quantity. */
-function scaled(quantity: number | null, base: number, portions: number): number | null {
+function scaled(quantity: number | null, base: number | null, portions: number): number | null {
   const value = scaledQuantity(quantity, base, portions);
   return value == null ? null : Math.round(value * 1000) / 1000;
 }
@@ -43,50 +44,68 @@ export function RecipeCookPage() {
         setError(message);
         toast.error(message);
       });
+    // t/toast come from context and are stable for the life of the page; adding
+    // them to the deps would reload the recipe (and reset the portions) when the
+    // language changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recipeId]);
 
-  // Keep the screen on while cooking, when the browser supports it.
+  // Keep the screen on while cooking, when the browser supports it. The browser
+  // drops the lock when the tab is hidden, so it is requested again on return.
   useEffect(() => {
     const wakeLock = (navigator as Navigator & { wakeLock?: { request: (type: string) => Promise<{ release?: () => Promise<void> }> } }).wakeLock;
     if (!wakeLock?.request) return;
     let sentinel: { release?: () => Promise<void> } | null = null;
     let cancelled = false;
-    wakeLock
-      .request("screen")
-      .then((lock) => {
-        if (cancelled) void lock.release?.().catch(() => undefined);
-        else sentinel = lock;
-      })
-      .catch(() => undefined);
+    const request = () => {
+      wakeLock
+        .request("screen")
+        .then((lock) => {
+          if (cancelled) void lock.release?.().catch(() => undefined);
+          else sentinel = lock;
+        })
+        .catch(() => undefined);
+    };
+    const onVisibility = () => {
+      if (!cancelled && document.visibilityState === "visible") request();
+    };
+    request();
+    document.addEventListener("visibilitychange", onVisibility);
     return () => {
       cancelled = true;
+      document.removeEventListener("visibilitychange", onVisibility);
       void sentinel?.release?.().catch(() => undefined);
     };
   }, []);
 
-  const base = Math.max(1, recipe?.servings ?? 1);
-  const scale = portions / base;
+  // Without a serving count there is nothing to scale against; the portions
+  // control then only divides the same recipe into more servings.
+  const baseServings = recipe?.servings != null && recipe.servings > 0 ? recipe.servings : null;
+  const base = baseServings ?? 1;
 
   const visibleIngredients = useMemo(() => {
     if (!recipe) return [];
     return recipe.ingredients.map((ingredient, index) => {
-      const quantity = scaled(ingredient.quantity, base, portions);
-      const grams = estimateIngredientGrams({ name: ingredient.name, quantity, unit: ingredient.unit }).grams;
+      // Convert from the unrounded quantity: rounding first can zero out very
+      // small amounts before the gram estimate runs.
+      const raw = scaledQuantity(ingredient.quantity, baseServings, portions);
+      const quantity = scaled(ingredient.quantity, baseServings, portions);
+      const grams = estimateIngredientGrams({ name: ingredient.name, quantity: raw, unit: ingredient.unit }).grams;
       return { ingredient, index, quantity, grams };
     });
-  }, [recipe, base, portions]);
+  }, [recipe, baseServings, portions]);
 
   const scaledPortion = useMemo(() => {
     if (!recipe) return null;
     return recipePortion(
       recipe.ingredients.map((ingredient) => ({
         name: ingredient.name,
-        quantity: scaled(ingredient.quantity, base, portions),
+        quantity: scaled(ingredient.quantity, baseServings, portions),
         unit: ingredient.unit,
       })),
       portions,
     );
-  }, [recipe, base, portions]);
+  }, [recipe, baseServings, portions]);
 
   if (error) {
     return (
@@ -107,8 +126,16 @@ export function RecipeCookPage() {
     setter(next);
   };
 
-  const kcalPerPortion = recipe.nutrition?.perServing?.energyKcal ?? null;
-  const totalKcal = recipe.nutrition?.total.energyKcal != null ? recipe.nutrition.total.energyKcal * scale : null;
+  // Keep the two figures consistent: whatever the whole scaled recipe holds,
+  // one portion is that divided by the number of portions being cooked.
+  const { totalKcal, perPortionKcal: kcalPerPortion } = scaledCalories(
+    {
+      totalKcal: recipe.nutrition?.total.energyKcal ?? null,
+      perServingKcal: recipe.nutrition?.perServing?.energyKcal ?? null,
+    },
+    baseServings,
+    portions,
+  );
 
   return (
     <div className="mx-auto max-w-3xl space-y-4 pb-24">
@@ -163,7 +190,12 @@ export function RecipeCookPage() {
             <Button size="sm" variant="soft" onClick={() => setPortions((current) => Math.min(100, Math.max(1, current * 2)))}>
               ×2
             </Button>
-            <Button size="sm" variant="soft" onClick={() => setPortions((current) => Math.min(100, Math.max(1, Math.round(current / 2))))}>
+            <Button
+              size="sm"
+              variant="soft"
+              disabled={portions <= 1}
+              onClick={() => setPortions((current) => Math.min(100, Math.max(1, Math.round(current / 2))))}
+            >
               ÷2
             </Button>
             <Button size="sm" variant="ghost" icon="refresh" onClick={() => setPortions(base)}>

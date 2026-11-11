@@ -15,6 +15,10 @@
  * amount instead of inventing a number.
  */
 
+import type { RecipePortion } from "./types.js";
+
+export type { RecipePortion };
+
 const MASS: Record<string, number> = { mg: 0.001, g: 1, kg: 1000, oz: 28.349523, lb: 453.59237 };
 
 const VOLUME: Record<string, number> = {
@@ -74,11 +78,37 @@ const UNIT_PIECE_GRAMS: Record<string, number> = {
 /** A dozen is a count multiplier rather than a single piece. */
 const COUNT_MULTIPLIER: Record<string, number> = { dozen: 12 };
 
+/**
+ * Units that already describe a whole container or bundle. Their weight must
+ * beat an ingredient-specific piece weight, otherwise "1 head garlic" would be
+ * costed as a single clove because garlic has a 5 g piece weight.
+ */
+const CONTAINER_UNITS = new Set([
+  "head",
+  "heads",
+  "bunch",
+  "bunches",
+  "can",
+  "cans",
+  "jar",
+  "jars",
+  "pack",
+  "packs",
+  "packet",
+  "packets",
+  "box",
+  "boxes",
+  "bag",
+  "bags",
+  "pair",
+  "set",
+]);
+
 /** Weight of a single piece, keyed by ingredient. First match wins. */
 const INGREDIENT_PIECE_GRAMS: [RegExp, number][] = [
   [/cherry tomato/, 12],
   [/grape tomato/, 12],
-  [/egg(s)?\b|αβγ(ό|ο)/i, 50],
+  [/egg(s)?\b|αβγ(ό|ο)(?![\u0370-\u03ff])/i, 50],
   [/garlic|σκόρδ(ο|α)/i, 5],
   [/shallot/, 30],
   [/red onion|white onion|onion|κρεμμύδ(ι|ια)/i, 150],
@@ -140,7 +170,16 @@ const DENSITY: [RegExp, number][] = [
 
 function numberOrNull(value: unknown): number | null {
   if (value == null || value === "") return null;
-  const parsed = typeof value === "number" ? value : Number(String(value).replace(",", "."));
+  let parsed: number;
+  if (typeof value === "number") {
+    parsed = value;
+  } else {
+    const raw = String(value).trim();
+    // "1,000" is a thousands separator while "1,5" is a decimal comma. Treat a
+    // comma as a separator only when it groups exactly three digits.
+    const compact = /^-?\d{1,3}(,\d{3})+(\.\d+)?$/.test(raw) ? raw.replace(/,/g, "") : raw.replace(",", ".");
+    parsed = Number(compact);
+  }
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
@@ -189,24 +228,16 @@ export function estimateIngredientGrams(ingredient: IngredientLike): IngredientG
     return { grams: round(millilitres * density), estimated: true };
   }
 
-  // No unit, or a countable unit: use a typical weight per piece.
-  const piece = matchTable(INGREDIENT_PIECE_GRAMS, name) ?? UNIT_PIECE_GRAMS[unit] ?? null;
+  // No unit, or a countable unit: use a typical weight per piece. A container
+  // unit ("head", "can") wins over the ingredient's own piece weight.
+  const unitPiece = UNIT_PIECE_GRAMS[unit] ?? null;
+  const ingredientPiece = matchTable(INGREDIENT_PIECE_GRAMS, name);
+  const piece = CONTAINER_UNITS.has(unit)
+    ? (unitPiece ?? ingredientPiece)
+    : (ingredientPiece ?? unitPiece);
   if (piece == null) return { grams: null, estimated: true };
   const count = quantity * (COUNT_MULTIPLIER[unit] ?? 1);
   return { grams: round(count * piece), estimated: true };
-}
-
-export interface RecipePortion {
-  /** Estimated prepared weight of the whole recipe, in grams. */
-  totalGrams: number | null;
-  /** Estimated weight of one portion, when servings are known. */
-  perServingGrams: number | null;
-  servings: number | null;
-  /** Ingredients whose grams could be estimated. */
-  covered: number;
-  ingredients: number;
-  /** covered / ingredients, rounded to two decimals. */
-  coverage: number;
 }
 
 /** Estimate the weight of a whole recipe and of one portion. */
@@ -232,17 +263,20 @@ export function recipePortion(ingredients: IngredientLike[], servings: number | 
   };
 }
 
-/** Scale an ingredient quantity for a different number of portions. */
+/**
+ * Scale an ingredient quantity for a different number of portions. When the
+ * recipe does not say how many servings it makes there is nothing to scale
+ * against, so the original quantity is kept instead of silently multiplying it.
+ */
 export function scaledQuantity(quantity: number | null, baseServings: number | null, portions: number): number | null {
   if (quantity == null) return null;
-  const base = baseServings != null && baseServings > 0 ? baseServings : 1;
-  return quantity * (portions / base);
+  if (baseServings == null || baseServings <= 0) return quantity;
+  return quantity * (portions / baseServings);
 }
 
 /** Compact gram label used by cook mode and portion cards. */
 export function gramsLabel(grams: number | null): string {
   if (grams == null) return "—";
   if (grams >= 1000) return `${round(grams / 1000, 2)} kg`;
-  if (grams >= 10) return `${Math.round(grams)} g`;
-  return `${round(grams)} g`;
+  return `${grams >= 10 ? Math.round(grams) : round(grams)} g`;
 }

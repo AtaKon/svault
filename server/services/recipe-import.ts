@@ -1,4 +1,4 @@
-import { OutboundBlockedError, assertOutboundUrl, outboundRedirectMode } from "../lib/outbound.js";
+import { OutboundBlockedError, fetchOutbound } from "../lib/outbound.js";
 import { heuristicRecipe, parseIngredientLine, type ParsedRecipe } from "./recipe-local.js";
 
 /**
@@ -190,6 +190,39 @@ function gatherNodes(value: unknown, found: Record<string, unknown>[], depth = 0
   }
 }
 
+/** Split a block that holds several concatenated JSON objects. */
+function splitJsonObjects(body: string): string[] | null {
+  const parts: string[] = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escaped = false;
+  for (let index = 0; index < body.length; index += 1) {
+    const char = body[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === "{" || char === "[") {
+      if (depth === 0) start = index;
+      depth += 1;
+    } else if (char === "}" || char === "]") {
+      depth -= 1;
+      if (depth === 0 && start >= 0) {
+        parts.push(body.slice(start, index + 1));
+        start = -1;
+      }
+    }
+  }
+  return parts.length ? parts : null;
+}
+
 /** Pull every parseable JSON-LD block from the page. */
 export function readJsonLd(html: string): unknown[] {
   const blocks: unknown[] = [];
@@ -197,18 +230,27 @@ export function readJsonLd(html: string): unknown[] {
   for (const match of html.matchAll(pattern)) {
     let body = match[1].replace(/^\s*<!--/, "").replace(/-->\s*$/, "").trim();
     if (!body) continue;
-    // Some sites emit several concatenated objects.
     try {
       blocks.push(JSON.parse(body));
       continue;
     } catch {
       /* try the next repair step */
     }
+    // Trailing commas are the most common breakage.
     body = body.replace(/,\s*([}\]])/g, "$1");
     try {
       blocks.push(JSON.parse(body));
+      continue;
     } catch {
-      /* ignore malformed blocks */
+      /* try the next repair step */
+    }
+    // Some sites emit several objects in one script tag.
+    for (const part of splitJsonObjects(body) ?? []) {
+      try {
+        blocks.push(JSON.parse(part.replace(/,\s*([}\]])/g, "$1")));
+      } catch {
+        /* ignore malformed fragments */
+      }
     }
   }
   return blocks;
@@ -355,18 +397,15 @@ export function parseRecipePage(html: string, sourceUrl: string): RecipeImportRe
 
 /** Fetch a recipe page with time, size and network guards. */
 export async function importRecipeFromUrl(rawUrl: string): Promise<RecipeImportResult> {
-  const sourceUrl = normaliseRecipeUrl(rawUrl);
-  try {
-    await assertOutboundUrl(sourceUrl, "The recipe link");
-  } catch (error) {
-    if (error instanceof OutboundBlockedError) throw new RecipeImportError(error.message);
-    throw error;
-  }
+  const requestedUrl = normaliseRecipeUrl(rawUrl);
 
   let response: Response;
+  // The final URL after redirects is what the recipe remembers, so a site that
+  // bounces http -> https or adds www still stores a link that opens.
+  let sourceUrl: string;
   try {
-    response = await fetch(sourceUrl, {
-      redirect: outboundRedirectMode(),
+    const fetched = await fetchOutbound(requestedUrl, {
+      label: "The recipe link",
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       headers: {
         accept: "text/html,application/xhtml+xml,text/plain;q=0.8,*/*;q=0.5",
@@ -374,7 +413,10 @@ export async function importRecipeFromUrl(rawUrl: string): Promise<RecipeImportR
         "user-agent": "SVaultRecipeImporter/1.0",
       },
     });
+    response = fetched.response;
+    sourceUrl = fetched.url;
   } catch (error) {
+    if (error instanceof OutboundBlockedError) throw new RecipeImportError(error.message);
     const reason = error instanceof Error && error.name === "TimeoutError" ? "it took too long to answer" : "it could not be reached";
     throw new RecipeImportError(`Could not open the recipe link — ${reason}.`);
   }

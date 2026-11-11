@@ -126,9 +126,6 @@ export function RecipesPage() {
               <Button icon="camera" onClick={() => navigate("/recipes/scan")}>
                 {t("Scan a recipe")}
               </Button>
-              <Button variant="secondary" icon="download" onClick={() => navigate("/recipes/import")}>
-                {t("Import a link")}
-              </Button>
               <Button variant="secondary" onClick={() => navigate("/recipes/new")}>
                 {t("Write one")}
               </Button>
