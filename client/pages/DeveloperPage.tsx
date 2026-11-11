@@ -24,6 +24,7 @@ const OPERATION_LABELS: Record<string, string> = {
   "receipt.scan": "Receipt scan",
   "receipt.intake": "Bulk intake",
   "recipe.scan": "Recipe scan",
+  "recipe.import": "Recipe link import",
   "recipe.complete": "Recipe cleanup",
   "ideas.suggest": "Food ideas",
   "ai.test": "Connection test",

@@ -133,6 +133,7 @@ export class SqliteDriver implements DatabaseDriver {
     ensureColumn("receipt_lines", "discount", "REAL");
     ensureColumn("receipt_lines", "off_code", "TEXT");
     ensureColumn("recipes", "ai_cost", "REAL");
+    ensureColumn("recipes", "source_url", "TEXT");
     ensureColumn("items", "off_code", "TEXT");
     ensureColumn("items", "off_linked_at", "TEXT");
     ensureColumn("items", "off_source", "TEXT");
@@ -1055,6 +1056,7 @@ CREATE TABLE IF NOT EXISTS recipes (
   image TEXT,
   source_image TEXT,
   ocr_text TEXT,
+  source_url TEXT,
   source TEXT NOT NULL DEFAULT 'manual',
   ai_notes TEXT,
   ai_cost REAL,

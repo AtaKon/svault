@@ -434,6 +434,7 @@ export function serializeRecipe(row: any, ingredients: any[] = [], match?: Recip
     image: row.image ?? null,
     sourceImage: row.source_image ?? null,
     ocrText: row.ocr_text ?? null,
+    sourceUrl: row.source_url ?? null,
     source: row.source,
     aiNotes: row.ai_notes ?? null,
     aiCost: row.ai_cost == null ? null : Number(row.ai_cost),

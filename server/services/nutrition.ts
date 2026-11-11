@@ -1,4 +1,6 @@
 import { convert, round, unitKind } from "../units.js";
+import { estimateIngredientGrams } from "../../shared/recipe-grams.js";
+import { referenceNutrition } from "./food-reference.js";
 import type {
   NutritionBasis,
   NutritionFacts,
@@ -249,7 +251,9 @@ function scaleValues(values: NutritionValues, factor: number): NutritionValues {
 }
 
 /**
- * Estimate nutrition for a recipe from the items its ingredients resolve to.
+ * Estimate nutrition for a recipe from the items its ingredients resolve to,
+ * falling back to the built-in per-100 g food reference for ingredients that
+ * are not tracked in the inventory.
  * Returns null when no ingredient could contribute.
  */
 export function recipeNutrition(
@@ -262,17 +266,35 @@ export function recipeNutrition(
   const totals = emptyNutritionValues();
   const seen = new Set<NutrientKey>();
   let matched = 0;
+  let referenceMatched = 0;
 
   for (const ingredient of ingredients) {
     const item = findItem(ingredient, byId, byName, items);
-    if (!item?.nutrition) continue;
-    const amount = amountForNutrition(ingredient, item);
-    if (amount == null) continue;
+    const amount = item?.nutrition ? amountForNutrition(ingredient, item) : null;
+
+    if (item?.nutrition && amount != null) {
+      matched += 1;
+      for (const key of NUTRIENT_KEYS) {
+        const per100 = item.nutrition[key];
+        if (per100 == null) continue;
+        totals[key] = (totals[key] ?? 0) + (per100 * amount) / 100;
+        seen.add(key);
+      }
+      continue;
+    }
+
+    // No usable label data: fall back to the reference table using the best
+    // gram estimate for the line (mass, volume with density, or count units).
+    const grams = estimateIngredientGrams(ingredient).grams;
+    const reference = grams != null ? referenceNutrition(ingredient.name) : null;
+    if (!reference || grams == null) continue;
     matched += 1;
+    referenceMatched += 1;
+    const referenceValues = reference as Partial<Record<NutrientKey, number>>;
     for (const key of NUTRIENT_KEYS) {
-      const per100 = item.nutrition[key];
+      const per100 = referenceValues[key];
       if (per100 == null) continue;
-      totals[key] = (totals[key] ?? 0) + (per100 * amount) / 100;
+      totals[key] = (totals[key] ?? 0) + (per100 * grams) / 100;
       seen.add(key);
     }
   }
@@ -291,6 +313,7 @@ export function recipeNutrition(
     servings: portionCount,
     ingredients: ingredients.length,
     matched,
+    referenceMatched,
     coverage: round(matched / Math.max(1, ingredients.length), 2),
   };
 }

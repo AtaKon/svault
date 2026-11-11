@@ -8,6 +8,8 @@ import { recipeMatch, serializeRecipe, stockQuantity } from "../serialize.js";
 import { aiCleanRecipe, aiCompleteRecipe, fileToDataUrl, resolveAi } from "../ai.js";
 import { normaliseNutrition, recipeNutrition, type NutritionSourceItem } from "../services/nutrition.js";
 import { heuristicRecipe, normaliseRecipeDraft, type ParsedRecipe } from "../services/recipe-local.js";
+import { RecipeImportError, importRecipeFromUrl } from "../services/recipe-import.js";
+import { recipePortion } from "../../shared/recipe-grams.js";
 import { removeUnreferencedUploads } from "../services/upload-cleanup.js";
 import { uploader, uploadPath } from "../upload.js";
 import type { OffProduct, Role, Recipe } from "../../shared/types.js";
@@ -40,10 +42,11 @@ export const recipeInput = z.object({
   cookMinutes: z.number().int().min(0).max(10000).nullish(),
   steps: z.array(stepSchema).max(150).optional(),
   tags: z.union([z.array(z.string().max(30)), z.string()]).optional(),
-  image: z.string().max(300).nullish(),
-  sourceImage: z.string().max(300).nullish(),
+  image: z.string().max(2000).nullish(),
+  sourceImage: z.string().max(2000).nullish(),
   ocrText: z.string().max(30000).nullish(),
-  source: z.enum(["manual", "scan", "ai"]).optional(),
+  sourceUrl: z.string().trim().max(2000).regex(/^https?:\/\//i).nullish(),
+  source: z.enum(["manual", "scan", "ai", "import"]).optional(),
   aiNotes: z.string().max(4000).nullish(),
   aiCost: z.number().min(0).max(1e9).nullish(),
   favorite: z.boolean().optional(),
@@ -100,6 +103,7 @@ function decorateRecipe(
   return {
     ...recipe,
     ingredients,
+    portion: recipePortion(ingredients, recipe.servings),
     match: recipeMatch(
       ingredients.map((ingredient) => ({
         name: ingredient.name,
@@ -164,7 +168,7 @@ export async function saveRecipe(houseId: string, userId: string, body: z.infer<
     if (existingId) {
       await run(
         `UPDATE recipes SET title = ?, description = ?, servings = ?, prep_minutes = ?, cook_minutes = ?, steps = ?,
-           tags = ?, image = ?, source_image = ?, ocr_text = ?, source = ?, ai_notes = ?, ai_cost = ?, favorite = ?, updated_at = ?
+           tags = ?, image = ?, source_image = ?, ocr_text = ?, source_url = ?, source = ?, ai_notes = ?, ai_cost = ?, favorite = ?, updated_at = ?
          WHERE id = ?`,
         [
           body.title,
@@ -177,6 +181,7 @@ export async function saveRecipe(houseId: string, userId: string, body: z.infer<
           body.image ?? null,
           body.sourceImage ?? null,
           body.ocrText ?? null,
+          body.sourceUrl ?? null,
           body.source ?? "manual",
           body.aiNotes ?? null,
           aiCost,
@@ -189,8 +194,8 @@ export async function saveRecipe(houseId: string, userId: string, body: z.infer<
     } else {
       await run(
         `INSERT INTO recipes (id, house_id, title, description, servings, prep_minutes, cook_minutes, steps, tags,
-           image, source_image, ocr_text, source, ai_notes, ai_cost, favorite, created_by, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           image, source_image, ocr_text, source_url, source, ai_notes, ai_cost, favorite, created_by, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
           houseId,
@@ -204,6 +209,7 @@ export async function saveRecipe(houseId: string, userId: string, body: z.infer<
           body.image ?? null,
           body.sourceImage ?? null,
           body.ocrText ?? null,
+          body.sourceUrl ?? null,
           body.source ?? "manual",
           body.aiNotes ?? null,
           aiCost,
@@ -235,7 +241,7 @@ export async function saveRecipe(houseId: string, userId: string, body: z.infer<
   });
 }
 
-function draftToInput(draft: ParsedRecipe, meta: { source?: "manual" | "scan" | "ai"; sourceImage?: string | null; ocrText?: string | null; aiCost?: number | null }): z.infer<typeof recipeInput> {
+function draftToInput(draft: ParsedRecipe, meta: { source?: "manual" | "scan" | "ai" | "import"; sourceImage?: string | null; ocrText?: string | null; sourceUrl?: string | null; image?: string | null; aiCost?: number | null }): z.infer<typeof recipeInput> {
   return {
     title: draft.title,
     description: draft.description,
@@ -244,9 +250,10 @@ function draftToInput(draft: ParsedRecipe, meta: { source?: "manual" | "scan" | 
     cookMinutes: draft.cookMinutes,
     steps: draft.steps,
     tags: draft.tags,
-    image: null,
+    image: meta.image ?? null,
     sourceImage: meta.sourceImage ?? null,
     ocrText: meta.ocrText ?? null,
+    sourceUrl: meta.sourceUrl ?? null,
     source: meta.source ?? "scan",
     aiNotes: draft.notes,
     aiCost: meta.aiCost ?? null,
@@ -395,6 +402,100 @@ recipeRoutes.post(
   }),
 );
 
+recipeRoutes.post(
+  "/:houseId/recipes/import",
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req, "member");
+    const body = parseBody(
+      z.object({
+        url: z.string().trim().min(4).max(2000),
+        save: z.boolean().optional(),
+      }),
+      req.body,
+    );
+
+    let imported;
+    try {
+      imported = await importRecipeFromUrl(body.url);
+    } catch (err) {
+      if (err instanceof RecipeImportError) throw new ApiError(400, err.message);
+      throw err;
+    }
+
+    const house = (await get<any>("SELECT * FROM houses WHERE id = ?", [houseId]))!;
+    const cfg = resolveAi(parseJson(house.settings, {}));
+    let draft = imported.draft;
+    let provider: "structured" | "html" | "ai" = imported.provider;
+    let warning = imported.warning;
+    let aiCost: number | null = null;
+
+    // A page without JSON-LD is only a rough text read. If an AI provider is
+    // configured, let it structure the page copy the same way scan clean-up does.
+    if (imported.provider === "html" && cfg.enabled && imported.textForAi.trim()) {
+      try {
+        const aiDraft = await aiCleanRecipe(cfg, imported.textForAi.slice(0, 12000), [], {
+          operation: "recipe.import",
+          houseId,
+          userId: req.user!.id,
+          metadata: { sourceUrl: imported.sourceUrl, provider: imported.provider },
+        });
+        const normalised = normaliseRecipeDraft(aiDraft.data, draft.title || "Imported recipe");
+        draft = {
+          ...draft,
+          ...normalised,
+          description: normalised.description ?? draft.description,
+          servings: normalised.servings ?? draft.servings,
+          prepMinutes: normalised.prepMinutes ?? draft.prepMinutes,
+          cookMinutes: normalised.cookMinutes ?? draft.cookMinutes,
+          tags: normalised.tags.length ? normalised.tags : draft.tags,
+          notes: normalised.notes ?? draft.notes,
+          ingredients: normalised.ingredients.length ? normalised.ingredients : draft.ingredients,
+          steps: normalised.steps.length ? normalised.steps : draft.steps,
+        };
+        aiCost = aiDraft.usage.cost;
+        provider = "ai";
+        warning = null;
+      } catch (err) {
+        warning = `${warning ?? ""} AI clean-up also failed: ${err instanceof Error ? err.message : "unknown error"}`.trim();
+      }
+    }
+
+    const input = draftToInput(draft, {
+      source: "import",
+      sourceUrl: imported.sourceUrl,
+      image: imported.image,
+      aiCost,
+    });
+
+    if (body.save) {
+      const id = await saveRecipe(houseId, req.user!.id, input);
+      const row = (await recipeRow(id))!;
+      const serialized = serializeRecipe(row, await ingredientsFor(id));
+      res.status(201).json({
+        provider,
+        warning,
+        aiCost,
+        saved: true,
+        sourceUrl: imported.sourceUrl,
+        image: imported.image,
+        recipe: decorateRecipe(serialized, await stockMaps(houseId), await nutritionItems(houseId)),
+      });
+      return;
+    }
+
+    res.json({
+      provider,
+      warning,
+      aiCost,
+      saved: false,
+      sourceUrl: imported.sourceUrl,
+      image: imported.image,
+      pageTitle: imported.pageTitle,
+      draft: input,
+    });
+  }),
+);
+
 /* ------------------------------------------------------------ single recipe */
 
 singleRecipeRoutes.get(
@@ -499,6 +600,7 @@ singleRecipeRoutes.post(
       image: current.image,
       sourceImage: current.sourceImage,
       ocrText: current.ocrText,
+      sourceUrl: current.sourceUrl,
       source: current.source,
       aiNotes: normalised.notes ?? current.aiNotes,
       aiCost,

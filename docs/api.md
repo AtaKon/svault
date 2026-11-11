@@ -150,7 +150,8 @@ Send `"apiKey": "***"` to keep the stored key, `""` to delete it. The API never 
 ### AI call log
 
 Every request SVault sends to an OpenAI-compatible provider is stored in `ai_call_logs`: receipt scans,
-bulk intake, recipe scans, recipe completion, food ideas and connection tests. Each row records the
+bulk intake, recipe scans, recipe link imports, recipe completion, food ideas and connection tests. Each
+row records the
 operation, user, house, provider host, model, HTTP status, retry count, duration, token counts, cost,
 image count, request/response sizes, truncated prompt/response previews, error text and arbitrary
 operation metadata. Logging never fails the scan that triggered it.
@@ -753,6 +754,7 @@ matched item's category; unlinked lines are reported as `Uncategorised`.
 | `POST` | `/api/houses/:houseId/recipes` | member+ | Create a recipe. |
 | `POST` | `/api/houses/:houseId/recipes/upload` | member+ | Upload a source image (`field: image`) and get `{ path }`. |
 | `POST` | `/api/houses/:houseId/recipes/scan` | member+ | Parse OCR text and/or an image into a draft, optionally save. |
+| `POST` | `/api/houses/:houseId/recipes/import` | member+ | Import a recipe from a URL (schema.org JSON-LD, text fallback, optional AI clean-up), optionally save. |
 | `GET` | `/api/recipes/:recipeId` | viewer+ | Recipe detail with `match` (available/total/missing) and `nutrition`. |
 | `PATCH` | `/api/recipes/:recipeId` | member+ | Partial update. |
 | `DELETE` | `/api/recipes/:recipeId` | member+ | Delete a recipe. |
@@ -781,6 +783,20 @@ Recipe body:
 }
 ```
 
+`source` is `manual`, `scan`, `ai` or `import`. Imported recipes also carry `sourceUrl`, and an
+imported cover image may be the remote page image.
+
+Import body:
+
+```json
+{ "url": "https://example.com/moussaka", "save": false }
+```
+
+Without `save`, the response contains `draft`. With `save: true`, it also contains `recipe`. The
+response includes `provider` (`structured`, `html` or `ai`), `sourceUrl`, `image`, an optional
+`warning` and `aiCost`. `structured` means the page published schema.org Recipe data; `html` is a
+rough text read; `ai` means the page text was structured by the configured provider.
+
 Scan body:
 
 ```json
@@ -791,7 +807,8 @@ Without `save`, the response contains `draft`. With `save: true`, it also contai
 response always includes `provider` (`ai` or `local`) and an optional `warning`.
 
 Every serialized recipe also carries `nutrition`, derived at read time from the ingredients and the
-nutrition panels of matching items:
+nutrition panels of matching items, with a fallback to a small built-in per-100 g reference table for
+common foods:
 
 ```json
 {
@@ -800,13 +817,33 @@ nutrition panels of matching items:
   "servings": 4,
   "ingredients": 9,
   "matched": 7,
+  "referenceMatched": 2,
   "coverage": 0.78
 }
 ```
 
-`matched` and `coverage` show how many ingredients could contribute. The estimate is null when no
-ingredient matches an item with nutrition data. Ingredient amounts are converted between mass and
-volume units; a count-based ingredient (`pcs`, `box`, `can`…) uses the item's `servingQuantity`.
+`matched` and `coverage` show how many ingredients could contribute; `referenceMatched` says how many
+of those used the built-in reference instead of an inventory item. The estimate is null when no
+ingredient can contribute. Ingredient amounts are converted between mass and volume units; a
+count-based ingredient (`pcs`, `box`, `can`…) uses the item's `servingQuantity` when available.
+
+`portion` estimates weight in grams:
+
+```json
+{
+  "totalGrams": 1284,
+  "perServingGrams": 321,
+  "servings": 4,
+  "covered": 3,
+  "ingredients": 3,
+  "coverage": 1
+}
+```
+
+Mass units convert exactly. Volume is multiplied by a typical density for the ingredient, and
+countable units (`pcs`, `clove`, `slice`…) use a typical piece weight. Lines that cannot be converted
+are left out, so `covered`/`coverage` describe how much of the recipe the estimate represents. Cook
+mode uses the same shared helpers in `shared/recipe-grams.ts`.
 
 ## Food ideas
 

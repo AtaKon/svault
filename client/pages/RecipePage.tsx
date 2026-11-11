@@ -18,6 +18,7 @@ import { NutritionRows } from "@/components/Nutrition";
 import { ZoomableImage } from "@/components/ZoomableImage";
 import { useToast } from "@/components/toast";
 import { aiCostLabel, minutesLabel, plural, qty, relativeTime } from "@/format";
+import { gramsLabel } from "@shared/recipe-grams";
 import type { Recipe } from "@shared/types";
 import { useI18n } from "@/i18n";
 
@@ -123,11 +124,22 @@ export function RecipePage() {
     <div className="space-y-4">
       <PageHeader
         back={() => navigate(-1)}
-        eyebrow={recipe.source === "scan" ? t("Scanned recipe") : recipe.source === "ai" ? t("AI idea") : t("Recipe")}
+        eyebrow={
+          recipe.source === "import"
+            ? t("Imported recipe")
+            : recipe.source === "scan"
+              ? t("Scanned recipe")
+              : recipe.source === "ai"
+                ? t("AI idea")
+                : t("Recipe")
+        }
         title={recipe.title}
         subtitle={recipe.description || undefined}
         actions={
           <>
+            <Button icon="utensils" onClick={() => navigate(`/recipes/${recipe.id}/cook`)}>
+              {t("Cook mode")}
+            </Button>
             <button
               onClick={() => void toggleFavorite()}
               aria-label={t("Toggle favourite")}
@@ -160,6 +172,19 @@ export function RecipePage() {
         )}
         {recipe.nutrition?.perServing?.energyKcal != null && (
           <Badge tone="outline">~{Math.round(recipe.nutrition.perServing.energyKcal)} {' '}{t(" kcal / portion")}</Badge>
+        )}
+        {recipe.portion?.perServingGrams != null && (
+          <Badge tone="outline">~{gramsLabel(recipe.portion.perServingGrams)} {' '}{t(" per portion")}</Badge>
+        )}
+        {recipe.sourceUrl && (
+          <a
+            href={recipe.sourceUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 rounded-full border border-line bg-surface px-2.5 py-0.5 text-[11px] text-muted hover:text-brand"
+          >
+            <Icon name="arrowUpRight" size={11} /> {t("Original recipe")}
+          </a>
         )}
         {recipe.tags.map((tag) => (
           <Badge key={tag} tone="neutral">
@@ -319,11 +344,38 @@ export function RecipePage() {
                   {t("Estimated from ")}{' '}{recipe.nutrition.matched} {' '}{t(" of ")}{' '}{recipe.nutrition.ingredients} {' '}{t(" ingredients ")}{recipe.nutrition.coverage < 1
                     ? t(" — add nutrition to the remaining items for a closer number.")
                     : "."}
+                  {recipe.nutrition.referenceMatched
+                    ? ` ${t("Includes typical values for ingredients that are not in your inventory.")}`
+                    : ""}
                 </p>
               </>
             ) : (
               <p className="text-xs leading-relaxed text-muted">
-                {t("No estimate yet. Ingredients that match inventory items with nutrition data are summed automatically. Link an OpenFoodFacts product or enter the label values on an item to start. ")}</p>
+                {t("No estimate yet. Ingredients are estimated from items with a nutrition panel, then from a small reference table of common foods. Link an OpenFoodFacts product or enter label values to make it exact. ")}</p>
+            )}
+            {recipe.portion?.totalGrams != null && (
+              <div className="mt-3 border-t border-line pt-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">{t("Portion weight")}</div>
+                  <Badge tone="outline">{t("estimated")}</Badge>
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  <div className="rounded-xl bg-raised px-3 py-2">
+                    <div className="text-[10px] uppercase tracking-wide text-muted">{t("Whole recipe")}</div>
+                    <div className="font-display text-xl">{gramsLabel(recipe.portion.totalGrams)}</div>
+                  </div>
+                  <div className="rounded-xl bg-raised px-3 py-2">
+                    <div className="text-[10px] uppercase tracking-wide text-muted">{t("Per portion")}</div>
+                    <div className="font-display text-xl">{gramsLabel(recipe.portion.perServingGrams)}</div>
+                  </div>
+                </div>
+                <p className="mt-2 text-[11px] leading-relaxed text-muted">
+                  {t("Weight estimated for {covered} of {total} ingredients. Volume is converted with a typical density and countable units with a typical piece weight.", {
+                    covered: recipe.portion.covered,
+                    total: recipe.portion.ingredients,
+                  })}
+                </p>
+              </div>
             )}
           </Card>
 
@@ -379,6 +431,14 @@ export function RecipePage() {
           <Card className="p-4">
             <h2 className="mb-2 font-display text-lg">{t("More")}</h2>
             <div className="space-y-1.5">
+              <button
+                onClick={() => navigate(`/recipes/${recipe.id}/cook`)}
+                className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left text-sm transition-colors hover:bg-raised"
+              >
+                <Icon name="utensils" size={16} className="text-muted" />
+                <span className="flex-1">{t("Cook mode: scale portions, weigh in grams")}</span>
+                <Icon name="chevronRight" size={14} className="text-muted" />
+              </button>
               <button
                 onClick={() => navigate(`/ideas`)}
                 className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left text-sm transition-colors hover:bg-raised"

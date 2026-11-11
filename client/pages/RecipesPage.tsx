@@ -6,6 +6,7 @@ import { useI18n } from "@/i18n";
 import { Badge, Button, Card, EmptyState, Input, PageHeader, Skeleton, Tabs, useDebounced } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { minutesLabel, qty } from "@/format";
+import { gramsLabel } from "@shared/recipe-grams";
 import type { Recipe } from "@shared/types";
 
 export function RecipesPage() {
@@ -62,6 +63,11 @@ export function RecipesPage() {
                 {t("Scan recipe")}
               </Button>
             </div>
+            <div className="hidden sm:block">
+              <Button variant="secondary" icon="download" onClick={() => navigate("/recipes/import")}>
+                {t("Import link")}
+              </Button>
+            </div>
             <Button icon="plus" onClick={() => navigate("/recipes/new")}>
               {t("New")}
             </Button>
@@ -116,9 +122,12 @@ export function RecipesPage() {
           title={t("No recipes here yet")}
           body={t("Scan a handwritten recipe from a notebook, or write one down. Any ingredients you already own are marked automatically.")}
           action={
-            <div className="flex gap-2">
+            <div className="flex flex-wrap justify-center gap-2">
               <Button icon="camera" onClick={() => navigate("/recipes/scan")}>
                 {t("Scan a recipe")}
+              </Button>
+              <Button variant="secondary" icon="download" onClick={() => navigate("/recipes/import")}>
+                {t("Import a link")}
               </Button>
               <Button variant="secondary" onClick={() => navigate("/recipes/new")}>
                 {t("Write one")}
@@ -163,6 +172,9 @@ export function RecipesPage() {
                         ~{Math.round(recipe.nutrition.perServing.energyKcal)} {' '}{t(" kcal / ")}{' '}{t("portion")}
                       </Badge>
                     )}
+                    {recipe.portion?.perServingGrams != null && (
+                      <Badge tone="outline">{gramsLabel(recipe.portion.perServingGrams)} {' '}{t("/ portion")}</Badge>
+                    )}
                     {recipe.tags.slice(0, 2).map((entry) => (
                       <Badge key={entry} tone="neutral">
                         {entry}
@@ -184,6 +196,15 @@ export function RecipesPage() {
           <span>
             <span className="block text-[13px] font-medium">{t("Scan grandma's recipe")}</span>
             <span className="block text-[11px] text-muted">{t("Photo or note → clean steps")}</span>
+          </span>
+        </button>
+        <button onClick={() => navigate("/recipes/import")} className="flex items-center gap-3 rounded-xl border border-line bg-surface px-3 py-3 text-left transition-colors hover:bg-raised sm:hidden">
+          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-soft text-brand">
+            <Icon name="download" size={17} />
+          </span>
+          <span>
+            <span className="block text-[13px] font-medium">{t("Import a recipe link")}</span>
+            <span className="block text-[11px] text-muted">{t("Ingredients and steps from a page")}</span>
           </span>
         </button>
         <button onClick={() => navigate("/ideas")} className="flex items-center gap-3 rounded-xl border border-line bg-surface px-3 py-3 text-left transition-colors hover:bg-raised sm:hidden">

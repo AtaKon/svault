@@ -217,6 +217,7 @@ const aiBudgetGuard: express.RequestHandler = (_req, _res, next) => {
 };
 app.post("/api/houses/:houseId/receipts/scan", aiLimit, aiBudgetGuard);
 app.post("/api/houses/:houseId/recipes/scan", aiLimit, aiBudgetGuard);
+app.post("/api/houses/:houseId/recipes/import", aiLimit, aiBudgetGuard);
 app.post("/api/houses/:houseId/intake/parse", aiLimit, aiBudgetGuard);
 app.post("/api/houses/:houseId/ideas", aiLimit, aiBudgetGuard);
 app.post("/api/houses/:houseId/ai/test", aiLimit, aiBudgetGuard);

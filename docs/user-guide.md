@@ -363,6 +363,19 @@ useful slices: running low, use-it-up (expiring), places and recent activity.
 **Kitchen -> New recipe**. Ingredients have a name, optional quantity and unit, an optional link to an
 inventory item, and an optional/required flag. Steps are free text; a timer can be attached to a step.
 
+### Import a recipe from a link
+
+1. **Kitchen -> Import link** (or open the importer from the recipe editor).
+2. Paste the address of a public recipe page and press **Import**.
+3. SVault reads the page. Most cooking sites publish schema.org recipe data, so ingredients, steps,
+   yield and timings come through exactly. A page without that data is read as text, and when an AI
+   provider is configured the copy is structured automatically. The badge on the preview says which
+   path was used.
+4. Review the title, ingredients and steps, then **Save recipe**.
+
+The recipe keeps a link to the original page. Import only fetches the public page; sites that block
+automated visits can still be used by opening the page yourself and pasting its text into the scanner.
+
 ### Scan a handwritten recipe
 
 1. **Kitchen -> Scan recipe**.
@@ -388,12 +401,31 @@ member access.
 ### Calories per recipe and portion
 
 Recipes estimate nutrition from their ingredients. Any ingredient whose name matches an inventory item
-with a nutrition panel is scaled to the quantity and unit in the recipe. The recipe page shows the
-whole-recipe total and, when servings are set, the calories and macros per portion. Recipe cards show
-a `kcal / portion` badge.
+with a nutrition panel is scaled to the quantity and unit in the recipe. Ingredients you do not track
+fall back to a small built-in table of typical values for common foods, so an imported recipe still
+gets a sensible estimate. The recipe page shows the whole-recipe total and, when servings are set, the
+calories and macros per portion. Recipe cards show a `kcal / portion` badge.
 
-The estimate is deliberately transparent: it reports how many ingredients contributed. Add nutrition
-to the remaining items, or set a serving weight on count-based products, to improve the number.
+The page also estimates **weight**: the whole recipe in grams and the weight of one portion. Mass units
+convert exactly, volume uses a typical density (a cup of flour is not a cup of water), and countable
+units use a typical piece weight (an egg is about 50 g). The estimate reports how many ingredients
+contributed; lines without a convertible unit keep their original measure.
+
+The estimate is deliberately transparent. Add nutrition to the remaining items, or set a serving
+weight on count-based products, to improve the number.
+
+### Cook mode
+
+Open a recipe and press **Cook mode**. Everything is scaled to the number of portions at the top:
+
+- **−** removes a portion, **+** adds one, and **×2** / **÷2** multiply or halve the current amount.
+- **Convert everything to grams** shows each ingredient as a weight. The original measure stays
+  underneath, and lines that cannot be estimated stay in their own unit.
+- The summary shows the weight and calories of one portion and of the whole scaled recipe.
+- Tap ingredients and steps to tick them off while you cook. The screen stays awake where the browser
+  allows it.
+
+Cook mode only changes what you see; the saved recipe is untouched.
 
 ### Cook from what you have
 
@@ -529,8 +561,9 @@ sends only the edited OCR text. A text-only local model never receives images.
 
 Turn on **Profile → Developer mode → Show developer tools** to reveal **More → Developer**. The AI call
 log shows every request sent to the provider: receipt scans, bulk intake, recipe scans, recipe
-cleanup, food ideas and connection tests. Each row expands into the model, provider, HTTP status,
-duration, retries, token counts, cost, request/response sizes and truncated prompt/answer previews.
+link imports, recipe cleanup, food ideas and connection tests. Each row expands into the model,
+provider, HTTP status, duration, retries, token counts, cost, request/response sizes and truncated
+prompt/answer previews.
 Failed calls are included with their error, which makes a failing model or proxy easy to spot.
 
 Use the filters to narrow by operation or result. Owners and admins can switch from **My calls** to

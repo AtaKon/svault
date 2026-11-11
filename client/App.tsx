@@ -18,6 +18,8 @@ import { RecipesPage } from "@/pages/RecipesPage";
 import { RecipePage } from "@/pages/RecipePage";
 import { RecipeFormPage } from "@/pages/RecipeFormPage";
 import { RecipeScanPage } from "@/pages/RecipeScanPage";
+import { RecipeImportPage } from "@/pages/RecipeImportPage";
+import { RecipeCookPage } from "@/pages/RecipeCookPage";
 import { IdeasPage } from "@/pages/IdeasPage";
 import { PhotosPage } from "@/pages/PhotosPage";
 import { NotificationsPage } from "@/pages/NotificationsPage";
@@ -62,8 +64,10 @@ export function App() {
         <Route path="/recipes" element={<RecipesPage />} />
         <Route path="/recipes/new" element={<RecipeFormPage />} />
         <Route path="/recipes/scan" element={<RecipeScanPage />} />
+        <Route path="/recipes/import" element={<RecipeImportPage />} />
         <Route path="/recipes/:recipeId" element={<RecipePage />} />
         <Route path="/recipes/:recipeId/edit" element={<RecipeFormPage />} />
+        <Route path="/recipes/:recipeId/cook" element={<RecipeCookPage />} />
         <Route path="/ideas" element={<IdeasPage />} />
         <Route path="/shopping" element={<ShoppingPage />} />
         <Route path="/plan" element={<PlanPage />} />
