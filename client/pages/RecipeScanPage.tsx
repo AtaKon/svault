@@ -144,7 +144,10 @@ export function RecipeScanPage() {
       setProvider(data.provider);
       setAiModel(data.aiModel ?? null);
       setAiModels(data.aiModels ?? []);
-      setWarning(data.warning);
+      // An empty response must never look like a successful no-op. The server
+      // normally explains the reason, but keep a generic empty state if it
+      // does not (and so the user is not left with a blank screen).
+      setWarning(list.length ? data.warning : (data.warning || t("No recipe could be read from this page")));
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (err) {
       toast.error(err instanceof Error ? t(err.message) : t("Could not read the recipe"));

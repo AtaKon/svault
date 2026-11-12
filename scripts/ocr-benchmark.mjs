@@ -256,6 +256,13 @@ export function contentScale(width, height) {
   );
 }
 
+/** Shrink an image that is already larger than the shared Tesseract budget. */
+function limitToBudget(image) {
+  const scale = Math.min(1, contentScale(image.width, image.height));
+  if (scale >= 1) return image;
+  return resize(image, Math.max(1, Math.round(image.width * scale)), Math.max(1, Math.round(image.height * scale)));
+}
+
 export function cropToContent(image) {
   const luma = lumaOf(image);
   const paper = detectPaperRegion(luma, image.width, image.height);
@@ -270,7 +277,10 @@ export function cropToContent(image) {
       box = { left, top, width: right - left, height: bottom - top };
     }
   }
-  if (box.width < image.width * 0.3 || box.height < image.height * 0.3) return image;
+  // A crop that would throw away most of the frame is a detector miss, so the
+  // whole photo is kept. The size budget still applies: returning the raw image
+  // here handed an oversized photo to Tesseract whole.
+  if (box.width < image.width * 0.3 || box.height < image.height * 0.3) return limitToBudget(image);
   const cropped = crop(image, box);
   // Mirror `tightenRecipePage`: Tesseract.js in Node aborts on a 2400x3200 page
   // ("Too many properties to enumerate"), so the final image must satisfy both
@@ -526,7 +536,11 @@ async function main() {
   const manifestFile = process.argv[2];
   if (manifestFile === "--self-check") {
     assertBmpRoundTrip();
-    console.log("BMP round trip OK: encode/decode, the spec decoder and sips preserve RGB channels.");
+    console.log(
+      process.platform === "darwin"
+        ? "BMP round trip OK: encode/decode, the spec decoder and sips preserve RGB channels."
+        : "BMP round trip OK: encode/decode and the spec decoder preserve RGB channels (sips check skipped on this platform).",
+    );
     return;
   }
   if (!manifestFile) {
@@ -558,11 +572,15 @@ async function main() {
     const file = path.isAbsolute(entry.path) ? entry.path : path.join(baseDir, entry.path);
     console.log(`\n### ${entry.label ?? path.basename(file)}`);
     const original = decodeImage(file);
-    const tight = tighten(original);
+    // Every variant reaches Tesseract, not only the cropped ones, so the whole
+    // decoded photo must satisfy the shared budget before it is normalised or
+    // rotated. The browser does the same in `prepareDocument`.
+    const capped = limitToBudget(original);
+    const tight = tighten(capped);
     const cropped = cropToContent(tight.image);
 
     const variants = {
-      "photo-normalized": normalize(original),
+      "photo-normalized": normalize(capped),
       "page-normalized": normalize(tight.image),
       "page-cropped": normalize(cropped),
       "page-ink": ink(cropped),

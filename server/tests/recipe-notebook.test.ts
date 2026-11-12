@@ -417,5 +417,11 @@ describe("OCR benchmark tooling", () => {
     );
     assert.equal(result.status, 0, result.stderr || result.stdout);
     assert.match(result.stdout, /BMP round trip OK/);
+    // The external `sips` check only exists on macOS; the output must say so
+    // instead of claiming a check that did not run.
+    assert.match(
+      result.stdout,
+      process.platform === "darwin" ? /sips preserve RGB channels/ : /sips check skipped on this platform/,
+    );
   });
 });

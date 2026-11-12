@@ -23,6 +23,9 @@ hand-held with the printed hour gutter, weekday/month headings and week-number g
   estimate and the page caps are imported from `shared/notebook-scan.ts`. The canvas-only rotate, crop
   and resize steps are mirrored on raw pixels because the browser helpers need a `<canvas>`; they are
   the same operations, not a second algorithm, and the shared constants keep the size budget identical.
+  The same width/pixel cap is applied to the decoded photo before rotation (as `prepareDocument` does)
+  and again to the final crop, so no variant can exceed the budget Tesseract aborts above. The
+  untouched-photo variant is not pre-upscaled the way the browser upscales a small input.
 - Four image variants: the untouched photo, the straightened page, the paper-cropped page, and the
   minimum-channel ink variant.
 - Two page-segmentation modes per run (`SINGLE_COLUMN`, `SPARSE_TEXT`); the longer reading is scored.

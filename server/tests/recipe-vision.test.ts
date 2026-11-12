@@ -469,6 +469,8 @@ describe("benchmark request and report", () => {
     assert.equal(benchmarkCost(undefined, { input: 1, output: 2 }), null);
     // A usage object without token counts cannot be priced either.
     assert.equal(benchmarkCost({}, { input: 1, output: 2 }), null);
+    // Explicit null counts are absent, not zero priced tokens.
+    assert.equal(benchmarkCost({ cost: null, prompt_tokens: null, completion_tokens: null }, { input: 1, output: 2 }), null);
     // Usage with no price falls back to the configured prices.
     assert.equal(benchmarkCost({ prompt_tokens: 1_000_000 }, { input: 1, output: 2 }), 1);
   });

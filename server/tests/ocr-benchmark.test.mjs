@@ -54,6 +54,31 @@ describe("ocr benchmark image caps", () => {
     assert.ok(cropped.width * cropped.height <= MAX_RECIPE_OCR_PIXELS);
   });
 
+  it("still enforces the size budget when a crop is rejected as a detector miss", () => {
+    // A bright page covering ~55% of an oversized frame, with a dark block that
+    // covers half of it. The content box is below the 30% crop threshold, so
+    // `cropToContent` keeps the whole photo; the full photo must still be
+    // shrunk, otherwise a 4000x3000 image reaches Tesseract whole.
+    const image = solidImage(4000, 3000, { r: 210, g: 210, b: 210 });
+    const paint = (left, top, right, bottom, value) => {
+      for (let y = top; y < bottom; y++) {
+        for (let x = left; x < right; x++) {
+          const index = (y * image.width + x) * 4;
+          image.data[index] = value;
+          image.data[index + 1] = value;
+          image.data[index + 2] = value;
+        }
+      }
+    };
+    paint(200, 500, 2400, 2500, 245); // the sheet
+    paint(700, 1000, 1800, 2100, 30); // the written block, half the sheet
+
+    const cropped = cropToContent(image);
+    assert.ok(cropped.width <= MAX_RECIPE_OCR_WIDTH, `width ${cropped.width} exceeds the cap`);
+    assert.ok(cropped.width * cropped.height <= MAX_RECIPE_OCR_PIXELS);
+    assert.ok(cropped.width < image.width, "the rejected crop path returned the oversized frame");
+  });
+
   it("upscales a small page crop", () => {
     const image = solidImage(100, 100);
     const cropped = cropToContent(image);

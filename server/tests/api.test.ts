@@ -6112,6 +6112,9 @@ describe("ai integration", () => {
       assert.equal(preview.data.count, 0);
       assert.deepEqual(preview.data.drafts, []);
       assert.equal(preview.data.draft, null);
+      // An empty result still has to tell the client why, otherwise the UI has
+      // nothing to show after the user pressed "read the recipe".
+      assert.match(String(preview.data.warning), /No AI provider configured|No text was recognised/i);
 
       const saved = await request(`/api/houses/${houseId}/recipes/scan`, {
         method: "POST",
