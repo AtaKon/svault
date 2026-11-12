@@ -266,6 +266,16 @@ export function parseBenchmarkManifest(input: unknown): BenchmarkManifest {
     }
   }
 
+  const rawReasoning =
+    typeof input.reasoning === "string" ? input.reasoning.trim().toLowerCase() : input.reasoning;
+  if (
+    rawReasoning != null &&
+    rawReasoning !== "" &&
+    !(RECIPE_REASONING_MODES as readonly unknown[]).includes(rawReasoning)
+  ) {
+    fail(`reasoning must be ${RECIPE_REASONING_MODES.join(", ")}.`);
+  }
+
   const rawPrices = input.prices;
   if (rawPrices != null && !isRecord(rawPrices)) fail("prices must be an object with input/output USD per 1M tokens.");
   const prices: BenchmarkPrices = {
@@ -277,7 +287,7 @@ export function parseBenchmarkManifest(input: unknown): BenchmarkManifest {
     baseUrl,
     models,
     referenceModel,
-    reasoning: normaliseRecipeReasoning(input.reasoning),
+    reasoning: normaliseRecipeReasoning(rawReasoning),
     prices,
     images,
   };

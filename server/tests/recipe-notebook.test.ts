@@ -272,6 +272,25 @@ describe("handwritten Greek ingredient lines", () => {
     assert.equal(parseIngredientLine("1 - ελιές", "g")?.unit, null);
   });
 
+  it("does not carry a ditto unit across an ingredient that has none", () => {
+    const draft = heuristicRecipe(
+      [
+        "Κέικ",
+        "200 γραμμ. βούτυρο",
+        "2 αυγά",
+        "150 » ζάχαρη",
+        "Εκτέλεση",
+        "Τα ανακατεύουμε.",
+      ].join("\n"),
+    );
+    assert.equal(draft.ingredients[1].name, "αυγά");
+    assert.equal(draft.ingredients[1].unit, null);
+    // The ditto belongs to "2 αυγά" (no unit), not to the butter two lines up.
+    assert.equal(draft.ingredients[2].name, "ζάχαρη");
+    assert.equal(draft.ingredients[2].quantity, 150);
+    assert.equal(draft.ingredients[2].unit, null);
+  });
+
   it("does not read an opening smart quote as a ditto mark", () => {
     // OCR turns a handwritten quotation mark into a curly quote; it must not
     // inherit the previous unit just because it follows a number.

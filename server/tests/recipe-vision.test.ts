@@ -530,6 +530,21 @@ describe("benchmark manifest", () => {
     assert.equal(parsed.models[0].reasoning, "high");
   });
 
+  it("rejects an unknown top-level reasoning mode", () => {
+    assert.throws(
+      () => parseBenchmarkManifest({ ...baseManifest, reasoning: "hgih" }),
+      (error: unknown) =>
+        error instanceof BenchmarkManifestError && /reasoning must be auto, off, low, medium, high/.test(error.message),
+    );
+    assert.throws(
+      () => parseBenchmarkManifest({ ...baseManifest, reasoning: 5 }),
+      (error: unknown) =>
+        error instanceof BenchmarkManifestError && /reasoning must be auto, off, low, medium, high/.test(error.message),
+    );
+    const parsed = parseBenchmarkManifest({ ...baseManifest, reasoning: " High " });
+    assert.equal(parsed.reasoning, "high");
+  });
+
   it("normalises a model's reasoning the same way the server does", () => {
     const parsed = parseBenchmarkManifest({
       ...baseManifest,
@@ -765,7 +780,7 @@ describe("recipe vision benchmark script", () => {
         }),
       );
       const secret = "super-secret-test-key";
-      const runBenchmark = async (manifestFile: string, reportFile: string) => {
+      const runBenchmark = async (manifestFile: string, reportFile: string, expectedCode = 0) => {
         const child = spawn(
           process.execPath,
           [
@@ -798,8 +813,13 @@ describe("recipe vision benchmark script", () => {
           });
           child.on("close", (code) => {
             clearTimeout(timer);
-            if (code === 0) resolve(stdout);
-            else reject(new Error(`benchmark exited ${code}: ${stderr.slice(0, 1000) || stdout.slice(0, 1000)}`));
+            if (code === expectedCode) resolve(stdout);
+            else
+              reject(
+                new Error(
+                  `benchmark exited ${code}, expected ${expectedCode}: ${stderr.slice(0, 1000) || stdout.slice(0, 1000)}`,
+                ),
+              );
           });
         });
       };
@@ -867,7 +887,9 @@ describe("recipe vision benchmark script", () => {
         }),
       );
       const failureReportPath = path.join(directory, "failure-report.json");
-      await runBenchmark(failureManifestPath, failureReportPath);
+      // Some models succeed and some fail: that is neither "all answered" (0)
+      // nor "all failed" (2), so the run must not exit as success.
+      await runBenchmark(failureManifestPath, failureReportPath, 3);
       const failureReport = JSON.parse(readFileSync(failureReportPath, "utf8"));
       const byModel = Object.fromEntries(failureReport.runs.map((run: any) => [run.model, run]));
       assert.ok(failureReport.runs.length > 0, "the report must describe the runs");

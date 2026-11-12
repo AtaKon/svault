@@ -476,7 +476,10 @@ export function heuristicRecipe(rawText: string, fallbackTitle = "Scanned recipe
       if (TITLE_NOTE.test(segment)) continue;
       const parsed = parseIngredientLine(segment, lastUnit);
       if (!parsed) continue;
-      if (parsed.unit) lastUnit = parsed.unit;
+      // A ditto repeats the unit on the line *above* it. A line with no unit
+      // ("2 eggs") therefore clears the remembered unit; otherwise a ditto
+      // after it would silently inherit a unit from further up the list.
+      lastUnit = parsed.unit;
       ingredients.push(parsed);
     }
   };

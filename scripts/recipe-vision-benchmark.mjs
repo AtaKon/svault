@@ -66,6 +66,7 @@ function usage() {
     "  0  every run answered (even if some scoring basis is only a reference)",
     "  1  invalid manifest, configuration or missing key",
     "  2  every request failed",
+    "  3  some requests failed (see the failure column and notes)",
     "",
     "The API key is read from OPENAI_API_KEY (or SVAI_API_KEY) and is never",
     "written to the report or printed. Photos are read from the paths in the",
@@ -492,7 +493,8 @@ async function main() {
     console.log(`JSON written to ${path.resolve(options.json)}`);
   }
 
-  return report.totals.failures === report.totals.runs ? 2 : 0;
+  if (report.totals.failures === 0) return 0;
+  return report.totals.failures === report.totals.runs ? 2 : 3;
 }
 
 main()
