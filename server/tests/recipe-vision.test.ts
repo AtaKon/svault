@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { tmpdir } from "node:os";
@@ -115,6 +115,16 @@ describe("recipe vision fallback chain", () => {
     assert.deepEqual(single, [{ model: "only-model" }]);
   });
 
+  it("keeps the known reasoning override when its model is listed explicitly", () => {
+    const chain = recipeVisionChain({
+      baseUrl: "https://openrouter.ai/api/v1",
+      configured: ["qwen/qwen3.6-35b-a3b", "google/gemini-3-flash-preview"],
+      visionModel: "ignored",
+    });
+    assert.deepEqual(chain[0], { model: "qwen/qwen3.6-35b-a3b", reasoning: { enabled: false } });
+    assert.deepEqual(chain[1], { model: "google/gemini-3-flash-preview" });
+  });
+
   it("parses stored and environment lists", () => {
     assert.equal(parseRecipeVisionModels(undefined), null);
     assert.equal(parseRecipeVisionModels(null), null);
@@ -144,6 +154,26 @@ describe("shared recipe prompt", () => {
     assert.deepEqual(extractJsonValue('{"a":'), { ok: false, reason: "malformed" });
   });
 
+  it("flags a prefix parse whose text continues the JSON as partial", () => {
+    // The first value is complete, but the answer kept going: a cut-off
+    // multi-recipe page must not look like a complete single-recipe one.
+    assert.deepEqual(extractJsonValue('{"recipes":[{"title":"A"}]}, {"recipes":[{"title":"B"'), {
+      ok: true,
+      value: { recipes: [{ title: "A" }] },
+      partial: true,
+    });
+    assert.deepEqual(extractJsonValue('{"a":1} trailing }'), { ok: false, reason: "malformed" });
+    // Trailing prose is not a truncation.
+    assert.deepEqual(extractJsonValue('{"a":1} — hope that helps'), { ok: true, value: { a: 1 } });
+  });
+
+  it("marks a long text prompt as cut off instead of truncating silently", () => {
+    const long = recipeArchivistPrompt("x".repeat(13000), 0);
+    assert.match(long, /cut off at 12000 characters/);
+    assert.equal(long.includes("x".repeat(12001)), false);
+    assert.doesNotMatch(recipeArchivistPrompt("short", 0), /cut off/);
+  });
+
   it("accepts a bare recipe object or a recipes array", () => {
     assert.deepEqual(recipeListFromJson({ title: "x" }), [{ title: "x" }]);
     assert.deepEqual(recipeListFromJson({ recipes: [{ title: "a" }, null, "nope", { title: "b" }] }), [
@@ -167,6 +197,10 @@ describe("recipe truth scoring", () => {
     assert.equal(normaliseUnit("gr"), "g");
     assert.equal(normaliseUnit("κιλά"), "kg");
     assert.equal(normaliseUnit("λίτρ."), "l");
+    // The prompt advertises the dotted abbreviation; punctuation normalisation
+    // turns it into "κ γ", which must still canonicalise to teaspoons.
+    assert.equal(normaliseUnit("κ.γ."), "tsp");
+    assert.equal(normaliseUnit("κγ"), "tsp");
     assert.equal(normaliseUnit(""), "");
   });
 
@@ -197,6 +231,20 @@ describe("recipe truth scoring", () => {
     assert.equal(score.inventedIngredients, 1);
     assert.ok(score.namesScore < 1);
     assert.ok(score.score < 1);
+  });
+
+  it("never lets two truth rows claim the same draft ingredient", () => {
+    const single = { ingredients: [{ name: "ζάχαρη", quantity: 200, unit: "g" }] };
+    const duplicatedTruth = {
+      ingredients: [
+        { name: "ζάχαρη", quantity: 200, unit: "g" },
+        { name: "ζαχαρη", quantity: 200, unit: "g" },
+      ],
+    };
+    const score = scoreRecipeAgainstTruth(single, duplicatedTruth);
+    assert.equal(score.matchedIngredients, 1, "one draft row cannot satisfy two truth rows");
+    assert.equal(score.inventedIngredients, 0);
+    assert.ok(score.namesScore < 1, "recall must not be inflated by the duplicate");
   });
 
   it("renormalises weights when the truth records only ingredients", () => {
@@ -338,6 +386,20 @@ describe("benchmark manifest", () => {
       (error: unknown) => error instanceof BenchmarkManifestError && /quantity must be a number/.test(error.message),
     );
   });
+
+  it("rejects an unknown reasoning mode on a model", () => {
+    assert.throws(
+      () =>
+        parseBenchmarkManifest({
+          ...baseManifest,
+          models: [{ id: "a", reasoning: "maximum" }],
+        }),
+      (error: unknown) =>
+        error instanceof BenchmarkManifestError && /reasoning must be auto, off, low, medium, high/.test(error.message),
+    );
+    const parsed = parseBenchmarkManifest({ ...baseManifest, models: [{ id: "a", reasoning: "high" }] });
+    assert.equal(parsed.models[0].reasoning, "high");
+  });
 });
 
 describe("benchmark request and report", () => {
@@ -368,6 +430,13 @@ describe("benchmark request and report", () => {
     assert.equal(benchmarkCost({ cost: 0.001557, prompt_tokens: 1000, completion_tokens: 500 }, { input: null, output: null }), 0.001557);
     assert.equal(benchmarkCost({ prompt_tokens: 1_000_000, completion_tokens: 1_000_000 }, { input: 1, output: 2 }), 3);
     assert.equal(benchmarkCost({ prompt_tokens: 1000 }, { input: null, output: null }), null);
+    // A reported zero is a real price, not an unknown one.
+    assert.equal(benchmarkCost({ cost: 0, prompt_tokens: 10 }, { input: 1, output: 1 }), 0);
+    // No usage at all with configured prices is unknown, not free.
+    assert.equal(benchmarkCost(null, { input: 1, output: 2 }), null);
+    assert.equal(benchmarkCost(undefined, { input: 1, output: 2 }), null);
+    // Usage with no price falls back to the configured prices.
+    assert.equal(benchmarkCost({ prompt_tokens: 1_000_000 }, { input: 1, output: 2 }), 1);
   });
 
   it("summarises scores and flags incomplete cost", () => {
@@ -394,6 +463,38 @@ describe("benchmark request and report", () => {
 });
 
 describe("recipe vision benchmark script", () => {
+  it("rejects a --models override that drops the reference model with a clear error", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "svault-bench-override-"));
+    try {
+      const manifestPath = path.join(directory, "manifest.json");
+      writeFileSync(
+        manifestPath,
+        JSON.stringify({
+          models: ["mock-a", "mock-b"],
+          referenceModel: "mock-a",
+          images: [{ path: "page.png", label: "page" }],
+        }),
+      );
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          path.resolve("scripts/recipe-vision-benchmark.mjs"),
+          manifestPath,
+          "--models",
+          "mock-b",
+        ],
+        { encoding: "utf8" },
+      );
+      assert.equal(result.status, 1, result.stderr || result.stdout);
+      assert.match(result.stderr, /must also be listed in models/);
+      assert.doesNotMatch(result.stderr, /TypeError/);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("runs end to end against a local provider and keeps secrets and photos out of the report", async () => {
     const directory = mkdtempSync(path.join(tmpdir(), "svault-bench-"));
     const requests: any[] = [];
@@ -403,6 +504,26 @@ describe("recipe vision benchmark script", () => {
       req.on("end", () => {
         const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
         requests.push({ headers: req.headers, body });
+        if (body.model === "mock-fail") {
+          res.writeHead(500, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: { message: "Mock upstream exploded" } }));
+          return;
+        }
+        if (body.model === "mock-retry-fail") {
+          if (body.reasoning?.enabled !== false) {
+            // Reasoning-only answer with no usage, then the retry fails too.
+            res.writeHead(200, { "content-type": "application/json" });
+            res.end(
+              JSON.stringify({
+                choices: [{ message: { content: null, reasoning: "thinking…" }, finish_reason: "length" }],
+              }),
+            );
+            return;
+          }
+          res.writeHead(500, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: { message: "Mock retry exploded" } }));
+          return;
+        }
         const payload =
           body.model === "mock-a"
             ? {
@@ -427,7 +548,13 @@ describe("recipe vision benchmark script", () => {
         res.end(
           JSON.stringify({
             choices: [{ message: { content: JSON.stringify(payload) } }],
-            usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150, cost: 0.001 },
+            usage: {
+              prompt_tokens: 100,
+              completion_tokens: 50,
+              total_tokens: 150,
+              // A provider may report usage but no price at all.
+              ...(body.model === "mock-usage-no-price" ? {} : { cost: 0.001 }),
+            },
           }),
         );
       });
@@ -509,6 +636,7 @@ describe("recipe vision benchmark script", () => {
       assert.equal(report.summary.totals.cost, 0.002);
       assert.equal(report.summary.totals.failures, 0);
       // Only a data URL goes to the provider; the report must not carry it.
+      assert.ok(requests.length > 0, "the benchmark must actually call the provider");
       assert.ok(requests.every((entry) => JSON.stringify(entry.body).includes("data:image/png;base64,")));
       const rawReport = readFileSync(reportPath, "utf8");
       assert.doesNotMatch(rawReport, /data:image/);
@@ -534,6 +662,39 @@ describe("recipe vision benchmark script", () => {
       assert.equal(referenceReport.summary.models[0].model, "mock-b", "the differing answer sorts first on similarity");
       assert.ok(referenceReport.summary.models[0].meanReferenceScore > 0.5);
       assert.equal(referenceReport.summary.models[0].meanScore, null);
+      // The reference model's own row has no similarity-to-itself score, and
+      // that null must not be averaged in as a zero.
+      const referenceRow = referenceReport.summary.models.find((model: any) => model.model === "mock-a");
+      assert.equal(referenceRow.meanReferenceScore, null);
+
+      // Failed calls report an unknown price, not a free one. A request that
+      // never reached usage, a response with usage but no price, and a failed
+      // reasoning retry must all end up as `null` in the report.
+      requests.length = 0;
+      const failureManifestPath = path.join(directory, "failure-manifest.json");
+      writeFileSync(
+        failureManifestPath,
+        JSON.stringify({
+          models: ["mock-fail", "mock-usage-no-price", "mock-retry-fail"],
+          images: [
+            {
+              path: "page.png",
+              label: "page",
+              truth: { title: "Pancakes", ingredients: [{ name: "flour", quantity: 200, unit: "g" }] },
+            },
+          ],
+        }),
+      );
+      const failureReportPath = path.join(directory, "failure-report.json");
+      await runBenchmark(failureManifestPath, failureReportPath);
+      const failureReport = JSON.parse(readFileSync(failureReportPath, "utf8"));
+      const byModel = Object.fromEntries(failureReport.runs.map((run: any) => [run.model, run]));
+      assert.ok(failureReport.runs.length > 0, "the report must describe the runs");
+      assert.equal(byModel["mock-fail"].cost, null, "an HTTP failure before usage has unknown cost");
+      assert.equal(byModel["mock-usage-no-price"].cost, null, "usage without a price is unknown");
+      assert.equal(byModel["mock-retry-fail"].cost, null, "a failed retry with no usage is unknown");
+      assert.equal(failureReport.summary.totals.costComplete, false);
+      assert.equal(failureReport.summary.totals.cost, 0);
     } finally {
       server.close();
       rmSync(directory, { recursive: true, force: true });

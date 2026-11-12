@@ -138,6 +138,7 @@ Mounted at `/api/houses`.
       "model": "gpt-4o-mini",
       "visionModel": "",
       "recipeVisionModels": ["google/gemini-3-flash-preview", "qwen/qwen3.6-35b-a3b"],
+      "recipeReasoning": "auto",
       "apiKey": "sk-..."
     },
     "notifications": { "lowStock": true, "expiryDays": 7 },
@@ -804,11 +805,15 @@ so the changes made on the preview are kept; `sourceUrl` is the final address af
 Scan body:
 
 ```json
-{ "text": "OCR text from the browser", "image": "/uploads/recipes/....jpg", "title": "Yiayia's cake", "save": false }
+{ "text": "OCR text from the browser", "image": "/uploads/recipes/....jpg", "images": ["/uploads/recipes/....jpg"], "title": "Yiayia's cake", "save": false }
 ```
 
-Without `save`, the response contains `draft`. With `save: true`, it also contains `recipe`. The
-response always includes `provider` (`ai` or `local`) and an optional `warning`. When AI read the page
+Without `save`, the response contains `draft`. With `save: true`, it also contains `recipe`. `images`
+sends several photos of the same page; `image` is the older single-photo field and `sourceImage` on the
+saved recipe is the first photo either way. One save call persists one recipe: when the page held more
+than one, the response keeps `count` (recipes found) and adds `savedCount: 1` plus a warning saying the
+others were not saved.
+The response always includes `provider` (`ai` or `local`) and an optional `warning`. When AI read the page
 it also includes `aiModel` (the model that answered) and `aiModels` (every model tried, in order, up to
 four); `aiCost` covers every attempt, including a failed one. The model list comes from
 `settings.ai.recipeVisionModels`, the `OPENAI_RECIPE_VISION_MODELS` environment variable, or the

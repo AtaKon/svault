@@ -7,6 +7,11 @@
  * Tesseract runtime and (on macOS) `sips` for JPEG decoding.
  *
  *   node --import tsx scripts/ocr-benchmark.mjs data/ocrbench/manifest.json
+ *   node --import tsx scripts/ocr-benchmark.mjs --self-check
+ *
+ * JPEG/PNG photos are decoded with macOS `sips`, so the full benchmark runs on
+ * macOS; BMP files decode everywhere. `--self-check` verifies the BMP
+ * encode/decode round trip without reading any photos or OCR data.
  *
  * The manifest lists images, the words that are visibly on each page and, when
  * available, a full transcription:
@@ -28,15 +33,40 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import bmp from "bmp-js";
 import { createWorker } from "tesseract.js";
 
 import {
+  MAX_RECIPE_OCR_PIXELS,
+  MAX_RECIPE_OCR_WIDTH,
   cleanNotebookText,
   detectContentBounds,
   detectPaperRegion,
   estimateSkewDegrees,
 } from "../shared/notebook-scan.ts";
+
+/* ---------------------------------------------------------- OCR language data */
+
+/** The repository root, resolved from this file, not from the caller's cwd. */
+const SCRIPT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+/**
+ * The same trained data the browser ships. `npm run dev` and `npm run build`
+ * copy it into `public/tesseract` (gzipped); reading it from there keeps the
+ * benchmark on the shipped models instead of whatever happens to be in cwd.
+ */
+function trainedDataDir() {
+  const directory = path.join(SCRIPT_ROOT, "public", "tesseract");
+  const missing = ["ell", "eng"].filter((lang) => !fs.existsSync(path.join(directory, `${lang}.traineddata.gz`)));
+  if (missing.length) {
+    throw new Error(
+      `Missing ${missing.map((lang) => `${lang}.traineddata.gz`).join(", ")} in ${directory}. ` +
+        "Run `node scripts/vendor-ocr.mjs` (or `npm run dev` once) to copy the OCR assets first.",
+    );
+  }
+  return directory;
+}
 
 /* --------------------------------------------------------------- image I/O */
 
@@ -44,6 +74,12 @@ function decodeImage(file) {
   if (/\.bmp$/i.test(file)) {
     const decoded = bmp.decode(fs.readFileSync(file));
     return { width: decoded.width, height: decoded.height, data: rgbaFromBmp(decoded) };
+  }
+  if (process.platform !== "darwin") {
+    throw new Error(
+      `${path.basename(file)} is not a BMP and this script decodes photos with macOS \`sips\`. ` +
+        "Convert the manifests' photos to BMP, or run the benchmark on macOS.",
+    );
   }
   const temp = path.join(os.tmpdir(), `ocr-bench-${process.pid}-${Date.now()}.bmp`);
   try {
@@ -215,7 +251,7 @@ function ink(image) {
   return { width: image.width, height: image.height, data: out };
 }
 
-/** Paper crop + deskew + upscale, mirroring `tightenRecipePage`. */
+/** Deskew only. Paper cropping and the upscale cap happen in `cropToContent`. */
 function tighten(image) {
   let page = image;
   const before = lumaOf(page);
@@ -240,22 +276,27 @@ function cropToContent(image) {
   }
   if (box.width < image.width * 0.3 || box.height < image.height * 0.3) return image;
   const cropped = crop(image, box);
-  // Tesseract.js in Node aborts on a 2400x3200 page ("Too many properties to
-  // enumerate"); 2000 px wide and <= 5.5 Mpx stays inside its wasm heap.
-  const scale = Math.min(2.4, Math.max(1, 2000 / Math.max(1, cropped.width)));
+  // Mirror `tightenRecipePage`: Tesseract.js in Node aborts on a 2400x3200 page
+  // ("Too many properties to enumerate"), so the upscale is capped by the shared
+  // width and total-pixel budget rather than by local copies of the numbers.
+  const scale = Math.min(2.4, Math.max(1, MAX_RECIPE_OCR_WIDTH / Math.max(1, cropped.width)));
   const targetWidth = Math.round(cropped.width * scale);
   const targetHeight = Math.round(cropped.height * scale);
-  const capped = Math.min(1, Math.sqrt(5_500_000 / Math.max(1, targetWidth * targetHeight)));
+  const capped = Math.min(1, Math.sqrt(MAX_RECIPE_OCR_PIXELS / Math.max(1, targetWidth * targetHeight)));
   return scale * capped > 1.01
     ? resize(cropped, Math.round(cropped.width * scale * capped), Math.round(cropped.height * scale * capped))
     : cropped;
 }
 
-function toBmpFile(image) {
+/**
+ * Encode as a 24-bit BMP. bmp-js expects the input buffer in its decoded layout
+ * `[a, b, g, r]` (the alpha slot is ignored by the 24-bit encoder) and writes
+ * the file as top-down BGR rows because of the negative height it stores.
+ * `rgbaFromBmp` reverses exactly this packing.
+ */
+function encodeBmp(image) {
   const width = image.width;
   const height = image.height;
-  // bmp-js expects top-down rows as [0, blue, green, red]; the encoder writes a
-  // negative height so no row flip is needed here.
   const rows = new Uint8Array(width * height * 4);
   for (let pixel = 0, index = 0; pixel < width * height; pixel++, index += 4) {
     const source = pixel * 4;
@@ -264,10 +305,47 @@ function toBmpFile(image) {
     rows[index + 2] = image.data[source + 1];
     rows[index + 3] = image.data[source];
   }
-  const encoded = bmp.encode({ data: Buffer.from(rows), width, height });
+  return bmp.encode({ data: Buffer.from(rows), width, height });
+}
+
+function toBmpFile(image) {
+  const encoded = encodeBmp(image);
   const file = path.join(os.tmpdir(), `ocr-bench-${process.pid}-${Date.now()}.bmp`);
   fs.writeFileSync(file, encoded.data);
   return file;
+}
+
+/**
+ * Guard the decode/encode round trip at startup. A previous evaluation run was
+ * discarded because of a channel-order bug, and that must never come back
+ * silently: a 2x2 image with distinct channels must survive unchanged.
+ */
+function assertBmpRoundTrip() {
+  const pixels = [
+    { r: 10, g: 20, b: 30 },
+    { r: 40, g: 50, b: 60 },
+    { r: 70, g: 80, b: 90 },
+    { r: 100, g: 110, b: 120 },
+  ];
+  const data = new Uint8ClampedArray(16);
+  pixels.forEach((pixel, index) => {
+    data[index * 4] = pixel.r;
+    data[index * 4 + 1] = pixel.g;
+    data[index * 4 + 2] = pixel.b;
+    data[index * 4 + 3] = 255;
+  });
+  const encoded = encodeBmp({ width: 2, height: 2, data });
+  const decoded = rgbaFromBmp(bmp.decode(encoded.data));
+  for (let index = 0; index < pixels.length; index++) {
+    const expected = pixels[index];
+    const actual = { r: decoded[index * 4], g: decoded[index * 4 + 1], b: decoded[index * 4 + 2] };
+    if (actual.r !== expected.r || actual.g !== expected.g || actual.b !== expected.b) {
+      throw new Error(
+        `BMP round trip changed pixel ${index}: expected rgb(${expected.r},${expected.g},${expected.b}) ` +
+          `but read rgb(${actual.r},${actual.g},${actual.b}). Refusing to benchmark on swapped channels.`,
+      );
+    }
+  }
 }
 
 /* -------------------------------------------------------------- evaluation */
@@ -317,11 +395,18 @@ function evaluate(entry, text) {
 /* -------------------------------------------------------------------- main */
 
 const manifestFile = process.argv[2];
+if (manifestFile === "--self-check") {
+  assertBmpRoundTrip();
+  console.log("BMP round trip OK: encode/decode preserves RGB channels.");
+  process.exit(0);
+}
 if (!manifestFile) {
   console.error("usage: node --import tsx scripts/ocr-benchmark.mjs <manifest.json> [--json out.json]");
+  console.error("       node --import tsx scripts/ocr-benchmark.mjs --self-check");
   process.exit(2);
 }
 const manifest = JSON.parse(fs.readFileSync(manifestFile, "utf8"));
+assertBmpRoundTrip();
 const baseDir = path.dirname(path.resolve(manifestFile));
 const jsonFlag = process.argv.indexOf("--json");
 const jsonOut = jsonFlag > 0 ? process.argv[jsonFlag + 1] : null;
@@ -332,8 +417,8 @@ const results = [];
 
 async function withWorker(lang, fn) {
   const worker = await createWorker(lang, 1, {
-    langPath: path.resolve("."),
-    gzip: false,
+    langPath: trainedDataDir(),
+    gzip: true,
     cachePath: path.join(os.tmpdir(), "ocr-bench-cache"),
     logger: () => {},
   });

@@ -19,7 +19,12 @@ import {
   RECIPE_ARCHIVIST_SYSTEM,
   recipeArchivistPrompt,
 } from "./recipe-vision.js";
-import { normaliseRecipeReasoning, reasoningRequestFor, type RecipeReasoningMode } from "./ai-reasoning.js";
+import {
+  normaliseRecipeReasoning,
+  RECIPE_REASONING_MODES,
+  reasoningRequestFor,
+  type RecipeReasoningMode,
+} from "./ai-reasoning.js";
 import type { RecipeTruth } from "./recipe-vision-score.js";
 
 export const MAX_BENCHMARK_IMAGES = 8;
@@ -127,8 +132,12 @@ function parseModel(value: unknown, index: number): BenchmarkModelSpec {
   }
   const parsedReasoning =
     reasoning == null || reasoning === "" ? undefined : normaliseRecipeReasoning(reasoning);
-  if (reasoning != null && reasoning !== "" && parsedReasoning === "auto" && reasoning !== "auto") {
-    fail(`models[${index}].reasoning must be auto, off, low, medium or high.`);
+  if (
+    reasoning != null &&
+    reasoning !== "" &&
+    !(RECIPE_REASONING_MODES as readonly unknown[]).includes(reasoning)
+  ) {
+    fail(`models[${index}].reasoning must be ${RECIPE_REASONING_MODES.join(", ")}.`);
   }
   return parsedReasoning ? { id: model, reasoning: parsedReasoning } : { id: model };
 }
@@ -305,18 +314,24 @@ export function benchmarkChatBody(input: BenchmarkRequestInput): Record<string, 
   };
 }
 
-/** Cost of one provider response. Provider-reported cost wins; prices are a fallback. */
+/**
+ * Cost of one provider response. Provider-reported cost wins; prices are a
+ * fallback. A response that carried no `usage` at all is unknown, not free:
+ * returning 0 would make a failed or empty call look fully priced and
+ * understate the totals.
+ */
 export function benchmarkCost(
   usage: { cost?: unknown; prompt_tokens?: unknown; completion_tokens?: unknown } | null | undefined,
   prices: BenchmarkPrices,
 ): number | null {
-  const reported = Number(usage?.cost);
-  if (usage?.cost != null && Number.isFinite(reported) && reported >= 0) {
+  if (usage == null) return null;
+  const reported = Number(usage.cost);
+  if (usage.cost != null && Number.isFinite(reported) && reported >= 0) {
     return Math.round(reported * 1e6) / 1e6;
   }
   if (prices.input == null && prices.output == null) return null;
-  const prompt = Number(usage?.prompt_tokens ?? 0) || 0;
-  const completion = Number(usage?.completion_tokens ?? 0) || 0;
+  const prompt = Number(usage.prompt_tokens ?? 0) || 0;
+  const completion = Number(usage.completion_tokens ?? 0) || 0;
   return Math.round(((prompt * (prices.input ?? 0) + completion * (prices.output ?? 0)) / 1_000_000) * 1e6) / 1e6;
 }
 

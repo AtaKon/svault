@@ -1,5 +1,6 @@
 // Shared domain types used by both the API and the web client.
 
+import type { RecipeReasoningMode } from "./ai-reasoning.js";
 import type { BillType } from "./bill-types.js";
 
 export type Role = "owner" | "admin" | "member" | "viewer";
@@ -78,7 +79,7 @@ export interface HouseSettings {
      * `medium` or `high`. Sent to OpenRouter as its `reasoning` field; other
      * endpoints are retried without it if they reject the field.
      */
-    recipeReasoning?: "auto" | "off" | "low" | "medium" | "high";
+    recipeReasoning?: RecipeReasoningMode;
     /** USD per 1M prompt tokens, used to estimate the cost of an AI call. */
     inputPrice?: number | null;
     /** USD per 1M completion tokens, used to estimate the cost of an AI call. */

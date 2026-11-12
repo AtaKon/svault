@@ -166,6 +166,8 @@ const UNIT_SYNONYMS: Record<string, string> = {
   κουταλια: "tbsp",
   tsp: "tsp",
   κγ: "tsp",
+  // normaliseText("κ.γ.") is "κ γ" because punctuation becomes a space.
+  "κ γ": "tsp",
   cup: "cup",
   cups: "cup",
   φλιτζ: "cup",
@@ -225,6 +227,8 @@ export function readSteps(value: unknown): string[] {
 
 function quantitiesEqual(left: number | null, right: number | null): boolean {
   if (left == null || right == null) return left == null && right == null;
+  // Absolute on purpose: recipe amounts are small and a wrong digit (2 vs 9,
+  // 160 vs 610) must fail, while 0.5 and 0.51 are the same reading.
   return Math.abs(left - right) <= QUANTITY_TOLERANCE;
 }
 
@@ -255,23 +259,27 @@ interface Pairing {
 }
 
 function pairIngredients(truth: IngredientReading[], draft: IngredientReading[]): Pairing {
-  const bestDraft: (number | null)[] = truth.map(() => null);
-  const bestTruth: number[] = draft.map(() => -1);
-  const similarity: number[] = [];
+  // One-to-one assignment: two truth rows may not both claim the same draft
+  // row, because that would inflate recall on a page where the model repeated
+  // or merged an ingredient. Strongest pairs are placed first.
+  const pairs: { truth: number; draft: number; score: number }[] = [];
   truth.forEach((expected, truthIndex) => {
-    let bestScore = 0;
-    let bestIndex: number | null = null;
     draft.forEach((actual, draftIndex) => {
       const score = textSimilarity(expected.name, actual.name);
-      if (score >= MATCH_THRESHOLD && score > bestScore) {
-        bestScore = score;
-        bestIndex = draftIndex;
-      }
+      if (score >= MATCH_THRESHOLD) pairs.push({ truth: truthIndex, draft: draftIndex, score });
     });
-    bestDraft[truthIndex] = bestIndex;
-    similarity[truthIndex] = bestScore;
-    if (bestIndex != null) bestTruth[bestIndex] = truthIndex;
   });
+  pairs.sort((left, right) => right.score - left.score || left.truth - right.truth || left.draft - right.draft);
+
+  const bestDraft: (number | null)[] = truth.map(() => null);
+  const bestTruth: number[] = draft.map(() => -1);
+  const similarity: number[] = truth.map(() => 0);
+  for (const pair of pairs) {
+    if (bestDraft[pair.truth] != null || bestTruth[pair.draft] >= 0) continue;
+    bestDraft[pair.truth] = pair.draft;
+    bestTruth[pair.draft] = pair.truth;
+    similarity[pair.truth] = pair.score;
+  }
   return { bestTruth, bestDraft, similarity };
 }
 

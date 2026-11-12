@@ -509,7 +509,9 @@ recipeRoutes.post(
     const draftInputs = drafts.map((draft) =>
       draftToInput(draft, {
         source: "scan",
-        sourceImage: body.image ?? null,
+        // The first photo is the page the user scanned; the other pages of a
+        // multi-photo scan are follow-ups, so keep the link to the first one.
+        sourceImage: body.image ?? body.images?.[0] ?? null,
         ocrText: rawText,
         aiCost,
       }),
@@ -520,13 +522,21 @@ recipeRoutes.post(
       const id = await saveRecipe(houseId, req.user!.id, draftInputs[0]);
       const row = (await recipeRow(id))!;
       const serialized = serializeRecipe(row, await ingredientsFor(id));
+      // One call saves one recipe. Say so instead of reporting a count the
+      // response does not match, which used to look like the extra recipes
+      // had been saved too.
+      const partialSave =
+        draftInputs.length > 1
+          ? `${draftInputs.length} recipes were found; only the first was saved. Scan again to save the others.`
+          : null;
       res.status(201).json({
         provider,
-        warning,
+        warning: [warning, partialSave].filter(Boolean).join(" ") || null,
         aiCost,
         aiModel,
         aiModels,
         saved: true,
+        savedCount: 1,
         aiAvailable: canUseAi,
         count: draftInputs.length,
         recipe: decorateRecipe(serialized, await stockMaps(houseId), await nutritionItems(houseId)),

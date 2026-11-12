@@ -2240,6 +2240,8 @@ const EL: Record<string, string> = {
   "AI call not found": "Η κλήση AI δεν βρέθηκε.",
   "AI did not return JSON": "Η AI δεν επέστρεψε JSON.",
   "AI returned malformed JSON": "Η AI επέστρεψε μη έγκυρο JSON.",
+  "AI returned JSON that was cut off before the answer was complete":
+    "Η AI επέστρεψε JSON που κόπηκε πριν ολοκληρωθεί η απάντηση.",
   "No AI vision model configured": "Δεν έχει ρυθμιστεί μοντέλο όρασης AI.",
   "AI could not read the recipe": "Η AI δεν μπόρεσε να διαβάσει τη συνταγή.",
   "An account with that email already exists": "Υπάρχει ήδη λογαριασμός με αυτό το email.",

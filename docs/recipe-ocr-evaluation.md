@@ -28,8 +28,10 @@ hand-held with the printed hour gutter, weekday/month headings and week-number g
 
 The image path was verified before trusting the numbers: an initial run decoded the BMP with the wrong
 channel order and fed the engine an upside-down page. That run was discarded; the numbers below come
-from a re-run whose decode/encode round-trip was checked against `sips`. This is also why the report
-quotes exact output text: the conclusion must survive a spot check.
+from a re-run whose decode/encode round-trip was checked against `sips`. The script now repeats that
+round-trip check on every start (and via `--self-check`), so a channel-order regression fails loudly
+instead of silently changing the numbers. This is also why the report quotes exact output text: the
+conclusion must survive a spot check.
 
 Run it with:
 
@@ -37,11 +39,16 @@ Run it with:
 node --import tsx scripts/ocr-benchmark.mjs data/ocrbench/manifest.json --json data/ocrbench/results.json
 ```
 
+Run `npm run dev` once (or `node scripts/vendor-ocr.mjs`) first, so the Greek and English models are
+copied to `public/tesseract`; the benchmark loads exactly those files. It also runs a BMP
+encode/decode round trip before reading any photo, and `--self-check` runs only that check.
+
 ## Result
 
-**2 of 54 words were recovered (3.7 %), and both hits are the same word `νερό` sitting inside
-unrelated OCR noise. No title, ingredient name, unit or cooking verb was read correctly**, in any of
-the 24 configurations.
+**The best single configuration — the paper-cropped page with the Greek model — recovered 2 of 54
+words (3.7 %), and both hits are the same word `νερό` sitting inside unrelated OCR noise. No title,
+ingredient name, unit or cooking verb was read correctly**, in any of the 24 runs (three pages × four
+image variants × two languages; the ink variant recovered 1).
 
 | Variant | Language | Keywords | Mean confidence | Output chars (3 pages) | Time/page |
 | --- | --- | --- | --- | --- | --- |

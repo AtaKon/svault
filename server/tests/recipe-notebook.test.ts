@@ -1,5 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import path from "node:path";
 
 import {
   MAX_RECIPE_OCR_PIXELS,
@@ -329,9 +331,31 @@ describe("more than one recipe on a page", () => {
     assert.equal(heuristicRecipes("Ρεβανί\n160 γραμμ. βούτυρο\nΕκτέλεση\nΛιώνουμε το βούτυρο.").length, 1);
   });
 
+  it("keeps consecutive titles out of each other's ingredient list", () => {
+    // Two titles on consecutive lines: the amounts below belong to the second
+    // one, so the first is not a section start and the page is not split on a
+    // guess. Its slice never contains the second title's amounts.
+    const sections = splitRecipeSections(
+      ["Ρεβανί", "Τσουρέκι", "17 αυγά", "250 γραμμ. μαγιά", "Εκτέλεση", "Τα ζυμώνουμε."].join("\n"),
+    );
+    assert.deepEqual(sections, []);
+  });
+
   it("keeps the OCR pixel budget below the size where Tesseract aborts", () => {
     // Measured: 2400x3200 aborts the worker; the scanner caps at 5.5 Mpx.
     assert.ok(MAX_RECIPE_OCR_PIXELS < 2400 * 3200);
     assert.ok(MAX_RECIPE_OCR_PIXELS > 1500 * 2000);
+  });
+});
+
+describe("OCR benchmark tooling", () => {
+  it("round-trips RGB channels through its BMP encoder", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", path.resolve("scripts/ocr-benchmark.mjs"), "--self-check"],
+      { encoding: "utf8" },
+    );
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.match(result.stdout, /BMP round trip OK/);
   });
 });

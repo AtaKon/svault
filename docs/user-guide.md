@@ -570,8 +570,10 @@ A key saved in house settings wins over the server environment. The API never re
 the UI shows a `***` placeholder. Without a key everything still works, with local OCR and parsing and
 local meal suggestions.
 
-If you use a vision model, SVault can read the recipe photo when OCR finds no text. Without one, it
-sends only the edited OCR text. A text-only local model never receives images.
+When the AI provider is configured, the photo is sent to the vision model as the primary source and
+the edited OCR text is attached only as a hint. Without a provider it sends only the edited OCR text,
+and the scan is parsed locally. A text-only local model never receives images: if it rejects the photo,
+SVault retries with the text alone and explains that handwriting needs a vision model.
 
 ### Recipe reasoning
 
@@ -588,9 +590,10 @@ is sent to OpenRouter as its `reasoning` field. Another OpenAI-compatible endpoi
 field is retried without it and the scan says so.
 
 If a model returns only hidden reasoning, or the answer is cut off at the token limit, SVault retries
-once with reasoning disabled and tells you in the scan. If that also fails, you keep the locally
-parsed draft instead of an empty recipe. The AI call log shows the finish reason, reasoning tokens and
-the retry.
+once with reasoning disabled on OpenRouter, which honours the field. Other endpoints may ignore or
+reject it, so they are not charged a second identical call; if the 4xx rejection path applies, the scan
+says so. If the retry also fails, you keep the locally parsed draft instead of an empty recipe. The AI
+call log shows the finish reason, reasoning tokens and the retry.
 
 Model choice matters more than price. In one-photo OpenRouter tests, Gemini 3 Flash Preview
 ($0.001557) and Gemini 3.8 Flash ($0.002104) read the key quantities correctly, while the cheaper

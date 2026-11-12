@@ -3,6 +3,7 @@ import { ApiError } from "./http.js";
 import { recordAiCall } from "./services/ai-logs.js";
 import { OutboundBlockedError, assertOutboundUrl, outboundRedirectMode } from "./lib/outbound.js";
 import {
+  canRetryRecipeReasoningOff,
   normaliseRecipeReasoning,
   reasoningRequestFor,
   supportsReasoningControl,
@@ -469,6 +470,9 @@ export function extractJson<T = any>(text: string): T {
   if (!result.ok) {
     throw new ApiError(502, result.reason === "missing" ? "AI did not return JSON" : "AI returned malformed JSON");
   }
+  if (result.partial) {
+    throw new ApiError(502, "AI returned JSON that was cut off before the answer was complete");
+  }
   return result.value as T;
 }
 
@@ -603,11 +607,11 @@ export async function aiReadRecipes(
       return await readOnce(candidate, index, configured);
     } catch (error) {
       const incomplete = error instanceof AiIncompleteResponseError ? error : null;
-      // Retrying only helps when the endpoint accepts the field (OpenRouter),
-      // the candidate has its own mode, or the user asked for a specific mode.
-      // A 4xx is handled inside `chat`.
-      const canRetryWithReasoningOff =
-        configured?.enabled !== false && (cfg.reasoningControl || configured != null);
+      // Retrying only helps where the endpoint honours the field (OpenRouter).
+      // Elsewhere the retry would send the same photo again for an ignored
+      // setting, so the failure is reported after one billed call. A 4xx
+      // rejection is already handled inside `chat`.
+      const canRetryWithReasoningOff = canRetryRecipeReasoningOff(cfg.reasoningControl, configured);
       if (!incomplete || !canRetryWithReasoningOff) throw error;
 
       notes.push(

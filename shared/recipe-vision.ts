@@ -127,7 +127,15 @@ export function recipeVisionChain(input: RecipeVisionChainInput): RecipeVisionCa
   const configured = input.configured ?? null;
 
   if (configured && configured.length) {
-    return dedupeCandidates(configured.map((model) => ({ model })));
+    // An explicit list must not lose a known per-model override: listing the
+    // built-in Qwen3.6 ID by hand would otherwise turn thinking back on and the
+    // model may answer with nothing but reasoning.
+    return dedupeCandidates(
+      configured.map((model) => {
+        const known = DEFAULT_RECIPE_VISION_MODELS.find((candidate) => candidate.model === model);
+        return known?.reasoning ? { model, reasoning: known.reasoning } : { model };
+      }),
+    );
   }
 
   if (isOpenRouterBaseUrl(input.baseUrl)) {
@@ -183,13 +191,16 @@ export const RECIPE_ARCHIVIST_SYSTEM =
  */
 export function recipeArchivistPrompt(rawText: string, imageCount = 0): string {
   const images = imageCount > 0;
+  const limit = 12000;
+  const truncated = rawText.length > limit;
   return (
     `Return every recipe on the page as JSON with this exact shape:\n${RECIPE_LIST_SCHEMA}\n\n` +
     (images
       ? "The page is in the attached photo. Read the handwriting carefully. "
       : "Read the recipe text below. ") +
     (rawText
-      ? `\n\n${images ? "OCR TEXT (unreliable — use it only to confirm what you can also see)" : "RECIPE TEXT"}:\n${rawText.slice(0, 12000)}`
+      ? `\n\n${images ? "OCR TEXT (unreliable — use it only to confirm what you can also see)" : "RECIPE TEXT"}:\n${rawText.slice(0, limit)}` +
+        (truncated ? `\n\n[The text was cut off at ${limit} characters.]` : "")
       : "")
   );
 }
@@ -197,13 +208,20 @@ export function recipeArchivistPrompt(rawText: string, imageCount = 0): string {
 /* --------------------------------------------------------------- JSON parsing */
 
 export type JsonExtraction =
-  | { ok: true; value: unknown }
+  | { ok: true; value: unknown; partial?: true }
   | { ok: false; reason: "missing" | "malformed" };
 
 /**
  * Tolerant JSON extraction: accepts a markdown fence, a leading sentence and a
  * body that was cut off after a complete object/array. Shared with the
  * benchmark so both judge the same text the same way.
+ *
+ * A parse that only covers a prefix of the answer is flagged as `partial` when
+ * the remaining text continues the JSON value (`{`, `[`, `,`, `}` or a quote).
+ * Trailing prose is not a truncation: "Here you go: {...}. Hope it helps" is a
+ * complete answer. A partial result must be treated as a failure by callers
+ * that need every recipe on the page, because a cut-off multi-recipe answer can
+ * otherwise look like a complete single-recipe one.
  */
 export function extractJsonValue(text: string): JsonExtraction {
   let cleaned = String(text ?? "").trim();
@@ -219,7 +237,12 @@ export function extractJsonValue(text: string): JsonExtraction {
     const end = Math.max(candidate.lastIndexOf("}"), candidate.lastIndexOf("]"));
     if (end > 0) {
       try {
-        return { ok: true, value: JSON.parse(candidate.slice(0, end + 1)) as unknown };
+        const value = JSON.parse(candidate.slice(0, end + 1)) as unknown;
+        const rest = candidate.slice(end + 1).trim();
+        const continues = ["[", "{", ",", "]", "}", '"', ":"].some((character) =>
+          rest.startsWith(character),
+        );
+        return continues ? { ok: true, value, partial: true } : { ok: true, value };
       } catch {
         /* fall through */
       }

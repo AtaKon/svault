@@ -104,6 +104,7 @@ await new Promise<void>((resolve) => {
 });
 
 const { app, apiErrorHandler } = await import("../index.js");
+const { aiReadRecipes, resolveAi } = await import("../ai.js");
 const { all, closeDb, databaseKind, get, initDb, lockHouseholdLedger, run, tx } = await import("../db.js");
 const { discardUploads } = await import("../upload.js");
 const { heuristicRecipe, parseIngredientLine, localIdeas } = await import("../services/recipe-local.js");
@@ -5566,7 +5567,7 @@ describe("ai integration", () => {
     });
   });
 
-  it("retries with reasoning disabled when the model only returns reasoning", async () => {
+  it("does not pay twice for a reasoning retry on a non-OpenRouter endpoint", async () => {
     await request(`/api/houses/${houseId}`, {
       method: "PATCH",
       body: { settings: { ai: { model: "reasoning-only-model", recipeReasoning: "high" } } },
@@ -5577,17 +5578,13 @@ describe("ai integration", () => {
       body: { text: "Pancakes\n2 eggs" },
     });
     assert.equal(scan.status, 200);
-    assert.equal(scan.data.provider, "ai");
-    assert.match(scan.data.warning, /spent its whole output budget on reasoning/i);
-    assert.equal(aiRequests.length, 2);
+    assert.equal(scan.data.provider, "local");
+    assert.match(scan.data.warning, /reasoning/i);
+    // This endpoint ignores (or does not know) OpenRouter's reasoning field, so
+    // a {"enabled": false} retry would send the same photo again for nothing.
+    assert.equal(aiRequests.length, 1);
     assert.deepEqual(aiRequests[0].body.reasoning, { effort: "high" });
-    assert.deepEqual(aiRequests[1].body.reasoning, { enabled: false });
-
-    // The failed first call is still in the log, with the reasoning token count.
-    const logs = await request(`/api/houses/${houseId}/ai/logs?scope=mine`);
-    const failed = logs.data.logs.find((log: any) => log.status === "error" && log.operation === "recipe.scan");
-    assert.equal(failed.metadata.reasoningTokens, 8192);
-    assert.match(failed.error, /reasoning/i);
+    assert.ok(scan.data.draft.ingredients.length > 0, "the local draft must survive");
 
     await request(`/api/houses/${houseId}`, {
       method: "PATCH",
@@ -5595,7 +5592,58 @@ describe("ai integration", () => {
     });
   });
 
-  it("keeps the local parse when a retried answer is still truncated", async () => {
+  it("retries with reasoning disabled on an endpoint that honours it", async () => {
+    // OpenRouter is the endpoint that accepts the field; this exercises the
+    // same server helper the route uses with that capability turned on.
+    const cfg = {
+      ...resolveAi({
+        ai: { enabled: true, baseUrl: aiBase, apiKey: "test-key", model: "mock-model", recipeReasoning: "high" },
+      }),
+      reasoningControl: true,
+    };
+    aiRequests.length = 0;
+    const result = await aiReadRecipes(
+      cfg,
+      "Pancakes\n2 eggs",
+      [],
+      { operation: "recipe.scan", houseId },
+      { models: [{ model: "reasoning-only-model" }] },
+    );
+    assert.equal(result.data.recipes.length, 1);
+    assert.equal(result.model, "reasoning-only-model");
+    assert.equal(aiRequests.length, 2);
+    assert.deepEqual(aiRequests[0].body.reasoning, { effort: "high" });
+    assert.deepEqual(aiRequests[1].body.reasoning, { enabled: false });
+    assert.match(result.notes?.join(" ") ?? "", /retried with reasoning disabled/i);
+    // Both attempts are billed in the reported usage.
+    assert.equal(result.usage.cost, 0.00305);
+  });
+
+  it("carries notes and accumulated usage on the thrown chain failure", async () => {
+    const cfg = resolveAi({
+      ai: { enabled: true, baseUrl: aiBase, apiKey: "test-key", model: "mock-model" },
+    });
+    await assert.rejects(
+      aiReadRecipes(
+        cfg,
+        "Pancakes\n2 eggs",
+        [],
+        { operation: "recipe.scan", houseId },
+        { models: [{ model: "chain-500-model" }, { model: "chain-empty-model" }] },
+      ),
+      (error: any) => {
+        assert.equal(error.status, 502);
+        assert.ok(Array.isArray(error.details?.notes), "the route reads details.notes for its warning");
+        assert.ok(error.details.notes.length >= 2);
+        // The 500 reported no usage; the empty answer cost 0.0009 and must
+        // survive on details.usage so the route can show the spend.
+        assert.equal(error.details?.usage?.cost, 0.0009);
+        return true;
+      },
+    );
+  });
+
+  it("keeps the local parse when a truncated answer is not retried", async () => {
     await request(`/api/houses/${houseId}`, {
       method: "PATCH",
       body: { settings: { ai: { model: "truncated-model", recipeReasoning: "high" } } },
@@ -5608,10 +5656,10 @@ describe("ai integration", () => {
     assert.equal(scan.status, 200);
     assert.equal(scan.data.provider, "local");
     assert.match(scan.data.warning, /token limit/i);
-    assert.match(scan.data.warning, /retried with reasoning disabled/i);
-    assert.equal(aiRequests.length, 2);
-    assert.deepEqual(aiRequests[1].body.reasoning, { enabled: false });
+    assert.equal(aiRequests.length, 1, "no second identical call on a non-OpenRouter endpoint");
     assert.ok(scan.data.draft.ingredients.length > 0, "the local draft must survive");
+    // The failed attempt still reported a price, so the spend stays visible.
+    assert.equal(scan.data.aiCost, 0.0018);
 
     await request(`/api/houses/${houseId}`, {
       method: "PATCH",
@@ -5866,6 +5914,49 @@ describe("ai integration", () => {
     assert.equal(res.data.drafts[1].ingredients[0].name, "Coconut");
     // The flat `draft` stays the first section for older clients.
     assert.equal(res.data.draft.title, "AI pancakes");
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { model: "mock-model" } } },
+    });
+  });
+
+  it("warns when a save keeps only the first of several recipes and links the first photo", async () => {
+    const uploadPhoto = async (name: string) => {
+      const png = encodePng(16, 16, Buffer.alloc(16 * 16 * 4, 200));
+      const bytes = new ArrayBuffer(png.length);
+      new Uint8Array(bytes).set(png);
+      const form = new FormData();
+      form.append("image", new Blob([bytes], { type: "image/png" }), name);
+      const upload = await fetch(`${base}/api/houses/${houseId}/recipes/upload`, {
+        method: "POST",
+        body: form,
+        headers: { cookie },
+      });
+      assert.equal(upload.status, 201);
+      return (await upload.json()).path as string;
+    };
+    const first = await uploadPhoto("page-one.png");
+    const second = await uploadPhoto("page-two.png");
+
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { model: "multi-model" } } },
+    });
+    aiRequests.length = 0;
+    const res = await request(`/api/houses/${houseId}/recipes/scan`, {
+      method: "POST",
+      body: { text: "Tsoureki\n17 eggs", images: [first, second], save: true },
+    });
+    assert.equal(res.status, 201);
+    assert.equal(res.data.saved, true);
+    assert.equal(res.data.count, 2, "the page held two recipes");
+    assert.equal(res.data.savedCount, 1, "one call saves one recipe");
+    assert.match(res.data.warning, /only the first was saved/i);
+    assert.equal(res.data.recipe.sourceImage, first, "the link must name the first photo, not null");
+    // Both photos reached the model on the multi-photo path.
+    const content = aiRequests[0].body.messages[1].content;
+    assert.equal(content.filter((part: any) => part.type === "image_url").length, 2);
+
     await request(`/api/houses/${houseId}`, {
       method: "PATCH",
       body: { settings: { ai: { model: "mock-model" } } },

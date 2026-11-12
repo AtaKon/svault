@@ -38,6 +38,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   aggregateBenchmark,
@@ -60,6 +61,11 @@ function usage() {
     "  --base-url <url>   Override the manifest base URL.",
     "  --models <ids>     Comma-separated model IDs, overriding the manifest (max 4).",
     "  --help             Show this help.",
+    "",
+    "Exit codes:",
+    "  0  every run answered (even if some scoring basis is only a reference)",
+    "  1  invalid manifest, configuration or missing key",
+    "  2  every request failed",
     "",
     "The API key is read from OPENAI_API_KEY (or SVAI_API_KEY) and is never",
     "written to the report or printed. Photos are read from the paths in the",
@@ -103,7 +109,9 @@ function readImageDataUrl(filePath) {
 
 function textOf(message) {
   if (typeof message === "string") return message;
-  if (Array.isArray(message)) return message.map((part) => part?.text ?? "").join("\n");
+  if (Array.isArray(message)) {
+    return message.map((part) => part?.text ?? part?.refusal ?? "").join("\n");
+  }
   return "";
 }
 
@@ -123,9 +131,9 @@ async function runOnce({ baseUrl, apiKey, manifest, model, image, referenceRecip
   const notes = [];
   let cost = 0;
   let costKnown = true;
+  let usageSeen = false;
   let promptTokens = 0;
   let completionTokens = 0;
-  let attempt = 0;
 
   let dataUrl;
   try {
@@ -147,7 +155,6 @@ async function runOnce({ baseUrl, apiKey, manifest, model, image, referenceRecip
   }
 
   const send = async (reasoning) => {
-    attempt += 1;
     const body = benchmarkChatBody({ model: model.id, imageDataUrl: dataUrl, reasoning });
     const response = await fetch(`${baseUrl.replace(/\/+$/, "")}/chat/completions`, {
       method: "POST",
@@ -170,6 +177,7 @@ async function runOnce({ baseUrl, apiKey, manifest, model, image, referenceRecip
     }
     const choice = data?.choices?.[0];
     const usage = data?.usage ?? null;
+    if (usage != null) usageSeen = true;
     promptTokens += Number(usage?.prompt_tokens ?? 0) || 0;
     completionTokens += Number(usage?.completion_tokens ?? 0) || 0;
     const reported = benchmarkCost(usage, manifest.prices);
@@ -200,13 +208,15 @@ async function runOnce({ baseUrl, apiKey, manifest, model, image, referenceRecip
     }
 
     const parsed = extractJsonValue(result.text);
-    if (!parsed.ok) {
+    if (!parsed.ok || parsed.partial) {
       throw new Error(
-        parsed.reason === "missing"
-          ? "no JSON in the answer"
-          : result.finishReason === "length"
-            ? "the answer was cut off at the token limit"
-            : "malformed JSON",
+        !parsed.ok
+          ? parsed.reason === "missing"
+            ? `no JSON in the answer${result.text.trim() ? `: ${result.text.trim().slice(0, 120)}` : ""}`
+            : result.finishReason === "length"
+              ? "the answer was cut off at the token limit"
+              : "malformed JSON"
+          : "the answer was cut off mid-JSON, so it may hold fewer recipes than the page",
       );
     }
     const recipes = recipeListFromJson(parsed.value);
@@ -237,7 +247,9 @@ async function runOnce({ baseUrl, apiKey, manifest, model, image, referenceRecip
       score: null,
       scoreDetail: null,
       referenceScore: null,
-      cost: costKnown && attempt > 0 ? cost : null,
+      // A request that failed before the provider reported usage has an
+      // unknown price, not a free one; `0` would understate the total.
+      cost: usageSeen && costKnown ? cost : null,
       promptTokens,
       completionTokens,
       durationMs: Date.now() - startedAt,
@@ -270,18 +282,30 @@ async function main() {
 
   const manifestPath = path.resolve(options.manifest);
   const manifestText = fs.readFileSync(manifestPath, "utf8");
-  let manifest;
+  let rawManifest;
   try {
-    manifest = parseBenchmarkManifest(JSON.parse(manifestText));
+    rawManifest = JSON.parse(manifestText);
   } catch (error) {
     console.error(`Invalid manifest: ${error instanceof Error ? error.message : String(error)}`);
     return 1;
   }
+  // The override is applied to the same parsed object, so it is validated
+  // against the manifest's own referenceModel instead of re-parsing raw text.
   if (options.models) {
-    manifest = parseBenchmarkManifest({
-      ...JSON.parse(manifestText),
-      models: options.models.split(",").map((value) => value.trim()).filter(Boolean),
-    });
+    rawManifest = {
+      ...rawManifest,
+      models: options.models
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean),
+    };
+  }
+  let manifest;
+  try {
+    manifest = parseBenchmarkManifest(rawManifest);
+  } catch (error) {
+    console.error(`Invalid manifest: ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
   }
   // Photo paths are relative to the manifest so the manifest can live next to
   // private photos outside version control.
@@ -307,7 +331,10 @@ async function main() {
     return 1;
   }
 
-  const repositoryRoot = process.cwd();
+  // Resolve from the script, not from the caller's cwd: running
+  // `node ../scripts/recipe-vision-benchmark.mjs` from a subdirectory must still
+  // warn about photos that live inside the repository.
+  const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   for (const image of manifest.images) {
     const relative = path.relative(repositoryRoot, image.path);
     if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
@@ -360,6 +387,9 @@ async function main() {
         model: model.id,
         image: image.label,
         path: image.path,
+        // Record the setting that was actually sent so the report can be
+        // reproduced even when a per-model override differs from the manifest.
+        reasoning: model.reasoning ?? manifest.reasoning,
         score: result.score,
         referenceScore: result.referenceScore,
         cost: result.cost,
