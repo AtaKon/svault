@@ -614,8 +614,10 @@ recipeRoutes.post(
       (draft) => draft.ingredients.length > 0 || draft.steps.some((step) => step.text.trim()),
     );
     // `aiCost` at the top level is the whole scan. A page can hold several
-    // recipes, so each draft carries its share: storing the full scan cost on
-    // every saved recipe would count the same spend once per recipe.
+    // recipes, so each *draft* carries its share: if the caller saves them one
+    // by one, the per-draft shares add up to the scan cost instead of counting
+    // it once per recipe. A `save: true` call persists only the first draft,
+    // so that path stores the full scan cost on that single row below.
     const draftAiCost = aiCost == null ? null : roundMicro(aiCost / Math.max(1, usableDrafts.length));
     // Link to the photo that was actually sent to the model. A request can
     // carry both `image` and `images`; the loader then uses `images` only, so
@@ -652,6 +654,10 @@ recipeRoutes.post(
           { aiCost, aiModels },
         );
       }
+      // The other drafts found on the page are not persisted by this call, so
+      // the one saved recipe must carry the whole scan's spend rather than a
+      // 1/N share that would leave the rest of the bill unaccounted for.
+      draftInputs[0].aiCost = aiCost;
       const id = await saveRecipe(houseId, req.user!.id, draftInputs[0]);
       const row = (await recipeRow(id))!;
       const serialized = serializeRecipe(row, await ingredientsFor(id));

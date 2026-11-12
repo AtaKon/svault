@@ -494,6 +494,10 @@ describe("recipe scan photos and multi-recipe pages", () => {
     assert.equal(res.data.savedCount, 1, "one call saves one recipe");
     assert.match(res.data.warning, /only the first was saved/i);
     assert.equal(res.data.recipe.sourceImage, first, "the link must name the first photo, not null");
+    // The other draft was not persisted, so the saved row must keep the whole
+    // scan spend rather than a 1/N share that would leave part of the bill
+    // unaccounted for.
+    assert.equal(res.data.recipe.aiCost, 0.00125);
     // Both photos reached the model on the multi-photo path.
     const content = aiRequests[0].body.messages[1].content;
     assert.equal(content.filter((part: any) => part.type === "image_url").length, 2);

@@ -821,7 +821,8 @@ it also includes `aiModel` (the model that answered) and `aiModels` (every model
 four; a failed chain still reports the models it tried); `aiCost` covers every attempt that reported a
 price, and the warning says when an attempt did not. When one page produced several drafts, each draft's
 `aiCost` is that scan cost divided between the drafts, so saving them all does not count the same spend
-more than once. `truncated: true` marks a best-effort partial read:
+more than once. A `save: true` call persists only the first recipe, so that saved recipe carries the
+whole scan cost. `truncated: true` marks a best-effort partial read:
 the response still carries the draft, but `save: true` is refused with `409` so a cut-off answer is never
 persisted unattended. The model list comes from
 `settings.ai.recipeVisionModels`, the `OPENAI_RECIPE_VISION_MODELS` environment variable, or the
