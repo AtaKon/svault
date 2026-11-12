@@ -37,6 +37,20 @@ export interface ScanRegion {
 export const MAX_RECIPE_OCR_PIXELS = 5_500_000;
 export const MAX_RECIPE_OCR_WIDTH = 2000;
 
+/**
+ * Scale for a cropped recipe page so the worker stays inside both budgets.
+ * Small crops are upscaled (capped at 2.4×), but a crop that is already larger
+ * than the width or pixel cap is downscaled. Straightening a page grows its
+ * canvas, so an oversized crop is a real path, not a theoretical one.
+ */
+export function recipeOcrScale(width: number, height: number): number {
+  return Math.min(
+    2.4,
+    MAX_RECIPE_OCR_WIDTH / Math.max(1, width),
+    Math.sqrt(MAX_RECIPE_OCR_PIXELS / Math.max(1, width * height)),
+  );
+}
+
 /** A pixel is ink when it is clearly darker than its neighbourhood. */
 const INK_CONTRAST = 20;
 /** How dark a pixel must be on its own before a faint contrast still counts. */

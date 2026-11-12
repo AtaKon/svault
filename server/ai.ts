@@ -381,7 +381,13 @@ export async function chat(
 
   try {
     if (!result.ok) {
-      throw new ApiError(502, `AI provider error (${result.status}): ${result.text || "no response"}`);
+      // Keep the retry notes on the failure too: the caller shows them next to
+      // "AI cleanup failed", so a field-rejection retry is not invisible.
+      throw new ApiError(
+        502,
+        `AI provider error (${result.status}): ${result.text || "no response"}`,
+        notes.length ? { notes } : undefined,
+      );
     }
     if (!result.text.trim()) {
       if ((result.reasoningChars ?? 0) > 0) {

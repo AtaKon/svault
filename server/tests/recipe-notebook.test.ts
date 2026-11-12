@@ -5,6 +5,7 @@ import path from "node:path";
 
 import {
   MAX_RECIPE_OCR_PIXELS,
+  MAX_RECIPE_OCR_WIDTH,
   cleanNotebookText,
   cleanNotebookTextReport,
   detectContentBounds,
@@ -15,6 +16,7 @@ import {
   isPlannerNoiseLine,
   normaliseLumaFromRgba,
   readableWordRatio,
+  recipeOcrScale,
   splitRecipeSections,
 } from "../../shared/notebook-scan.js";
 import { heuristicRecipe, heuristicRecipes, parseIngredientLine } from "../services/recipe-local.js";
@@ -405,6 +407,25 @@ describe("more than one recipe on a page", () => {
     // Measured: 2400x3200 aborts the worker; the scanner caps at 5.5 Mpx.
     assert.ok(MAX_RECIPE_OCR_PIXELS < 2400 * 3200);
     assert.ok(MAX_RECIPE_OCR_PIXELS > 1500 * 2000);
+  });
+});
+
+describe("recipe OCR size budget", () => {
+  it("downscales a crop that straightening pushed over the budget", () => {
+    // A page prepared at the caps (2000x2667) grows to about 2140x2851 when it
+    // is rotated to straighten the ruled lines, and the whole frame can be the
+    // crop. It must be shrunk, not handed to Tesseract whole.
+    const width = 2140;
+    const height = 2851;
+    const scale = recipeOcrScale(width, height);
+    assert.ok(scale < 1, "an oversized crop must be downscaled");
+    assert.ok(Math.round(width * scale) <= MAX_RECIPE_OCR_WIDTH);
+    assert.ok(Math.round(width * scale) * Math.round(height * scale) <= MAX_RECIPE_OCR_PIXELS);
+  });
+
+  it("upscales a small crop and leaves a crop at the width cap alone", () => {
+    assert.equal(recipeOcrScale(100, 100), 2.4);
+    assert.equal(recipeOcrScale(MAX_RECIPE_OCR_WIDTH, 2600), 1);
   });
 });
 

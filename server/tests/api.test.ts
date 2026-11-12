@@ -441,6 +441,37 @@ before(async () => {
           res.end(JSON.stringify({ error: { message: "This model does not accept image input" } }));
           return;
         }
+        // A 400 about the request's content type says nothing about the photo:
+        // retrying without the image would bill a second, pointless call.
+        if (body?.model === "content-type-model") {
+          res.writeHead(400, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: { message: "Unsupported content type: text/plain" } }));
+          return;
+        }
+        // Rejects the photo, then fails the photo-less retry. The response must
+        // still report every model the photo chain tried.
+        if (body?.model === "image-reject-then-fail-model") {
+          if (Array.isArray(userContent)) {
+            res.writeHead(400, { "content-type": "application/json" });
+            res.end(JSON.stringify({ error: { message: "This model does not accept image input" } }));
+          } else {
+            res.writeHead(500, { "content-type": "application/json" });
+            res.end(JSON.stringify({ error: { message: "Mock text-only retry exploded" } }));
+          }
+          return;
+        }
+        // Rejects the reasoning field, then fails without it: the retry note
+        // must still reach the caller that shows the failure warning.
+        if (body?.model === "reasoning-reject-then-fail-model") {
+          if (body?.reasoning) {
+            res.writeHead(400, { "content-type": "application/json" });
+            res.end(JSON.stringify({ error: { message: "Unsupported parameter: reasoning" } }));
+          } else {
+            res.writeHead(500, { "content-type": "application/json" });
+            res.end(JSON.stringify({ error: { message: "Mock retry exploded" } }));
+          }
+          return;
+        }
         // Models used by the recipe fallback-chain tests: a provider failure,
         // an empty answer, and a rate limit must each move to the next model.
         if (body?.model === "chain-500-model") {
@@ -6083,6 +6114,137 @@ describe("ai integration", () => {
     await request(`/api/houses/${houseId}`, {
       method: "PATCH",
       body: { settings: { ai: { model: "mock-model", recipeVisionModels: [] } } },
+    });
+  });
+
+  it("does not treat an unrelated content-type error as an image-input failure", async () => {
+    const png = encodePng(16, 16, Buffer.alloc(16 * 16 * 4, 200));
+    const bytes = new ArrayBuffer(png.length);
+    new Uint8Array(bytes).set(png);
+    const form = new FormData();
+    form.append("image", new Blob([bytes], { type: "image/png" }), "content-type.png");
+    const upload = await fetch(`${base}/api/houses/${houseId}/recipes/upload`, {
+      method: "POST",
+      body: form,
+      headers: { cookie },
+    });
+    const { path: imagePath } = await upload.json();
+
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: {
+        settings: {
+          ai: {
+            enabled: true,
+            baseUrl: aiBase,
+            apiKey: "test-key",
+            model: "content-type-model",
+            visionModel: null,
+            recipeVisionModels: [],
+            recipeReasoning: "auto",
+          },
+        },
+      },
+    });
+    aiRequests.length = 0;
+    const scan = await request(`/api/houses/${houseId}/recipes/scan`, {
+      method: "POST",
+      body: { text: "Pancakes\n2 eggs", image: imagePath },
+    });
+    assert.equal(scan.status, 200);
+    assert.equal(scan.data.provider, "local");
+    assert.equal(
+      String(scan.data.warning).includes("did not accept the photo"),
+      false,
+      "a content-type error says nothing about the image",
+    );
+    assert.equal(aiRequests.length, 1, "the photo must not be re-sent without the image");
+
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { model: "mock-model", recipeVisionModels: [] } } },
+    });
+  });
+
+  it("lists the photo chain models when the text-only retry also fails", async () => {
+    const png = encodePng(16, 16, Buffer.alloc(16 * 16 * 4, 200));
+    const bytes = new ArrayBuffer(png.length);
+    new Uint8Array(bytes).set(png);
+    const form = new FormData();
+    form.append("image", new Blob([bytes], { type: "image/png" }), "retry-fail.png");
+    const upload = await fetch(`${base}/api/houses/${houseId}/recipes/upload`, {
+      method: "POST",
+      body: form,
+      headers: { cookie },
+    });
+    const { path: imagePath } = await upload.json();
+
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: {
+        settings: {
+          ai: {
+            enabled: true,
+            baseUrl: aiBase,
+            apiKey: "test-key",
+            model: "mock-model",
+            recipeVisionModels: ["chain-500-model", "image-reject-then-fail-model"],
+          },
+        },
+      },
+    });
+    aiRequests.length = 0;
+    const scan = await request(`/api/houses/${houseId}/recipes/scan`, {
+      method: "POST",
+      body: { text: "Pancakes\n2 eggs", image: imagePath },
+    });
+    assert.equal(scan.status, 200);
+    assert.equal(scan.data.provider, "local");
+    assert.match(scan.data.warning, /AI cleanup failed/i);
+    assert.match(scan.data.warning, /Mock text-only retry exploded/i);
+    assert.deepEqual(
+      aiRequests.map((entry) => entry.body.model),
+      ["chain-500-model", "image-reject-then-fail-model", "image-reject-then-fail-model"],
+    );
+    // The photo chain's first model must not disappear because the retry failed.
+    assert.deepEqual(scan.data.aiModels, ["chain-500-model", "image-reject-then-fail-model"]);
+    assert.equal(scan.data.aiCost, null, "none of the failed calls reported a price");
+
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { model: "mock-model", recipeVisionModels: [] } } },
+    });
+  });
+
+  it("keeps the field-rejection note when the retry also fails", async () => {
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: {
+        settings: {
+          ai: {
+            model: "reasoning-reject-then-fail-model",
+            recipeVisionModels: [],
+            recipeReasoning: "high",
+          },
+        },
+      },
+    });
+    aiRequests.length = 0;
+    const scan = await request(`/api/houses/${houseId}/recipes/scan`, {
+      method: "POST",
+      body: { text: "Pancakes\n2 eggs" },
+    });
+    assert.equal(scan.status, 200);
+    assert.equal(scan.data.provider, "local");
+    assert.match(scan.data.warning, /AI cleanup failed/i);
+    assert.match(scan.data.warning, /rejected the reasoning setting/i);
+    assert.equal(aiRequests.length, 2);
+    assert.deepEqual(aiRequests[0].body.reasoning, { effort: "high" });
+    assert.equal(aiRequests[1].body.reasoning, undefined);
+
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { model: "mock-model", recipeReasoning: "auto" } } },
     });
   });
 

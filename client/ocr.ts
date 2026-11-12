@@ -8,6 +8,7 @@ import {
   inkLumaFromRgba,
   measureBlueInk,
   normaliseLumaFromRgba,
+  recipeOcrScale,
   scoreRecipeText,
 } from "@shared/notebook-scan";
 
@@ -437,12 +438,11 @@ function tightenRecipePage(source: HTMLCanvasElement): HTMLCanvasElement {
   const right = Math.min(page.width, Math.round((box.left + box.width) * scaleX) + marginX);
   const bottom = Math.min(page.height, Math.round((box.top + box.height) * scaleY) + marginY);
   const region: Region = { left, top, width: right - left, height: bottom - top };
-  // Tesseract.js aborts on a 2400x3200 page (its wasm heap), so the upscale is
-  // capped by total pixels as well as by width.
-  const widthScale = MAX_RECIPE_OCR_WIDTH / Math.max(1, region.width);
-  const pixelScale = Math.sqrt(MAX_RECIPE_OCR_PIXELS / Math.max(1, region.width * region.height));
-  const scale = Math.min(2.4, Math.max(1, Math.min(widthScale, pixelScale)));
-  return cropCanvas(page, region, scale);
+  // Tesseract.js aborts on a 2400x3200 page (its wasm heap), and straightening
+  // the photo can push an otherwise-fine crop over the budget. The shared scale
+  // caps the upscale at 2.4× and downscales an oversized crop instead of
+  // handing it to the worker whole.
+  return cropCanvas(page, region, recipeOcrScale(region.width, region.height));
 }
 
 type OcrWorker = Awaited<ReturnType<typeof import("tesseract.js")["createWorker"]>>;

@@ -41,14 +41,13 @@ import bmp from "bmp-js";
 import { createWorker } from "tesseract.js";
 
 import {
-  MAX_RECIPE_OCR_PIXELS,
-  MAX_RECIPE_OCR_WIDTH,
   cleanNotebookText,
   detectContentBounds,
   detectPaperRegion,
   estimateSkewDegrees,
   inkLumaFromRgba,
   normaliseLumaFromRgba,
+  recipeOcrScale,
 } from "../shared/notebook-scan.ts";
 
 /* ---------------------------------------------------------- OCR language data */
@@ -249,11 +248,7 @@ export function tighten(image) {
  * an oversized photo is downscaled instead of being handed to Tesseract whole.
  */
 export function contentScale(width, height) {
-  return Math.min(
-    2.4,
-    MAX_RECIPE_OCR_WIDTH / Math.max(1, width),
-    Math.sqrt(MAX_RECIPE_OCR_PIXELS / Math.max(1, width * height)),
-  );
+  return recipeOcrScale(width, height);
 }
 
 /** Shrink an image that is already larger than the shared Tesseract budget. */

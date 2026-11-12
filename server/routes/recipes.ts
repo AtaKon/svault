@@ -369,12 +369,13 @@ function providerStatusOf(message: string): number | null {
 /**
  * A provider that cannot accept image parts usually says so in a client-error
  * body. Match only image-specific wording and only a 4xx: a bare "unsupported"
- * (e.g. "unsupported parameter: reasoning"), a rate limit, an auth failure or a
- * 5xx must not trigger a second, photo-less call that re-bills the request.
+ * (e.g. "unsupported parameter: reasoning"), an unrelated "unsupported content
+ * type: text/plain", a rate limit, an auth failure or a 5xx must not trigger a
+ * second, photo-less call that re-bills the request.
  */
 function isImageInputError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  if (!/image|vision|multimodal|content[\s_-]*type/i.test(message)) return false;
+  if (!/image|vision|multimodal/i.test(message)) return false;
   if (
     /rate.?limit|too many requests|quota|unauthor|forbidden|api.?key|reasoning|unsupported\s+(?:parameter|value|option|model|field)/i.test(
       message,
@@ -403,6 +404,12 @@ function attemptedModelsFrom(error: unknown): string[] {
 function failedModelFrom(error: unknown): string | null {
   const model = (error as { details?: { model?: unknown } } | null)?.details?.model;
   return typeof model === "string" && model ? model : null;
+}
+
+/** Add the models a failed call tried, keeping the ones an earlier call used. */
+function addAttemptedModels(current: string[], error: unknown): string[] {
+  const models = attemptedModelsFrom(error);
+  return models.length ? [...new Set([...current, ...models])] : current;
 }
 
 function roundMicro(value: number): number {
@@ -505,7 +512,7 @@ recipeRoutes.post(
         }
       } catch (err) {
         spentOnFailure(err);
-        aiModels = attemptedModelsFrom(err);
+        aiModels = addAttemptedModels(aiModels, err);
         if (vision.images.length && isImageInputError(err)) {
           try {
             // Retry the model that actually rejected the photo. Re-running the
@@ -527,8 +534,9 @@ recipeRoutes.post(
             );
           } catch (retryError) {
             spentOnFailure(retryError);
-            const retried = attemptedModelsFrom(retryError);
-            if (retried.length) aiModels = retried;
+            // The retry is a second call, not a replacement: the response must
+            // still list the photo chain's models alongside the retried one.
+            aiModels = addAttemptedModels(aiModels, retryError);
             warnings.push(
               `AI cleanup failed, kept the locally parsed version. ${retryError instanceof Error ? retryError.message : ""}`.trim(),
             );
