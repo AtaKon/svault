@@ -311,7 +311,12 @@ export function scoreRecipeAgainstTruth(draft: RecipeLike, truth: RecipeTruth): 
   const weights: Record<keyof typeof RECIPE_SCORE_WEIGHTS, number> = { ...RECIPE_SCORE_WEIGHTS };
   if (!truthTitle) weights.title = 0;
   if (!expected.length) {
-    weights.names = 0;
+    // A truth that records no ingredient cannot confirm an ingredient list, so
+    // a draft that lists none is complete and earns no names credit for it.
+    // Keep the weight when the draft does list ingredients: those rows are
+    // unverified, and `namesScore` is already 0 for them. Dropping the weight
+    // too made a page of invented ingredients score a perfect 1.0.
+    if (!actual.length || !Array.isArray(truth.ingredients)) weights.names = 0;
     weights.quantities = 0;
     weights.units = 0;
   }

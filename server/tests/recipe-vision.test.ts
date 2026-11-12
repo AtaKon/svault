@@ -196,9 +196,15 @@ describe("shared recipe prompt", () => {
       value: { recipes: [{ title: "A" }] },
       partial: true,
     });
-    assert.deepEqual(extractJsonValue('{"a":1} trailing }'), { ok: false, reason: "malformed" });
+    assert.deepEqual(extractJsonValue('{"a":1} trailing }'), { ok: true, value: { a: 1 } });
     // Trailing prose is not a truncation.
     assert.deepEqual(extractJsonValue('{"a":1} — hope that helps'), { ok: true, value: { a: 1 } });
+    // Trailing prose may itself contain a bracket; the answer is still complete.
+    assert.deepEqual(extractJsonValue('{"recipes":[{"title":"A"}]} Hope it helps [see docs]'), {
+      ok: true,
+      value: { recipes: [{ title: "A" }] },
+    });
+    assert.deepEqual(extractJsonValue('{"a":1} Note: see the {appendix}'), { ok: true, value: { a: 1 } });
     // A cut-off multi-recipe answer that stops on a complete inner object is
     // rejected outright, never returned as a complete single-recipe answer.
     assert.deepEqual(extractJsonValue('{"recipes":[{"title":"A"}'), { ok: false, reason: "malformed" });
@@ -321,6 +327,30 @@ describe("recipe truth scoring", () => {
     assert.equal(score.score, 1);
     assert.equal(score.titleScore, 1);
     assert.equal(score.stepsScore, 1);
+  });
+
+  it("penalises ingredients the truth never recorded", () => {
+    // A steps-only truth cannot confirm any ingredient, but a draft that lists
+    // them is unverified content: it must not earn a perfect score, because the
+    // docs promise the names score is F1 against invented rows.
+    const stepsOnly = { title: "Ρεβάνι", ingredients: [], steps: ["Χτυπάμε το βούτυρο με τη ζάχαρη."] };
+    const invented = {
+      title: "Ρεβάνι",
+      steps: [{ text: "Χτυπάμε το βούτυρο με τη ζάχαρη." }],
+      ingredients: [
+        { name: "βούτυρο", quantity: 160, unit: "g" },
+        { name: "ζάχαρη", quantity: 200, unit: "g" },
+      ],
+    };
+    const score = scoreRecipeAgainstTruth(invented, stepsOnly);
+    assert.equal(score.inventedIngredients, 2);
+    assert.equal(score.namesScore, 0);
+    assert.ok(score.score < 1, `score ${score.score} must not be perfect without recorded ingredients`);
+    assert.equal(scoreRecipeAgainstTruth(invented, { title: stepsOnly.title, steps: stepsOnly.steps }).score, 1);
+
+    // A draft that also lists no ingredients is still a complete reading.
+    const empty = { title: "Ρεβάνι", steps: [{ text: "Χτυπάμε το βούτυρο με τη ζάχαρη." }] };
+    assert.equal(scoreRecipeAgainstTruth(empty, stepsOnly).score, 1);
   });
 
   it("does not award quantity or unit credit the truth never recorded", () => {

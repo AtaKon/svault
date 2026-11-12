@@ -273,6 +273,37 @@ export type JsonExtraction =
   | { ok: false; reason: "missing" | "malformed" };
 
 /**
+ * Index of the bracket that closes the first complete JSON value in `text`, or
+ * null when it never closes. Strings and escapes are respected so a brace in a
+ * recipe title cannot end the scan early.
+ */
+function firstJsonValueEnd(text: string): number | null {
+  const stack: string[] = [];
+  let inString = false;
+  let escaped = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === '"') inString = false;
+      continue;
+    }
+    if (character === '"') {
+      inString = true;
+    } else if (character === "{" || character === "[") {
+      stack.push(character);
+    } else if (character === "}" || character === "]") {
+      const open = stack.pop();
+      if (!open) return null;
+      if ((open === "{" && character !== "}") || (open === "[" && character !== "]")) return null;
+      if (!stack.length) return index;
+    }
+  }
+  return null;
+}
+
+/**
  * Tolerant JSON extraction: accepts a markdown fence, a leading sentence and a
  * body that was cut off after a complete object/array. Shared with the
  * benchmark so both judge the same text the same way.
@@ -294,9 +325,12 @@ export function extractJsonValue(text: string): JsonExtraction {
   try {
     return { ok: true, value: JSON.parse(candidate) as unknown };
   } catch {
-    // find the last closing bracket and retry
-    const end = Math.max(candidate.lastIndexOf("}"), candidate.lastIndexOf("]"));
-    if (end > 0) {
+    // The answer may be followed by prose. Cut at the first complete value
+    // instead of the last bracket in the string: trailing prose can contain a
+    // bracket of its own ("Hope it helps [see docs]"), and using the last one
+    // then discarded an otherwise valid answer.
+    const end = firstJsonValueEnd(candidate);
+    if (end != null) {
       try {
         const value = JSON.parse(candidate.slice(0, end + 1)) as unknown;
         const rest = candidate.slice(end + 1).trim();
