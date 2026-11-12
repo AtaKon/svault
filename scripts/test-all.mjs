@@ -9,6 +9,9 @@ const steps = [
   [...shared, "--test", "server/tests/ocr-benchmark.test.mjs"],
   [...shared, "--test", "server/tests/ai-reasoning.test.ts"],
   [...shared, "--test", "server/tests/recipe-vision.test.ts"],
+  [...shared, "--test", "server/tests/recipe-scan-reasoning.test.ts"],
+  [...shared, "--test", "server/tests/recipe-scan-fallbacks.test.ts"],
+  [...shared, "--test", "server/tests/recipe-scan-photos.test.ts"],
   [...shared, "--test", "server/tests/api.test.ts"],
 ];
 
