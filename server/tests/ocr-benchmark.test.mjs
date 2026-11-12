@@ -16,6 +16,7 @@ import {
   cropToContent,
   evaluate,
   keywordFound,
+  parseArgs,
   parseManifest,
   rotate,
   temporaryPath,
@@ -218,6 +219,23 @@ describe("ocr benchmark manifest", () => {
     );
   });
 
+  it("rejects scoring inputs that would produce meaningless numbers", () => {
+    // A string keywords value passes a truthiness check but `evaluate` would
+    // iterate its characters, so recall would look measured while being wrong.
+    assert.throws(
+      () => parseManifest({ images: [{ path: "p.jpg", keywords: "ΡΕΒΑΝΙ" }] }, process.cwd()),
+      /keywords must be an array/,
+    );
+    assert.throws(
+      () => parseManifest({ images: [{ path: "p.jpg", keywords: ["ΡΕΒΑΝΙ", 3] }] }, process.cwd()),
+      /keywords must be an array/,
+    );
+    assert.throws(
+      () => parseManifest({ images: [{ path: "p.jpg", truth: { title: "Ρεβάνι" } }] }, process.cwd()),
+      /truth must be a string/,
+    );
+  });
+
   it("resolves each relative path against the manifest directory", () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "ocr-manifest-"));
     try {
@@ -230,6 +248,42 @@ describe("ocr benchmark manifest", () => {
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });
     }
+  });
+});
+
+describe("ocr benchmark CLI arguments", () => {
+  it("accepts --json before or after the manifest", () => {
+    assert.deepEqual(parseArgs(["--json", "out.json", "manifest.json"]), {
+      manifest: "manifest.json",
+      json: "out.json",
+      selfCheck: false,
+      help: false,
+    });
+    assert.deepEqual(parseArgs(["manifest.json", "--json", "out.json"]), {
+      manifest: "manifest.json",
+      json: "out.json",
+      selfCheck: false,
+      help: false,
+    });
+  });
+
+  it("treats a missing --json value as a usage error, not a file name", () => {
+    assert.throws(() => parseArgs(["--json"]), /needs an output file path/);
+    assert.throws(() => parseArgs(["--json", "--self-check"]), /needs an output file path/);
+  });
+
+  it("rejects unknown options and more than one manifest", () => {
+    assert.throws(() => parseArgs(["--wat", "manifest.json"]), /Unknown option/);
+    assert.throws(() => parseArgs(["one.json", "two.json"]), /Unexpected argument/);
+  });
+
+  it("recognises --self-check", () => {
+    assert.deepEqual(parseArgs(["--self-check"]), {
+      manifest: null,
+      json: null,
+      selfCheck: true,
+      help: false,
+    });
   });
 });
 

@@ -287,11 +287,11 @@ export function RecipeScanPage() {
                 <div className="mt-2 rounded-xl bg-warn-soft px-3 py-2 text-[11px] text-warn">
                   {t(ocrError)} {' '}{t(" You can still type the text below, or let AI read the photo. ")}</div>
               )}
-              {(ocrLooksUnreadable || (!text.trim() && uploadedPath)) && (
+              {!ocrRunning && (ocrLooksUnreadable || (!text.trim() && uploadedPath)) && (
                 <div className="mt-2 rounded-xl bg-warn-soft px-3 py-2 text-[11px] leading-relaxed text-warn">
                   <p>{t("This looks handwritten, and on-device OCR cannot read handwriting reliably. A vision model reads the photo itself — the recognised text below is only a hint.")}</p>
                   {uploadedPath ? (
-                    <Button type="button" size="sm" icon="sparkles" className="mt-2" loading={busy} onClick={() => void digitize(true)}>
+                    <Button type="button" size="sm" icon="sparkles" className="mt-2" loading={busy} disabled={ocrRunning} onClick={() => void digitize(true)}>
                       {t("Read the photo with AI ")}</Button>
                   ) : null}
                 </div>
@@ -315,10 +315,10 @@ export function RecipeScanPage() {
               <div className="mt-2 flex flex-wrap gap-2">
                 <Button type="button" size="sm" variant="secondary" icon="refresh" onClick={() => void runOcr()} disabled={ocrRunning}>
                   {t("Re-run OCR ")}</Button>
-                <Button type="button" size="sm" icon="sparkles" loading={busy} onClick={() => void digitize()}>
+                <Button type="button" size="sm" icon="sparkles" loading={busy} disabled={ocrRunning} onClick={() => void digitize()}>
                   {t("Digitise recipe ")}</Button>
                 {uploadedPath && (
-                  <Button type="button" size="sm" variant="secondary" icon="sparkles" loading={busy} onClick={() => void digitize(true)}>
+                  <Button type="button" size="sm" variant="secondary" icon="sparkles" loading={busy} disabled={ocrRunning} onClick={() => void digitize(true)}>
                     {t("Read the photo with AI ")}</Button>
                 )}
               </div>

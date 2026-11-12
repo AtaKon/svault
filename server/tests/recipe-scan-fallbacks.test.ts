@@ -206,6 +206,7 @@ describe("recipe scan fallback chains and truncation", () => {
       body: form,
       headers: { cookie },
     });
+    assert.equal(upload.ok, true, "the fixture photo must upload before the scan");
     const { path: imagePath } = await upload.json();
 
     await request(`/api/houses/${houseId}`, {
@@ -235,6 +236,53 @@ describe("recipe scan fallback chains and truncation", () => {
       await request(`/api/houses/${houseId}`, {
         method: "PATCH",
         body: { settings: { ai: { enabled: true } } },
+      });
+    }
+  });
+
+  it("reports the AI spend when save finds no usable recipe", async () => {
+    const png = encodePng(16, 16, Buffer.alloc(16 * 16 * 4, 200));
+    const bytes = new ArrayBuffer(png.length);
+    new Uint8Array(bytes).set(png);
+    const form = new FormData();
+    form.append("image", new Blob([bytes], { type: "image/png" }), "title-only.png");
+    const upload = await fetch(`${base}/api/houses/${houseId}/recipes/upload`, {
+      method: "POST",
+      body: form,
+      headers: { cookie },
+    });
+    assert.equal(upload.ok, true, "the fixture photo must upload before the scan");
+    const { path: imagePath } = await upload.json();
+
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: {
+        settings: {
+          ai: {
+            enabled: true,
+            baseUrl: aiBase,
+            apiKey: "test-key",
+            model: "mock-model",
+            recipeVisionModels: ["truncated-title-model"],
+          },
+        },
+      },
+    });
+    try {
+      const saved = await request(`/api/houses/${houseId}/recipes/scan`, {
+        method: "POST",
+        body: { image: imagePath, save: true },
+      });
+      assert.equal(saved.status, 400);
+      assert.match(saved.data.error, /No recipe could be read/i);
+      // The title-only answer was billed but produced no usable draft; the
+      // client must still be able to see what the failed save cost.
+      assert.equal(saved.data.details?.aiCost, 0.00125);
+      assert.deepEqual(saved.data.details?.aiModels, ["truncated-title-model"]);
+    } finally {
+      await request(`/api/houses/${houseId}`, {
+        method: "PATCH",
+        body: { settings: { ai: { model: "mock-model", recipeVisionModels: [] } } },
       });
     }
   });
@@ -327,6 +375,18 @@ describe("recipe scan fallback chains and truncation", () => {
       method: "PATCH",
       body: { settings: { ai: { model: "mock-model", recipeVisionModels: [] } } },
     });
+  });
+
+  it("warns when the kept partial answer did not report a price", async () => {
+    const cfg = resolveAi({
+      ai: { enabled: true, baseUrl: aiBase, apiKey: "test-key", model: "mock-model" },
+    });
+    const result = await aiReadRecipes(cfg, "Pancakes\n2 eggs", [], { operation: "recipe.scan", houseId }, {
+      models: [{ model: "truncated-unpriced-json-model" }],
+    });
+    assert.equal(result.truncated, true);
+    assert.equal(result.usage.cost, null, "no provider price and no configured fallback price");
+    assert.match(result.notes?.join(" ") ?? "", /truncated-unpriced-json-model did not report a price/i);
   });
 
   it("attributes a kept partial answer to the model that produced it and keeps its cost", async () => {

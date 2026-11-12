@@ -272,6 +272,15 @@ const WORD_NUMBERS: [RegExp, number][] = [
 ];
 
 /**
+ * Words that make a leading number word part of ordinary prose rather than an
+ * amount ("Μια συνταγή", "μια φορά"). Without this guard the number is consumed
+ * and the rest of the sentence becomes an ingredient or a phantom title.
+ * `\b` is ASCII-only in JavaScript, so the boundary is spelled out.
+ */
+const PROSE_AFTER_WORD_NUMBER =
+  /^(?:συνταγ(?:ή|η|ές|εσ)|φορά|φορα|φορές|φορες|ιδέα|ιδεα|ιδέες|ιδεεσ|μέρα|μερα|μέρες|μερεσ|ώρα|ωρα|ώρες|ωρεσ|εβδομάδα|εβδομαδα|εβδομάδες|εβδομαδεσ|χρόνο|χρονο|χρόνια|χρονια|σελίδα|σελιδα|σελίδες|σελιδεσ|στιγμή|στιγμη)(?=\s|$)/iu;
+
+/**
  * Ditto mark after the quantity ("150 »"), meaning "same unit as the line
  * above". Only unambiguous marks count: a single quote (smart or straight) is far
  * more likely to be an opening quotation mark from OCR than a ditto, so it is
@@ -292,8 +301,10 @@ export function parseIngredientLine(rawLine: string, previousUnit: string | null
     for (const [pattern, value] of WORD_NUMBERS) {
       const match = pattern.exec(line);
       if (!match) continue;
+      const rest = line.slice(match[0].length).trim();
+      if (PROSE_AFTER_WORD_NUMBER.test(rest)) continue;
       quantity = value;
-      line = line.slice(match[0].length).trim();
+      line = rest;
       break;
     }
   }

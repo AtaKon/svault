@@ -471,6 +471,14 @@ describe("benchmark manifest", () => {
         }),
       (error: unknown) => error instanceof BenchmarkManifestError && /quantity must be a number/.test(error.message),
     );
+    assert.throws(
+      () =>
+        parseBenchmarkManifest({
+          ...baseManifest,
+          images: [{ path: "p.jpg", truth: { ingredients: [{ name: "flour", quantity: -200 }] } }],
+        }),
+      (error: unknown) => error instanceof BenchmarkManifestError && /quantity must be non-negative/.test(error.message),
+    );
   });
 
   it("rejects an unknown reasoning mode on a model", () => {
@@ -480,6 +488,11 @@ describe("benchmark manifest", () => {
           ...baseManifest,
           models: [{ id: "a", reasoning: "maximum" }],
         }),
+      (error: unknown) =>
+        error instanceof BenchmarkManifestError && /reasoning must be auto, off, low, medium, high/.test(error.message),
+    );
+    assert.throws(
+      () => parseBenchmarkManifest({ ...baseManifest, models: [{ id: "a", reasoning: 5 }] }),
       (error: unknown) =>
         error instanceof BenchmarkManifestError && /reasoning must be auto, off, low, medium, high/.test(error.message),
     );

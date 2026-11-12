@@ -617,7 +617,11 @@ export function splitRecipeSections(text: string): RecipeSection[] {
     const start = position === 0 ? 0 : titleIndex;
     const end = position + 1 < starts.length ? starts[position + 1] : lines.length;
     const slice = lines.slice(start, end);
-    if (!slice.some((line) => CONTENT_START.test(line) && letterCount(line) > 0)) continue;
+    // A start normally owns the amount line that qualified it, but a title
+    // immediately followed by another title can borrow the next section's
+    // amount line. That leaves a title-only slice; dropping it would lose the
+    // heading, so keep the page unsplit and let the caller parse all of it.
+    if (!slice.some((line) => CONTENT_START.test(line) && letterCount(line) > 0)) return [];
     sections.push({ title: lines[titleIndex], lines: slice, startLine: titleIndex - start });
   }
   return sections.length >= 2 ? sections : [];
@@ -644,6 +648,9 @@ export function normaliseLumaFromRgba(
   rgba: Uint8ClampedArray | Uint8Array,
   pixelCount: number,
 ): Uint8ClampedArray {
+  if (rgba.length < pixelCount * 4) {
+    throw new Error(`RGBA buffer is too short: expected ${pixelCount * 4} bytes, got ${rgba.length}.`);
+  }
   const values = new Uint8ClampedArray(pixelCount);
   const histogram = new Uint32Array(256);
   for (let pixel = 0, index = 0; pixel < pixelCount; pixel++, index += 4) {
@@ -668,6 +675,9 @@ export function normaliseLumaFromRgba(
  * while cream paper and yellow age stains stay light. `rgba` is 8-bit RGBA.
  */
 export function inkLumaFromRgba(rgba: Uint8ClampedArray | Uint8Array, pixelCount: number): Uint8ClampedArray {
+  if (rgba.length < pixelCount * 4) {
+    throw new Error(`RGBA buffer is too short: expected ${pixelCount * 4} bytes, got ${rgba.length}.`);
+  }
   const values = new Uint8ClampedArray(pixelCount);
   const histogram = new Uint32Array(256);
   for (let pixel = 0, index = 0; pixel < pixelCount; pixel++, index += 4) {
@@ -705,6 +715,9 @@ export function inkLumaFromRgba(rgba: Uint8ClampedArray | Uint8Array, pixelCount
 
 /** Average blue-minus-red of the darkest pixels. Blue ballpoint scores high. */
 export function measureBlueInk(rgba: Uint8ClampedArray | Uint8Array, pixelCount: number): number {
+  if (rgba.length < pixelCount * 4) {
+    throw new Error(`RGBA buffer is too short: expected ${pixelCount * 4} bytes, got ${rgba.length}.`);
+  }
   const histogram = new Uint32Array(256);
   const values = new Uint8ClampedArray(pixelCount);
   for (let pixel = 0, index = 0; pixel < pixelCount; pixel++, index += 4) {

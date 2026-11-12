@@ -155,6 +155,12 @@ describe("shared OCR pixel transforms", () => {
     assert.ok(values[1] < values[0], "the blue ink pixel must be darker than the paper");
     assert.ok(values[3] < values[2]);
   });
+
+  it("fails loudly when an RGBA buffer is shorter than its pixel count", () => {
+    const short = new Uint8ClampedArray(4 * 3);
+    assert.throws(() => normaliseLumaFromRgba(short, 4), /too short/);
+    assert.throws(() => inkLumaFromRgba(short, 4), /too short/);
+  });
 });
 
 describe("notebook page detection", () => {
@@ -230,6 +236,22 @@ describe("handwritten Greek ingredient lines", () => {
 
     assert.equal(parseIngredientLine("δύο αυγά")?.quantity, 2);
     assert.equal(parseIngredientLine("ενάμισι φλιτζ. γάλα")?.quantity, 1.5);
+  });
+
+  it("does not read a prose number word as an amount", () => {
+    // "Μια συνταγή" is a heading, not one recipe; "μια φορά" is prose. The
+    // word-number match used to consume the number and turn the rest into an
+    // ingredient, which also hid the heading from title detection.
+    assert.equal(parseIngredientLine("Μια συνταγή")?.quantity, null);
+    assert.equal(parseIngredientLine("μια φορά")?.quantity, null);
+    assert.equal(parseIngredientLine("ένα φλιτζάνι αλεύρι")?.quantity, 1, "a unit still counts");
+
+    const draft = heuristicRecipe(["Μια συνταγή", "2 αυγά", "1 cup flour"].join("\n"));
+    assert.equal(draft.title, "Μια συνταγή");
+    assert.deepEqual(
+      draft.ingredients.map((ingredient) => ingredient.name),
+      ["αυγά", "flour"],
+    );
   });
 
   it("reads a mixed fraction", () => {
@@ -422,6 +444,16 @@ describe("more than one recipe on a page", () => {
     // guess. Its slice never contains the second title's amounts.
     const sections = splitRecipeSections(
       ["Ρεβανί", "Τσουρέκι", "17 αυγά", "250 γραμμ. μαγιά", "Εκτέλεση", "Τα ζυμώνουμε."].join("\n"),
+    );
+    assert.deepEqual(sections, []);
+  });
+
+  it("does not split when that would drop a title-only slice", () => {
+    // The first title borrows the second title's amount line during lookahead,
+    // so its own slice is just the heading. Splitting would silently lose
+    // "Ρεβανί"; keep the page whole instead.
+    const sections = splitRecipeSections(
+      ["Ρεβανί", "Τσουρέκι", "17 αυγά", "250 γραμμ. μαγιά", "Κουραμπιέδες", "3 αυγά"].join("\n"),
     );
     assert.deepEqual(sections, []);
   });

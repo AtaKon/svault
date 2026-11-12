@@ -880,6 +880,9 @@ export async function aiCleanRecipe(
   const parsed = extractJson(text);
   const recipes = recipeListFromJson(parsed);
   const notes = [...chatNotes];
+  if (truncated) {
+    notes.push(`The recipe text was cut off at ${limit} characters, so the import may be incomplete.`);
+  }
   if (!recipes.length) throw new ApiError(502, "AI did not return a recipe", { usage });
   if (recipes.length > 1) {
     notes.push(`The AI returned ${recipes.length} recipes; only the first was imported.`);
@@ -891,7 +894,10 @@ export async function aiCleanRecipe(
     data: recipes[0],
     usage,
     notes,
-    truncated: finishReason === "length",
+    // The provider cutting the answer off and the caller cutting the input at
+    // 12000 characters both leave the imported recipe incomplete, so both are
+    // reported. The caller uses this to warn before saving.
+    truncated: finishReason === "length" || truncated,
     model: usage.model,
     models: [usage.model],
   };

@@ -553,6 +553,20 @@ export function parseManifest(value, baseDir) {
     if (typeof entry.path !== "string" || !entry.path.trim()) {
       throw new Error(`manifest.images[${index}].path must be a non-empty string.`);
     }
+    // A string here would pass the path check and then be iterated character by
+    // character by `evaluate`, producing recall numbers that look measured but
+    // are meaningless. Validate the scoring inputs before any OCR spend.
+    if (entry.keywords != null) {
+      if (
+        !Array.isArray(entry.keywords) ||
+        entry.keywords.some((word) => typeof word !== "string" || !word.trim())
+      ) {
+        throw new Error(`manifest.images[${index}].keywords must be an array of non-empty strings.`);
+      }
+    }
+    if (entry.truth != null && typeof entry.truth !== "string") {
+      throw new Error(`manifest.images[${index}].truth must be a string when set.`);
+    }
     const file = path.isAbsolute(entry.path) ? entry.path : path.join(baseDir, entry.path);
     let isFile = false;
     try {
@@ -567,9 +581,61 @@ export function parseManifest(value, baseDir) {
   });
 }
 
+/**
+ * Parse the manual CLI without assuming the manifest is `argv[2]`. Flags may
+ * appear before or after it, and a missing flag value is a usage error rather
+ * than an `ENOENT` on a file literally named "--json".
+ */
+export function parseArgs(argv) {
+  const options = { manifest: null, json: null, selfCheck: false, help: false };
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--self-check") {
+      options.selfCheck = true;
+    } else if (arg === "--json") {
+      const value = argv[index + 1];
+      if (!value || value.startsWith("-")) throw new Error("--json needs an output file path.");
+      options.json = value;
+      index += 1;
+    } else if (arg === "--help" || arg === "-h") {
+      options.help = true;
+    } else if (arg.startsWith("-")) {
+      throw new Error(`Unknown option ${arg}.`);
+    } else if (!options.manifest) {
+      options.manifest = arg;
+    } else {
+      throw new Error(`Unexpected argument ${arg}.`);
+    }
+  }
+  return options;
+}
+
+function printUsage() {
+  console.error("usage: node --import tsx scripts/ocr-benchmark.mjs <manifest.json> [--json out.json]");
+  console.error("       node --import tsx scripts/ocr-benchmark.mjs --self-check");
+}
+
 async function main() {
-  const manifestFile = process.argv[2];
-  if (manifestFile === "--self-check") {
+  let options;
+  try {
+    options = parseArgs(process.argv.slice(2));
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    printUsage();
+    process.exitCode = 2;
+    return;
+  }
+  if (options.help) {
+    printUsage();
+    return;
+  }
+  if (options.selfCheck) {
+    if (options.manifest || options.json) {
+      console.error("--self-check does not take a manifest or --json.");
+      printUsage();
+      process.exitCode = 2;
+      return;
+    }
     assertBmpRoundTrip();
     console.log(
       process.platform === "darwin"
@@ -578,13 +644,22 @@ async function main() {
     );
     return;
   }
+  const manifestFile = options.manifest;
   if (!manifestFile) {
-    console.error("usage: node --import tsx scripts/ocr-benchmark.mjs <manifest.json> [--json out.json]");
-    console.error("       node --import tsx scripts/ocr-benchmark.mjs --self-check");
+    printUsage();
     process.exitCode = 2;
     return;
   }
-  const manifest = JSON.parse(fs.readFileSync(manifestFile, "utf8"));
+  let manifest;
+  try {
+    manifest = JSON.parse(fs.readFileSync(manifestFile, "utf8"));
+  } catch (error) {
+    console.error(
+      `Cannot read manifest ${manifestFile}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    process.exitCode = 1;
+    return;
+  }
   assertBmpRoundTrip();
   const baseDir = path.dirname(path.resolve(manifestFile));
   let images;
@@ -597,9 +672,7 @@ async function main() {
     process.exitCode = 1;
     return;
   }
-  const jsonFlag = process.argv.indexOf("--json");
-  const jsonOut = jsonFlag > 0 ? process.argv[jsonFlag + 1] : null;
-  const jsonPath = jsonOut ? path.resolve(jsonOut) : null;
+  const jsonPath = options.json ? path.resolve(options.json) : null;
   // Create the destination before the multi-minute OCR run, not after it: a
   // typo or missing directory must not throw away every result.
   if (jsonPath) {

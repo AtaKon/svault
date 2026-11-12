@@ -298,6 +298,18 @@ describe("recipe scan reasoning and provider fields", () => {
     assert.equal(aiRequests.length, 1, "an error that blames the request body is not a field rejection");
   });
 
+  it("reports input truncation as an incomplete import", async () => {
+    const cfg = resolveAi({
+      ai: { enabled: true, baseUrl: aiBase, apiKey: "test-key", model: "mock-model" },
+    });
+    const result = await aiCleanRecipe(cfg, "x".repeat(12001), [], {
+      operation: "recipe.import",
+      houseId,
+    });
+    assert.equal(result.truncated, true, "the 12000-character cut leaves the recipe incomplete");
+    assert.match(result.notes?.join(" ") ?? "", /cut off at 12000 characters/i);
+  });
+
   it("cleans link-import text without the photo prompt or vision budget", async () => {
     const cfg = resolveAi({
       ai: { enabled: true, baseUrl: aiBase, apiKey: "test-key", model: "title-only-model" },

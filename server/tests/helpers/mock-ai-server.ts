@@ -245,6 +245,27 @@ export async function startMockAiServer(requests: MockAiRequest[]): Promise<Mock
         );
         return;
       }
+      // A usable truncated answer whose usage omits the price: the kept partial
+      // result must still warn that the reported cost may be lower.
+      if (body?.model === "truncated-unpriced-json-model") {
+        const partial = {
+          recipes: [
+            {
+              title: "AI pancakes",
+              ingredients: [{ name: "Flour", quantity: 200, unit: "g", optional: false }],
+              steps: [{ text: "Mix everything." }],
+            },
+          ],
+        };
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            choices: [{ message: { content: JSON.stringify(partial) }, finish_reason: "length" }],
+            usage: { prompt_tokens: 1000, completion_tokens: 8192, total_tokens: 9192 },
+          }),
+        );
+        return;
+      }
       // A usable answer that still hit the output limit: JSON parses, but the
       // provider says it was cut off. This is an objective truncation, so the
       // chain may try another model and keep this one as a last resort.

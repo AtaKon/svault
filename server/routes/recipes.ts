@@ -614,7 +614,11 @@ recipeRoutes.post(
     );
 
     if (body.save) {
-      if (!draftInputs.length) throw new ApiError(400, "No recipe could be read from this page");
+      // The AI call was billed even when it produced nothing usable. Put the
+      // spend on the error payload so it is not invisible to API clients.
+      if (!draftInputs.length) {
+        throw new ApiError(400, "No recipe could be read from this page", { aiCost, aiModels });
+      }
       // Never persist a best-effort partial read unattended: the caller can
       // show the draft, let the user check it, and save it deliberately.
       if (aiTruncated) {

@@ -162,6 +162,9 @@ function parseTruth(value: unknown, where: string): RecipeTruth {
       if (quantity != null && (typeof quantity !== "number" || !Number.isFinite(quantity))) {
         fail(`${where}.ingredients[${index}].quantity must be a number or null.`);
       }
+      if (quantity != null && quantity < 0) {
+        fail(`${where}.ingredients[${index}].quantity must be non-negative.`);
+      }
       if (entry.unit != null && typeof entry.unit !== "string") {
         fail(`${where}.ingredients[${index}].unit must be a string or null.`);
       }

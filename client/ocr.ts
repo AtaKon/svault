@@ -469,6 +469,7 @@ async function recognizeRecipePage(
     // Drawing it again would repeat that failure, so the single-column pass
     // runs on the raw file. It still returns the same cleaned-text contract and
     // reports the raw text once, so callers cannot tell the passes apart.
+    setPhase(0.35, 0.4);
     await worker.setParameters({
       tessedit_pageseg_mode: psm.SINGLE_COLUMN,
       preserve_interword_spaces: "1",
