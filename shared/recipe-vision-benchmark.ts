@@ -333,8 +333,13 @@ export function benchmarkCost(
     return Math.round(reported * 1e6) / 1e6;
   }
   if (prices.input == null && prices.output == null) return null;
-  const prompt = Number(usage.prompt_tokens ?? 0) || 0;
-  const completion = Number(usage.completion_tokens ?? 0) || 0;
+  const hasPrompt = usage.prompt_tokens != null && Number.isFinite(Number(usage.prompt_tokens));
+  const hasCompletion = usage.completion_tokens != null && Number.isFinite(Number(usage.completion_tokens));
+  // A usage object with no token counts cannot be priced: reporting 0 would
+  // make an unmeasured call look free and understate the total.
+  if (!hasPrompt && !hasCompletion) return null;
+  const prompt = hasPrompt ? Number(usage.prompt_tokens) : 0;
+  const completion = hasCompletion ? Number(usage.completion_tokens) : 0;
   return Math.round(((prompt * (prices.input ?? 0) + completion * (prices.output ?? 0)) / 1_000_000) * 1e6) / 1e6;
 }
 

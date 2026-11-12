@@ -66,13 +66,18 @@ export function supportsReasoningControl(baseUrl: string): boolean {
  * Whether a failed recipe attempt is worth retrying with reasoning disabled.
  *
  * Only OpenRouter is known to honour the field, so a retry elsewhere would send
- * the same photo twice and bill the user for the same, ignored setting. A
- * request that already ran with reasoning off has nothing left to switch off.
+ * the same photo twice and bill the user for the same, ignored setting.
+ *
+ * An explicit mode is the user's choice and is never overridden: retrying a
+ * deliberate `low`/`medium`/`high` with reasoning off would silently ignore it,
+ * and a request that already ran with `off` has nothing left to switch off. The
+ * automatic mode sends no reason request (`null`), so switching it off is a
+ * recovery rather than an override.
  */
 export function canRetryRecipeReasoningOff(
   supportsReasoning: boolean,
   current: ReasoningRequest | null | undefined,
 ): boolean {
-  if (current?.enabled === false) return false;
-  return supportsReasoning;
+  if (!supportsReasoning) return false;
+  return current == null;
 }

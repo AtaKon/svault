@@ -590,10 +590,13 @@ is sent to OpenRouter as its `reasoning` field. Another OpenAI-compatible endpoi
 field is retried without it and the scan says so.
 
 If a model returns only hidden reasoning, or the answer is cut off at the token limit, SVault retries
-once with reasoning disabled on OpenRouter, which honours the field. Other endpoints may ignore or
-reject it, so they are not charged a second identical call; if the 4xx rejection path applies, the scan
-says so. If the retry also fails, you keep the locally parsed draft instead of an empty recipe. The AI
-call log shows the finish reason, reasoning tokens and the retry.
+once with reasoning disabled on OpenRouter, which honours the field. This recovery only happens when
+the setting is **Use the model's default** (`auto`): an explicit **Off / Low / Medium / High** is your
+choice and is never overridden, so the failure is reported instead. Other endpoints may ignore or
+reject the field, so they are not charged a second identical call. If an endpoint rejects the reasoning
+field itself, the scan retries once without the field and the warning says the setting was rejected.
+If the retry also fails, you keep the locally parsed draft instead of an empty recipe. The AI call log
+shows the finish reason, reasoning tokens and the retry.
 
 Model choice matters more than price. In one-photo OpenRouter tests, Gemini 3 Flash Preview
 ($0.001557) and Gemini 3.8 Flash ($0.002104) read the key quantities correctly, while the cheaper
@@ -621,10 +624,12 @@ LM Studio and any other endpoint the list is not applied: only your configured v
 because the built-in IDs belong to OpenRouter. A vision model you chose yourself is always tried before
 the defaults. To turn the extra fallbacks off, enter just your one preferred model.
 
-Every attempt is counted: the scan badge and the AI call log include the cost of a failed first attempt
-as well as the model that finally answered, and the warning names each model that failed. When a
-provider reports no price for an attempt, the warning says so and the shown cost may be lower than the
-actual spend. If all models fail, you keep the locally parsed draft and the warning lists them. The review card shows the model
+Every attempt is counted: the AI call log includes the cost of a failed first attempt as well as the
+model that finally answered, and the warning names each model that failed. When a page holds several
+recipes, the review badge shows that recipe's share of the scan cost, so saving them all does not
+multiply the same spend. When a provider reports no price for an attempt, the warning says so and the
+shown cost may be lower than the actual spend. If all models fail, you keep the locally parsed draft and
+the warning lists them. The review card shows the model
 that produced the recipe.
 
 To compare your own model IDs on your own photos, a developer can run the manual benchmark. It scores

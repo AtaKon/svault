@@ -148,6 +148,10 @@ describe("recipe vision fallback chain", () => {
     assert.equal(tooMany.ok ? 0 : tooMany.count, 5);
     assert.equal(droppedRecipeVisionModels("a,b,c,d,e,f"), 2);
     assert.equal(droppedRecipeVisionModels("a,b"), 0);
+    // A non-string entry must not hide the valid models that were cut off.
+    assert.equal(droppedRecipeVisionModels(["a", "b", "c", "d", "e", "f", 3]), 2);
+    assert.equal(droppedRecipeVisionModels(["a", "a", "b", "c", "d", "e"]), 1);
+    assert.equal(droppedRecipeVisionModels(42), 0);
   });
 });
 
@@ -463,6 +467,8 @@ describe("benchmark request and report", () => {
     // No usage at all with configured prices is unknown, not free.
     assert.equal(benchmarkCost(null, { input: 1, output: 2 }), null);
     assert.equal(benchmarkCost(undefined, { input: 1, output: 2 }), null);
+    // A usage object without token counts cannot be priced either.
+    assert.equal(benchmarkCost({}, { input: 1, output: 2 }), null);
     // Usage with no price falls back to the configured prices.
     assert.equal(benchmarkCost({ prompt_tokens: 1_000_000 }, { input: 1, output: 2 }), 1);
   });

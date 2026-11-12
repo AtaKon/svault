@@ -123,10 +123,24 @@ export function checkRecipeVisionModels(value: unknown): RecipeVisionModelsCheck
   return { ok: true, models };
 }
 
-/** How many configured models a stored/environment list had to drop. */
+/**
+ * How many usable model IDs a stored/environment list had to drop to fit the
+ * chain. Counts every non-empty string (deduplicated) rather than trusting the
+ * validator's `count`, so a list that also contains a malformed entry still
+ * reports how many valid models were lost.
+ */
 export function droppedRecipeVisionModels(value: unknown): number {
-  const check = checkRecipeVisionModels(value);
-  return !check.ok ? Math.max(0, check.count - MAX_RECIPE_VISION_CHAIN) : 0;
+  let entries: unknown[];
+  if (Array.isArray(value)) entries = value;
+  else if (typeof value === "string") entries = value.split(",");
+  else return 0;
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    if (typeof entry !== "string") continue;
+    const model = entry.trim();
+    if (model) seen.add(model);
+  }
+  return Math.max(0, seen.size - MAX_RECIPE_VISION_CHAIN);
 }
 
 export interface RecipeVisionChainInput {

@@ -2,7 +2,10 @@
  * Real-photo OCR benchmark for photographed handwritten recipe pages.
  *
  * The browser scanner is Tesseract.js, so this script runs the same engine and
- * the same `shared/notebook-scan` preprocessing against real photographs. It is
+ * the same `shared/notebook-scan` grayscale/ink transforms, page detectors and
+ * size caps against real photographs. The canvas-only crop, rotate and resize
+ * steps are mirrored here on raw pixels because the browser helpers need a
+ * <canvas>; the shared maths they depend on is imported, not copied. It is
  * deliberately a manual tool, not part of `npm test`: it needs the photos, a
  * Tesseract runtime and (on macOS) `sips` for JPEG decoding.
  *
@@ -44,6 +47,8 @@ import {
   detectContentBounds,
   detectPaperRegion,
   estimateSkewDegrees,
+  inkLumaFromRgba,
+  normaliseLumaFromRgba,
 } from "../shared/notebook-scan.ts";
 
 /* ---------------------------------------------------------- OCR language data */
@@ -190,7 +195,7 @@ export function rotate(image, degrees) {
       const dy = y - centreY;
       const sourceX = dx * Math.cos(radians) + dy * Math.sin(radians) + image.width / 2;
       const sourceY = -dx * Math.sin(radians) + dy * Math.cos(radians) + image.height / 2;
-      if (sourceX < 0 || sourceY < 0 || sourceX >= image.width - 1 || sourceY >= image.height - 1) continue;
+      if (sourceX < 0 || sourceY < 0 || sourceX >= image.width || sourceY >= image.height) continue;
       const target = (y * width + x) * 4;
       for (let channel = 0; channel < 3; channel++) {
         const x0 = Math.floor(sourceX);
@@ -207,59 +212,26 @@ export function rotate(image, degrees) {
   return { width, height, data: out };
 }
 
-function percentile(histogram, total, fraction) {
-  const target = Math.round(total * fraction);
-  let seen = 0;
-  for (let value = 0; value < histogram.length; value++) {
-    seen += histogram[value];
-    if (seen >= target) return value;
+function grayscaleImage(image, values) {
+  const out = new Uint8ClampedArray(values.length * 4);
+  for (let pixel = 0, index = 0; pixel < values.length; pixel++, index += 4) {
+    const value = values[pixel];
+    out[index] = value;
+    out[index + 1] = value;
+    out[index + 2] = value;
+    out[index + 3] = 255;
   }
-  return 255;
+  return { width: image.width, height: image.height, data: out };
 }
 
-/** Grayscale + gentle percentile stretch, mirroring `normalizeCanvas`. */
+/** Grayscale + percentile stretch, exactly the shared browser transform. */
 export function normalize(image) {
-  const luma = lumaOf(image);
-  const histogram = new Uint32Array(256);
-  for (const value of luma) histogram[value]++;
-  const low = percentile(histogram, luma.length, 0.01);
-  const high = percentile(histogram, luma.length, 0.99);
-  const range = Math.max(1, high - low);
-  const out = new Uint8ClampedArray(image.width * image.height * 4);
-  for (let pixel = 0, index = 0; pixel < luma.length; pixel++, index += 4) {
-    const value = Math.max(0, Math.min(255, Math.round(((luma[pixel] - low) * 255) / range)));
-    out[index] = value;
-    out[index + 1] = value;
-    out[index + 2] = value;
-    out[index + 3] = 255;
-  }
-  return { width: image.width, height: image.height, data: out };
+  return grayscaleImage(image, normaliseLumaFromRgba(image.data, image.width * image.height));
 }
 
-/** Minimum-channel ink isolation, mirroring `inkCanvas`. */
+/** Minimum-channel ink isolation, exactly the shared browser transform. */
 export function ink(image) {
-  const total = image.width * image.height;
-  const values = new Uint8ClampedArray(total);
-  const histogram = new Uint32Array(256);
-  for (let pixel = 0, index = 0; pixel < total; pixel++, index += 4) {
-    const value = Math.min(image.data[index], image.data[index + 1], image.data[index + 2]);
-    values[pixel] = value;
-    histogram[value]++;
-  }
-  const low = percentile(histogram, total, 0.02);
-  const high = percentile(histogram, total, 0.98);
-  const range = high - low;
-  const out = new Uint8ClampedArray(total * 4);
-  for (let pixel = 0, index = 0; pixel < total; pixel++, index += 4) {
-    let value = values[pixel];
-    if (range >= 24) value = ((value - low) * 255) / range;
-    value = Math.max(0, Math.min(255, Math.round(value)));
-    out[index] = value;
-    out[index + 1] = value;
-    out[index + 2] = value;
-    out[index + 3] = 255;
-  }
-  return { width: image.width, height: image.height, data: out };
+  return grayscaleImage(image, inkLumaFromRgba(image.data, image.width * image.height));
 }
 
 /** Deskew only. Paper cropping and the upscale cap happen in `cropToContent`. */
@@ -470,6 +442,29 @@ function fold(text) {
     .trim();
 }
 
+/** Folded whole words. Matching tokens instead of substrings keeps `νερό` out of `νεροκόκκο`. */
+export function tokensOf(text) {
+  const folded = fold(text);
+  return folded ? folded.split(" ") : [];
+}
+
+/** True when every folded word of `keyword` appears as consecutive whole words. */
+export function keywordFound(keyword, pageTokens) {
+  const words = tokensOf(keyword);
+  if (!words.length || words.length > pageTokens.length) return false;
+  for (let start = 0; start + words.length <= pageTokens.length; start++) {
+    let matches = true;
+    for (let offset = 0; offset < words.length; offset++) {
+      if (pageTokens[start + offset] !== words[offset]) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) return true;
+  }
+  return false;
+}
+
 function levenshtein(a, b) {
   if (!a.length) return b.length;
   if (!b.length) return a.length;
@@ -488,17 +483,17 @@ function levenshtein(a, b) {
   return previous[b.length];
 }
 
-function evaluate(entry, text) {
-  const folded = fold(text);
+export function evaluate(entry, text) {
+  const pageTokens = tokensOf(text);
   const keywords = entry.keywords ?? [];
-  const found = keywords.filter((word) => folded.includes(fold(word)));
+  const found = keywords.filter((word) => keywordFound(word, pageTokens));
   const truth = entry.truth ? fold(entry.truth) : "";
   return {
     keywordRecall: keywords.length ? found.length / keywords.length : null,
     found: found.length,
     keywords: keywords.length,
     missing: keywords.filter((word) => !found.includes(word)),
-    characterErrorRate: truth ? levenshtein(truth, folded) / Math.max(1, truth.length) : null,
+    characterErrorRate: truth ? levenshtein(truth, fold(text)) / Math.max(1, truth.length) : null,
   };
 }
 
@@ -507,6 +502,12 @@ function evaluate(entry, text) {
 export const LANGS = ["ell", "eng"];
 export const PSM_MODES = ["4", "11"];
 
+/**
+ * One worker per (variant, language) pair is intentional: `setParameters`
+ * carries page-segmentation state between recognitions, so reusing a worker
+ * across variants would silently mix settings. Do not "optimise" this into a
+ * shared worker without recreating that state explicitly.
+ */
 async function withWorker(lang, fn) {
   const worker = await createWorker(lang, 1, {
     langPath: trainedDataDir(),
@@ -539,6 +540,18 @@ async function main() {
   const baseDir = path.dirname(path.resolve(manifestFile));
   const jsonFlag = process.argv.indexOf("--json");
   const jsonOut = jsonFlag > 0 ? process.argv[jsonFlag + 1] : null;
+  const jsonPath = jsonOut ? path.resolve(jsonOut) : null;
+  // Create the destination before the multi-minute OCR run, not after it: a
+  // typo or missing directory must not throw away every result.
+  if (jsonPath) {
+    try {
+      fs.mkdirSync(path.dirname(jsonPath), { recursive: true });
+    } catch (error) {
+      console.error(`Cannot write the JSON report to ${jsonPath}: ${error instanceof Error ? error.message : String(error)}`);
+      process.exitCode = 1;
+      return;
+    }
+  }
   const results = [];
 
   for (const entry of manifest.images) {
@@ -557,58 +570,62 @@ async function main() {
 
     for (const [variant, image] of Object.entries(variants)) {
       const bmpFile = toBmpFile(image);
-      for (const lang of LANGS) {
-        const row = await withWorker(lang, async (worker) => {
-          const started = Date.now();
-          let text = "";
-          let confidence = 0;
-          for (const psm of PSM_MODES) {
-            await worker.setParameters({
-              tessedit_pageseg_mode: psm,
-              preserve_interword_spaces: "1",
-              user_defined_dpi: "300",
-            });
-            const { data } = await worker.recognize(bmpFile);
-            if (data.text.trim().length > text.trim().length) {
-              text = data.text;
-              confidence = data.confidence;
+      try {
+        for (const lang of LANGS) {
+          const row = await withWorker(lang, async (worker) => {
+            const started = Date.now();
+            let text = "";
+            let confidence = 0;
+            for (const psm of PSM_MODES) {
+              await worker.setParameters({
+                tessedit_pageseg_mode: psm,
+                preserve_interword_spaces: "1",
+                user_defined_dpi: "300",
+              });
+              const { data } = await worker.recognize(bmpFile);
+              if (data.text.trim().length > text.trim().length) {
+                text = data.text;
+                confidence = data.confidence;
+              }
             }
-          }
-          const metrics = evaluate(entry, text);
-          const cleaned = cleanNotebookText(text);
-          const cleanedMetrics = evaluate(entry, cleaned);
-          return {
-            image: entry.label ?? path.basename(file),
-            variant,
-            lang,
-            ms: Date.now() - started,
-            confidence,
-            chars: text.trim().length,
-            ...metrics,
-            cleanedChars: cleaned.trim().length,
-            cleanedKeywordRecall: cleanedMetrics.keywordRecall,
-            cleanedCharacterErrorRate: cleanedMetrics.characterErrorRate,
-            text: text.trim(),
-          };
-        });
-        results.push(row);
-        console.log(
-          `${variant.padEnd(16)} ${lang.padEnd(8)} conf=${String(Math.round(row.confidence)).padStart(3)} ` +
-            `chars=${String(row.chars).padStart(5)} keywords=${row.found}/${row.keywords} ` +
-            `CER=${row.characterErrorRate == null ? "n/a" : row.characterErrorRate.toFixed(2)} ` +
-            `cleanedKeywords=${Math.round((row.cleanedKeywordRecall ?? 0) * row.keywords)}/${row.keywords}`,
-        );
+            const metrics = evaluate(entry, text);
+            const cleaned = cleanNotebookText(text);
+            const cleanedMetrics = evaluate(entry, cleaned);
+            return {
+              image: entry.label ?? path.basename(file),
+              variant,
+              lang,
+              ms: Date.now() - started,
+              confidence,
+              chars: text.trim().length,
+              ...metrics,
+              cleanedChars: cleaned.trim().length,
+              cleanedKeywordRecall: cleanedMetrics.keywordRecall,
+              cleanedCharacterErrorRate: cleanedMetrics.characterErrorRate,
+              text: text.trim(),
+            };
+          });
+          results.push(row);
+          console.log(
+            `${variant.padEnd(16)} ${lang.padEnd(8)} conf=${String(Math.round(row.confidence)).padStart(3)} ` +
+              `chars=${String(row.chars).padStart(5)} keywords=${row.found}/${row.keywords} ` +
+              `CER=${row.characterErrorRate == null ? "n/a" : row.characterErrorRate.toFixed(2)} ` +
+              `cleanedKeywords=${Math.round((row.cleanedKeywordRecall ?? 0) * row.keywords)}/${row.keywords}`,
+          );
+        }
+      } finally {
+        // A worker error must not leave the scratch BMP behind.
+        fs.rmSync(bmpFile, { force: true });
       }
-      fs.rmSync(bmpFile, { force: true });
     }
     console.log(
       `skew=${tight.skew}° crop=${cropped.width}x${cropped.height} (from ${original.width}x${original.height})`,
     );
   }
 
-  if (jsonOut) {
-    fs.writeFileSync(jsonOut, JSON.stringify({ generatedAt: new Date().toISOString(), results }, null, 2));
-    console.log(`\nwrote ${jsonOut}`);
+  if (jsonPath) {
+    fs.writeFileSync(jsonPath, JSON.stringify({ generatedAt: new Date().toISOString(), results }, null, 2));
+    console.log(`\nwrote ${jsonPath}`);
   }
 }
 

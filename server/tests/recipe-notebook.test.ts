@@ -11,7 +11,9 @@ import {
   detectPaperRegion,
   detectScript,
   estimateSkewDegrees,
+  inkLumaFromRgba,
   isPlannerNoiseLine,
+  normaliseLumaFromRgba,
   readableWordRatio,
   splitRecipeSections,
 } from "../../shared/notebook-scan.js";
@@ -132,6 +134,26 @@ describe("script detection from the page, not the interface", () => {
   });
 });
 
+describe("shared OCR pixel transforms", () => {
+  it("stretches a low-contrast page without changing its order", () => {
+    const rgba = new Uint8ClampedArray([10, 10, 10, 255, 60, 60, 60, 255, 110, 110, 110, 255, 160, 160, 160, 255]);
+    const values = normaliseLumaFromRgba(rgba, 4);
+    assert.equal(values.length, 4);
+    assert.ok(values[0] < values[1] && values[1] < values[2], "lighter pixels stay lighter");
+    assert.ok(values[0] <= 2, `darkest ${values[0]}`);
+    assert.ok(values[3] >= 250, `lightest ${values[3]}`);
+  });
+
+  it("keeps blue ballpoint darker than cream paper in the ink variant", () => {
+    const blue = [0, 0, 255, 255];
+    const paper = [245, 235, 200, 255];
+    const rgba = new Uint8ClampedArray([...paper, ...blue, ...paper, ...blue]);
+    const values = inkLumaFromRgba(rgba, 4);
+    assert.ok(values[1] < values[0], "the blue ink pixel must be darker than the paper");
+    assert.ok(values[3] < values[2]);
+  });
+});
+
 describe("notebook page detection", () => {
   it("finds the written area and ignores the surround", () => {
     const luma = ruledPage(240, 200, 0, 30, 209, 20, 180);
@@ -230,6 +252,11 @@ describe("handwritten Greek ingredient lines", () => {
     // inherit the previous unit just because it follows a number.
     assert.equal(parseIngredientLine("2 “eggs", "g")?.unit, null);
     assert.equal(parseIngredientLine("2 “eggs")?.quantity, 2);
+    // A single straight quote is an opening quote too, not a ditto.
+    assert.equal(parseIngredientLine('2 " eggs', "g")?.unit, null);
+    assert.equal(parseIngredientLine('2 " eggs')?.quantity, 2);
+    // A doubled mark is the handwritten ditto and still inherits the unit.
+    assert.equal(parseIngredientLine('150 "" νερό', "g")?.unit, "g");
   });
 
   it("keeps OCR double spacing inside one ingredient row", () => {

@@ -399,6 +399,12 @@ function attemptedModelsFrom(error: unknown): string[] {
   return Array.isArray(models) ? models.filter((model): model is string => typeof model === "string") : [];
 }
 
+/** The model whose error ended the chain, reported with the error. */
+function failedModelFrom(error: unknown): string | null {
+  const model = (error as { details?: { model?: unknown } } | null)?.details?.model;
+  return typeof model === "string" && model ? model : null;
+}
+
 function roundMicro(value: number): number {
   return Math.round(value * 1e6) / 1e6;
 }
@@ -442,7 +448,11 @@ recipeRoutes.post(
     let aiTruncated = false;
     if (cfg.recipeVisionWarning) warnings.push(cfg.recipeVisionWarning);
 
-    const readWithAi = async (images: string[], reason: string) => {
+    const readWithAi = async (
+      images: string[],
+      reason: string,
+      models?: typeof cfg.recipeVisionCandidates,
+    ) => {
       const result = await aiReadRecipes(cfg, rawText, images, {
         operation: "recipe.scan",
         houseId,
@@ -457,10 +467,12 @@ recipeRoutes.post(
           recipeReasoning: cfg.recipeReasoning,
           visionChain: cfg.recipeVisionCandidates.map((candidate) => candidate.model),
         },
-      }, reason === "text-only-retry" ? { models: cfg.recipeVisionCandidates.slice(0, 1) } : {});
+      }, models?.length ? { models } : {});
       aiCost = result.usage.cost == null ? aiCost : roundMicro((aiCost ?? 0) + result.usage.cost);
       aiModel = result.model ?? null;
-      aiModels = result.models ?? [];
+      // A text-only retry is a second call, not a replacement: keep the models
+      // the failed photo chain already tried so the response lists every one.
+      aiModels = [...new Set([...aiModels, ...(result.models ?? [])])];
       aiTruncated = Boolean(result.truncated);
       if (result.notes?.length) warnings.push(...result.notes);
       return result.data.recipes
@@ -496,7 +508,15 @@ recipeRoutes.post(
         aiModels = attemptedModelsFrom(err);
         if (vision.images.length && isImageInputError(err)) {
           try {
-            const aiDrafts = await readWithAi([], "text-only-retry");
+            // Retry the model that actually rejected the photo. Re-running the
+            // first model would re-bill every earlier failure (a 5xx, a rate
+            // limit) and could hit the same image rejection again.
+            const failedModel = failedModelFrom(err) ?? attemptedModelsFrom(err).at(-1) ?? null;
+            const retryCandidate = failedModel
+              ? cfg.recipeVisionCandidates.find((candidate) => candidate.model === failedModel)
+              : undefined;
+            const retryModels = retryCandidate ? [retryCandidate] : cfg.recipeVisionCandidates.slice(0, 1);
+            const aiDrafts = await readWithAi([], "text-only-retry", retryModels);
             if (aiDrafts.length) {
               drafts = aiDrafts;
               provider = "ai";
@@ -548,6 +568,10 @@ recipeRoutes.post(
     const usableDrafts = drafts.filter(
       (draft) => draft.ingredients.length > 0 || draft.steps.some((step) => step.text.trim()),
     );
+    // `aiCost` at the top level is the whole scan. A page can hold several
+    // recipes, so each draft carries its share: storing the full scan cost on
+    // every saved recipe would count the same spend once per recipe.
+    const draftAiCost = aiCost == null ? null : roundMicro(aiCost / Math.max(1, usableDrafts.length));
     const draftInputs = usableDrafts.map((draft) =>
       draftToInput(draft, {
         source: "scan",
@@ -555,7 +579,7 @@ recipeRoutes.post(
         // multi-photo scan are follow-ups, so keep the link to the first one.
         sourceImage: body.image ?? body.images?.[0] ?? null,
         ocrText: rawText,
-        aiCost,
+        aiCost: draftAiCost,
       }),
     );
 

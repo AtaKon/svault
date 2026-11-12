@@ -12,8 +12,11 @@ import {
   assertBmpRoundTrip,
   contentScale,
   cropToContent,
+  evaluate,
+  keywordFound,
   temporaryPath,
   toBmpFile,
+  tokensOf,
 } from "../../scripts/ocr-benchmark.mjs";
 
 function solidImage(width, height, rgb = { r: 255, g: 255, b: 255 }) {
@@ -56,6 +59,39 @@ describe("ocr benchmark image caps", () => {
     const cropped = cropToContent(image);
     assert.equal(cropped.width, 240);
     assert.equal(cropped.height, 240);
+  });
+});
+
+describe("ocr benchmark keyword scoring", () => {
+  it("folds accents, case and punctuation without matching inside a longer word", () => {
+    const page = tokensOf("Ρεβάνι, με νερό και ΝΕΡΟΚΟΚΚΟ.");
+    assert.equal(keywordFound("ΡΕΒΑΝΙ", page), true);
+    assert.equal(keywordFound("νερο", page), true, "an accent-free keyword matches the accented page word");
+    assert.equal(keywordFound("ΝΕΡΟ", page), true, "the standalone word is present");
+    assert.equal(keywordFound("ΑΛΕΥΡΙ", page), false);
+    assert.equal(keywordFound("ΡΕΒΑΝΙ ΜΕ", page), true, "multi-word keywords match consecutive words");
+  });
+
+  it("does not let a keyword match a prefix of a longer OCR word", () => {
+    const page = tokensOf("ΝΕΡΟΚΟΚΚΟ ΑΛΕΥΡΟΥ ΒΟΥΤΥΡΟΥ");
+    assert.equal(keywordFound("ΝΕΡΟ", page), false);
+    assert.equal(keywordFound("ΑΛΕΥΡΙ", page), false);
+    assert.equal(keywordFound("ΒΟΥΤΥΡΟ", page), false);
+  });
+
+  it("reports whole-word recall and the missing keywords", () => {
+    const result = evaluate(
+      { keywords: ["ΡΕΒΑΝΙ", "ΝΕΡΟ", "ΙΝΔΟΚΑΡΥΔΟ"] },
+      "Ρεβάνι με νερό. ΝΕΡΟΚΟΚΚΟ παντού.",
+    );
+    assert.equal(result.found, 2);
+    assert.equal(result.keywords, 3);
+    assert.equal(result.keywordRecall, 2 / 3);
+    assert.deepEqual(result.missing, ["ΙΝΔΟΚΑΡΥΔΟ"]);
+  });
+
+  it("returns null recall when the manifest lists no keywords", () => {
+    assert.equal(evaluate({}, "anything").keywordRecall, null);
   });
 });
 

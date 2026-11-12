@@ -43,12 +43,21 @@ describe("recipe reasoning configuration", () => {
   });
 
   it("retries with reasoning off only where the field is honoured", () => {
-    assert.equal(canRetryRecipeReasoningOff(true, { effort: "high" }), true);
+    // Auto sends no reasoning field, so switching it off is a recovery.
     assert.equal(canRetryRecipeReasoningOff(true, null), true);
+    assert.equal(canRetryRecipeReasoningOff(true, undefined), true);
     // Another endpoint would bill the same photo again for an ignored setting.
-    assert.equal(canRetryRecipeReasoningOff(false, { effort: "high" }), false);
     assert.equal(canRetryRecipeReasoningOff(false, null), false);
+    assert.equal(canRetryRecipeReasoningOff(false, { effort: "high" }), false);
     // Reasoning was already off, so there is nothing left to switch off.
     assert.equal(canRetryRecipeReasoningOff(true, { enabled: false }), false);
+  });
+
+  it("never overrides an explicit effort with reasoning off", () => {
+    // A user who picked Low/Medium/High keeps that choice even when the model
+    // spends its budget thinking; the failure is reported instead.
+    for (const effort of ["low", "medium", "high"] as const) {
+      assert.equal(canRetryRecipeReasoningOff(true, { effort }), false, effort);
+    }
   });
 });

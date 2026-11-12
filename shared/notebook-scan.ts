@@ -592,6 +592,44 @@ export function splitRecipeSections(text: string): RecipeSection[] {
 
 /* --------------------------------------------------------------- ink helpers */
 
+function histogramValue(histogram: Uint32Array, total: number, fraction: number): number {
+  const target = Math.max(1, Math.floor(total * fraction));
+  let seen = 0;
+  for (let value = 0; value < histogram.length; value++) {
+    seen += histogram[value];
+    if (seen >= target) return value;
+  }
+  return 255;
+}
+
+/**
+ * Grayscale plus the gentle percentile stretch the browser scanner applies
+ * before recognition. Shared with the OCR benchmark so a measured run describes
+ * the pixels the scanner actually sends to Tesseract. `rgba` is 8-bit RGBA.
+ */
+export function normaliseLumaFromRgba(
+  rgba: Uint8ClampedArray | Uint8Array,
+  pixelCount: number,
+): Uint8ClampedArray {
+  const values = new Uint8ClampedArray(pixelCount);
+  const histogram = new Uint32Array(256);
+  for (let pixel = 0, index = 0; pixel < pixelCount; pixel++, index += 4) {
+    const value = Math.round(0.299 * rgba[index] + 0.587 * rgba[index + 1] + 0.114 * rgba[index + 2]);
+    values[pixel] = value;
+    histogram[value]++;
+  }
+  const low = histogramValue(histogram, pixelCount, 0.01);
+  const high = histogramValue(histogram, pixelCount, 0.99);
+  const range = high - low;
+  for (let pixel = 0; pixel < pixelCount; pixel++) {
+    let value = values[pixel];
+    if (range >= 32) value = ((value - low) * 255) / range;
+    // A small contrast boost keeps anti-aliased Greek glyphs readable.
+    values[pixel] = Math.max(0, Math.min(255, Math.round((value - 128) * 1.12 + 128)));
+  }
+  return values;
+}
+
 /**
  * Minimum-channel grayscale: blue ballpoint, black ink and pencil stay dark
  * while cream paper and yellow age stains stay light. `rgba` is 8-bit RGBA.

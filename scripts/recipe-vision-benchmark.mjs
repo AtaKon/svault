@@ -355,6 +355,15 @@ async function main() {
 
   const referenceRecipes = {};
   const referenceResults = {};
+  if (options.json) {
+    // Fail before spending money if the report path cannot be created.
+    try {
+      fs.mkdirSync(path.dirname(path.resolve(options.json)), { recursive: true });
+    } catch (error) {
+      console.error(`Cannot write the JSON report: ${error instanceof Error ? error.message : String(error)}`);
+      return 1;
+    }
+  }
   if (manifest.referenceModel) {
     const reference = manifest.models.find((model) => model.id === manifest.referenceModel);
     for (const image of manifest.images) {
@@ -462,7 +471,6 @@ async function main() {
         "Same prompt, JSON schema, temperature and max_tokens as the recipe scanner. " +
         "Truth scores are explicit ground truth; reference scores are similarity to a named model, not accuracy.",
     };
-    fs.mkdirSync(path.dirname(path.resolve(options.json)), { recursive: true });
     fs.writeFileSync(path.resolve(options.json), `${JSON.stringify(output, null, 2)}\n`);
     console.log(`JSON written to ${path.resolve(options.json)}`);
   }

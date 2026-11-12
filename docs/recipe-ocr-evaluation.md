@@ -16,15 +16,20 @@ hand-held with the printed hour gutter, weekday/month headings and week-number g
 
 ## Method
 
-`scripts/ocr-benchmark.mjs` runs the real engine and the real preprocessing, not a simulation:
+`scripts/ocr-benchmark.mjs` runs the real engine, not a simulation:
 
 - Tesseract.js 7.0.0, `ell` and `eng` trained data (the same models the browser ships).
+- The grayscale stretch and minimum-channel ink transforms, the paper/content detectors, the tilt
+  estimate and the page caps are imported from `shared/notebook-scan.ts`. The canvas-only rotate, crop
+  and resize steps are mirrored on raw pixels because the browser helpers need a `<canvas>`; they are
+  the same operations, not a second algorithm, and the shared constants keep the size budget identical.
 - Four image variants: the untouched photo, the straightened page, the paper-cropped page, and the
   minimum-channel ink variant.
 - Two page-segmentation modes per run (`SINGLE_COLUMN`, `SPARSE_TEXT`); the longer reading is scored.
 - Keyword recall against words that are unambiguously visible on each page (18, 21 and 15 words —
-  54 in total). Matching ignores accents, case and punctuation, so a near miss counts if the word is
-  there at all.
+  54 in total). Matching ignores accents, case and punctuation and compares **whole words**, so
+  `νερό` does not match inside `νεροκόκκο`; a near miss that OCR writes as a separate word still
+  counts.
 
 The image path was verified before trusting the numbers: an initial run decoded the BMP with the wrong
 channel order and fed the engine an upside-down page. That run was discarded; the numbers below come
@@ -41,16 +46,20 @@ node --import tsx scripts/ocr-benchmark.mjs data/ocrbench/manifest.json --json d
 
 Run `npm run dev` once (or `node scripts/vendor-ocr.mjs`) first, so the Greek and English models are
 copied to `public/tesseract`; the benchmark loads exactly those files. It also runs a BMP
-encode/decode round trip before reading any photo, and `--self-check` runs only that check.
+encode/decode round trip before reading any photo, and `--self-check` runs only that check. The `--json`
+destination directory is created before the OCR run, so a typo in the report path fails immediately
+instead of discarding the results.
 
 ## Result
 
 **The best single configuration — the paper-cropped page with the Greek model — recovered 2 of 54
 words (3.7 %), and both hits are the same word `νερό` sitting inside unrelated OCR noise. No title,
 ingredient name, unit or cooking verb was read correctly**, in any of the 24 runs (three pages × four
-image variants × two languages; the ink variant recovered 1).
+image variants × two languages; the ink variant recovered 1). Those figures were recorded with the
+earlier substring matcher, so they are an **upper bound**: the current whole-word matcher can only
+lower recall, and neither hit was a recipe word.
 
-| Variant | Language | Keywords | Mean confidence | Output chars (3 pages) | Time/page |
+| Variant | Language | Keywords | Mean confidence | Output chars (3 pages total) | Time/page |
 | --- | --- | --- | --- | --- | --- |
 | photo, grayscale | ell | 0/54 | 38 | 4.8 kB | 6.4 s |
 | photo, grayscale | eng | 0/54 | 46 | 4.9 kB | 6.6 s |
@@ -119,6 +128,10 @@ recognition at 2000 px wide and 5.5 Mpx (`MAX_RECIPE_OCR_PIXELS`), which is abov
   independent on-device baseline beyond Tesseract.
 - Keyword recall measures whether the right words appear, not full transcription accuracy. Since the
   result is zero, that distinction does not affect the conclusion.
+- The result table was produced by an earlier build of the benchmark, before it imported the scanner's
+  exact grayscale/ink transforms and switched keyword matching to whole words. The operations are the
+  same, but the current script uses the shipped percentile/contrast constants and a stricter matcher;
+  re-running may move the last digits without changing the conclusion.
 - The photos are personal family recipes and are not committed; the benchmark reads them from a
   manifest kept outside version control.
 
@@ -155,9 +168,11 @@ right setting is therefore a per-house choice rather than a hard-coded provider:
 - The value is sent to OpenRouter as its `reasoning` request field. If another OpenAI-compatible
   endpoint rejects the field, the request is retried without it and the scan response says so.
 - A response that contains only hidden reasoning, or that hits the token limit before any text, is
-  retried once with reasoning disabled. The scan response carries a plain-language warning, and the
-  AI call log records `finishReason`, `reasoningTokens` and the retry note. If the retry also fails,
-  the locally parsed draft is kept with a warning instead of showing an empty recipe.
+  retried once with reasoning disabled **when the setting is `auto`**. An explicit Off/Low/Medium/High
+  is honoured even if the model then returns nothing: silently switching it off would override the
+  user's choice. The scan response carries a plain-language warning, and the AI call log records
+  `finishReason`, `reasoningTokens` and the retry note. If the retry also fails, the locally parsed
+  draft is kept with a warning instead of showing an empty recipe.
 - A truncated answer is treated as an objective failure: the next model in the chain is tried. If no
   model finishes the page, a truncated answer that still parses as JSON is kept with a warning that the
   recipe may be incomplete.
@@ -203,14 +218,16 @@ Rules:
   honoured on any endpoint. Listing only one model opts out of extra fallbacks. The server-side
   equivalent is `OPENAI_RECIPE_VISION_MODELS`.
 - **All costs are counted.** The response's `aiCost`, the scan badge and the AI call log include every
-  attempt, including a reasoning retry that failed. Each attempt is a separate row in the AI call log
-  with `visionChain`, `visionIndex` and `visionModel` metadata. A `null` price means at least one attempt
-  that reported usage did not report a price, so a full sum cannot be shown; provider errors that
-  returned no usage are not counted either.
+  attempt that reported a price, including a reasoning retry that failed. Each attempt is a separate
+  row in the AI call log with `visionChain`, `visionIndex` and `visionModel` metadata. An attempt that
+  reports usage without a price is excluded from the sum and the warning says so, so the shown `aiCost`
+  is a lower bound rather than a hidden zero; `null` means no attempt reported a price at all.
+  Provider errors that returned no usage are not counted either.
 - **Warnings say which model failed and why.** The scan keeps the locally parsed draft when every model
   fails, names each failed model in the warning, and shows the winning model on the review card.
-- The image-rejection retry still exists: if every model rejects the photo, the text is retried once
-  without the image and the UI explains that handwriting needs a vision model.
+- The image-rejection retry still exists: when a model rejects the photo, that model — not the first
+  model in the chain — is retried once without the image, and the UI explains that handwriting needs a
+  vision model. Earlier failures are not re-billed.
 
 Model IDs and availability change. If OpenRouter retires one of the defaults, that attempt fails and
 the chain moves on with a warning; replace the list in **Settings → AI** if it happens often. The chain,

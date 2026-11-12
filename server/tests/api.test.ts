@@ -433,6 +433,14 @@ before(async () => {
           res.end(JSON.stringify({ error: { message: "This model does not support image input" } }));
           return;
         }
+        // A later model in a chain rejects the photo after an earlier model
+        // failed for an unrelated reason. The text-only retry must target only
+        // this model, not re-bill the earlier failure.
+        if (body?.model === "image-reject-model" && Array.isArray(userContent)) {
+          res.writeHead(400, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: { message: "This model does not accept image input" } }));
+          return;
+        }
         // Models used by the recipe fallback-chain tests: a provider failure,
         // an empty answer, and a rate limit must each move to the next model.
         if (body?.model === "chain-500-model") {
@@ -451,6 +459,18 @@ before(async () => {
             JSON.stringify({
               choices: [{ message: { content: "" }, finish_reason: "stop" }],
               usage: { prompt_tokens: 900, completion_tokens: 0, total_tokens: 900, cost: 0.0009 },
+            }),
+          );
+          return;
+        }
+        // An empty answer whose usage omits the price: the failed attempt's
+        // tokens are known but its spend is not, and the next model still bills.
+        if (body?.model === "unpriced-empty-model") {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(
+            JSON.stringify({
+              choices: [{ message: { content: "" }, finish_reason: "stop" }],
+              usage: { prompt_tokens: 900, completion_tokens: 0, total_tokens: 900 },
             }),
           );
           return;
@@ -5447,7 +5467,9 @@ describe("ai integration", () => {
     aiRequests.length = 0;
     const res = await request(`/api/houses/${houseId}/recipes/scan`, {
       method: "POST",
-      body: { text: "flour eggs milk" },
+      // The "Read the photo with AI" button sends this flag; the recipe scan
+      // must accept it and still use the provider.
+      body: { text: "flour eggs milk", preferAi: true },
     });
     assert.equal(res.status, 200);
     assert.equal(res.data.provider, "ai");
@@ -5650,7 +5672,7 @@ describe("ai integration", () => {
     // same server helper the route uses with that capability turned on.
     const cfg = {
       ...resolveAi({
-        ai: { enabled: true, baseUrl: aiBase, apiKey: "test-key", model: "mock-model", recipeReasoning: "high" },
+        ai: { enabled: true, baseUrl: aiBase, apiKey: "test-key", model: "mock-model", recipeReasoning: "auto" },
       }),
       reasoningControl: true,
     };
@@ -5665,11 +5687,35 @@ describe("ai integration", () => {
     assert.equal(result.data.recipes.length, 1);
     assert.equal(result.model, "reasoning-only-model");
     assert.equal(aiRequests.length, 2);
-    assert.deepEqual(aiRequests[0].body.reasoning, { effort: "high" });
+    assert.equal(aiRequests[0].body.reasoning, undefined);
     assert.deepEqual(aiRequests[1].body.reasoning, { enabled: false });
     assert.match(result.notes?.join(" ") ?? "", /retried with reasoning disabled/i);
     // Both attempts are billed in the reported usage.
     assert.equal(result.usage.cost, 0.00305);
+  });
+
+  it("honours an explicit reasoning mode instead of retrying it away", async () => {
+    const cfg = {
+      ...resolveAi({
+        ai: { enabled: true, baseUrl: aiBase, apiKey: "test-key", model: "mock-model", recipeReasoning: "high" },
+      }),
+      reasoningControl: true,
+    };
+    aiRequests.length = 0;
+    await assert.rejects(
+      aiReadRecipes(
+        cfg,
+        "Pancakes\n2 eggs",
+        [],
+        { operation: "recipe.scan", houseId },
+        { models: [{ model: "reasoning-only-model" }] },
+      ),
+      /reasoning/i,
+    );
+    // The user chose High, so the failure is reported after one billed call;
+    // switching reasoning off would silently override that choice.
+    assert.equal(aiRequests.length, 1);
+    assert.deepEqual(aiRequests[0].body.reasoning, { effort: "high" });
   });
 
   it("carries notes and accumulated usage on the thrown chain failure", async () => {
@@ -5780,6 +5826,30 @@ describe("ai integration", () => {
     const successful = logs.data.logs.find((log: any) => log.status === "ok" && log.model === "chain-ok-model");
     assert.deepEqual(successful.metadata.visionChain, ["chain-500-model", "chain-empty-model", "chain-ok-model"]);
     assert.equal(successful.metadata.visionIndex, 2);
+
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { model: "mock-model", recipeVisionModels: [] } } },
+    });
+  });
+
+  it("keeps the known spend when an earlier attempt reported no price", async () => {
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { model: "mock-model", recipeVisionModels: ["unpriced-empty-model", "chain-ok-model"] } } },
+    });
+    aiRequests.length = 0;
+    const scan = await request(`/api/houses/${houseId}/recipes/scan`, {
+      method: "POST",
+      body: { text: "Pancakes\n2 eggs" },
+    });
+    assert.equal(scan.status, 200);
+    assert.equal(scan.data.provider, "ai");
+    // The empty attempt had usage but no price; the successful model still
+    // reported 0.00125, which must not be hidden behind a null total.
+    assert.equal(scan.data.aiCost, 0.00125);
+    assert.match(scan.data.warning, /unpriced-empty-model did not report a price/i);
+    assert.match(scan.data.warning, /lower than the actual spend/i);
 
     await request(`/api/houses/${houseId}`, {
       method: "PATCH",
@@ -5961,6 +6031,58 @@ describe("ai integration", () => {
     await request(`/api/houses/${houseId}`, {
       method: "PATCH",
       body: { settings: { ai: { model: "mock-model", recipeReasoning: "auto" } } },
+    });
+  });
+
+  it("retries only the model that rejected the photo after an earlier chain failure", async () => {
+    const png = encodePng(16, 16, Buffer.alloc(16 * 16 * 4, 200));
+    const bytes = new ArrayBuffer(png.length);
+    new Uint8Array(bytes).set(png);
+    const form = new FormData();
+    form.append("image", new Blob([bytes], { type: "image/png" }), "chain.png");
+    const upload = await fetch(`${base}/api/houses/${houseId}/recipes/upload`, {
+      method: "POST",
+      body: form,
+      headers: { cookie },
+    });
+    const { path: imagePath } = await upload.json();
+
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: {
+        settings: {
+          ai: {
+            enabled: true,
+            baseUrl: aiBase,
+            apiKey: "test-key",
+            model: "mock-model",
+            recipeVisionModels: ["chain-500-model", "image-reject-model"],
+          },
+        },
+      },
+    });
+    aiRequests.length = 0;
+    const scan = await request(`/api/houses/${houseId}/recipes/scan`, {
+      method: "POST",
+      body: { text: "Pancakes\n2 eggs", image: imagePath },
+    });
+    assert.equal(scan.status, 200);
+    assert.equal(scan.data.provider, "ai");
+    assert.match(scan.data.warning, /did not accept the photo/i);
+    // The 500 was not re-sent: only the image-rejecting model is retried, and
+    // its own image rejection is not retried a second time inside `chat`.
+    assert.deepEqual(
+      aiRequests.map((entry) => entry.body.model),
+      ["chain-500-model", "image-reject-model", "image-reject-model"],
+    );
+    assert.ok(Array.isArray(aiRequests[1].body.messages[1].content), "the photo reached the rejecting model");
+    assert.equal(typeof aiRequests[2].body.messages[1].content, "string", "the retry is text only");
+    assert.equal(scan.data.aiCost, 0.00125, "only the successful text-only retry is priced");
+    assert.deepEqual(scan.data.aiModels, ["chain-500-model", "image-reject-model"]);
+
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { model: "mock-model", recipeVisionModels: [] } } },
     });
   });
 
@@ -6262,6 +6384,11 @@ describe("ai integration", () => {
     assert.equal(res.data.drafts[0].title, "AI pancakes");
     assert.equal(res.data.drafts[1].title, "AI biscuits");
     assert.equal(res.data.drafts[1].ingredients[0].name, "Coconut");
+    // One model call paid for the whole page; each draft carries its share so
+    // saving both does not count the same spend twice.
+    assert.equal(res.data.aiCost, 0.00125);
+    assert.equal(res.data.drafts[0].aiCost, 0.000625);
+    assert.equal(res.data.drafts[1].aiCost, 0.000625);
     // The flat `draft` stays the first section for older clients.
     assert.equal(res.data.draft.title, "AI pancakes");
     await request(`/api/houses/${houseId}`, {

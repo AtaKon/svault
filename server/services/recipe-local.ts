@@ -273,11 +273,11 @@ const WORD_NUMBERS: [RegExp, number][] = [
 
 /**
  * Ditto mark after the quantity ("150 »"), meaning "same unit as the line
- * above". Only unambiguous marks count: a bare smart quote is far more likely
- * to be an opening quotation mark from OCR than a ditto, so it is not one. A
- * dash is a list bullet, not a ditto either.
+ * above". Only unambiguous marks count: a single quote (smart or straight) is far
+ * more likely to be an opening quotation mark from OCR than a ditto, so it is
+ * not one. A dash is a list bullet, not a ditto either.
  */
-const DITTO_UNIT = /^(?:»+|＞＞|〃|"{2,}|"|'{2})\s*/;
+const DITTO_UNIT = /^(?:»+|＞＞|〃|"{2,}|'{2})\s*/;
 
 export function parseIngredientLine(rawLine: string, previousUnit: string | null = null): ParsedIngredient | null {
   let line = normaliseFractions(rawLine).replace(/\s+/g, " ").trim().replace(/^[-*•–—·]\s*/, "");

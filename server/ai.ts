@@ -360,12 +360,12 @@ export async function chat(
   let result = await runAttempt(Boolean(opts.json), useReasoning);
   // An endpoint that does not know OpenRouter's field answers 400/422. Drop the
   // field rather than failing the scan; the user is told in the response.
-  if (!result.ok && useReasoning && isFieldRejection(result.status)) {
+  if (!result.ok && useReasoning && isFieldRejection(result.status, result.text)) {
     useReasoning = false;
     notes.push("The AI endpoint rejected the reasoning setting, so the request was retried without it.");
     result = await runAttempt(Boolean(opts.json), false);
   }
-  if (!result.ok && opts.json && isFieldRejection(result.status)) {
+  if (!result.ok && opts.json && isFieldRejection(result.status, result.text)) {
     result = await runAttempt(false, useReasoning);
   }
   responseText = result.text ?? "";
@@ -450,11 +450,18 @@ export async function chat(
 
 /**
  * Statuses a provider uses for "I do not know this request field". Retrying
- * without the field only makes sense for these; 401/403/409/429 and 5xx would
- * just bill or rate-limit the caller a second time for the same failure.
+ * without the field only makes sense when the body names a request field:
+ * a genuine 400 (image too large, unknown model, bad content type) would fail
+ * identically the second time and bill the user twice.
  */
-function isFieldRejection(status: number): boolean {
-  return status === 400 || status === 422;
+const FIELD_REJECTION =
+  /(?:unknown|unrecognized|unexpected|unsupported|invalid)\s+(?:request\s+)?(?:parameter|field|argument|property|option|response_format|reasoning|max_tokens|temperature)/i;
+const FIELD_NOT_SUPPORTED =
+  /(?:parameter|field|argument|property|option|response_format|reasoning|max_tokens|temperature)\b[^.]{0,40}\b(?:not supported|unsupported|unknown|unrecognized|invalid)/i;
+
+function isFieldRejection(status: number, body: string): boolean {
+  if (status !== 400 && status !== 422) return false;
+  return FIELD_REJECTION.test(body) || FIELD_NOT_SUPPORTED.test(body);
 }
 
 function roundCost(value: number): number {
@@ -588,6 +595,11 @@ export async function aiReadRecipes(
   const spent: AiUsage[] = [];
   const partial: { model: string; recipes: Record<string, unknown>[] }[] = [];
 
+  const noteUnpriced = (model: string) => {
+    const note = `${model} did not report a price, so the AI cost shown may be lower than the actual spend.`;
+    if (!notes.includes(note)) notes.push(note);
+  };
+
   const readOnce = async (
     candidate: RecipeVisionCandidate,
     index: number,
@@ -643,7 +655,9 @@ export async function aiReadRecipes(
   const readCandidate = async (candidate: RecipeVisionCandidate, index: number) => {
     const configured = candidate.reasoning ?? reasoningRequestFor(cfg.recipeReasoning);
     try {
-      return await readOnce(candidate, index, configured);
+      const result = await readOnce(candidate, index, configured);
+      if (result.usage.cost == null) noteUnpriced(candidate.model);
+      return result;
     } catch (error) {
       const incomplete = error instanceof AiIncompleteResponseError ? error : null;
       // Retrying only helps where the endpoint honours the field (OpenRouter).
@@ -660,9 +674,11 @@ export async function aiReadRecipes(
       );
       try {
         const result = await readOnce(candidate, index, { enabled: false });
+        if (result.usage.cost == null) noteUnpriced(candidate.model);
         const usage = addUsages([incomplete.usage, result.usage]);
         return { ...result, usage: usage ?? result.usage };
       } catch (retryError) {
+        if (usageOf(retryError)?.cost == null) noteUnpriced(candidate.model);
         // The retry may itself have produced a parseable but truncated answer.
         // Keep those recipes so the chain can still offer them as a last resort
         // instead of replacing the error with a generic message.
@@ -699,10 +715,7 @@ export async function aiReadRecipes(
       if (usage) spent.push(usage);
       // An attempt the provider never billed is invisible in the totals above.
       // Say so instead of quietly reporting a lower spend than the user paid.
-      if (!usage || usage.cost == null) {
-        const note = `${candidate.model} did not report a price, so the AI cost shown may be lower than the actual spend.`;
-        if (!notes.includes(note)) notes.push(note);
-      }
+      if (!usage || usage.cost == null) noteUnpriced(candidate.model);
       const message = error instanceof Error ? error.message : String(error);
       for (const note of notesFromError(error)) {
         if (!notes.includes(note)) notes.push(note);
@@ -734,7 +747,9 @@ export async function aiReadRecipes(
           };
         }
         notes.push(`${candidate.model} did not return a usable recipe (${shorten(message, 160)}).`);
-        const details: Record<string, unknown> = { notes, models: chain };
+        // Name the model whose error ended the chain so a caller can retry only
+        // that model (e.g. a text-only retry) instead of re-billing earlier ones.
+        const details: Record<string, unknown> = { notes, models: chain, model: candidate.model };
         const total = addUsages(spent);
         if (total) details.usage = total;
         throw new ApiError(502, message || "AI could not read the recipe", details);
@@ -768,10 +783,12 @@ function shorten(value: string, max: number): string {
 }
 
 /**
- * Add the token counts and prices of every attempt that reported usage. Cost
- * stays null unless every usage passed in reported one, because a partial sum
- * would understate spend. Attempts with no usage at all are not visible here;
- * `aiReadRecipes` adds a note for those so a low total is never silent.
+ * Add the token counts of every attempt and the prices of the attempts that
+ * reported one. A missing price is excluded from the total rather than turning
+ * the whole sum into null: the caller already has a note for each unpriced
+ * attempt, so the known spend is shown with a warning that it may be lower.
+ * Attempts with no usage at all are invisible here; `aiReadRecipes` adds a note
+ * for those so a low total is never silent.
  */
 function addUsages(usages: (AiUsage | null | undefined)[]): AiUsage | null {
   const present = usages.filter((usage): usage is AiUsage => Boolean(usage));
@@ -785,8 +802,9 @@ function addUsages(usages: (AiUsage | null | undefined)[]): AiUsage | null {
     }),
     { promptTokens: 0, completionTokens: 0, totalTokens: 0, reasoningTokens: 0 },
   );
-  const cost = present.every((usage) => usage.cost != null)
-    ? roundCost(present.reduce((sum, usage) => sum + (usage.cost ?? 0), 0))
+  const priced = present.filter((usage) => usage.cost != null);
+  const cost = priced.length
+    ? roundCost(priced.reduce((sum, usage) => sum + (usage.cost ?? 0), 0))
     : null;
   return { model: present[present.length - 1].model, ...totals, cost };
 }

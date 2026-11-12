@@ -7,6 +7,7 @@ import {
   estimateSkewDegrees,
   inkLumaFromRgba,
   measureBlueInk,
+  normaliseLumaFromRgba,
   scoreRecipeText,
 } from "@shared/notebook-scan";
 
@@ -15,7 +16,8 @@ type OcrMode = "recipe" | "receipt" | "bill";
 export interface OcrOptions {
   mode?: OcrMode;
   /**
-   * Called once with the untouched recognition result and its reported
+   * Called once with the recognition result the scanner kept — the pass with
+   * the highest score, not necessarily the first — and that pass's reported
    * confidence. Cleanup removes planner furniture and OCR duplicates, and
    * handwriting is read so poorly that the raw reading must stay available to
    * the user.
@@ -222,16 +224,6 @@ export function spliceProductText(fullText: string, productText: string): string
   return [...lines.slice(0, start), ...replacement, ...lines.slice(totalIndex)].join("\n");
 }
 
-function percentile(histogram: Uint32Array, total: number, fraction: number): number {
-  const target = Math.max(1, Math.floor(total * fraction));
-  let seen = 0;
-  for (let value = 0; value < histogram.length; value++) {
-    seen += histogram[value];
-    if (seen >= target) return value;
-  }
-  return 255;
-}
-
 /** Grayscale plus a gentle percentile stretch. Keeps anti-aliased Greek glyphs intact. */
 function normalizeCanvas(source: HTMLCanvasElement): HTMLCanvasElement {
   const canvas = document.createElement("canvas");
@@ -244,23 +236,10 @@ function normalizeCanvas(source: HTMLCanvasElement): HTMLCanvasElement {
   const image = context.getImageData(0, 0, canvas.width, canvas.height);
   const data = image.data;
   const total = canvas.width * canvas.height;
-  const luma = new Uint8ClampedArray(total);
-  const histogram = new Uint32Array(256);
-
-  for (let pixel = 0, index = 0; index < data.length; index += 4, pixel++) {
-    const value = Math.round(0.299 * data[index] + 0.587 * data[index + 1] + 0.114 * data[index + 2]);
-    luma[pixel] = value;
-    histogram[value]++;
-  }
-
-  const low = percentile(histogram, total, 0.01);
-  const high = percentile(histogram, total, 0.99);
-  const range = high - low;
+  const values = normaliseLumaFromRgba(data, total);
 
   for (let pixel = 0; pixel < total; pixel++) {
-    let value = luma[pixel];
-    if (range >= 32) value = ((value - low) * 255) / range;
-    value = Math.max(0, Math.min(255, Math.round((value - 128) * 1.12 + 128)));
+    const value = values[pixel];
     const index = pixel * 4;
     data[index] = value;
     data[index + 1] = value;
