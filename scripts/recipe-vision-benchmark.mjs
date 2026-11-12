@@ -77,12 +77,23 @@ function parseArgs(argv) {
   const options = { manifest: null, json: null, baseUrl: null, models: null, help: false };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if (arg === "--help" || arg === "-h") options.help = true;
-    else if (arg === "--json") options.json = argv[++index] ?? null;
-    else if (arg === "--base-url") options.baseUrl = argv[++index] ?? null;
-    else if (arg === "--models") options.models = argv[++index] ?? null;
-    else if (arg.startsWith("-")) throw new Error(`Unknown option ${arg}`);
-    else if (!options.manifest) options.manifest = arg;
+    if (arg === "--help" || arg === "-h") {
+      options.help = true;
+      continue;
+    }
+    if (arg === "--json" || arg === "--base-url" || arg === "--models") {
+      // A missing value used to become `null`, which silently kept the
+      // manifest default (or skipped the report) and still spent money. A
+      // following flag is missing a value too, not a path or URL that starts
+      // with a dash.
+      const value = argv[index + 1];
+      if (!value || value.startsWith("-")) throw new Error(`${arg} needs a value.`);
+      options[arg === "--json" ? "json" : arg === "--base-url" ? "baseUrl" : "models"] = value;
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("-")) throw new Error(`Unknown option ${arg}`);
+    if (!options.manifest) options.manifest = arg;
     else throw new Error(`Unexpected argument ${arg}`);
   }
   return options;

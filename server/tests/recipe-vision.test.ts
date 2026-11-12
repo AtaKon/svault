@@ -618,6 +618,34 @@ describe("recipe vision benchmark script", () => {
     }
   });
 
+  it("rejects a flag whose value is missing", () => {
+    const missingManifest = path.join(tmpdir(), "svault-bench-missing-manifest.json");
+    const cases: Array<[string[], RegExp]> = [
+      [["--json"], /--json needs a value/],
+      [["--base-url"], /--base-url needs a value/],
+      [["--models"], /--models needs a value/],
+      // A following flag is not a value either: without this guard `--json`
+      // would consume `--models` as its report path and still run the calls.
+      [["--json", "--models", "mock-a"], /--json needs a value/],
+    ];
+    for (const [args, expected] of cases) {
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          path.resolve("scripts/recipe-vision-benchmark.mjs"),
+          missingManifest,
+          ...args,
+        ],
+        { encoding: "utf8" },
+      );
+      assert.equal(result.status, 1, `${args.join(" ")} must exit 1`);
+      assert.match(result.stderr, expected);
+      assert.doesNotMatch(result.stderr, /ENOENT|Cannot read manifest/);
+    }
+  });
+
   it("runs end to end against a local provider and keeps secrets and photos out of the report", async () => {
     const directory = mkdtempSync(path.join(tmpdir(), "svault-bench-"));
     const requests: any[] = [];
