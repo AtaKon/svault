@@ -370,6 +370,12 @@ export interface BenchmarkRun {
   /** Similarity to the reference model's answer 0…1, or null. */
   referenceScore: number | null;
   cost: number | null;
+  /**
+   * False when at least one attempt in this run did not report a price, so
+   * `cost` is a lower bound even when it is not null (for example, a priced
+   * first attempt followed by a failed retry that never reported usage).
+   */
+  costComplete?: boolean;
   promptTokens: number;
   completionTokens: number;
   durationMs: number;
@@ -397,6 +403,11 @@ function mean(values: number[]): number | null {
   return Math.round((values.reduce((sum, value) => sum + value, 0) / values.length) * 1000) / 1000;
 }
 
+/** A run's cost is complete only when it is known and no attempt was unpriced. */
+function runCostComplete(run: BenchmarkRun): boolean {
+  return run.cost != null && run.costComplete !== false;
+}
+
 export function aggregateBenchmark(runs: BenchmarkRun[]): {
   models: BenchmarkModelSummary[];
   totals: { runs: number; failures: number; cost: number; costComplete: boolean };
@@ -416,7 +427,7 @@ export function aggregateBenchmark(runs: BenchmarkRun[]): {
       entries.map((entry) => entry.referenceScore).filter((value): value is number => value != null),
     ),
     cost: Math.round(entries.reduce((sum, entry) => sum + (entry.cost ?? 0), 0) * 1e6) / 1e6,
-    costComplete: entries.every((entry) => entry.cost != null),
+    costComplete: entries.every(runCostComplete),
     promptTokens: entries.reduce((sum, entry) => sum + entry.promptTokens, 0),
     completionTokens: entries.reduce((sum, entry) => sum + entry.completionTokens, 0),
     durationMs: entries.reduce((sum, entry) => sum + entry.durationMs, 0),
@@ -443,7 +454,7 @@ export function aggregateBenchmark(runs: BenchmarkRun[]): {
       runs: runs.length,
       failures: runs.filter((run) => !run.ok).length,
       cost: Math.round(runs.reduce((sum, run) => sum + (run.cost ?? 0), 0) * 1e6) / 1e6,
-      costComplete: runs.every((run) => run.cost != null),
+      costComplete: runs.every(runCostComplete),
     },
   };
 }

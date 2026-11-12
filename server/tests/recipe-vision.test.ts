@@ -148,6 +148,13 @@ describe("recipe vision fallback chain", () => {
     assert.deepEqual(parseRecipeVisionModels("a, b ,, c"), ["a", "b", "c"]);
     assert.deepEqual(parseRecipeVisionModels(["a", 3, " b "]), ["a", "b"]);
     assert.deepEqual(parseRecipeVisionModels("a,b,c,d,e"), ["a", "b", "c", "d"]);
+    // A model ID never contains whitespace. The tolerant reader skips such a
+    // value instead of sending it to the provider on every scan, matching the
+    // settings validator that rejects it.
+    assert.deepEqual(parseRecipeVisionModels("good-model, bad model"), ["good-model"]);
+    assert.deepEqual(parseRecipeVisionModels(["good-model", "bad model"]), ["good-model"]);
+    assert.deepEqual(parseRecipeVisionModels("bad model"), []);
+    assert.equal(droppedRecipeVisionModels("a,b,c,d,e, bad model"), 1);
   });
 
   it("validates a new settings list instead of silently cutting it", () => {
@@ -627,6 +634,17 @@ describe("benchmark request and report", () => {
     assert.equal(report.totals.failures, 1);
     assert.equal(report.totals.cost, 0.0035);
     assert.equal(report.totals.costComplete, false);
+
+    // A known cost can still be a lower bound when a later attempt reported no
+    // price. The report must trust the per-run flag, not just `cost != null`.
+    const pricedButIncomplete: BenchmarkRun[] = [
+      { model: "d", image: "one", score: 1, referenceScore: null, cost: 0.001, costComplete: false, promptTokens: 1, completionTokens: 1, durationMs: 1, ok: true, error: null, notes: [] },
+    ];
+    const incomplete = aggregateBenchmark(pricedButIncomplete);
+    assert.equal(incomplete.models[0].cost, 0.001);
+    assert.equal(incomplete.models[0].costComplete, false);
+    assert.equal(incomplete.totals.cost, 0.001);
+    assert.equal(incomplete.totals.costComplete, false);
   });
 });
 
@@ -712,6 +730,23 @@ describe("recipe vision benchmark script", () => {
             res.end(
               JSON.stringify({
                 choices: [{ message: { content: null, reasoning: "thinking…" }, finish_reason: "length" }],
+              }),
+            );
+            return;
+          }
+          res.writeHead(500, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: { message: "Mock retry exploded" } }));
+          return;
+        }
+        if (body.model === "mock-retry-fail-priced") {
+          if (body.reasoning?.enabled !== false) {
+            // The first attempt is priced; the retry then fails without usage.
+            // Its known spend must survive, but only as a lower bound.
+            res.writeHead(200, { "content-type": "application/json" });
+            res.end(
+              JSON.stringify({
+                choices: [{ message: { content: null, reasoning: "thinking…" }, finish_reason: "length" }],
+                usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150, cost: 0.0007 },
               }),
             );
             return;
@@ -876,7 +911,7 @@ describe("recipe vision benchmark script", () => {
       writeFileSync(
         failureManifestPath,
         JSON.stringify({
-          models: ["mock-fail", "mock-usage-no-price", "mock-retry-fail"],
+          models: ["mock-fail", "mock-usage-no-price", "mock-retry-fail", "mock-retry-fail-priced"],
           images: [
             {
               path: "page.png",
@@ -896,8 +931,17 @@ describe("recipe vision benchmark script", () => {
       assert.equal(byModel["mock-fail"].cost, null, "an HTTP failure before usage has unknown cost");
       assert.equal(byModel["mock-usage-no-price"].cost, null, "usage without a price is unknown");
       assert.equal(byModel["mock-retry-fail"].cost, null, "a failed retry with no usage is unknown");
+      // The first attempt was priced, so its known spend stays in the report;
+      // the failed retry means that number is a lower bound, not the total.
+      assert.equal(byModel["mock-retry-fail-priced"].cost, 0.0007);
+      assert.equal(byModel["mock-retry-fail-priced"].costComplete, false);
+      assert.match(
+        (byModel["mock-retry-fail-priced"].notes as string[]).join(" "),
+        /lower bound/i,
+        "the run notes must explain why the cost is incomplete",
+      );
       assert.equal(failureReport.summary.totals.costComplete, false);
-      assert.equal(failureReport.summary.totals.cost, 0);
+      assert.equal(failureReport.summary.totals.cost, 0.0007);
     } finally {
       server.close();
       rmSync(directory, { recursive: true, force: true });

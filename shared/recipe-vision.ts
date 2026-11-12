@@ -57,13 +57,22 @@ export function isOpenRouterBaseUrl(baseUrl: unknown): boolean {
   }
 }
 
+/**
+ * A model ID a provider can actually accept. The settings writer rejects
+ * anything else; the tolerant reader skips it so a malformed environment or
+ * stored value cannot be sent to the provider on every scan.
+ */
+function isUsableModelId(model: string): boolean {
+  return model.length <= 200 && !/\s/.test(model);
+}
+
 function cleanModelList(values: unknown[]): string[] {
   const seen = new Set<string>();
   const models: string[] = [];
   for (const value of values) {
     if (typeof value !== "string") continue;
     const model = value.trim();
-    if (!model || seen.has(model)) continue;
+    if (!model || !isUsableModelId(model) || seen.has(model)) continue;
     seen.add(model);
     models.push(model);
     if (models.length >= MAX_RECIPE_VISION_CHAIN) break;
@@ -114,7 +123,7 @@ export function checkRecipeVisionModels(value: unknown): RecipeVisionModelsCheck
     if (typeof entry !== "string") return { ok: false, reason: "invalid", count: models.length };
     const model = entry.trim();
     if (!model) continue;
-    if (model.length > 200 || /\s/.test(model)) return { ok: false, reason: "invalid", count: models.length };
+    if (!isUsableModelId(model)) return { ok: false, reason: "invalid", count: models.length };
     if (seen.has(model)) continue;
     seen.add(model);
     models.push(model);
@@ -138,7 +147,7 @@ export function droppedRecipeVisionModels(value: unknown): number {
   for (const entry of entries) {
     if (typeof entry !== "string") continue;
     const model = entry.trim();
-    if (model) seen.add(model);
+    if (model && isUsableModelId(model)) seen.add(model);
   }
   return Math.max(0, seen.size - MAX_RECIPE_VISION_CHAIN);
 }

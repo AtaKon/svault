@@ -151,7 +151,14 @@ async function runOnce({ baseUrl, apiKey, manifest, model, image, referenceRecip
   const notes = [];
   let cost = 0;
   let costKnown = true;
+  // False once an attempt was sent but did not report a usable price. The
+  // known spend can still be reported, but only as a lower bound.
+  let costComplete = true;
   let usageSeen = false;
+  // Whether the most recent request reported usage for this attempt. A throw
+  // from `send` leaves it false, which is what makes a retry's total a lower
+  // bound even when the first attempt was priced.
+  let lastAttemptUsage = false;
   let promptTokens = 0;
   let completionTokens = 0;
 
@@ -166,6 +173,7 @@ async function runOnce({ baseUrl, apiKey, manifest, model, image, referenceRecip
       scoreDetail: null,
       referenceScore: null,
       cost: null,
+      costComplete: false,
       promptTokens: 0,
       completionTokens: 0,
       durationMs: Date.now() - startedAt,
@@ -175,6 +183,7 @@ async function runOnce({ baseUrl, apiKey, manifest, model, image, referenceRecip
   }
 
   const send = async (reasoning) => {
+    lastAttemptUsage = false;
     const body = benchmarkChatBody({ model: model.id, imageDataUrl: dataUrl, reasoning });
     const response = await fetch(`${baseUrl.replace(/\/+$/, "")}/chat/completions`, {
       method: "POST",
@@ -197,12 +206,16 @@ async function runOnce({ baseUrl, apiKey, manifest, model, image, referenceRecip
     }
     const choice = data?.choices?.[0];
     const usage = data?.usage ?? null;
-    if (usage != null) usageSeen = true;
+    if (usage != null) {
+      usageSeen = true;
+      lastAttemptUsage = true;
+    }
     promptTokens += Number(usage?.prompt_tokens ?? 0) || 0;
     completionTokens += Number(usage?.completion_tokens ?? 0) || 0;
     const reported = benchmarkCost(usage, manifest.prices);
     if (reported == null) {
       costKnown = false;
+      costComplete = false;
       const note =
         "The provider reported no usable price and the manifest prices cannot price this usage, so the run's cost is unknown.";
       if (!notes.includes(note)) notes.push(note);
@@ -260,6 +273,7 @@ async function runOnce({ baseUrl, apiKey, manifest, model, image, referenceRecip
       scoreDetail: score,
       referenceScore: manifest.referenceModel === model.id ? null : similarity ? similarity.score : null,
       cost: costKnown ? cost : null,
+      costComplete: costComplete && costKnown,
       promptTokens,
       completionTokens,
       durationMs: Date.now() - startedAt,
@@ -267,6 +281,13 @@ async function runOnce({ baseUrl, apiKey, manifest, model, image, referenceRecip
       error: null,
     };
   } catch (error) {
+    // A priced first attempt followed by a retry that failed before reporting
+    // usage is a lower bound, not a complete total. Say so in the run and in
+    // its notes so the report does not present the partial sum as exact.
+    if (usageSeen && !lastAttemptUsage) {
+      const note = "A retry failed before reporting usage, so the run's cost is a lower bound.";
+      if (!notes.includes(note)) notes.push(note);
+    }
     return {
       ok: false,
       recipe: null,
@@ -276,6 +297,7 @@ async function runOnce({ baseUrl, apiKey, manifest, model, image, referenceRecip
       // A request that failed before the provider reported usage has an
       // unknown price, not a free one; `0` would understate the total.
       cost: usageSeen && costKnown ? cost : null,
+      costComplete: costComplete && costKnown && lastAttemptUsage,
       promptTokens,
       completionTokens,
       durationMs: Date.now() - startedAt,
@@ -428,6 +450,7 @@ async function main() {
         score: result.score,
         referenceScore: result.referenceScore,
         cost: result.cost,
+        costComplete: result.costComplete,
         promptTokens: result.promptTokens,
         completionTokens: result.completionTokens,
         durationMs: result.durationMs,
