@@ -754,12 +754,21 @@ export async function aiReadRecipes(
         if (!notes.includes(note)) notes.push(note);
       }
       if (index === candidates.length - 1) {
-        const best = partial[partial.length - 1];
         // A partial answer with only a title is not a recipe. Returning it as
-        // success would let an unattended save persist an empty draft.
+        // success would let an unattended save persist an empty draft. Pick the
+        // newest *usable* partial instead of blindly taking the last one: a
+        // title-only truncation from the final model must not discard an
+        // earlier model's usable reading.
+        let best: { model: string; recipes: Record<string, unknown>[] } | undefined;
+        for (let position = partial.length - 1; position >= 0; position -= 1) {
+          if (partial[position].recipes.some(isUsableRecipe)) {
+            best = partial[position];
+            break;
+          }
+        }
         const usable = best?.recipes.filter(isUsableRecipe) ?? [];
         if (best && usable.length) {
-          if (!(error instanceof AiTruncatedRecipesError)) {
+          if (best.model !== candidate.model) {
             notes.push(`${candidate.model} did not return a usable recipe (${shorten(message, 160)}).`);
           }
           notes.push("The AI answer hit the output token limit, so the recipe may be incomplete.");

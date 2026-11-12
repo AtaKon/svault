@@ -547,7 +547,10 @@ recipeRoutes.post(
       } catch (err) {
         spentOnFailure(err);
         aiModels = addAttemptedModels(aiModels, err);
-        if (vision.images.length && isImageInputError(err)) {
+        // A photo-only scan has no text to clean up. Retrying without the image
+        // would send an empty prompt and bill a call that cannot succeed; keep
+        // the local (empty) result and let the no-text warning explain it.
+        if (vision.images.length && rawText && isImageInputError(err)) {
           try {
             // Retry the model that actually rejected the photo. Re-running the
             // first model would re-bill every earlier failure (a 5xx, a rate

@@ -508,9 +508,15 @@ async function recognizeRecipePage(
   // Most pages are decided by the variant chosen from the ink colour.
   if (average(passes[0]) < 1.6) {
     setPhase(0.7, 0.2);
-    const secondary = buildVariant(!preferInk);
-    const second = await worker.recognize(secondary);
-    passes.push({ canvas: secondary, text: second.data.text, score: scoreRecipeText(second.data.text), confidence: second.data.confidence });
+    try {
+      const secondary = buildVariant(!preferInk);
+      const second = await worker.recognize(secondary);
+      passes.push({ canvas: secondary, text: second.data.text, score: scoreRecipeText(second.data.text), confidence: second.data.confidence });
+    } catch {
+      // The first pass is already a usable reading. A failed optional pass must
+      // not discard it (a second recognise can fail after the worker survived
+      // the first), so keep the primary text.
+    }
   }
 
   passes.sort((a, b) => b.score - a.score);
@@ -523,18 +529,23 @@ async function recognizeRecipePage(
     // produced the best reading, not always the ink-colour-first one: the
     // second variant can win the two layout passes.
     setPhase(0.9, 0.1);
-    await worker.setParameters({
-      tessedit_pageseg_mode: psm.SPARSE_TEXT,
-      preserve_interword_spaces: "1",
-      user_defined_dpi: "300",
-    });
-    const sparse = await worker.recognize(bestPass.canvas);
-    const candidate = {
-      text: sparse.data.text,
-      score: scoreRecipeText(sparse.data.text),
-      confidence: sparse.data.confidence,
-    };
-    if (candidate.score > best.score) best = candidate;
+    try {
+      await worker.setParameters({
+        tessedit_pageseg_mode: psm.SPARSE_TEXT,
+        preserve_interword_spaces: "1",
+        user_defined_dpi: "300",
+      });
+      const sparse = await worker.recognize(bestPass.canvas);
+      const candidate = {
+        text: sparse.data.text,
+        score: scoreRecipeText(sparse.data.text),
+        confidence: sparse.data.confidence,
+      };
+      if (candidate.score > best.score) best = candidate;
+    } catch {
+      // Same as the optional second layout pass: keep the reading we already
+      // have instead of failing the whole scan.
+    }
   }
 
   if (import.meta.env.DEV) {

@@ -421,6 +421,31 @@ describe("recipe scan photos and multi-recipe pages", () => {
     });
   });
 
+  it("does not send an empty text-only retry for a photo-only scan", async () => {
+    const imagePath = await uploadPhoto("blank.png");
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { model: "text-only-model", visionModel: null, recipeVisionModels: [] } } },
+    });
+    aiRequests.length = 0;
+    try {
+      const scan = await request(`/api/houses/${houseId}/recipes/scan`, {
+        method: "POST",
+        body: { image: imagePath },
+      });
+      assert.equal(scan.status, 200);
+      assert.equal(aiRequests.length, 1, "with no recognised text a photo-less retry is a billed empty prompt");
+      assert.equal(scan.data.provider, "local", "the empty retry must not turn into an AI draft");
+      assert.doesNotMatch(String(scan.data.warning), /did not accept the photo/i);
+      assert.match(String(scan.data.warning), /No text was recognised/i);
+    } finally {
+      await request(`/api/houses/${houseId}`, {
+        method: "PATCH",
+        body: { settings: { ai: { model: "mock-model", visionModel: null, recipeVisionModels: [] } } },
+      });
+    }
+  });
+
   it("returns every recipe on a photographed page separately", async () => {
     await request(`/api/houses/${houseId}`, {
       method: "PATCH",

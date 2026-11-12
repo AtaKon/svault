@@ -411,4 +411,23 @@ describe("recipe scan fallback chains and truncation", () => {
     assert.equal(result.usage.cost, 0.00125, "the truncated model's cost is counted once");
     assert.match(result.notes?.join(" ") ?? "", /output token limit/i);
   });
+
+  it("keeps an earlier usable partial when the final model truncates to a title", async () => {
+    // The last model's partial is not a recipe (title only). It must not
+    // replace the usable truncated reading an earlier model already produced.
+    const cfg = resolveAi({
+      ai: { enabled: true, baseUrl: aiBase, apiKey: "test-key", model: "mock-model" },
+    });
+    aiRequests.length = 0;
+    const result = await aiReadRecipes(cfg, "Pancakes\n2 eggs", [], { operation: "recipe.scan", houseId }, {
+      models: [{ model: "truncated-json-model" }, { model: "truncated-title-model" }],
+    });
+    assert.equal(result.model, "truncated-json-model");
+    assert.deepEqual(result.models, ["truncated-json-model", "truncated-title-model"]);
+    assert.equal(result.truncated, true);
+    assert.equal(result.data.recipes.length, 1);
+    assert.match(String(result.data.recipes[0].title), /AI pancakes/i);
+    assert.equal(result.usage.cost, 0.0025, "both billed attempts are counted once");
+    assert.match(result.notes?.join(" ") ?? "", /truncated-title-model did not return a usable recipe/i);
+  });
 });
