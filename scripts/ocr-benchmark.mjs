@@ -70,7 +70,18 @@ function trainedDataDir() {
 
 /* --------------------------------------------------------------- image I/O */
 
-function decodeImage(file) {
+let temporaryFileCount = 0;
+
+/**
+ * A unique scratch path. `Date.now()` alone can repeat within one millisecond,
+ * and two variants must never share (and delete) the same file.
+ */
+export function temporaryPath(extension) {
+  temporaryFileCount += 1;
+  return path.join(os.tmpdir(), `ocr-bench-${process.pid}-${temporaryFileCount}-${Date.now()}.${extension}`);
+}
+
+export function decodeImage(file) {
   if (/\.bmp$/i.test(file)) {
     const decoded = bmp.decode(fs.readFileSync(file));
     return { width: decoded.width, height: decoded.height, data: rgbaFromBmp(decoded) };
@@ -81,7 +92,7 @@ function decodeImage(file) {
         "Convert the manifests' photos to BMP, or run the benchmark on macOS.",
     );
   }
-  const temp = path.join(os.tmpdir(), `ocr-bench-${process.pid}-${Date.now()}.bmp`);
+  const temp = temporaryPath("bmp");
   try {
     execFileSync("sips", ["-s", "format", "bmp", file, "--out", temp], { stdio: "ignore" });
     const decoded = bmp.decode(fs.readFileSync(temp));
@@ -95,7 +106,7 @@ function decodeImage(file) {
  * bmp-js stores pixels as [0, blue, green, red] and already normalises rows to
  * top-down. Re-pack into real RGBA so the shared helpers see true colours.
  */
-function rgbaFromBmp(decoded) {
+export function rgbaFromBmp(decoded) {
   const data = new Uint8ClampedArray(decoded.width * decoded.height * 4);
   for (let pixel = 0, source = 0, target = 0; target < data.length; pixel++, source += 4, target += 4) {
     data[target] = decoded.data[source + 3];
@@ -106,7 +117,7 @@ function rgbaFromBmp(decoded) {
   return data;
 }
 
-function lumaOf(image) {
+export function lumaOf(image) {
   const { data, width, height } = image;
   const luma = new Uint8ClampedArray(width * height);
   for (let pixel = 0, index = 0; index < data.length; index += 4, pixel++) {
@@ -115,14 +126,14 @@ function lumaOf(image) {
   return luma;
 }
 
-function sample(image, x, y, channel) {
+export function sample(image, x, y, channel) {
   const clampedX = Math.max(0, Math.min(image.width - 1, x));
   const clampedY = Math.max(0, Math.min(image.height - 1, y));
   return image.data[(clampedY * image.width + clampedX) * 4 + channel];
 }
 
 /** Bilinear resize over RGBA. */
-function resize(image, width, height) {
+export function resize(image, width, height) {
   const out = new Uint8ClampedArray(width * height * 4);
   const scaleX = image.width / width;
   const scaleY = image.height / height;
@@ -148,7 +159,7 @@ function resize(image, width, height) {
   return { width, height, data: out };
 }
 
-function crop(image, region) {
+export function crop(image, region) {
   const out = new Uint8ClampedArray(region.width * region.height * 4);
   for (let y = 0; y < region.height; y++) {
     for (let x = 0; x < region.width; x++) {
@@ -164,7 +175,7 @@ function crop(image, region) {
 }
 
 /** Rotate by `degrees`, positive clockwise, filling the corners with white. */
-function rotate(image, degrees) {
+export function rotate(image, degrees) {
   const radians = (degrees * Math.PI) / 180;
   const cos = Math.abs(Math.cos(radians));
   const sin = Math.abs(Math.sin(radians));
@@ -207,7 +218,7 @@ function percentile(histogram, total, fraction) {
 }
 
 /** Grayscale + gentle percentile stretch, mirroring `normalizeCanvas`. */
-function normalize(image) {
+export function normalize(image) {
   const luma = lumaOf(image);
   const histogram = new Uint32Array(256);
   for (const value of luma) histogram[value]++;
@@ -226,7 +237,7 @@ function normalize(image) {
 }
 
 /** Minimum-channel ink isolation, mirroring `inkCanvas`. */
-function ink(image) {
+export function ink(image) {
   const total = image.width * image.height;
   const values = new Uint8ClampedArray(total);
   const histogram = new Uint32Array(256);
@@ -252,7 +263,7 @@ function ink(image) {
 }
 
 /** Deskew only. Paper cropping and the upscale cap happen in `cropToContent`. */
-function tighten(image) {
+export function tighten(image) {
   let page = image;
   const before = lumaOf(page);
   const skew = estimateSkewDegrees(before, page.width, page.height);
@@ -260,7 +271,20 @@ function tighten(image) {
   return { image: page, skew };
 }
 
-function cropToContent(image) {
+/**
+ * Final scale for a cropped page. Mirrors `prepareDocument` in the browser: up
+ * to 2.4× for a small crop, but never past the shared width or pixel budget, so
+ * an oversized photo is downscaled instead of being handed to Tesseract whole.
+ */
+export function contentScale(width, height) {
+  return Math.min(
+    2.4,
+    MAX_RECIPE_OCR_WIDTH / Math.max(1, width),
+    Math.sqrt(MAX_RECIPE_OCR_PIXELS / Math.max(1, width * height)),
+  );
+}
+
+export function cropToContent(image) {
   const luma = lumaOf(image);
   const paper = detectPaperRegion(luma, image.width, image.height);
   const content = detectContentBounds(luma, image.width, image.height);
@@ -277,15 +301,12 @@ function cropToContent(image) {
   if (box.width < image.width * 0.3 || box.height < image.height * 0.3) return image;
   const cropped = crop(image, box);
   // Mirror `tightenRecipePage`: Tesseract.js in Node aborts on a 2400x3200 page
-  // ("Too many properties to enumerate"), so the upscale is capped by the shared
-  // width and total-pixel budget rather than by local copies of the numbers.
-  const scale = Math.min(2.4, Math.max(1, MAX_RECIPE_OCR_WIDTH / Math.max(1, cropped.width)));
-  const targetWidth = Math.round(cropped.width * scale);
-  const targetHeight = Math.round(cropped.height * scale);
-  const capped = Math.min(1, Math.sqrt(MAX_RECIPE_OCR_PIXELS / Math.max(1, targetWidth * targetHeight)));
-  return scale * capped > 1.01
-    ? resize(cropped, Math.round(cropped.width * scale * capped), Math.round(cropped.height * scale * capped))
-    : cropped;
+  // ("Too many properties to enumerate"), so the final image must satisfy both
+  // the shared width and total-pixel budget. This scale can be below 1 when the
+  // crop is already larger than the budget.
+  const scale = contentScale(cropped.width, cropped.height);
+  if (Math.abs(scale - 1) <= 0.01) return cropped;
+  return resize(cropped, Math.max(1, Math.round(cropped.width * scale)), Math.max(1, Math.round(cropped.height * scale)));
 }
 
 /**
@@ -294,7 +315,7 @@ function cropToContent(image) {
  * the file as top-down BGR rows because of the negative height it stores.
  * `rgbaFromBmp` reverses exactly this packing.
  */
-function encodeBmp(image) {
+export function encodeBmp(image) {
   const width = image.width;
   const height = image.height;
   const rows = new Uint8Array(width * height * 4);
@@ -308,19 +329,55 @@ function encodeBmp(image) {
   return bmp.encode({ data: Buffer.from(rows), width, height });
 }
 
-function toBmpFile(image) {
+export function toBmpFile(image) {
   const encoded = encodeBmp(image);
-  const file = path.join(os.tmpdir(), `ocr-bench-${process.pid}-${Date.now()}.bmp`);
+  const file = temporaryPath("bmp");
   fs.writeFileSync(file, encoded.data);
   return file;
 }
 
 /**
+ * A 24-bit BMP written from the specification, not by `encodeBmp`. Decoding it
+ * proves `rgbaFromBmp` reads channel order and row order correctly even if the
+ * encoder had the same mistake (a symmetric swap would pass a self round trip).
+ */
+function handBuiltBmp(width, height, rgbAt) {
+  const rowSize = Math.ceil((width * 3) / 4) * 4;
+  const pixelBytes = rowSize * height;
+  const buffer = Buffer.alloc(54 + pixelBytes);
+  buffer.write("BM", 0, "ascii");
+  buffer.writeUInt32LE(54 + pixelBytes, 2);
+  buffer.writeUInt32LE(54, 10);
+  buffer.writeUInt32LE(40, 14);
+  buffer.writeInt32LE(width, 18);
+  buffer.writeInt32LE(height, 22); // positive height: rows are stored bottom-up
+  buffer.writeUInt16LE(1, 26);
+  buffer.writeUInt16LE(24, 28);
+  buffer.writeUInt32LE(pixelBytes, 34);
+  buffer.writeUInt32LE(2835, 38);
+  buffer.writeUInt32LE(2835, 42);
+  for (let fileRow = 0; fileRow < height; fileRow++) {
+    const sourceRow = height - 1 - fileRow;
+    for (let x = 0; x < width; x++) {
+      const { r, g, b } = rgbAt(x, sourceRow);
+      const offset = 54 + fileRow * rowSize + x * 3;
+      buffer[offset] = b;
+      buffer[offset + 1] = g;
+      buffer[offset + 2] = r;
+    }
+  }
+  return buffer;
+}
+
+/**
  * Guard the decode/encode round trip at startup. A previous evaluation run was
  * discarded because of a channel-order bug, and that must never come back
- * silently: a 2x2 image with distinct channels must survive unchanged.
+ * silently. Three independent checks:
+ *   1. the bytes `encodeBmp` hands to bmp-js are [0, b, g, r] as that API wants;
+ *   2. a BMP built from the spec decodes back to the expected RGB;
+ *   3. on macOS, `sips` can read the encoded file and returns the same colours.
  */
-function assertBmpRoundTrip() {
+export function assertBmpRoundTrip() {
   const pixels = [
     { r: 10, g: 20, b: 30 },
     { r: 40, g: 50, b: 60 },
@@ -334,16 +391,69 @@ function assertBmpRoundTrip() {
     data[index * 4 + 2] = pixel.b;
     data[index * 4 + 3] = 255;
   });
-  const encoded = encodeBmp({ width: 2, height: 2, data });
-  const decoded = rgbaFromBmp(bmp.decode(encoded.data));
+  const image = { width: 2, height: 2, data };
+  const encoded = encodeBmp(image);
+
+  // 1. The encoder's output buffer must be in bmp-js's [a, b, g, r] layout.
+  const raw = bmp.decode(encoded.data);
   for (let index = 0; index < pixels.length; index++) {
     const expected = pixels[index];
-    const actual = { r: decoded[index * 4], g: decoded[index * 4 + 1], b: decoded[index * 4 + 2] };
+    const actual = { b: raw.data[index * 4 + 1], g: raw.data[index * 4 + 2], r: raw.data[index * 4 + 3] };
     if (actual.r !== expected.r || actual.g !== expected.g || actual.b !== expected.b) {
       throw new Error(
-        `BMP round trip changed pixel ${index}: expected rgb(${expected.r},${expected.g},${expected.b}) ` +
+        `BMP encoding wrote pixel ${index} as rgb(${actual.r},${actual.g},${actual.b}) ` +
+          `but expected rgb(${expected.r},${expected.g},${expected.b}). Refusing to benchmark on swapped channels.`,
+      );
+    }
+  }
+
+  // 2. A specification-built file must survive the decoder.
+  const external = handBuiltBmp(2, 2, (x, y) => pixels[y * 2 + x]);
+  const decodedExternal = rgbaFromBmp(bmp.decode(external));
+  for (let index = 0; index < pixels.length; index++) {
+    const expected = pixels[index];
+    const actual = {
+      r: decodedExternal[index * 4],
+      g: decodedExternal[index * 4 + 1],
+      b: decodedExternal[index * 4 + 2],
+    };
+    if (actual.r !== expected.r || actual.g !== expected.g || actual.b !== expected.b) {
+      throw new Error(
+        `BMP decoding changed spec-built pixel ${index}: expected rgb(${expected.r},${expected.g},${expected.b}) ` +
           `but read rgb(${actual.r},${actual.g},${actual.b}). Refusing to benchmark on swapped channels.`,
       );
+    }
+  }
+
+  // 3. An external reader must see the same colours as the encoder intended.
+  if (process.platform === "darwin") {
+    const input = temporaryPath("bmp");
+    const output = temporaryPath("bmp");
+    try {
+      fs.writeFileSync(input, encoded.data);
+      execFileSync("sips", ["-s", "format", "bmp", input, "--out", output], { stdio: "ignore" });
+      const fromSips = rgbaFromBmp(bmp.decode(fs.readFileSync(output)));
+      for (let index = 0; index < pixels.length; index++) {
+        const expected = pixels[index];
+        const actual = {
+          r: fromSips[index * 4],
+          g: fromSips[index * 4 + 1],
+          b: fromSips[index * 4 + 2],
+        };
+        if (
+          Math.abs(actual.r - expected.r) > 2 ||
+          Math.abs(actual.g - expected.g) > 2 ||
+          Math.abs(actual.b - expected.b) > 2
+        ) {
+          throw new Error(
+            `sips read encoded pixel ${index} as rgb(${actual.r},${actual.g},${actual.b}) ` +
+              `instead of rgb(${expected.r},${expected.g},${expected.b}). Refusing to benchmark on swapped channels.`,
+          );
+        }
+      }
+    } finally {
+      fs.rmSync(input, { force: true });
+      fs.rmSync(output, { force: true });
     }
   }
 }
@@ -394,26 +504,8 @@ function evaluate(entry, text) {
 
 /* -------------------------------------------------------------------- main */
 
-const manifestFile = process.argv[2];
-if (manifestFile === "--self-check") {
-  assertBmpRoundTrip();
-  console.log("BMP round trip OK: encode/decode preserves RGB channels.");
-  process.exit(0);
-}
-if (!manifestFile) {
-  console.error("usage: node --import tsx scripts/ocr-benchmark.mjs <manifest.json> [--json out.json]");
-  console.error("       node --import tsx scripts/ocr-benchmark.mjs --self-check");
-  process.exit(2);
-}
-const manifest = JSON.parse(fs.readFileSync(manifestFile, "utf8"));
-assertBmpRoundTrip();
-const baseDir = path.dirname(path.resolve(manifestFile));
-const jsonFlag = process.argv.indexOf("--json");
-const jsonOut = jsonFlag > 0 ? process.argv[jsonFlag + 1] : null;
-
-const LANGS = ["ell", "eng"];
-const PSM_MODES = ["4", "11"];
-const results = [];
+export const LANGS = ["ell", "eng"];
+export const PSM_MODES = ["4", "11"];
 
 async function withWorker(lang, fn) {
   const worker = await createWorker(lang, 1, {
@@ -429,72 +521,98 @@ async function withWorker(lang, fn) {
   }
 }
 
-for (const entry of manifest.images) {
-  const file = path.isAbsolute(entry.path) ? entry.path : path.join(baseDir, entry.path);
-  console.log(`\n### ${entry.label ?? path.basename(file)}`);
-  const original = decodeImage(file);
-  const tight = tighten(original);
-  const cropped = cropToContent(tight.image);
-
-  const variants = {
-    "photo-normalized": normalize(original),
-    "page-normalized": normalize(tight.image),
-    "page-cropped": normalize(cropped),
-    "page-ink": ink(cropped),
-  };
-
-  for (const [variant, image] of Object.entries(variants)) {
-    const bmpFile = toBmpFile(image);
-    for (const lang of LANGS) {
-      const row = await withWorker(lang, async (worker) => {
-        const started = Date.now();
-        let text = "";
-        let confidence = 0;
-        for (const psm of PSM_MODES) {
-          await worker.setParameters({
-            tessedit_pageseg_mode: psm,
-            preserve_interword_spaces: "1",
-            user_defined_dpi: "300",
-          });
-          const { data } = await worker.recognize(bmpFile);
-          if (data.text.trim().length > text.trim().length) {
-            text = data.text;
-            confidence = data.confidence;
-          }
-        }
-        const metrics = evaluate(entry, text);
-        const cleaned = cleanNotebookText(text);
-        const cleanedMetrics = evaluate(entry, cleaned);
-        return {
-          image: entry.label ?? path.basename(file),
-          variant,
-          lang,
-          ms: Date.now() - started,
-          confidence,
-          chars: text.trim().length,
-          ...metrics,
-          cleanedChars: cleaned.trim().length,
-          cleanedKeywordRecall: cleanedMetrics.keywordRecall,
-          cleanedCharacterErrorRate: cleanedMetrics.characterErrorRate,
-          text: text.trim(),
-        };
-      });
-      results.push(row);
-      console.log(
-        `${variant.padEnd(16)} ${lang.padEnd(8)} conf=${String(Math.round(row.confidence)).padStart(3)} ` +
-          `chars=${String(row.chars).padStart(5)} keywords=${row.found}/${row.keywords} ` +
-          `CER=${row.characterErrorRate == null ? "n/a" : row.characterErrorRate.toFixed(2)} ` +
-          `cleanedKeywords=${Math.round((row.cleanedKeywordRecall ?? 0) * row.keywords)}/${row.keywords}`,
-      );
-    }
-    fs.rmSync(bmpFile, { force: true });
+async function main() {
+  const manifestFile = process.argv[2];
+  if (manifestFile === "--self-check") {
+    assertBmpRoundTrip();
+    console.log("BMP round trip OK: encode/decode, the spec decoder and sips preserve RGB channels.");
+    return;
   }
-  console.log(
-    `skew=${tight.skew}° crop=${cropped.width}x${cropped.height} (from ${original.width}x${original.height})`,
-  );
+  if (!manifestFile) {
+    console.error("usage: node --import tsx scripts/ocr-benchmark.mjs <manifest.json> [--json out.json]");
+    console.error("       node --import tsx scripts/ocr-benchmark.mjs --self-check");
+    process.exitCode = 2;
+    return;
+  }
+  const manifest = JSON.parse(fs.readFileSync(manifestFile, "utf8"));
+  assertBmpRoundTrip();
+  const baseDir = path.dirname(path.resolve(manifestFile));
+  const jsonFlag = process.argv.indexOf("--json");
+  const jsonOut = jsonFlag > 0 ? process.argv[jsonFlag + 1] : null;
+  const results = [];
+
+  for (const entry of manifest.images) {
+    const file = path.isAbsolute(entry.path) ? entry.path : path.join(baseDir, entry.path);
+    console.log(`\n### ${entry.label ?? path.basename(file)}`);
+    const original = decodeImage(file);
+    const tight = tighten(original);
+    const cropped = cropToContent(tight.image);
+
+    const variants = {
+      "photo-normalized": normalize(original),
+      "page-normalized": normalize(tight.image),
+      "page-cropped": normalize(cropped),
+      "page-ink": ink(cropped),
+    };
+
+    for (const [variant, image] of Object.entries(variants)) {
+      const bmpFile = toBmpFile(image);
+      for (const lang of LANGS) {
+        const row = await withWorker(lang, async (worker) => {
+          const started = Date.now();
+          let text = "";
+          let confidence = 0;
+          for (const psm of PSM_MODES) {
+            await worker.setParameters({
+              tessedit_pageseg_mode: psm,
+              preserve_interword_spaces: "1",
+              user_defined_dpi: "300",
+            });
+            const { data } = await worker.recognize(bmpFile);
+            if (data.text.trim().length > text.trim().length) {
+              text = data.text;
+              confidence = data.confidence;
+            }
+          }
+          const metrics = evaluate(entry, text);
+          const cleaned = cleanNotebookText(text);
+          const cleanedMetrics = evaluate(entry, cleaned);
+          return {
+            image: entry.label ?? path.basename(file),
+            variant,
+            lang,
+            ms: Date.now() - started,
+            confidence,
+            chars: text.trim().length,
+            ...metrics,
+            cleanedChars: cleaned.trim().length,
+            cleanedKeywordRecall: cleanedMetrics.keywordRecall,
+            cleanedCharacterErrorRate: cleanedMetrics.characterErrorRate,
+            text: text.trim(),
+          };
+        });
+        results.push(row);
+        console.log(
+          `${variant.padEnd(16)} ${lang.padEnd(8)} conf=${String(Math.round(row.confidence)).padStart(3)} ` +
+            `chars=${String(row.chars).padStart(5)} keywords=${row.found}/${row.keywords} ` +
+            `CER=${row.characterErrorRate == null ? "n/a" : row.characterErrorRate.toFixed(2)} ` +
+            `cleanedKeywords=${Math.round((row.cleanedKeywordRecall ?? 0) * row.keywords)}/${row.keywords}`,
+        );
+      }
+      fs.rmSync(bmpFile, { force: true });
+    }
+    console.log(
+      `skew=${tight.skew}° crop=${cropped.width}x${cropped.height} (from ${original.width}x${original.height})`,
+    );
+  }
+
+  if (jsonOut) {
+    fs.writeFileSync(jsonOut, JSON.stringify({ generatedAt: new Date().toISOString(), results }, null, 2));
+    console.log(`\nwrote ${jsonOut}`);
+  }
 }
 
-if (jsonOut) {
-  fs.writeFileSync(jsonOut, JSON.stringify({ generatedAt: new Date().toISOString(), results }, null, 2));
-  console.log(`\nwrote ${jsonOut}`);
-}
+/** Only run the benchmark when executed, not when a test imports the helpers. */
+const invokedDirectly =
+  process.argv[1] != null && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (invokedDirectly) await main();

@@ -75,6 +75,11 @@ function cleanModelList(values: unknown[]): string[] {
  * Read a stored or environment list. `null` means "not configured" so the
  * caller can apply the provider default; an empty list is treated the same
  * way. To remove the extra fallbacks, list only the one model to use.
+ *
+ * This is the tolerant reader for values that are already stored (or come from
+ * the environment): unusable entries are skipped and the list is capped. A
+ * settings write goes through `checkRecipeVisionModels` instead, which reports
+ * what would be lost so the API can answer 400 rather than silently truncate.
  */
 export function parseRecipeVisionModels(value: unknown): string[] | null {
   if (value == null) return null;
@@ -84,6 +89,44 @@ export function parseRecipeVisionModels(value: unknown): string[] | null {
     return cleanModelList(value.split(","));
   }
   return null;
+}
+
+export type RecipeVisionModelsCheck =
+  | { ok: true; models: string[] }
+  | { ok: false; reason: "invalid" | "too-many"; count: number };
+
+/**
+ * Validate a *new* recipe vision model list before it is stored. Unlike
+ * `parseRecipeVisionModels` it never guesses: a non-string entry, a value that
+ * cannot be a model ID, or more models than the chain can use is an error. An
+ * empty list is valid and means "clear the setting".
+ */
+export function checkRecipeVisionModels(value: unknown): RecipeVisionModelsCheck {
+  if (value == null) return { ok: true, models: [] };
+  let entries: unknown[];
+  if (Array.isArray(value)) entries = value;
+  else if (typeof value === "string") entries = value.split(",");
+  else return { ok: false, reason: "invalid", count: 0 };
+
+  const seen = new Set<string>();
+  const models: string[] = [];
+  for (const entry of entries) {
+    if (typeof entry !== "string") return { ok: false, reason: "invalid", count: models.length };
+    const model = entry.trim();
+    if (!model) continue;
+    if (model.length > 200 || /\s/.test(model)) return { ok: false, reason: "invalid", count: models.length };
+    if (seen.has(model)) continue;
+    seen.add(model);
+    models.push(model);
+  }
+  if (models.length > MAX_RECIPE_VISION_CHAIN) return { ok: false, reason: "too-many", count: models.length };
+  return { ok: true, models };
+}
+
+/** How many configured models a stored/environment list had to drop. */
+export function droppedRecipeVisionModels(value: unknown): number {
+  const check = checkRecipeVisionModels(value);
+  return !check.ok ? Math.max(0, check.count - MAX_RECIPE_VISION_CHAIN) : 0;
 }
 
 export interface RecipeVisionChainInput {

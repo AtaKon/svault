@@ -9,6 +9,8 @@ import path from "node:path";
 import {
   DEFAULT_RECIPE_VISION_MODELS,
   MAX_RECIPE_VISION_CHAIN,
+  checkRecipeVisionModels,
+  droppedRecipeVisionModels,
   extractJsonValue,
   isOpenRouterBaseUrl,
   parseRecipeVisionModels,
@@ -132,6 +134,20 @@ describe("recipe vision fallback chain", () => {
     assert.deepEqual(parseRecipeVisionModels("a, b ,, c"), ["a", "b", "c"]);
     assert.deepEqual(parseRecipeVisionModels(["a", 3, " b "]), ["a", "b"]);
     assert.deepEqual(parseRecipeVisionModels("a,b,c,d,e"), ["a", "b", "c", "d"]);
+  });
+
+  it("validates a new settings list instead of silently cutting it", () => {
+    assert.deepEqual(checkRecipeVisionModels(["a", "b", "a"]), { ok: true, models: ["a", "b"] });
+    assert.deepEqual(checkRecipeVisionModels("a, b"), { ok: true, models: ["a", "b"] });
+    assert.deepEqual(checkRecipeVisionModels("  "), { ok: true, models: [] });
+    assert.equal(checkRecipeVisionModels(["a", 3]).ok, false);
+    assert.equal(checkRecipeVisionModels("a b").ok, false);
+    const tooMany = checkRecipeVisionModels(["a", "b", "c", "d", "e"]);
+    assert.equal(tooMany.ok, false);
+    assert.equal(tooMany.ok ? 0 : tooMany.reason, "too-many");
+    assert.equal(tooMany.ok ? 0 : tooMany.count, 5);
+    assert.equal(droppedRecipeVisionModels("a,b,c,d,e,f"), 2);
+    assert.equal(droppedRecipeVisionModels("a,b"), 0);
   });
 });
 
@@ -399,6 +415,18 @@ describe("benchmark manifest", () => {
     );
     const parsed = parseBenchmarkManifest({ ...baseManifest, models: [{ id: "a", reasoning: "high" }] });
     assert.equal(parsed.models[0].reasoning, "high");
+  });
+
+  it("normalises a model's reasoning the same way the server does", () => {
+    const parsed = parseBenchmarkManifest({
+      ...baseManifest,
+      models: [
+        { id: "a", reasoning: " High " },
+        { id: "b", reasoning: "AUTO" },
+      ],
+    });
+    assert.equal(parsed.models[0].reasoning, "high");
+    assert.equal(parsed.models[1].reasoning, "auto");
   });
 });
 

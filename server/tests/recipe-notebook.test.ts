@@ -224,6 +224,39 @@ describe("handwritten Greek ingredient lines", () => {
     // A dash is a bullet, not a ditto mark.
     assert.equal(parseIngredientLine("1 - ελιές", "g")?.unit, null);
   });
+
+  it("does not read an opening smart quote as a ditto mark", () => {
+    // OCR turns a handwritten quotation mark into a curly quote; it must not
+    // inherit the previous unit just because it follows a number.
+    assert.equal(parseIngredientLine("2 “eggs", "g")?.unit, null);
+    assert.equal(parseIngredientLine("2 “eggs")?.quantity, 2);
+  });
+
+  it("keeps OCR double spacing inside one ingredient row", () => {
+    const draft = heuristicRecipe(
+      ["Pancakes", "2  eggs", "1  cup  flour", "Εκτέλεση", "Whisk everything."].join("\n"),
+    );
+    assert.equal(draft.ingredients.length, 2, "a double space is not an ingredient separator");
+    assert.deepEqual(
+      draft.ingredients.map((ingredient) => ingredient.name),
+      ["eggs", "flour"],
+    );
+    assert.equal(draft.ingredients[0].quantity, 2);
+    assert.equal(draft.ingredients[1].unit, "cup");
+
+    const wrapped = heuristicRecipe(
+      ["Pancakes", "1 cup flour", "  continued below", "Εκτέλεση", "Whisk."].join("\n"),
+    );
+    assert.equal(wrapped.ingredients[0].quantity, 1);
+    assert.equal(wrapped.ingredients[0].unit, "cup");
+    assert.equal(wrapped.ingredients[0].name, "flour");
+  });
+
+  it("does not invent a step for an empty page", () => {
+    const draft = heuristicRecipe("");
+    assert.equal(draft.ingredients.length, 0);
+    assert.ok(draft.steps.every((step) => !step.text.trim()), "no whitespace-only step is a recipe");
+  });
 });
 
 describe("handwritten Greek notebook page", () => {

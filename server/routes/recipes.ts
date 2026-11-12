@@ -346,10 +346,13 @@ recipeRoutes.post(
   }),
 );
 
+/** One scan accepts at most this many photos; the schema and loader share it. */
+const MAX_RECIPE_SCAN_IMAGES = 6;
+
 async function loadRecipeImages(paths: string[]): Promise<{ images: string[]; skipped: number }> {
   const images: string[] = [];
   let skipped = 0;
-  for (const image of paths.slice(0, 6)) {
+  for (const image of paths.slice(0, MAX_RECIPE_SCAN_IMAGES)) {
     const dataUrl = await localImageToDataUrl(image);
     if (dataUrl) images.push(dataUrl);
     else skipped++;
@@ -357,16 +360,43 @@ async function loadRecipeImages(paths: string[]): Promise<{ images: string[]; sk
   return { images, skipped };
 }
 
-/** A provider that cannot accept image parts usually says so in the 4xx body. */
+/** The provider status the AI layer embedded in a chain failure message, if any. */
+function providerStatusOf(message: string): number | null {
+  const match = /AI provider error \((\d{3})\)/.exec(message);
+  return match ? Number(match[1]) : null;
+}
+
+/**
+ * A provider that cannot accept image parts usually says so in a client-error
+ * body. Match only image-specific wording and only a 4xx: a bare "unsupported"
+ * (e.g. "unsupported parameter: reasoning"), a rate limit, an auth failure or a
+ * 5xx must not trigger a second, photo-less call that re-bills the request.
+ */
 function isImageInputError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return /image|vision|multimodal|content[\s_-]*type|unsupported/i.test(message);
+  if (!/image|vision|multimodal|content[\s_-]*type/i.test(message)) return false;
+  if (
+    /rate.?limit|too many requests|quota|unauthor|forbidden|api.?key|reasoning|unsupported\s+(?:parameter|value|option|model|field)/i.test(
+      message,
+    )
+  ) {
+    return false;
+  }
+  const status = providerStatusOf(message);
+  if (status == null) return false;
+  return status >= 400 && status < 500 && status !== 401 && status !== 403 && status !== 429;
 }
 
 /** Notes an AI helper attached to an error, e.g. why a retry happened. */
 function notesFrom(error: unknown): string[] {
   const notes = (error as { details?: { notes?: unknown } } | null)?.details?.notes;
   return Array.isArray(notes) ? notes.filter((note): note is string => typeof note === "string") : [];
+}
+
+/** Models the failed chain actually tried, reported with the error. */
+function attemptedModelsFrom(error: unknown): string[] {
+  const models = (error as { details?: { models?: unknown } } | null)?.details?.models;
+  return Array.isArray(models) ? models.filter((model): model is string => typeof model === "string") : [];
 }
 
 function roundMicro(value: number): number {
@@ -381,7 +411,7 @@ recipeRoutes.post(
       z.object({
         text: z.string().max(30000).optional(),
         image: z.string().max(300).optional(),
-        images: z.array(z.string().max(300)).max(6).optional(),
+        images: z.array(z.string().max(300)).max(MAX_RECIPE_SCAN_IMAGES).optional(),
         title: z.string().max(120).optional(),
         save: z.boolean().optional(),
         /** Ask for an AI read even when local parsing already produced text. */
@@ -409,6 +439,8 @@ recipeRoutes.post(
     let aiCost: number | null = null;
     let aiModel: string | null = null;
     let aiModels: string[] = [];
+    let aiTruncated = false;
+    if (cfg.recipeVisionWarning) warnings.push(cfg.recipeVisionWarning);
 
     const readWithAi = async (images: string[], reason: string) => {
       const result = await aiReadRecipes(cfg, rawText, images, {
@@ -429,6 +461,7 @@ recipeRoutes.post(
       aiCost = result.usage.cost == null ? aiCost : roundMicro((aiCost ?? 0) + result.usage.cost);
       aiModel = result.model ?? null;
       aiModels = result.models ?? [];
+      aiTruncated = Boolean(result.truncated);
       if (result.notes?.length) warnings.push(...result.notes);
       return result.data.recipes
         .map((entry, index) => normaliseRecipeDraft(entry, index === 0 ? fallbackTitle : "Recipe"))
@@ -460,6 +493,7 @@ recipeRoutes.post(
         }
       } catch (err) {
         spentOnFailure(err);
+        aiModels = attemptedModelsFrom(err);
         if (vision.images.length && isImageInputError(err)) {
           try {
             const aiDrafts = await readWithAi([], "text-only-retry");
@@ -473,6 +507,8 @@ recipeRoutes.post(
             );
           } catch (retryError) {
             spentOnFailure(retryError);
+            const retried = attemptedModelsFrom(retryError);
+            if (retried.length) aiModels = retried;
             warnings.push(
               `AI cleanup failed, kept the locally parsed version. ${retryError instanceof Error ? retryError.message : ""}`.trim(),
             );
@@ -506,7 +542,13 @@ recipeRoutes.post(
     }
 
     const warning = warnings.length ? warnings.join(" ") : null;
-    const draftInputs = drafts.map((draft) =>
+    // A draft with neither ingredients nor steps is not a recipe. Without this
+    // filter an empty OCR reading (or a title-only AI fragment) would still be
+    // "saved" as a blank recipe.
+    const usableDrafts = drafts.filter(
+      (draft) => draft.ingredients.length > 0 || draft.steps.some((step) => step.text.trim()),
+    );
+    const draftInputs = usableDrafts.map((draft) =>
       draftToInput(draft, {
         source: "scan",
         // The first photo is the page the user scanned; the other pages of a
@@ -519,6 +561,14 @@ recipeRoutes.post(
 
     if (body.save) {
       if (!draftInputs.length) throw new ApiError(400, "No recipe could be read from this page");
+      // Never persist a best-effort partial read unattended: the caller can
+      // show the draft, let the user check it, and save it deliberately.
+      if (aiTruncated) {
+        throw new ApiError(
+          409,
+          "The AI answer was cut off at the output token limit, so nothing was saved. Review the draft and save it when it looks complete.",
+        );
+      }
       const id = await saveRecipe(houseId, req.user!.id, draftInputs[0]);
       const row = (await recipeRow(id))!;
       const serialized = serializeRecipe(row, await ingredientsFor(id));
@@ -535,6 +585,7 @@ recipeRoutes.post(
         aiCost,
         aiModel,
         aiModels,
+        truncated: aiTruncated,
         saved: true,
         savedCount: 1,
         aiAvailable: canUseAi,
@@ -550,6 +601,7 @@ recipeRoutes.post(
       aiCost,
       aiModel,
       aiModels,
+      truncated: aiTruncated,
       saved: false,
       aiAvailable: canUseAi,
       count: draftInputs.length,
@@ -612,7 +664,16 @@ recipeRoutes.post(
         };
         aiCost = aiDraft.usage.cost;
         provider = "ai";
-        warning = null;
+        // A cut-off answer still parsed: keep it, but tell the user it may be
+        // incomplete instead of presenting it as a finished import.
+        warning = [
+          aiDraft.truncated
+            ? "The AI answer was cut off at the output token limit, so the imported recipe may be incomplete."
+            : null,
+          ...(aiDraft.notes ?? []),
+        ]
+          .filter(Boolean)
+          .join(" ") || null;
       } catch (err) {
         warning = `${warning ?? ""} AI clean-up also failed: ${err instanceof Error ? err.message : "unknown error"}`.trim();
       }

@@ -104,7 +104,7 @@ await new Promise<void>((resolve) => {
 });
 
 const { app, apiErrorHandler } = await import("../index.js");
-const { aiReadRecipes, resolveAi } = await import("../ai.js");
+const { aiCleanRecipe, aiReadRecipes, extractJson, resolveAi } = await import("../ai.js");
 const { all, closeDb, databaseKind, get, initDb, lockHouseholdLedger, run, tx } = await import("../db.js");
 const { discardUploads } = await import("../upload.js");
 const { heuristicRecipe, parseIngredientLine, localIdeas } = await import("../services/recipe-local.js");
@@ -371,6 +371,59 @@ before(async () => {
         if (body?.model === "reject-reasoning-model" && body?.reasoning) {
           res.writeHead(400, { "content-type": "application/json" });
           res.end(JSON.stringify({ error: { message: "Unsupported parameter: reasoning" } }));
+          return;
+        }
+        // A provider that rejects an unknown field but has no idea about the
+        // photo: the recipe route must not mistake "unsupported parameter" for
+        // an image-input failure and re-bill a text-only retry.
+        if (body?.model === "reasoning-unsupported-model") {
+          res.writeHead(400, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: { message: "Unsupported parameter: reasoning" } }));
+          return;
+        }
+        // A rate limit that mentions images: still not an image-input failure.
+        if (body?.model === "image-rate-limited-model") {
+          res.writeHead(429, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: { message: "Rate limit reached for image requests" } }));
+          return;
+        }
+        // An auth failure must not be retried without the reasoning/json field.
+        if (body?.model === "unauthorised-model") {
+          res.writeHead(401, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: { message: "Invalid API key" } }));
+          return;
+        }
+        // A parseable answer with only a title: not a recipe, so it must never
+        // be returned as a successful read.
+        if (body?.model === "truncated-title-model") {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(
+            JSON.stringify({
+              choices: [
+                {
+                  message: { content: JSON.stringify({ recipes: [{ title: "Just a title", notes: null }] }) },
+                  finish_reason: "length",
+                },
+              ],
+              usage: { prompt_tokens: 1000, completion_tokens: 100, total_tokens: 1100, cost: 0.00125 },
+            }),
+          );
+          return;
+        }
+        // A text model that answers with a title and notes but no ingredient
+        // or step list (a link-import page can legitimately look like this).
+        if (body?.model === "title-only-model") {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(
+            JSON.stringify({
+              choices: [
+                {
+                  message: { content: JSON.stringify({ title: "Notes only", notes: "Just a note about the dish." }) },
+                },
+              ],
+              usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120, cost: 0.0002 },
+            }),
+          );
           return;
         }
         // A text-only model rejects image parts the way OpenAI-compatible
@@ -5773,6 +5826,7 @@ describe("ai integration", () => {
     assert.equal(scan.status, 200);
     assert.equal(scan.data.provider, "ai", "the partial answer is better than the local draft");
     assert.equal(scan.data.draft.title, "AI pancakes");
+    assert.equal(scan.data.truncated, true, "the caller can tell the answer was cut off");
     assert.match(scan.data.warning, /may be incomplete/i);
     assert.equal(scan.data.aiCost, 0.00125);
     assert.deepEqual(scan.data.aiModels, ["truncated-json-model"]);
@@ -5781,6 +5835,174 @@ describe("ai integration", () => {
       method: "PATCH",
       body: { settings: { ai: { model: "mock-model", recipeVisionModels: [] } } },
     });
+  });
+
+  it("does not accept a title-only truncated answer as a read", async () => {
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: {
+        settings: {
+          ai: {
+            enabled: true,
+            baseUrl: aiBase,
+            apiKey: "test-key",
+            model: "mock-model",
+            recipeVisionModels: ["truncated-title-model"],
+          },
+        },
+      },
+    });
+    aiRequests.length = 0;
+    const scan = await request(`/api/houses/${houseId}/recipes/scan`, {
+      method: "POST",
+      body: { text: "Pancakes\n2 eggs\n1 cup flour" },
+    });
+    assert.equal(scan.status, 200);
+    assert.equal(scan.data.provider, "local", "a title is not a usable AI read");
+    assert.equal(scan.data.truncated, false);
+    assert.match(scan.data.warning, /token limit/i);
+    assert.equal(scan.data.aiCost, 0.00125, "the failed attempt is still billed");
+    assert.ok(scan.data.draft.ingredients.length > 0, "the local draft must survive");
+
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { model: "mock-model", recipeVisionModels: [] } } },
+    });
+  });
+
+  it("refuses to save a truncated AI read unattended", async () => {
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: {
+        settings: {
+          ai: {
+            enabled: true,
+            baseUrl: aiBase,
+            apiKey: "test-key",
+            model: "mock-model",
+            recipeVisionModels: ["truncated-json-model"],
+          },
+        },
+      },
+    });
+    const before = await request(`/api/houses/${houseId}/recipes`);
+    const scan = await request(`/api/houses/${houseId}/recipes/scan`, {
+      method: "POST",
+      body: { text: "Pancakes\n2 eggs\n1 cup flour", save: true },
+    });
+    assert.equal(scan.status, 409, "a partial read must be reviewed, not saved silently");
+    assert.match(scan.data.error, /cut off at the output token limit/i);
+    const after = await request(`/api/houses/${houseId}/recipes`);
+    assert.equal(after.data.length, before.data.length, "nothing was persisted");
+
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { model: "mock-model", recipeVisionModels: [] } } },
+    });
+  });
+
+  it("does not re-bill a text-only retry for a non-image provider error", async () => {
+    const png = encodePng(16, 16, Buffer.alloc(16 * 16 * 4, 200));
+    const bytes = new ArrayBuffer(png.length);
+    new Uint8Array(bytes).set(png);
+    const form = new FormData();
+    form.append("image", new Blob([bytes], { type: "image/png" }), "card.png");
+    const upload = await fetch(`${base}/api/houses/${houseId}/recipes/upload`, {
+      method: "POST",
+      body: form,
+      headers: { cookie },
+    });
+    const { path: imagePath } = await upload.json();
+
+    // A 400 that says "Unsupported parameter" is not an image-input failure.
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: {
+        settings: {
+          ai: {
+            enabled: true,
+            baseUrl: aiBase,
+            apiKey: "test-key",
+            model: "reasoning-unsupported-model",
+            visionModel: null,
+            recipeReasoning: "high",
+          },
+        },
+      },
+    });
+    aiRequests.length = 0;
+    const scan = await request(`/api/houses/${houseId}/recipes/scan`, {
+      method: "POST",
+      body: { text: "Pancakes\n2 eggs", image: imagePath },
+    });
+    assert.equal(scan.status, 200);
+    assert.equal(scan.data.provider, "local");
+    assert.equal(scan.data.warning.includes("did not accept the photo"), false);
+    assert.equal(aiRequests.length, 3, "only the request-field retries are allowed");
+    assert.ok(
+      aiRequests.every((entry) => Array.isArray(entry.body.messages[1].content)),
+      "no text-only retry was sent",
+    );
+
+    // A 429 that happens to mention images is a rate limit, not an input error.
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { model: "image-rate-limited-model", recipeReasoning: "auto" } } },
+    });
+    aiRequests.length = 0;
+    const limited = await request(`/api/houses/${houseId}/recipes/scan`, {
+      method: "POST",
+      body: { text: "Pancakes\n2 eggs", image: imagePath },
+    });
+    assert.equal(limited.status, 200);
+    assert.equal(limited.data.provider, "local");
+    assert.equal(aiRequests.length, 1, "a rate limit must not trigger a second billed call");
+
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { model: "mock-model", recipeReasoning: "auto" } } },
+    });
+  });
+
+  it("does not save a blank recipe when nothing was read", async () => {
+    const png = encodePng(16, 16, Buffer.alloc(16 * 16 * 4, 200));
+    const bytes = new ArrayBuffer(png.length);
+    new Uint8Array(bytes).set(png);
+    const form = new FormData();
+    form.append("image", new Blob([bytes], { type: "image/png" }), "empty.png");
+    const upload = await fetch(`${base}/api/houses/${houseId}/recipes/upload`, {
+      method: "POST",
+      body: form,
+      headers: { cookie },
+    });
+    const { path: imagePath } = await upload.json();
+
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { enabled: false } } },
+    });
+    try {
+      const preview = await request(`/api/houses/${houseId}/recipes/scan`, {
+        method: "POST",
+        body: { image: imagePath },
+      });
+      assert.equal(preview.status, 200);
+      assert.equal(preview.data.count, 0);
+      assert.deepEqual(preview.data.drafts, []);
+      assert.equal(preview.data.draft, null);
+
+      const saved = await request(`/api/houses/${houseId}/recipes/scan`, {
+        method: "POST",
+        body: { image: imagePath, save: true },
+      });
+      assert.equal(saved.status, 400);
+      assert.match(saved.data.error, /No recipe could be read/i);
+    } finally {
+      await request(`/api/houses/${houseId}`, {
+        method: "PATCH",
+        body: { settings: { ai: { enabled: true } } },
+      });
+    }
   });
 
   it("does not replace a successful recipe with a later model", async () => {
@@ -5826,14 +6048,141 @@ describe("ai integration", () => {
     assert.match(scan.data.warning, /chain-429-model did not return a usable recipe/i);
     assert.match(scan.data.warning, /truncated-model did not return a usable recipe/i);
     // The 429 has no price, the truncated answer reported 0.0018; a partial
-    // sum is better than nothing, so the known spend is exposed.
+    // sum is better than nothing, so the known spend is exposed and the
+    // warning says the total may be lower than the actual bill.
     assert.equal(scan.data.aiCost, 0.0018);
+    assert.match(scan.data.warning, /did not report a price/i);
     assert.ok(scan.data.draft.ingredients.length > 0, "the local draft must survive");
-    assert.deepEqual(scan.data.aiModels, []);
+    assert.deepEqual(scan.data.aiModels, ["chain-429-model", "truncated-model"]);
 
     await request(`/api/houses/${houseId}`, {
       method: "PATCH",
       body: { settings: { ai: { model: "mock-model", recipeVisionModels: [] } } },
+    });
+  });
+
+  it("sums two billed failures without double counting the spend", async () => {
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: {
+        settings: {
+          ai: {
+            enabled: true,
+            baseUrl: aiBase,
+            apiKey: "test-key",
+            model: "mock-model",
+            recipeVisionModels: ["chain-empty-model", "truncated-model"],
+          },
+        },
+      },
+    });
+    aiRequests.length = 0;
+    const scan = await request(`/api/houses/${houseId}/recipes/scan`, {
+      method: "POST",
+      body: { text: "Pancakes\n2 eggs\n1 cup flour" },
+    });
+    assert.equal(scan.status, 200);
+    assert.equal(scan.data.provider, "local");
+    assert.match(scan.data.warning, /chain-empty-model did not return a usable recipe/i);
+    assert.match(scan.data.warning, /truncated-model did not return a usable recipe/i);
+    // 0.0009 (empty answer) + 0.0018 (truncated answer), each billed once.
+    assert.equal(scan.data.aiCost, 0.0027);
+    assert.deepEqual(scan.data.aiModels, ["chain-empty-model", "truncated-model"]);
+
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { model: "mock-model", recipeVisionModels: [] } } },
+    });
+  });
+
+  it("does not retry an auth failure without the reasoning field", async () => {
+    const cfg = {
+      ...resolveAi({
+        ai: { enabled: true, baseUrl: aiBase, apiKey: "test-key", model: "mock-model", recipeReasoning: "high" },
+      }),
+      reasoningControl: true,
+    };
+    aiRequests.length = 0;
+    await assert.rejects(
+      aiReadRecipes(
+        cfg,
+        "Pancakes\n2 eggs",
+        [],
+        { operation: "recipe.scan", houseId },
+        { models: [{ model: "unauthorised-model" }] },
+      ),
+      /Invalid API key/,
+    );
+    assert.equal(aiRequests.length, 1, "401 must not be retried without the field");
+    assert.deepEqual(aiRequests[0].body.reasoning, { effort: "high" });
+  });
+
+  it("rejects a JSON answer that was cut off mid-value", () => {
+    assert.throws(
+      () => extractJson('{"recipes":[{"title":"A"}]}, {"recipes":[{"title":"B"'),
+      /cut off before the answer was complete/i,
+    );
+  });
+
+  it("cleans link-import text without the photo prompt or vision budget", async () => {
+    const cfg = resolveAi({
+      ai: { enabled: true, baseUrl: aiBase, apiKey: "test-key", model: "title-only-model" },
+    });
+    aiRequests.length = 0;
+    const result = await aiCleanRecipe(cfg, "A note about soup", [], {
+      operation: "recipe.import",
+      houseId,
+    });
+    assert.equal(result.data.title, "Notes only");
+    assert.equal(result.data.ingredients, undefined, "a title/notes answer is accepted, not rejected");
+    assert.equal(aiRequests[0].body.model, "title-only-model", "the text model is used, not a vision model");
+    assert.equal(aiRequests[0].body.max_tokens, undefined, "the vision output budget is not applied");
+    assert.match(String(aiRequests[0].body.messages[0].content), /raw recipe text/i);
+
+    const multi = resolveAi({
+      ai: { enabled: true, baseUrl: aiBase, apiKey: "test-key", model: "multi-model" },
+    });
+    const two = await aiCleanRecipe(multi, "Tsoureki and biscuits", [], {
+      operation: "recipe.import",
+      houseId,
+    });
+    assert.equal(two.data.title, "AI pancakes", "a single-recipe import keeps the first recipe");
+    assert.match(two.notes?.join(" ") ?? "", /2 recipes; only the first was imported/i);
+  });
+
+  it("validates recipe vision models and reasoning at the settings boundary", async () => {
+    const tooMany = await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { recipeVisionModels: ["a", "b", "c", "d", "e"] } } },
+    });
+    assert.equal(tooMany.status, 400);
+    assert.match(tooMany.data.error, /at most 4/i);
+
+    const invalid = await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { recipeVisionModels: ["a", 3] } } },
+    });
+    assert.equal(invalid.status, 400);
+    assert.match(invalid.data.error, /model IDs/i);
+
+    const badReasoning = await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { recipeReasoning: "sometimes" } } },
+    });
+    assert.equal(badReasoning.status, 400);
+    assert.match(badReasoning.data.error, /reasoning must be/i);
+
+    const saved = await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { recipeVisionModels: ["a", "b", "c", "d"], recipeReasoning: "low" } } },
+    });
+    assert.equal(saved.status, 200);
+    assert.deepEqual(saved.data.settings.ai.recipeVisionModels, ["a", "b", "c", "d"]);
+    assert.equal(saved.data.settings.ai.recipeReasoning, "low");
+
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { recipeVisionModels: [], recipeReasoning: "auto" } } },
     });
   });
 
@@ -5887,6 +6236,7 @@ describe("ai integration", () => {
     assert.equal(scan.data.draft.title, "AI pancakes");
     assert.match(scan.data.warning, /did not accept the photo/i);
     assert.match(scan.data.warning, /vision model/i);
+    assert.equal(scan.data.aiCost, 0.00125, "the successful text-only retry is billed once");
     // First attempts carried the image; the last attempt is the text-only retry.
     assert.ok(Array.isArray(aiRequests[0].body.messages[1].content));
     assert.equal(typeof aiRequests[aiRequests.length - 1].body.messages[1].content, "string");

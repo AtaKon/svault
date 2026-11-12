@@ -6,6 +6,7 @@ const steps = [
   [...shared, "--test", "scripts/check-i18n.test.mjs"],
   ["scripts/pdfjs-render-smoke.mjs"],
   [...shared, "--test", "server/tests/recipe-notebook.test.ts"],
+  [...shared, "--test", "server/tests/ocr-benchmark.test.mjs"],
   [...shared, "--test", "server/tests/ai-reasoning.test.ts"],
   [...shared, "--test", "server/tests/recipe-vision.test.ts"],
   [...shared, "--test", "server/tests/api.test.ts"],

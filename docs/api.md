@@ -815,9 +815,14 @@ than one, the response keeps `count` (recipes found) and adds `savedCount: 1` pl
 others were not saved.
 The response always includes `provider` (`ai` or `local`) and an optional `warning`. When AI read the page
 it also includes `aiModel` (the model that answered) and `aiModels` (every model tried, in order, up to
-four); `aiCost` covers every attempt, including a failed one. The model list comes from
+four; a failed chain still reports the models it tried); `aiCost` covers every attempt that reported a
+price, and the warning says when an attempt did not. `truncated: true` marks a best-effort partial read:
+the response still carries the draft, but `save: true` is refused with `409` so a cut-off answer is never
+persisted unattended. The model list comes from
 `settings.ai.recipeVisionModels`, the `OPENAI_RECIPE_VISION_MODELS` environment variable, or the
-provider default (the tested OpenRouter chain on OpenRouter, the single vision model elsewhere).
+provider default (the tested OpenRouter chain on OpenRouter, the single vision model elsewhere). A
+settings write with more than four models, or with an entry that is not a model ID, is rejected with
+`400` rather than truncated.
 
 Every serialized recipe also carries `nutrition`, derived at read time from the ingredients and the
 nutrition panels of matching items, with a fallback to a small built-in per-100 g reference table for

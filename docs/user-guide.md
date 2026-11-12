@@ -607,8 +607,13 @@ a benchmark: check the draft against the photo before saving.
 scans try them in order and move to the next one only when an attempt fails: a provider error, a rate
 limit, an empty answer, a truncation (even if the partial text parsed), or malformed JSON. A successful
 complete answer is never replaced by a later model just because it might look more accurate, so a scan
-costs one call unless something failed. If every model truncates, the last usable partial recipe is kept
-with a warning.
+costs one call unless something failed. If every model truncates, the last partial recipe that still has
+ingredients or steps is kept with a warning; a fragment with only a title is not treated as a read. A
+partial recipe is never saved automatically: review it and save it yourself.
+
+The settings field accepts at most four model IDs. A longer list, or an entry that is not a model ID, is
+rejected with an error instead of being cut down silently. If `OPENAI_RECIPE_VISION_MODELS` is longer
+than four, the scan warning says how many models were dropped.
 
 Leave the field empty for the provider default. On OpenRouter that is Gemini 3 Flash Preview, then
 Qwen3.6 35B (reasoning is turned off for it automatically), then Gemini 3.8 Flash. On OpenAI, Ollama,
@@ -617,8 +622,9 @@ because the built-in IDs belong to OpenRouter. A vision model you chose yourself
 the defaults. To turn the extra fallbacks off, enter just your one preferred model.
 
 Every attempt is counted: the scan badge and the AI call log include the cost of a failed first attempt
-as well as the model that finally answered, and the warning names each model that failed. If all models
-fail, you keep the locally parsed draft and the warning lists them. The review card shows the model
+as well as the model that finally answered, and the warning names each model that failed. When a
+provider reports no price for an attempt, the warning says so and the shown cost may be lower than the
+actual spend. If all models fail, you keep the locally parsed draft and the warning lists them. The review card shows the model
 that produced the recipe.
 
 To compare your own model IDs on your own photos, a developer can run the manual benchmark. It scores

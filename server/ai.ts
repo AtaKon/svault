@@ -11,10 +11,12 @@ import {
   type ReasoningRequest,
 } from "../shared/ai-reasoning.js";
 import {
+  MAX_RECIPE_VISION_CHAIN,
   MAX_RECIPE_VISION_TOKENS,
   RECIPE_ARCHIVIST_SYSTEM,
   RECIPE_LIST_SCHEMA,
   RECIPE_SCHEMA,
+  droppedRecipeVisionModels,
   extractJsonValue,
   parseRecipeVisionModels,
   recipeArchivistPrompt,
@@ -46,6 +48,12 @@ export interface AiConfig {
   visionModelExplicit: boolean;
   /** Ordered models a recipe scan may use, at most four. */
   recipeVisionCandidates: RecipeVisionCandidate[];
+  /**
+   * Set when the configured list was longer than the chain cap, so the caller
+   * can tell the operator which models were dropped instead of losing them
+   * silently.
+   */
+  recipeVisionWarning: string | null;
   /** USD per 1M prompt tokens. Used when the provider does not report a price. */
   inputPrice: number | null;
   /** USD per 1M completion tokens. Used when the provider does not report a price. */
@@ -75,6 +83,12 @@ export interface AiResult<T> {
   usage: AiUsage;
   /** Plain-language notes the caller can show to the user (retries, truncation). */
   notes?: string[];
+  /**
+   * True when the provider said the answer was cut off at the output limit but
+   * the text still parsed. The data is a best-effort partial read, so a caller
+   * that persists it must warn the user (or refuse an unattended save).
+   */
+  truncated?: boolean;
   /** Model that produced the answer, when a fallback chain was used. */
   model?: string;
   /** Every model the call tried, in order. */
@@ -148,6 +162,8 @@ export function resolveAi(settings: HouseSettings | Record<string, any>): AiConf
   const baseUrl = houseBase || envBase;
   const visionModel = ai.visionModel || AI_ENV.visionModel || ai.model || AI_ENV.model;
   const visionModelExplicit = Boolean(ai.visionModel || AI_ENV.visionModel);
+  const rawVisionModels = ai.recipeVisionModels ?? AI_ENV.recipeVisionModels;
+  const droppedVisionModels = droppedRecipeVisionModels(rawVisionModels);
   return {
     enabled,
     baseUrl,
@@ -157,10 +173,13 @@ export function resolveAi(settings: HouseSettings | Record<string, any>): AiConf
     visionModelExplicit,
     recipeVisionCandidates: recipeVisionChain({
       baseUrl,
-      configured: parseRecipeVisionModels(ai.recipeVisionModels ?? AI_ENV.recipeVisionModels),
+      configured: parseRecipeVisionModels(rawVisionModels),
       visionModel,
       visionModelExplicit,
     }),
+    recipeVisionWarning: droppedVisionModels
+      ? `Only the first ${MAX_RECIPE_VISION_CHAIN} recipe vision models are used; ${droppedVisionModels} configured model(s) were dropped.`
+      : null,
     inputPrice: optionalPrice(ai.inputPrice) ?? AI_ENV.inputPrice,
     outputPrice: optionalPrice(ai.outputPrice) ?? AI_ENV.outputPrice,
     customEndpoint,
@@ -339,14 +358,14 @@ export async function chat(
 
   let useReasoning = Boolean(opts.reasoning);
   let result = await runAttempt(Boolean(opts.json), useReasoning);
-  // An endpoint that does not know OpenRouter's field answers 4xx. Drop the
+  // An endpoint that does not know OpenRouter's field answers 400/422. Drop the
   // field rather than failing the scan; the user is told in the response.
-  if (!result.ok && useReasoning && result.status >= 400 && result.status < 500) {
+  if (!result.ok && useReasoning && isFieldRejection(result.status)) {
     useReasoning = false;
     notes.push("The AI endpoint rejected the reasoning setting, so the request was retried without it.");
     result = await runAttempt(Boolean(opts.json), false);
   }
-  if (!result.ok && opts.json && result.status >= 400 && result.status < 500) {
+  if (!result.ok && opts.json && isFieldRejection(result.status)) {
     result = await runAttempt(false, useReasoning);
   }
   responseText = result.text ?? "";
@@ -427,6 +446,15 @@ export async function chat(
     });
     throw error;
   }
+}
+
+/**
+ * Statuses a provider uses for "I do not know this request field". Retrying
+ * without the field only makes sense for these; 401/403/409/429 and 5xx would
+ * just bill or rate-limit the caller a second time for the same failure.
+ */
+function isFieldRejection(status: number): boolean {
+  return status === 400 || status === 422;
 }
 
 function roundCost(value: number): number {
@@ -522,6 +550,17 @@ export async function aiParseReceipt(
 }
 
 /**
+ * A recipe the user can actually keep. A title with no ingredients or steps is
+ * a truncated fragment, not a usable read, and must not be saved as success.
+ */
+function isUsableRecipe(recipe: Record<string, unknown>): boolean {
+  return (
+    (Array.isArray(recipe.ingredients) && recipe.ingredients.length > 0) ||
+    (Array.isArray(recipe.steps) && recipe.steps.length > 0)
+  );
+}
+
+/**
  * Read a recipe page, returning one structured recipe per recipe written on it.
  * The image is sent whenever the caller has one; the prompt tells the model to
  * trust the photo over OCR text because handwriting is not reliably recognised
@@ -595,7 +634,7 @@ export async function aiReadRecipes(
       throw new AiTruncatedRecipesError(recipes, usage);
     }
     const recipes = recipeListFromJson(parsed);
-    if (!recipes.some((recipe) => (Array.isArray(recipe.ingredients) && recipe.ingredients.length > 0) || (Array.isArray(recipe.steps) && recipe.steps.length > 0))) {
+    if (!recipes.some(isUsableRecipe)) {
       throw new ApiError(502, "AI returned no usable recipe", { usage });
     }
     return { data: { recipes }, usage };
@@ -624,6 +663,15 @@ export async function aiReadRecipes(
         const usage = addUsages([incomplete.usage, result.usage]);
         return { ...result, usage: usage ?? result.usage };
       } catch (retryError) {
+        // The retry may itself have produced a parseable but truncated answer.
+        // Keep those recipes so the chain can still offer them as a last resort
+        // instead of replacing the error with a generic message.
+        if (retryError instanceof AiTruncatedRecipesError) {
+          throw new AiTruncatedRecipesError(
+            retryError.recipes,
+            addUsages([incomplete.usage, retryError.usage]) ?? undefined,
+          );
+        }
         throw new ApiError(502, retryError instanceof Error ? retryError.message : String(retryError), {
           notes: notesFromError(retryError),
           usage: addUsages([incomplete.usage, usageOf(retryError)]),
@@ -649,19 +697,28 @@ export async function aiReadRecipes(
       }
       const usage = usageOf(error);
       if (usage) spent.push(usage);
+      // An attempt the provider never billed is invisible in the totals above.
+      // Say so instead of quietly reporting a lower spend than the user paid.
+      if (!usage || usage.cost == null) {
+        const note = `${candidate.model} did not report a price, so the AI cost shown may be lower than the actual spend.`;
+        if (!notes.includes(note)) notes.push(note);
+      }
       const message = error instanceof Error ? error.message : String(error);
       for (const note of notesFromError(error)) {
         if (!notes.includes(note)) notes.push(note);
       }
       if (index === candidates.length - 1) {
         const best = partial[partial.length - 1];
-        if (best) {
+        // A partial answer with only a title is not a recipe. Returning it as
+        // success would let an unattended save persist an empty draft.
+        const usable = best?.recipes.filter(isUsableRecipe) ?? [];
+        if (best && usable.length) {
           if (!(error instanceof AiTruncatedRecipesError)) {
             notes.push(`${candidate.model} did not return a usable recipe (${shorten(message, 160)}).`);
           }
           notes.push("The AI answer hit the output token limit, so the recipe may be incomplete.");
           return {
-            data: { recipes: best.recipes },
+            data: { recipes: usable },
             usage: addUsages(spent) ?? {
               model: best.model,
               promptTokens: 0,
@@ -671,12 +728,13 @@ export async function aiReadRecipes(
               cost: null,
             },
             notes,
+            truncated: true,
             model: best.model,
             models: chain,
           };
         }
         notes.push(`${candidate.model} did not return a usable recipe (${shorten(message, 160)}).`);
-        const details: Record<string, unknown> = { notes };
+        const details: Record<string, unknown> = { notes, models: chain };
         const total = addUsages(spent);
         if (total) details.usage = total;
         throw new ApiError(502, message || "AI could not read the recipe", details);
@@ -710,8 +768,10 @@ function shorten(value: string, max: number): string {
 }
 
 /**
- * Add the token counts and prices of every attempt. Cost stays null unless
- * every attempt reported one, because a partial sum would understate spend.
+ * Add the token counts and prices of every attempt that reported usage. Cost
+ * stays null unless every usage passed in reported one, because a partial sum
+ * would understate spend. Attempts with no usage at all are not visible here;
+ * `aiReadRecipes` adds a note for those so a low total is never silent.
  */
 function addUsages(usages: (AiUsage | null | undefined)[]): AiUsage | null {
   const present = usages.filter((usage): usage is AiUsage => Boolean(usage));
@@ -731,27 +791,58 @@ function addUsages(usages: (AiUsage | null | undefined)[]): AiUsage | null {
   return { model: present[present.length - 1].model, ...totals, cost };
 }
 
+/** Text-only clean-up prompt, used by link imports. A photo read uses RECIPE_ARCHIVIST_SYSTEM. */
+const RECIPE_CLEANUP_SYSTEM =
+  "You are a meticulous family-recipe archivist. Turn raw recipe text into clean, structured JSON. " +
+  "Fix OCR mistakes, expand abbreviations (tbsp, tsp, °C), normalise units and split ingredients from steps. " +
+  "You may infer obvious missing details (preheat temperature, resting time, pan size) but never invent ingredients that are not present. " +
+  "List every inference in notes. Write steps so a beginner can follow them, one action per step. " +
+  "Return exactly one recipe object in the requested shape; if the text holds several recipes, return the main one. " +
+  "Respond with JSON only, no markdown.";
+
+/**
+ * Clean up recipe text (a link import or pasted text). This is deliberately not
+ * `aiReadRecipes`: that prompt is written for a photo and insists on a usable
+ * ingredient/step list, so a page that only yields a title or notes would fail
+ * here. The text model is used without the recipe vision fallback chain and
+ * without the vision output budget.
+ */
 export async function aiCleanRecipe(
   cfg: AiConfig,
   rawText: string,
   images: string[] = [],
   ctx: AiCallContext = { operation: "recipe.scan" },
 ): Promise<AiResult<Record<string, unknown>>> {
-  // A text-only clean-up (link import) is not a photo read: keep the house's
-  // text model and do not draw it into the vision fallback chain.
-  const result = await aiReadRecipes(
-    cfg,
-    rawText,
+  const limit = 12000;
+  const truncated = rawText.length > limit;
+  const { text, usage, finishReason, notes: chatNotes } = await chat(cfg, {
+    system: RECIPE_CLEANUP_SYSTEM,
+    user:
+      `Structure this recipe into JSON with this exact shape:\n${RECIPE_SCHEMA}\n\n` +
+      (rawText
+        ? `RAW TEXT:\n${rawText.slice(0, limit)}` + (truncated ? `\n\n[The text was cut off at ${limit} characters.]` : "")
+        : "The recipe is in the attached image. Read it carefully."),
     images,
-    ctx,
-    images.length ? {} : { models: [{ model: cfg.model }] },
-  );
+    json: true,
+    temperature: 0.1,
+  }, ctx);
+  const parsed = extractJson(text);
+  const recipes = recipeListFromJson(parsed);
+  const notes = [...chatNotes];
+  if (!recipes.length) throw new ApiError(502, "AI did not return a recipe", { usage });
+  if (recipes.length > 1) {
+    notes.push(`The AI returned ${recipes.length} recipes; only the first was imported.`);
+  }
+  if (finishReason === "length") {
+    notes.push("The AI answer hit the output token limit, so the imported recipe may be incomplete.");
+  }
   return {
-    data: result.data.recipes[0] ?? {},
-    usage: result.usage,
-    notes: result.notes,
-    model: result.model,
-    models: result.models,
+    data: recipes[0],
+    usage,
+    notes,
+    truncated: finishReason === "length",
+    model: usage.model,
+    models: [usage.model],
   };
 }
 

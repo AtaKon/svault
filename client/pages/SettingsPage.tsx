@@ -22,6 +22,7 @@ import {
 import { Icon } from "@/components/icons";
 import { useToast } from "@/components/toast";
 import { qty } from "@/format";import { LOCATION_ICONS, LOCATION_KINDS } from "@/units";
+import { normaliseRecipeReasoning, type RecipeReasoningMode } from "@shared/ai-reasoning";
 import type {
   AttributeDef,
   CatalogImportResult,
@@ -1168,7 +1169,9 @@ function AiTab({ house, onSave }: { house: House; onSave: (patch: Record<string,
   const [model, setModel] = useState(settings.model ?? "");
   const [visionModel, setVisionModel] = useState(settings.visionModel ?? "");
   const [recipeVisionModels, setRecipeVisionModels] = useState((settings.recipeVisionModels ?? []).join(", "));
-  const [recipeReasoning, setRecipeReasoning] = useState(settings.recipeReasoning ?? "auto");
+  const [recipeReasoning, setRecipeReasoning] = useState<RecipeReasoningMode>(
+    normaliseRecipeReasoning(settings.recipeReasoning),
+  );
   const [inputPrice, setInputPrice] = useState(settings.inputPrice != null ? String(settings.inputPrice) : "");
   const [outputPrice, setOutputPrice] = useState(settings.outputPrice != null ? String(settings.outputPrice) : "");
   const [apiKey, setApiKey] = useState("");
@@ -1184,6 +1187,18 @@ function AiTab({ house, onSave }: { house: House; onSave: (patch: Record<string,
   };
 
   const save = async () => {
+    const visionModels = [
+      ...new Set(
+        recipeVisionModels
+          .split(",")
+          .map((value) => value.trim())
+          .filter(Boolean),
+      ),
+    ];
+    if (visionModels.length > 4) {
+      toast.error(t("List at most 4 recipe vision models."));
+      return;
+    }
     setBusy(true);
     try {
       const payload: Record<string, unknown> = {
@@ -1191,11 +1206,7 @@ function AiTab({ house, onSave }: { house: House; onSave: (patch: Record<string,
         baseUrl: baseUrl.trim() || undefined,
         model: model.trim() || undefined,
         visionModel: visionModel.trim() || undefined,
-        recipeVisionModels: recipeVisionModels
-          .split(",")
-          .map((value) => value.trim())
-          .filter(Boolean)
-          .slice(0, 4),
+        recipeVisionModels: visionModels,
         recipeReasoning,
         inputPrice: priceOrNull(inputPrice),
         outputPrice: priceOrNull(outputPrice),
@@ -1309,7 +1320,7 @@ function AiTab({ house, onSave }: { house: House; onSave: (patch: Record<string,
           <p className="-mt-1 text-[11px] text-muted">
             {t("Recipe scans try these models in order and move to the next only when one fails or returns no usable recipe; a successful answer is never replaced. Leave empty for the OpenRouter default chain. Only list one model to keep single-model behaviour. Other providers only see the IDs you type here — the built-in defaults are OpenRouter IDs.")}</p>
           <Field label={t("Recipe reasoning")} hint={t("recipe scans only")}>
-            <Select value={recipeReasoning} onChange={(event) => setRecipeReasoning(event.target.value as "auto" | "off" | "low" | "medium" | "high")} disabled={!can("admin")}>
+            <Select value={recipeReasoning} onChange={(event) => setRecipeReasoning(normaliseRecipeReasoning(event.target.value))} disabled={!can("admin")}>
               <option value="auto">{t("Use the model's default")}</option>
               <option value="off">{t("Off — fastest")}</option>
               <option value="low">{t("Low")}</option>

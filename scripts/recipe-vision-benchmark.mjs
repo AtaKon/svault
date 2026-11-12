@@ -90,8 +90,16 @@ function parseArgs(argv) {
 
 function isLocalHost(baseUrl) {
   try {
-    const host = new URL(baseUrl).hostname.toLowerCase();
-    return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "host.docker.internal";
+    // `URL.hostname` keeps the brackets on an IPv6 literal ("[::1]").
+    const host = new URL(baseUrl).hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    return (
+      host === "localhost" ||
+      host.endsWith(".localhost") ||
+      host === "127.0.0.1" ||
+      host === "0.0.0.0" ||
+      host === "::1" ||
+      host === "host.docker.internal"
+    );
   } catch {
     return false;
   }

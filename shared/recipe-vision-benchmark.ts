@@ -130,12 +130,15 @@ function parseModel(value: unknown, index: number): BenchmarkModelSpec {
   if (model.length > 200 || /\s/.test(model)) {
     fail(`models[${index}] "${model.slice(0, 60)}" is not a valid model ID (no spaces, at most 200 characters).`);
   }
+  // Normalise before validating: an operator writing " High " means the same
+  // as "high", and rejecting it made the manifest disagree with the server.
+  const rawReasoning = typeof reasoning === "string" ? reasoning.trim().toLowerCase() : reasoning;
   const parsedReasoning =
-    reasoning == null || reasoning === "" ? undefined : normaliseRecipeReasoning(reasoning);
+    rawReasoning == null || rawReasoning === "" ? undefined : normaliseRecipeReasoning(rawReasoning);
   if (
-    reasoning != null &&
-    reasoning !== "" &&
-    !(RECIPE_REASONING_MODES as readonly unknown[]).includes(reasoning)
+    rawReasoning != null &&
+    rawReasoning !== "" &&
+    !(RECIPE_REASONING_MODES as readonly unknown[]).includes(rawReasoning)
   ) {
     fail(`models[${index}].reasoning must be ${RECIPE_REASONING_MODES.join(", ")}.`);
   }
