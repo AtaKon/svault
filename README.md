@@ -34,7 +34,7 @@ dataset — all from one PWA that runs in a single Docker container.
 | **Meal planner** | A seven-day breakfast/lunch/dinner/snack grid. Pick saved recipes or food ideas, scale servings per slot, duplicate a meal, and turn the week's missing ingredients into the shopping list. |
 | **CSV import** | Bring a spreadsheet in with automatic column mapping, a dry-run preview and per-line errors. Supports comma/semicolon, quoted fields, BOM, CRLF and decimal commas; commits create normal stock movements. |
 | **Low stock & expiry reminders** | Set a reorder point, get a reminder when it is reached. Expiring batches warn you days ahead. Checked on every stock change plus every 30 minutes. Deliver to the bell, the browser, ntfy, Apprise or a signed webhook. |
-| **Recipes, digitised** | Photograph a handwritten card: English & Greek OCR runs on-device (Tesseract, no upload), then AI or a local parser rebuilds the ingredients and steps. "Improve with AI" fills gaps and rewrites steps. Paste a recipe link to import it from a cooking site, with schema.org data read exactly and a text fallback. |
+| **Recipes, digitised** | Photograph a handwritten card or a notebook page. The page is straightened and cropped to the paper; the configured vision model reads the handwriting, with English & Greek on-device OCR as a private fallback (measured: OCR alone does not read handwriting — see `docs/recipe-ocr-evaluation.md`). Diary furniture, Greek abbreviations and ditto marks are handled, and a page with several recipes is split into separate drafts. "Improve with AI" fills gaps and rewrites steps. Paste a recipe link to import it from a cooking site, with schema.org data read exactly and a text fallback. |
 | **Calories, portions and cook mode** | Recipe nutrition is estimated from linked OpenFoodFacts or hand-entered panels, with a built-in reference table for untracked ingredients. Every recipe also estimates whole-recipe and per-portion weight in grams. Cook mode scales the portions up or down, converts every ingredient to grams, and keeps a tick-off step list on screen while you cook. |
 | **Cook what you have** | Meal suggestions built from current stock and saved recipes, with realistic missing-ingredient lists — AI or fully local. |
 | **AI call log** | Turn on developer mode to inspect every AI request: operation, model, tokens, cost, duration, retries, errors and truncated prompt/response previews. Failed calls are included, filters cover the whole house for admins, and the same records stream to stdout as structured JSON for Docker, Loki or Grafana. |
@@ -168,6 +168,8 @@ Copy `.env.example` to `.env` (Docker Compose reads it) or export the variables 
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Any OpenAI-compatible endpoint (Ollama, LM Studio, OpenRouter…) |
 | `OPENAI_MODEL` | `gpt-4o-mini` | Text model for recipes/ideas |
 | `OPENAI_VISION_MODEL` | falls back to text model | Vision model used to read recipe photos |
+| `OPENAI_RECIPE_REASONING` | `auto` | Recipe-scan reasoning: `auto`, `off`, `low`, `medium`, `high` (sent to OpenRouter as `reasoning`) |
+| `OPENAI_RECIPE_VISION_MODELS` | provider default | Comma-separated recipe-scan models, at most four. OpenRouter defaults to Gemini 3 Flash Preview → Qwen3.6 35B → Gemini 3.8 Flash; other endpoints use `OPENAI_VISION_MODEL` only |
 | `MAX_UPLOAD_MB` | `20` | Per-image upload limit |
 
 AI can also be configured **per house** in *Settings → AI*. A stored key wins over the environment.
@@ -198,6 +200,51 @@ Then choose **Ollama (local)** in Settings → AI, press Save and Test. SVault o
 when a vision model is configured; otherwise it relies on the on-device OCR text, which is what most
 local text models expect. On Linux hosts replace `host.docker.internal` with your Docker gateway
 (`172.17.0.1`) or the service name if Ollama runs in Compose.
+
+### Recipe reasoning and model choice
+
+Recipe scans are the one operation where a reasoning ("thinking") model can help or hurt: some models
+read handwriting more accurately with thinking on, while hybrid models such as Qwen3 can spend the
+whole answer budget thinking and return no recipe. **Settings → AI → Recipe reasoning** offers
+`auto` (default, no field sent), `off`, `low`, `medium` and `high` for recipe scans only; receipt
+scans, ideas and cleanup are unchanged. The value is sent to OpenRouter as its `reasoning` field, and
+an endpoint that rejects it is retried without it.
+
+A response that contains only reasoning, or that is cut off at the token limit, is retried once with
+reasoning disabled and the scan warns you. If the retry also fails, the locally parsed draft is kept
+instead of showing an empty recipe. The AI call log records the finish reason, reasoning tokens and
+the retry.
+
+Measured one-photo OpenRouter observations (not a benchmark; see
+[`docs/recipe-ocr-evaluation.md`](docs/recipe-ocr-evaluation.md)): Gemini 3 Flash Preview ($0.001557)
+and Gemini 3.8 Flash ($0.002104) read the key quantities correctly, while Gemini 2.5 Flash ($0.00119)
+and Flash Lite ($0.0001895) misread a `2` as `9`. Qwen3.6 35B needed reasoning disabled, and Qwen3.7
+returned HTTP 429. Do not pick a recipe model on price alone: a wrong digit in a quantity is a worse
+outcome than a slightly higher scan cost, and one photo does not establish accuracy.
+
+### Recipe model fallback chain
+
+Recipe scans try up to **four** models and move to the next only when one fails (provider error, empty
+answer, any truncation, malformed JSON). A successful answer is never replaced by a later model just
+because it might look more accurate: that would bill every scan twice. When every model truncates, a
+usable partial recipe is kept with a warning. On OpenRouter the default order is Gemini 3 Flash
+Preview → Qwen3.6 35B → Gemini 3.8 Flash, with reasoning disabled for Qwen3.6. **Settings → AI → Recipe
+vision models** overrides the list (comma-separated, max four; one entry opts out). Other providers are
+never sent these OpenRouter IDs — they keep their configured vision model unless you type an explicit
+list; a deliberately configured vision model is always tried first. The scan warning names each failed
+model, the AI call log records every attempt, and the reported cost covers all attempts.
+
+To replace the defaults with evidence from your own photos, run the developer benchmark with your own
+model IDs and a written ground truth (photos and key stay outside the manifest):
+
+```sh
+OPENAI_API_KEY=... node --import tsx scripts/recipe-vision-benchmark.mjs \
+  data/recipe-vision/manifest.json --json data/recipe-vision/results.json
+```
+
+See [`docs/recipe-ocr-evaluation.md`](docs/recipe-ocr-evaluation.md) for the manifest format, scoring
+weights and limitations.
+
 
 What AI actually powers:
 

@@ -8,6 +8,7 @@ import path from "node:path";
 import { splitAmountEvenly } from "../../shared/bill-splitting.js";
 import { BILL_TYPE_LABELS, BILL_TYPE_VALUES } from "../../shared/bill-types.js";
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA, POSTGRES_TABLE_ORDER } from "../database/postgres-schema.js";
+import { startMockAiServer } from "./helpers/mock-ai-server.js";
 
 const dataDir = mkdtempSync(path.join(tmpdir(), "svault-test-"));
 process.env.DATA_DIR = dataDir;
@@ -147,7 +148,9 @@ async function request(
   pathname: string,
   options: { method?: string; body?: unknown; auth?: string; headers?: Record<string, string> } = {},
 ) {
-  const headers: Record<string, string> = { ...(options.headers ?? {}) };
+  // Some suites leave the server idle during slow migration tests. Avoid
+  // reusing a socket that the server may have closed during that interval.
+  const headers: Record<string, string> = { connection: "close", ...(options.headers ?? {}) };
   const useCookie = options.auth === undefined ? cookie : options.auth;
   if (useCookie) headers.cookie = useCookie;
   let body: BodyInit | undefined;
@@ -315,93 +318,9 @@ before(async () => {
   base = `http://127.0.0.1:${address.port}`;
 
   // OpenAI-compatible mock so the AI code paths can be tested without a key.
-  await new Promise<void>((resolve) => {
-    aiServer = http.createServer((req, res) => {
-      const chunks: Buffer[] = [];
-      req.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-      req.on("end", () => {
-        let body: any = {};
-        try {
-          body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-        } catch {
-          body = {};
-        }
-        aiRequests.push({ headers: req.headers, body });
-        const system = String(body?.messages?.[0]?.content ?? "");
-        let payload: any;
-        if (system.includes("receipt")) {
-          payload = {
-            vendorName: "Mock Mart",
-            purchasedAt: "2026-10-12",
-            currency: "EUR",
-            total: 5.5,
-            lines: [
-              { description: "Milk", quantity: 2, unit: "l", unitPrice: 1.2, lineTotal: 2.4 },
-              { description: "Bread", quantity: 1, unit: null, unitPrice: 3.1, lineTotal: 3.1 },
-            ],
-            notes: "Mock receipt",
-          };
-        } else if (system.includes("archivist")) {
-          payload = {
-            title: "AI pancakes",
-            description: "Cleaned by the mock model",
-            servings: 3,
-            prepMinutes: 5,
-            cookMinutes: 10,
-            tags: ["breakfast"],
-            ingredients: [{ name: "Flour", quantity: 200, unit: "g", optional: false }],
-            steps: [{ text: "Mix everything." }, { text: "Fry until golden.", timerSeconds: 120 }],
-            notes: "Mock cleanup",
-          };
-        } else if (system.includes("home cook")) {
-          payload = {
-            summary: "Mock ideas from stock",
-            ideas: [
-              {
-                title: "Mock soup",
-                rationale: "You have everything",
-                timeMinutes: 20,
-                servings: 2,
-                uses: [{ name: "Milk", quantity: 1, unit: "l" }],
-                missing: [],
-                steps: ["Warm it up."],
-              },
-            ],
-          };
-        } else {
-          payload = {
-            title: "Pancakes improved",
-            description: "Completed",
-            servings: 4,
-            prepMinutes: 10,
-            cookMinutes: 15,
-            tags: ["breakfast"],
-            ingredients: [{ name: "Flour", quantity: 250, unit: "g", optional: false }],
-            steps: [{ text: "Whisk the batter." }, { text: "Cook for 3 minutes." }],
-            notes: "completed by mock",
-          };
-        }
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(
-          JSON.stringify({
-            choices: [{ message: { content: JSON.stringify(payload) } }],
-            usage: {
-              prompt_tokens: 1000,
-              completion_tokens: 500,
-              total_tokens: 1500,
-              ...(body?.model === "priced-model" ? {} : { cost: 0.00125 }),
-            },
-          }),
-        );
-      });
-    });
-    aiServer.listen(0, "127.0.0.1", () => {
-      const aiAddress = aiServer.address();
-      if (!aiAddress || typeof aiAddress === "string") throw new Error("no ai address");
-      aiBase = `http://127.0.0.1:${aiAddress.port}/v1`;
-      resolve();
-    });
-  });
+  const mockAi = await startMockAiServer(aiRequests);
+  aiServer = mockAi.server;
+  aiBase = mockAi.baseUrl;
 
   const reg = await request("/api/auth/register", {
     method: "POST",
@@ -832,6 +751,46 @@ describe("recipe link import", () => {
       }
     } finally {
       // Do not leave an extra house behind for tests that count the owner's houses.
+      await request(`/api/houses/${aiHouse}`, { method: "DELETE" });
+    }
+  });
+
+  it("warns when a long page is cut off before AI cleanup", async () => {
+    const created = await request("/api/houses", { method: "POST", body: { name: "Import long house", currency: "EUR" } });
+    assert.equal(created.status, 201);
+    const aiHouse = created.data.id;
+    try {
+      const configured = await request(`/api/houses/${aiHouse}`, {
+        method: "PATCH",
+        body: { settings: { ai: { enabled: true, baseUrl: aiBase, apiKey: "test-key", model: "mock-model" } } },
+      });
+      assert.equal(configured.status, 200);
+
+      const longCopy = "Simmer the broth gently until the vegetables are soft. ".repeat(400);
+      const pageServer = http.createServer((_req, res) => {
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        res.end(`<html><head><title>Long soup</title></head><body><h1>Soup</h1><p>${longCopy}</p></body></html>`);
+      });
+      await new Promise<void>((resolve) => pageServer.listen(0, "127.0.0.1", () => resolve()));
+      const pageAddress = pageServer.address();
+      if (!pageAddress || typeof pageAddress === "string") throw new Error("no import page address");
+      try {
+        aiRequests.length = 0;
+        const preview = await request(`/api/houses/${aiHouse}/recipes/import`, {
+          method: "POST",
+          body: { url: `http://127.0.0.1:${pageAddress.port}/long-soup` },
+        });
+        assert.equal(preview.status, 200);
+        assert.equal(preview.data.provider, "ai");
+        // The page is longer than the AI input budget. The truncation must be
+        // visible in the response instead of silently dropping the tail.
+        assert.match(String(preview.data.warning), /cut off at 12000 characters/i);
+        const prompt = String(aiRequests.at(-1)?.body.messages[1].content ?? "");
+        assert.match(prompt, /\[The text was cut off at 12000 characters\.\]/);
+      } finally {
+        await new Promise<void>((resolve, reject) => pageServer.close((error) => (error ? reject(error) : resolve())));
+      }
+    } finally {
       await request(`/api/houses/${aiHouse}`, { method: "DELETE" });
     }
   });
@@ -5082,6 +5041,18 @@ describe("recipes", () => {
     assert.equal(res.data.provider, "local");
     assert.ok(res.data.warning.includes("No AI provider"));
     assert.equal(res.data.draft.ingredients.length, 2);
+    assert.equal(res.data.count, 1);
+    assert.equal(res.data.drafts.length, 1);
+  });
+
+  it("warns about suspicious OCR without discarding entered text", async () => {
+    const res = await request(`/api/houses/${houseId}/recipes/scan`, {
+      method: "POST",
+      body: { text: "ΞΞΞ\nΕΞ\nΞΞΞΕΞ\n---Ξε\n====" },
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.data.provider, "local");
+    assert.match(res.data.warning, /may be unreliable/);
   });
 
   it("saves recipes and matches stock", async () => {
@@ -5269,7 +5240,9 @@ describe("ai integration", () => {
     aiRequests.length = 0;
     const res = await request(`/api/houses/${houseId}/recipes/scan`, {
       method: "POST",
-      body: { text: "flour eggs milk" },
+      // The "Read the photo with AI" button sends this flag; the recipe scan
+      // must accept it and still use the provider.
+      body: { text: "flour eggs milk", preferAi: true },
     });
     assert.equal(res.status, 200);
     assert.equal(res.data.provider, "ai");
@@ -5384,56 +5357,6 @@ describe("ai integration", () => {
       method: "PATCH",
       body: { settings: { ai: { model: "mock-model", inputPrice: null, outputPrice: null } } },
     });
-  });
-
-  it("only sends scan images when a vision model is configured", async () => {
-    const png = encodePng(16, 16, Buffer.alloc(16 * 16 * 4, 200));
-    const bytes = new ArrayBuffer(png.length);
-    new Uint8Array(bytes).set(png);
-    const form = new FormData();
-    form.append("image", new Blob([bytes], { type: "image/png" }), "card.png");
-    const upload = await fetch(`${base}/api/houses/${houseId}/recipes/upload`, {
-      method: "POST",
-      body: form,
-      headers: { cookie },
-    });
-    assert.equal(upload.status, 201);
-    const { path: imagePath } = await upload.json();
-    assert.ok(imagePath.startsWith("/uploads/recipes/"));
-
-    aiRequests.length = 0;
-    const withoutVision = await request(`/api/houses/${houseId}/recipes/scan`, {
-      method: "POST",
-      body: { text: "flour eggs milk", image: imagePath },
-    });
-    assert.equal(withoutVision.status, 200);
-    assert.equal(withoutVision.data.provider, "ai");
-    assert.equal(typeof aiRequests[0].body.messages[1].content, "string");
-
-    await request(`/api/houses/${houseId}`, {
-      method: "PATCH",
-      body: { settings: { ai: { visionModel: "mock-vision" } } },
-    });
-    aiRequests.length = 0;
-    const withVision = await request(`/api/houses/${houseId}/recipes/scan`, {
-      method: "POST",
-      body: { text: "flour eggs milk", image: imagePath },
-    });
-    assert.equal(withVision.data.provider, "ai");
-    const content = aiRequests[0].body.messages[1].content;
-    assert.ok(Array.isArray(content));
-    assert.ok(content.some((part: any) => part.type === "image_url"));
-
-    await request(`/api/houses/${houseId}`, {
-      method: "PATCH",
-      body: { settings: { ai: { visionModel: null } } },
-    });
-    const noText = await request(`/api/houses/${houseId}/recipes/scan`, {
-      method: "POST",
-      body: { image: imagePath },
-    });
-    assert.equal(noText.data.provider, "local");
-    assert.match(noText.data.warning, /vision-capable model/);
   });
 
   it("generates ideas through the provider", async () => {

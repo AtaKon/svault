@@ -86,6 +86,8 @@ Docker Compose reads `.env` next to `docker-compose.yml`.
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Server | Any OpenAI-compatible endpoint. |
 | `OPENAI_MODEL` | `gpt-4o-mini` | Server | Text model. |
 | `OPENAI_VISION_MODEL` | falls back to text model | Server | Vision model for recipe photos. |
+| `OPENAI_RECIPE_REASONING` | `auto` | Server | Recipe-scan reasoning: `auto`, `off`, `low`, `medium`, `high`. Only sent to endpoints that honour OpenRouter's `reasoning` field. |
+| `OPENAI_RECIPE_VISION_MODELS` | provider default | Server | Comma-separated recipe-scan models, at most four. On OpenRouter the default chain is Gemini 3 Flash Preview → Qwen3.6 35B → Gemini 3.8 Flash; other endpoints use `OPENAI_VISION_MODEL` only. |
 | `SV_AI_LOG_RETENTION_DAYS` | `90` | Server | Days to keep rows in the AI call log; `0` keeps them forever. |
 | `SV_AI_LOG_PREVIEW_CHARS` | `4000` | Server | Maximum prompt/response characters stored per AI call (200–20000). |
 | `SV_CATALOG_URL` | empty | Server | Optional shared OpenFoodFacts receipt-name catalogue (JSON) for **Settings → Data → Sync catalogue**. |

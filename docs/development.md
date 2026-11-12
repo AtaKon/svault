@@ -58,6 +58,7 @@ npm run seed
 | `npm run build` | Vendors OCR assets, builds the client to `dist/client`, compiles the server to `dist/server` |
 | `npm start` | Runs the built server (`NODE_ENV` should be `production` in real deployments) |
 | `npm test` | API integration, parser, stock and dataset tests with a temporary database |
+| `npm run recipe-vision:benchmark -- manifest.json` | Manual recipe-photo model comparison; needs photos, a key and a written ground truth (see [`recipe-ocr-evaluation.md`](recipe-ocr-evaluation.md)) |
 | `npm run typecheck` | `tsc --noEmit` over client, shared and server |
 | `npm run seed` | Demo seeder against `DATA_DIR` |
 | `npm run icons` | Regenerates PWA icons from `assets/icon.svg` |

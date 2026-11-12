@@ -17,6 +17,8 @@ import {
   type ChannelMessage,
 } from "../services/channels.js";
 import { chat, resolveAi } from "../ai.js";
+import { MAX_RECIPE_VISION_CHAIN, checkRecipeVisionModels } from "../../shared/recipe-vision.js";
+import { RECIPE_REASONING_MODES } from "../../shared/ai-reasoning.js";
 import type { NotificationChannel, Role } from "../../shared/types.js";
 
 export const houseRoutes = Router();
@@ -49,6 +51,27 @@ function mergeSettings(current: Record<string, any>, incoming: Record<string, an
       else delete mergedAi.apiKey;
     }
     if (incoming.ai.apiKey === "" || incoming.ai.apiKey === null) delete mergedAi.apiKey;
+    if (incoming.ai.recipeVisionModels !== undefined) {
+      // Reject a malformed or over-long list instead of deleting it or cutting
+      // it silently: "up to four" is a user-facing promise.
+      const checked = checkRecipeVisionModels(incoming.ai.recipeVisionModels);
+      if (!checked.ok) {
+        throw new ApiError(
+          400,
+          checked.reason === "too-many"
+            ? `List at most ${MAX_RECIPE_VISION_CHAIN} recipe vision models.`
+            : "Recipe vision models must be model IDs separated by commas.",
+        );
+      }
+      if (checked.models.length) mergedAi.recipeVisionModels = checked.models;
+      else delete mergedAi.recipeVisionModels;
+    }
+    if (incoming.ai.recipeReasoning !== undefined) {
+      if (!(RECIPE_REASONING_MODES as readonly unknown[]).includes(incoming.ai.recipeReasoning)) {
+        throw new ApiError(400, `Recipe reasoning must be one of ${RECIPE_REASONING_MODES.join(", ")}.`);
+      }
+      mergedAi.recipeReasoning = incoming.ai.recipeReasoning;
+    }
     next.ai = mergedAi;
   }
   if (incoming.notifications && typeof incoming.notifications === "object") {
@@ -186,6 +209,8 @@ houseRoutes.post(
       ok: true,
       model: cfg.model,
       visionModel: cfg.visionModel,
+      visionModels: cfg.recipeVisionCandidates.map((candidate) => candidate.model),
+      visionWarning: cfg.recipeVisionWarning,
       reply: reply.text.trim().slice(0, 120),
       cost: reply.usage.cost,
     });

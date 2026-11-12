@@ -137,6 +137,8 @@ Mounted at `/api/houses`.
       "baseUrl": "https://api.openai.com/v1",
       "model": "gpt-4o-mini",
       "visionModel": "",
+      "recipeVisionModels": ["google/gemini-3-flash-preview", "qwen/qwen3.6-35b-a3b"],
+      "recipeReasoning": "auto",
       "apiKey": "sk-..."
     },
     "notifications": { "lowStock": true, "expiryDays": 7 },
@@ -803,11 +805,30 @@ so the changes made on the preview are kept; `sourceUrl` is the final address af
 Scan body:
 
 ```json
-{ "text": "OCR text from the browser", "image": "/uploads/recipes/....jpg", "title": "Yiayia's cake", "save": false }
+{ "text": "OCR text from the browser", "image": "/uploads/recipes/....jpg", "images": ["/uploads/recipes/....jpg"], "title": "Yiayia's cake", "save": false, "preferAi": false }
 ```
 
-Without `save`, the response contains `draft`. With `save: true`, it also contains `recipe`. The
-response always includes `provider` (`ai` or `local`) and an optional `warning`.
+Without `save`, the response contains `draft`. With `save: true`, it also contains `recipe`. `images`
+sends several photos of the same page; `image` is the older single-photo field and `sourceImage` on the
+saved recipe is the first photo either way. One save call persists one recipe: when the page held more
+than one, the response keeps `count` (recipes found) and adds `savedCount: 1` plus a warning saying the
+others were not saved.
+The response always includes `provider` (`ai` or `local`) and an optional `warning`. Recipe scans try AI
+first whenever a provider is configured; `preferAi: true` (the "Read the photo with AI" button) is
+accepted for compatibility and recorded as the request reason in the AI call log, so the button always
+uses the vision path rather than a local-only parse. When AI read the page
+it also includes `aiModel` (the model that answered) and `aiModels` (every model tried, in order, up to
+four; a failed chain still reports the models it tried); `aiCost` covers every attempt that reported a
+price, and the warning says when an attempt did not. When one page produced several drafts, each draft's
+`aiCost` is that scan cost divided between the drafts, so saving them all does not count the same spend
+more than once. A `save: true` call persists only the first recipe, so that saved recipe carries the
+whole scan cost. `truncated: true` marks a best-effort partial read:
+the response still carries the draft, but `save: true` is refused with `409` so a cut-off answer is never
+persisted unattended. The model list comes from
+`settings.ai.recipeVisionModels`, the `OPENAI_RECIPE_VISION_MODELS` environment variable, or the
+provider default (the built-in OpenRouter chain on OpenRouter, the single vision model elsewhere). A
+settings write with more than four models, or with an entry that is not a model ID, is rejected with
+`400` rather than truncated.
 
 Every serialized recipe also carries `nutrition`, derived at read time from the ingredients and the
 nutrition panels of matching items, with a fallback to a small built-in per-100 g reference table for

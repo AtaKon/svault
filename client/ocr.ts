@@ -1,7 +1,30 @@
+import {
+  MAX_RECIPE_OCR_PIXELS,
+  MAX_RECIPE_OCR_WIDTH,
+  cleanNotebookTextReport,
+  detectContentBounds,
+  detectPaperRegion,
+  estimateSkewDegrees,
+  inkLumaFromRgba,
+  measureBlueInk,
+  normaliseLumaFromRgba,
+  recipeOcrFitScale,
+  recipeOcrScale,
+  scoreRecipeText,
+} from "@shared/notebook-scan";
+
 type OcrMode = "recipe" | "receipt" | "bill";
 
 export interface OcrOptions {
   mode?: OcrMode;
+  /**
+   * Called once with the recognition result the scanner kept — the pass with
+   * the highest score, not necessarily the first — and that pass's reported
+   * confidence. Cleanup removes planner furniture and OCR duplicates, and
+   * handwriting is read so poorly that the raw reading must stay available to
+   * the user.
+   */
+  onRawText?: (text: string, meta: { confidence: number }) => void;
   /** Complete readings, called when a product region was found and additional passes succeeded. */
   onCandidates?: (texts: string[]) => void;
 }
@@ -58,6 +81,7 @@ const NON_PRODUCT_ROW =
 const MAX_IMAGE_PIXELS = 18_000_000;
 const MAX_PRODUCT_PIXELS = 10_000_000;
 const MAX_PRODUCT_WIDTH = 3200;
+const RECIPE_ANALYSIS_WIDTH = 900;
 
 /** Fold look-alike Latin characters so a misread ΣΥΝΟΛΟ still anchors the layout. */
 function foldGreekLookalikes(text: string): string {
@@ -202,16 +226,6 @@ export function spliceProductText(fullText: string, productText: string): string
   return [...lines.slice(0, start), ...replacement, ...lines.slice(totalIndex)].join("\n");
 }
 
-function percentile(histogram: Uint32Array, total: number, fraction: number): number {
-  const target = Math.max(1, Math.floor(total * fraction));
-  let seen = 0;
-  for (let value = 0; value < histogram.length; value++) {
-    seen += histogram[value];
-    if (seen >= target) return value;
-  }
-  return 255;
-}
-
 /** Grayscale plus a gentle percentile stretch. Keeps anti-aliased Greek glyphs intact. */
 function normalizeCanvas(source: HTMLCanvasElement): HTMLCanvasElement {
   const canvas = document.createElement("canvas");
@@ -224,23 +238,10 @@ function normalizeCanvas(source: HTMLCanvasElement): HTMLCanvasElement {
   const image = context.getImageData(0, 0, canvas.width, canvas.height);
   const data = image.data;
   const total = canvas.width * canvas.height;
-  const luma = new Uint8ClampedArray(total);
-  const histogram = new Uint32Array(256);
-
-  for (let pixel = 0, index = 0; index < data.length; index += 4, pixel++) {
-    const value = Math.round(0.299 * data[index] + 0.587 * data[index + 1] + 0.114 * data[index + 2]);
-    luma[pixel] = value;
-    histogram[value]++;
-  }
-
-  const low = percentile(histogram, total, 0.01);
-  const high = percentile(histogram, total, 0.99);
-  const range = high - low;
+  const values = normaliseLumaFromRgba(data, total);
 
   for (let pixel = 0; pixel < total; pixel++) {
-    let value = luma[pixel];
-    if (range >= 32) value = ((value - low) * 255) / range;
-    value = Math.max(0, Math.min(255, Math.round((value - 128) * 1.12 + 128)));
+    const value = values[pixel];
     const index = pixel * 4;
     data[index] = value;
     data[index + 1] = value;
@@ -257,12 +258,13 @@ async function prepareDocument(file: File, mode: OcrMode): Promise<HTMLCanvasEle
   try {
     const bitmap = await createImageBitmap(file);
     const dense = mode === "receipt" || mode === "bill";
-    const maxWidth = dense ? 2400 : 2000;
-    const maxUpscale = dense ? 3 : 2;
+    const maxWidth = dense ? 2400 : MAX_RECIPE_OCR_WIDTH;
+    const maxUpscale = dense ? 3 : 2.5;
+    const maxPixels = dense ? MAX_IMAGE_PIXELS : MAX_RECIPE_OCR_PIXELS;
     const scale = Math.min(
       maxUpscale,
       maxWidth / bitmap.width,
-      Math.sqrt(MAX_IMAGE_PIXELS / (bitmap.width * bitmap.height)),
+      Math.sqrt(maxPixels / (bitmap.width * bitmap.height)),
     );
     const width = Math.max(1, Math.round(bitmap.width * Math.max(0.25, scale)));
     const height = Math.max(1, Math.round(bitmap.height * Math.max(0.25, scale)));
@@ -275,7 +277,9 @@ async function prepareDocument(file: File, mode: OcrMode): Promise<HTMLCanvasEle
     context.imageSmoothingQuality = "high";
     context.drawImage(bitmap, 0, 0, width, height);
     bitmap.close?.();
-    return normalizeCanvas(canvas);
+    // Recipe pages keep their colour: the ink variant needs the channel
+    // difference to separate blue ballpoint from cream paper.
+    return dense ? normalizeCanvas(canvas) : canvas;
   } catch {
     return file;
   }
@@ -306,6 +310,253 @@ function cropCanvas(source: HTMLCanvasElement, region: Region, scale: number): H
     canvas.height,
   );
   return canvas;
+}
+
+interface PageAnalysis {
+  luma: Uint8ClampedArray;
+  width: number;
+  height: number;
+  /** Average blue-minus-red of the darkest pixels. Blue ballpoint scores high. */
+  bluish: number;
+}
+
+/** Downscaled grayscale copy used to find the page and its tilt cheaply. */
+function analysePage(source: HTMLCanvasElement): PageAnalysis | null {
+  const scale = Math.min(1, RECIPE_ANALYSIS_WIDTH / Math.max(1, source.width));
+  const width = Math.max(1, Math.round(source.width * scale));
+  const height = Math.max(1, Math.round(source.height * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) return null;
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  context.drawImage(source, 0, 0, width, height);
+  const data = context.getImageData(0, 0, width, height).data;
+
+  const luma = new Uint8ClampedArray(width * height);
+  for (let pixel = 0, index = 0; index < data.length; index += 4, pixel++) {
+    luma[pixel] = Math.round(0.299 * data[index] + 0.587 * data[index + 1] + 0.114 * data[index + 2]);
+  }
+
+  return { luma, width, height, bluish: measureBlueInk(data, width * height) };
+}
+
+/** Rotate the image by `degrees`, positive being clockwise (canvas convention). */
+function rotateCanvas(source: HTMLCanvasElement, degrees: number): HTMLCanvasElement {
+  const radians = (degrees * Math.PI) / 180;
+  const cos = Math.abs(Math.cos(radians));
+  const sin = Math.abs(Math.sin(radians));
+  const width = Math.ceil(source.width * cos + source.height * sin);
+  const height = Math.ceil(source.width * sin + source.height * cos);
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (!context) return source;
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, width, height);
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  context.translate(width / 2, height / 2);
+  context.rotate(radians);
+  context.drawImage(source, -source.width / 2, -source.height / 2);
+  return canvas;
+}
+
+/**
+ * Minimum-channel grayscale. Blue ballpoint, black ink and pencil all stay
+ * dark while cream paper and yellow age stains stay light, which is exactly
+ * what a global Otsu pass gets wrong on uneven notebook photos.
+ */
+function inkCanvas(source: HTMLCanvasElement): HTMLCanvasElement {
+  const canvas = document.createElement("canvas");
+  canvas.width = source.width;
+  canvas.height = source.height;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) return source;
+  context.drawImage(source, 0, 0);
+
+  const image = context.getImageData(0, 0, canvas.width, canvas.height);
+  const data = image.data;
+  const total = canvas.width * canvas.height;
+  const values = inkLumaFromRgba(data, total);
+
+  for (let pixel = 0; pixel < total; pixel++) {
+    const value = values[pixel];
+    const index = pixel * 4;
+    data[index] = value;
+    data[index + 1] = value;
+    data[index + 2] = value;
+    data[index + 3] = 255;
+  }
+  context.putImageData(image, 0, 0);
+  return canvas;
+}
+
+/**
+ * Straighten and crop a photographed page before recognition. The ruled lines
+ * give a reliable tilt; the bright-paper box ignores the desk, the neighbouring
+ * page and the deep shadow at the spine.
+ */
+function tightenRecipePage(source: HTMLCanvasElement): HTMLCanvasElement {
+  let page = source;
+  const before = analysePage(page);
+  if (before) {
+    const skew = estimateSkewDegrees(before.luma, before.width, before.height);
+    if (Math.abs(skew) >= 1) page = rotateCanvas(page, -skew);
+  }
+
+  const analysis = analysePage(page);
+  if (!analysis) return page;
+
+  const paper = detectPaperRegion(analysis.luma, analysis.width, analysis.height);
+  const ink = detectContentBounds(analysis.luma, analysis.width, analysis.height);
+  let box: Region = paper ?? { left: 0, top: 0, width: analysis.width, height: analysis.height };
+  if (ink) {
+    const left = Math.max(box.left, ink.left);
+    const top = Math.max(box.top, ink.top);
+    const right = Math.min(box.left + box.width, ink.left + ink.width);
+    const bottom = Math.min(box.top + box.height, ink.top + ink.height);
+    // Only trust the ink box when it still covers most of the paper, so a
+    // single dense paragraph cannot crop the ingredients above it away.
+    if (right - left >= box.width * 0.5 && bottom - top >= box.height * 0.5) {
+      box = { left, top, width: right - left, height: bottom - top };
+    }
+  }
+
+  // A crop that would throw away most of the frame means the detector found a
+  // small block of ink, not the page edge. Keep the full photo instead — but a
+  // straightened frame is larger than the one `prepareDocument` capped, so it
+  // must still fit the worker budget or Tesseract aborts on the whole page.
+  if (box.width < analysis.width * 0.3 || box.height < analysis.height * 0.3) {
+    const scale = recipeOcrFitScale(page.width, page.height);
+    return scale < 1
+      ? cropCanvas(page, { left: 0, top: 0, width: page.width, height: page.height }, scale)
+      : page;
+  }
+
+  const scaleX = page.width / analysis.width;
+  const scaleY = page.height / analysis.height;
+  const marginX = Math.round(box.width * 0.015 * scaleX);
+  const marginY = Math.round(box.height * 0.015 * scaleY);
+  const left = Math.max(0, Math.round(box.left * scaleX) - marginX);
+  const top = Math.max(0, Math.round(box.top * scaleY) - marginY);
+  const right = Math.min(page.width, Math.round((box.left + box.width) * scaleX) + marginX);
+  const bottom = Math.min(page.height, Math.round((box.top + box.height) * scaleY) + marginY);
+  const region: Region = { left, top, width: right - left, height: bottom - top };
+  // Tesseract.js aborts on a 2400x3200 page (its wasm heap), and straightening
+  // the photo can push an otherwise-fine crop over the budget. The shared scale
+  // caps the upscale at 2.4× and downscales an oversized crop instead of
+  // handing it to the worker whole.
+  return cropCanvas(page, region, recipeOcrScale(region.width, region.height));
+}
+
+type OcrWorker = Awaited<ReturnType<typeof import("tesseract.js")["createWorker"]>>;
+type OcrPsm = NonNullable<Parameters<OcrWorker["setParameters"]>[0]["tessedit_pageseg_mode"]>;
+
+async function recognizeRecipePage(
+  worker: OcrWorker,
+  prepared: HTMLCanvasElement | File,
+  psm: { SINGLE_COLUMN: OcrPsm; SPARSE_TEXT: OcrPsm },
+  setPhase: (start: number, span: number) => void,
+  onRawText?: (text: string, meta: { confidence: number }) => void,
+): Promise<string> {
+  if (!(prepared instanceof HTMLCanvasElement)) {
+    // Deliberately a degraded path: a `File` reaches here only when
+    // `prepareDocument` could not draw it to a canvas (undecodable image).
+    // Drawing it again would repeat that failure, so the single-column pass
+    // runs on the raw file. It still returns the same cleaned-text contract and
+    // reports the raw text once, so callers cannot tell the passes apart.
+    setPhase(0.35, 0.4);
+    await worker.setParameters({
+      tessedit_pageseg_mode: psm.SINGLE_COLUMN,
+      preserve_interword_spaces: "1",
+      user_defined_dpi: "300",
+    });
+    const plain = await worker.recognize(prepared);
+    onRawText?.(plain.data.text, { confidence: plain.data.confidence });
+    return cleanNotebookTextReport(plain.data.text).text;
+  }
+
+  const page = tightenRecipePage(prepared);
+  const analysis = analysePage(page);
+  // A blue ballpoint page reads best on the minimum channel; let the measured
+  // ink colour decide which variant runs first.
+  const preferInk = (analysis?.bluish ?? 0) > 16;
+  const buildVariant = (ink: boolean) => (ink ? inkCanvas(page) : normalizeCanvas(page));
+
+  await worker.setParameters({
+    // A notebook page is one column of handwriting; SINGLE_COLUMN keeps the
+    // rows in reading order, which the local parser relies on.
+    tessedit_pageseg_mode: psm.SINGLE_COLUMN,
+    preserve_interword_spaces: "1",
+    user_defined_dpi: "300",
+  });
+
+  const passes: { canvas: HTMLCanvasElement; text: string; score: number; confidence: number }[] = [];
+  const average = (pass: { text: string; score: number }) =>
+    pass.score / Math.max(1, pass.text.split("\n").filter((line) => line.trim()).length);
+
+  setPhase(0.35, 0.4);
+  const primary = buildVariant(preferInk);
+  const first = await worker.recognize(primary);
+  passes.push({ canvas: primary, text: first.data.text, score: scoreRecipeText(first.data.text), confidence: first.data.confidence });
+
+  // Only spend the second preparation and pass when the first reading is thin.
+  // Most pages are decided by the variant chosen from the ink colour.
+  if (average(passes[0]) < 1.6) {
+    setPhase(0.7, 0.2);
+    try {
+      const secondary = buildVariant(!preferInk);
+      const second = await worker.recognize(secondary);
+      passes.push({ canvas: secondary, text: second.data.text, score: scoreRecipeText(second.data.text), confidence: second.data.confidence });
+    } catch {
+      // The first pass is already a usable reading. A failed optional pass must
+      // not discard it (a second recognise can fail after the worker survived
+      // the first), so keep the primary text.
+    }
+  }
+
+  passes.sort((a, b) => b.score - a.score);
+  const bestPass = passes[0];
+  let best = { text: bestPass.text, score: bestPass.score, confidence: bestPass.confidence };
+
+  if (average(best) < 0.8) {
+    // Handwriting spread over a ruled page: sparse mode keeps separate words
+    // apart instead of merging rows into one blob. Run it on the variant that
+    // produced the best reading, not always the ink-colour-first one: the
+    // second variant can win the two layout passes.
+    setPhase(0.9, 0.1);
+    try {
+      await worker.setParameters({
+        tessedit_pageseg_mode: psm.SPARSE_TEXT,
+        preserve_interword_spaces: "1",
+        user_defined_dpi: "300",
+      });
+      const sparse = await worker.recognize(bestPass.canvas);
+      const candidate = {
+        text: sparse.data.text,
+        score: scoreRecipeText(sparse.data.text),
+        confidence: sparse.data.confidence,
+      };
+      if (candidate.score > best.score) best = candidate;
+    } catch {
+      // Same as the optional second layout pass: keep the reading we already
+      // have instead of failing the whole scan.
+    }
+  }
+
+  if (import.meta.env.DEV) {
+    console.debug(
+      "[ocr] recipe passes",
+      passes.map((pass) => ({ score: Math.round(pass.score), chars: pass.text.length })),
+    );
+  }
+
+  onRawText?.(best.text, { confidence: best.confidence });
+  return cleanNotebookTextReport(best.text).text;
 }
 
 function otsuThreshold(histogram: Uint32Array, total: number): number {
@@ -381,10 +632,12 @@ export async function ocrImage(
     phaseSpan = span;
   };
 
-  // Greek first: receipts and utility bills are mostly Greek, while Latin
-  // product names are still covered by the English model. Recipes keep English
-  // first for mixed cards.
-  const languages = mode === "receipt" || mode === "bill" ? ["ell", "eng"] : ["eng", "ell"];
+  // The language is a property of the page, not of the interface: a Greek
+  // household can run the English UI and photograph a Greek notebook, and a
+  // recipe card can be written in English on a Greek page. Recognition
+  // therefore always loads both models; `detectScript` reports what was found
+  // instead of the caller guessing from the UI language.
+  const languages = ["ell", "eng"];
   const worker = await createWorker(languages.join("+"), 1, {
     workerPath: "/tesseract/worker.min.js",
     corePath: "/tesseract/core",
@@ -395,6 +648,10 @@ export async function ocrImage(
 
   try {
     const prepared = await prepareDocument(file, mode);
+    if (mode === "recipe") {
+      setPhase(0.25, 0.75);
+      return await recognizeRecipePage(worker, prepared, PSM, setPhase, options.onRawText);
+    }
     const receiptPage = mode === "receipt" && prepared instanceof HTMLCanvasElement ? prepared : null;
 
     setPhase(0.25, receiptPage ? 0.25 : 0.75);

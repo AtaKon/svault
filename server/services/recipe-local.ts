@@ -1,4 +1,5 @@
 import type { FoodIdea, IdeaResponse, RecipeIngredient, RecipeStep } from "../../shared/types.js";
+import { splitRecipeSections } from "../../shared/notebook-scan.js";
 
 const UNICODE_FRACTIONS: Record<string, number> = {
   "½": 0.5,
@@ -177,6 +178,35 @@ const UNIT_ALIASES: Record<string, string> = {
   ματσακι: "bunch",
   ματσάκια: "bunch",
   ματσακια: "bunch",
+  // Handwritten Greek recipes abbreviate constantly and the dot is often the
+  // only difference between spoons; these are the forms that show up on cards.
+  γρμ: "g",
+  γραμμ: "g",
+  γραμ: "g",
+  φλιτζ: "cup",
+  φλυτζ: "cup",
+  φλ: "cup",
+  κουτ: "tbsp",
+  κουταλ: "tbsp",
+  κσ: "tbsp",
+  κουτγλ: "tsp",
+  κγ: "tsp",
+  κουταλακ: "tsp",
+  κιλ: "kg",
+  κιλου: "kg",
+  λτρ: "l",
+  λιτρ: "l",
+  μλ: "ml",
+  χλστ: "ml",
+  φετ: "slice",
+  σκελ: "clove",
+  κλων: "sprig",
+  πρεζ: "pinch",
+  χουφτ: "handful",
+  κονσ: "can",
+  πακ: "pack",
+  σακ: "bag",
+  ματσ: "bunch",
 };
 
 const ING_HEADER =
@@ -221,22 +251,77 @@ export interface ParsedIngredient extends RecipeIngredient {
   raw: string;
 }
 
-export function parseIngredientLine(rawLine: string): ParsedIngredient | null {
-  let line = rawLine.trim().replace(/^[-*•–—·]\s*/, "");
+/**
+ * Quantities written as words. Greek cards mix digits and words freely
+ * ("μισό κιλό", "δύο αυγά") and the word carries the number.
+ */
+const WORD_NUMBERS: [RegExp, number][] = [
+  [/^(?:ενάμισι|εναμισι)(?=\s|$)/iu, 1.5],
+  [/^(?:δυόμισι|δυομισι)(?=\s|$)/iu, 2.5],
+  [/^(?:μισό|μισο|μισή|μιση|μισός|μισοσ)(?=\s|$)/iu, 0.5],
+  [/^(?:ένα|ενα|μία|μια|μιά)(?=\s|$)/iu, 1],
+  [/^(?:δύο|δυο)(?=\s|$)/iu, 2],
+  [/^(?:τρία|τρια|τρεις)(?=\s|$)/iu, 3],
+  [/^(?:τέσσερα|τεσσερα|τέσσερις|τεσσερισ)(?=\s|$)/iu, 4],
+  [/^(?:πέντε|πεντε)(?=\s|$)/iu, 5],
+  [/^(?:έξι|εξι)(?=\s|$)/iu, 6],
+  [/^(?:εφτά|εφτα|επτά|επτα)(?=\s|$)/iu, 7],
+  [/^(?:οχτώ|οχτω|οκτώ|οκτω)(?=\s|$)/iu, 8],
+  [/^(?:εννιά|εννια)(?=\s|$)/iu, 9],
+  [/^(?:δέκα|δεκα)(?=\s|$)/iu, 10],
+];
+
+/**
+ * Words that make a leading number word part of ordinary prose rather than an
+ * amount ("Μια συνταγή", "μια φορά"). Without this guard the number is consumed
+ * and the rest of the sentence becomes an ingredient or a phantom title.
+ * `\b` is ASCII-only in JavaScript, so the boundary is spelled out.
+ */
+const PROSE_AFTER_WORD_NUMBER =
+  /^(?:συνταγ(?:ή|η|ές|εσ)|φορά|φορα|φορές|φορες|ιδέα|ιδεα|ιδέες|ιδεεσ|μέρα|μερα|μέρες|μερεσ|ώρα|ωρα|ώρες|ωρεσ|εβδομάδα|εβδομαδα|εβδομάδες|εβδομαδεσ|χρόνο|χρονο|χρόνια|χρονια|σελίδα|σελιδα|σελίδες|σελιδεσ|στιγμή|στιγμη)(?=\s|$)/iu;
+
+/**
+ * Ditto mark after the quantity ("150 »"), meaning "same unit as the line
+ * above". Only unambiguous marks count: a single quote (smart or straight) is far
+ * more likely to be an opening quotation mark from OCR than a ditto, so it is
+ * not one. A dash is a list bullet, not a ditto either.
+ */
+const DITTO_UNIT = /^(?:»+|＞＞|〃|"{2,}|'{2})\s*/;
+
+export function parseIngredientLine(rawLine: string, previousUnit: string | null = null): ParsedIngredient | null {
+  let line = normaliseFractions(rawLine).replace(/\s+/g, " ").trim().replace(/^[-*•–—·]\s*/, "");
   if (!line || line.length > 220) return null;
-  const qtyMatch = line.match(/^(\d+\s+\d+\s*\/\s*\d+|\d+\s*\/\s*\d+|\d+(?:[.,]\d+)?)/);
+
   let quantity: number | null = null;
+  const qtyMatch = line.match(/^(\d+\s+\d+\s*\/\s*\d+|\d+\s*\/\s*\d+|\d+(?:[.,]\d+)?)/);
   if (qtyMatch) {
     quantity = parseNumber(qtyMatch[1]);
     line = line.slice(qtyMatch[1].length).trim();
+  } else {
+    for (const [pattern, value] of WORD_NUMBERS) {
+      const match = pattern.exec(line);
+      if (!match) continue;
+      const rest = line.slice(match[0].length).trim();
+      if (PROSE_AFTER_WORD_NUMBER.test(rest)) continue;
+      quantity = value;
+      line = rest;
+      break;
+    }
   }
+
   let unit: string | null = null;
-  const unitMatch = line.match(/^([a-zA-Zα-ωά-ώΑ-ΩΆ-Ώ.]+)(?=\s|$)/);
-  if (unitMatch) {
-    const candidate = unitMatch[1].toLowerCase().replace(/\.$/, "");
-    if (UNIT_ALIASES[candidate]) {
-      unit = UNIT_ALIASES[candidate];
-      line = line.slice(unitMatch[0].length).trim();
+  const ditto = DITTO_UNIT.exec(line);
+  if (ditto && quantity != null) {
+    unit = previousUnit;
+    line = line.slice(ditto[0].length).trim();
+  } else {
+    const unitMatch = line.match(/^([a-zA-Zα-ωά-ώΑ-ΩΆ-Ώ.]+)(?=\s|$)/);
+    if (unitMatch) {
+      const candidate = unitMatch[1].toLowerCase().replace(/\./g, "");
+      if (UNIT_ALIASES[candidate]) {
+        unit = UNIT_ALIASES[candidate];
+        line = line.slice(unitMatch[0].length).trim();
+      }
     }
   }
   line = line.replace(/^of\s+/i, "").replace(/^[-–—:]\s*/, "").trim();
@@ -281,6 +366,29 @@ export interface ParsedRecipe {
   notes: string | null;
 }
 
+/** Notes that sit above the title on a handwritten card ("half batch"). */
+const TITLE_NOTE =
+  /^(?:(?:μισ[ήηό]|διπλ[ήη]|μία|μια|μισό|μισο|half|double)\s*)?(?:δόσ|δοσ|μερίδ|μεριδ|portion|batch|servings?)[\p{L}]*|^για\s+\d+\s+(?:άτομα|ατομα|μερίδες|μεριδες|persons?|people)/iu;
+
+/**
+ * One handwritten row often holds two ingredients separated by a wide gap or a
+ * middle dot. Split only when every piece carries its own quantity, so a
+ * wrapped line never loses its measurement.
+ */
+function splitIngredientSegments(line: string): string[] {
+  const trimmed = line.trim();
+  if (!trimmed) return [];
+  const segments = trimmed
+    .split(/\s{2,}|[;·•]/u)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  if (segments.length <= 1) return [trimmed];
+  const complete = segments.every(
+    (segment) => segment.length > 2 && parseIngredientLine(segment)?.quantity != null,
+  );
+  return complete ? segments : [trimmed];
+}
+
 export function heuristicRecipe(rawText: string, fallbackTitle = "Scanned recipe"): ParsedRecipe {
   const text = normaliseFractions(rawText.replace(/\r\n?/g, "\n"));
   // OCR often prefixes lines with pipes, bullets or dashes. Strip them before
@@ -308,17 +416,36 @@ export function heuristicRecipe(rawText: string, fallbackTitle = "Scanned recipe
   });
   if (notesStart >= 0 && stepStart >= 0 && notesStart < stepStart) notesStart = -1;
 
-  const titleCandidates = lines.filter(
-    (line) =>
-      line.length <= 90 &&
-      !ING_HEADER.test(line) &&
-      !STEP_HEADER.test(line) &&
-      !NOTES_HEADER.test(line) &&
-      !/^\d+[.)]\s+/.test(line) &&
-      parseIngredientLine(line)?.quantity == null,
-  );
-  let title = (titleCandidates[0] ?? fallbackTitle).replace(/^(recipe\s*[:\-]\s*)/i, "").trim().slice(0, 120);
-  const secondLine = titleCandidates[1];
+  const titleIndexes = lines
+    .map((_line, index) => index)
+    .filter((index) => {
+      const line = lines[index];
+      return (
+        line.length <= 90 &&
+        !ING_HEADER.test(line) &&
+        !STEP_HEADER.test(line) &&
+        !NOTES_HEADER.test(line) &&
+        !/^\d+[.)]\s+/.test(line) &&
+        !TITLE_NOTE.test(line) &&
+        (line.match(/\p{L}/gu) ?? []).length >= 2 &&
+        parseIngredientLine(line)?.quantity == null
+      );
+    });
+
+  // On a notebook page the recipe name is the line just above the ingredients.
+  // Prefer a candidate followed by a quantity line, then fall back to the first
+  // reasonable line.
+  const startsWithQuantity = (index: number) => {
+    const next = lines[index + 1];
+    return Boolean(next && parseIngredientLine(next)?.quantity != null);
+  };
+  const titleIndex = titleIndexes.find(startsWithQuantity) ?? titleIndexes[0] ?? -1;
+  let title = (titleIndex >= 0 ? lines[titleIndex] : fallbackTitle)
+    .replace(/^(recipe\s*[:\-]\s*)/i, "")
+    .trim()
+    .slice(0, 120);
+  const secondIndex = titleIndex >= 0 ? titleIndexes.find((index) => index > titleIndex) : undefined;
+  const secondLine = secondIndex != null ? lines[secondIndex] : undefined;
   if (
     secondLine &&
     title.length <= 42 &&
@@ -330,7 +457,7 @@ export function heuristicRecipe(rawText: string, fallbackTitle = "Scanned recipe
     title = `${title} ${secondLine}`.slice(0, 120);
   }
 
-  const titleLine = titleCandidates[0] ?? "";
+  const titleLine = titleIndex >= 0 ? lines[titleIndex] : "";
 
   const description =
     ingStart > 1
@@ -339,10 +466,22 @@ export function heuristicRecipe(rawText: string, fallbackTitle = "Scanned recipe
 
   const ingredients: ParsedIngredient[] = [];
   const steps: RecipeStep[] = [];
+  // A handwritten ">>" or "»" after the quantity repeats the unit above it.
+  let lastUnit: string | null = null;
 
   const pushIngredient = (line: string) => {
-    const parsed = parseIngredientLine(line);
-    if (parsed) ingredients.push(parsed);
+    for (const segment of splitIngredientSegments(line)) {
+      // "Μισή δόση" above the title is how much of the batch the page makes,
+      // not an ingredient.
+      if (TITLE_NOTE.test(segment)) continue;
+      const parsed = parseIngredientLine(segment, lastUnit);
+      if (!parsed) continue;
+      // A ditto repeats the unit on the line *above* it. A line with no unit
+      // ("2 eggs") therefore clears the remembered unit; otherwise a ditto
+      // after it would silently inherit a unit from further up the list.
+      lastUnit = parsed.unit;
+      ingredients.push(parsed);
+    }
   };
 
   if (ingStart >= 0 || stepStart >= 0) {
@@ -374,10 +513,14 @@ export function heuristicRecipe(rawText: string, fallbackTitle = "Scanned recipe
   }
 
   if (!ingredients.length) {
-    // No ingredient section: use quantity-prefixed lines as ingredients.
-    for (const line of lines) {
+    // No ingredient header: quantity-prefixed lines are ingredients. Stop at
+    // the method so amounts inside the steps do not become ingredients.
+    const ingLimit = stepStart >= 0 ? stepStart : lines.length;
+    for (let index = 0; index < ingLimit; index++) {
+      const line = lines[index];
+      if (index === titleIndex || index === secondIndex) continue;
       if (/^\d+[.)]\s+/.test(line)) continue;
-      if (/^\s*\d/.test(line)) pushIngredient(line);
+      if (parseIngredientLine(line)?.quantity != null) pushIngredient(line);
     }
   }
 
@@ -410,15 +553,15 @@ export function heuristicRecipe(rawText: string, fallbackTitle = "Scanned recipe
 
   const lower = text.toLowerCase();
   const tagRules: [RegExp, string][] = [
-    [/vegan/, "vegan"],
-    [/vegetarian/, "vegetarian"],
-    [/gluten[- ]free/, "gluten-free"],
-    [/baking|cake|cookies?|bread|pastry/, "baking"],
-    [/dessert|sweet|pudding|cake/, "dessert"],
-    [/soup|stew|broth/, "soup"],
-    [/breakfast|brunch/, "breakfast"],
-    [/salad/, "salad"],
-    [/grandma|grandmother|nana|oma|yiayia/, "family"],
+    [/vegan|βίγκαν/, "vegan"],
+    [/vegetarian|χορτοφαγ/, "vegetarian"],
+    [/gluten[- ]free|χωρίς γλουτένη|χωρισ γλουτενη/, "gluten-free"],
+    [/baking|cake|cookies?|bread|pastry|ψωμ|τσουρέκ|τσουρεκ|ζύμη|ζυμη|κέικ|κειικ/, "baking"],
+    [/dessert|sweet|pudding|cake|γλυκ|τούρτα|τουρτα|ρεβανί|ρεβανι|μπισκότ|μπισκοτ/, "dessert"],
+    [/soup|stew|broth|σούπα|σουπα|γιαχνί|γιαχνι/, "soup"],
+    [/breakfast|brunch|πρωινό|πρωινο/, "breakfast"],
+    [/salad|σαλάτα|σαλατα/, "salad"],
+    [/grandma|grandmother|nana|oma|yiayia|γιαγιά|γιαγια/, "family"],
   ];
   const tags = tagRules.filter(([re]) => re.test(lower)).map(([, tag]) => tag);
 
@@ -433,6 +576,20 @@ export function heuristicRecipe(rawText: string, fallbackTitle = "Scanned recipe
     steps: steps.slice(0, 60),
     notes: notesStart >= 0 ? lines.slice(notesStart + 1).join(" ").slice(0, 600) || null : null,
   };
+}
+
+/**
+ * One page can hold several recipes (a tsoureki above the kourou biscuits, a
+ * cake plus its icing). Merge nothing silently: return one parsed recipe per
+ * section and let the reader choose which one to save.
+ */
+export function heuristicRecipes(rawText: string, fallbackTitle = "Scanned recipe"): ParsedRecipe[] {
+  const sections = splitRecipeSections(rawText);
+  if (!sections.length) return [heuristicRecipe(rawText, fallbackTitle)];
+  const parsed = sections
+    .map((section) => heuristicRecipe(section.lines.join("\n"), section.title || fallbackTitle))
+    .filter((recipe) => recipe.ingredients.length > 0 || recipe.steps.length > 0);
+  return parsed.length ? parsed : [heuristicRecipe(rawText, fallbackTitle)];
 }
 
 interface InventoryEntry {
