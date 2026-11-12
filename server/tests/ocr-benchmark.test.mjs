@@ -6,6 +6,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import { MAX_RECIPE_OCR_PIXELS, MAX_RECIPE_OCR_WIDTH } from "../../shared/notebook-scan.ts";
 import {
@@ -14,6 +16,7 @@ import {
   cropToContent,
   evaluate,
   keywordFound,
+  parseManifest,
   rotate,
   temporaryPath,
   toBmpFile,
@@ -186,6 +189,46 @@ describe("ocr benchmark temp files", () => {
     } finally {
       fs.rmSync(fileA, { force: true });
       fs.rmSync(fileB, { force: true });
+    }
+  });
+});
+
+describe("ocr benchmark manifest", () => {
+  it("rejects a manifest without a non-empty images array", () => {
+    assert.throws(() => parseManifest({}, process.cwd()), /images/);
+    assert.throws(() => parseManifest({ images: [] }, process.cwd()), /non-empty/);
+    assert.throws(() => parseManifest(null, process.cwd()), /JSON object/);
+  });
+
+  it("rejects an entry without a usable path before any OCR starts", () => {
+    assert.throws(
+      () => parseManifest({ images: [{ label: "page" }] }, process.cwd()),
+      /images\[0\]\.path/,
+    );
+    assert.throws(
+      () => parseManifest({ images: [{ path: "   " }] }, process.cwd()),
+      /images\[0\]\.path/,
+    );
+  });
+
+  it("rejects a manifest that names a photo that does not exist", () => {
+    assert.throws(
+      () => parseManifest({ images: [{ path: "missing-photo.jpg" }] }, process.cwd()),
+      /does not exist/,
+    );
+  });
+
+  it("resolves each relative path against the manifest directory", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "ocr-manifest-"));
+    try {
+      const photo = path.join(directory, "page.bmp");
+      fs.writeFileSync(photo, Buffer.alloc(0));
+      const images = parseManifest({ images: [{ path: "page.bmp", label: "page" }] }, directory);
+      assert.equal(images.length, 1);
+      assert.equal(images[0].file, photo);
+      assert.equal(images[0].label, "page");
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
     }
   });
 });

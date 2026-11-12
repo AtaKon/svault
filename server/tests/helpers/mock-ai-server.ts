@@ -153,6 +153,25 @@ export async function startMockAiServer(requests: MockAiRequest[]): Promise<Mock
         res.end(JSON.stringify({ error: { message: "This model does not support image input" } }));
         return;
       }
+      // OpenAI's wording for a model without vision. It names the image part
+      // rather than the word "vision", so it must still count as a support
+      // failure and not as a generic image error.
+      if (body?.model === "image_url-only-supported-model" && Array.isArray(userContent)) {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            error: { message: "Invalid content type. image_url is only supported by certain models." },
+          }),
+        );
+        return;
+      }
+      // The photo is fine but too big for the provider. Removing the photo
+      // would throw away the vision read, so no text-only retry is allowed.
+      if (body?.model === "image-too-large-model" && Array.isArray(userContent)) {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: { message: "Image is too large; maximum size is 20 MB" } }));
+        return;
+      }
       // A later model in a chain rejects the photo after an earlier model
       // failed for an unrelated reason. The text-only retry must target only
       // this model, not re-bill the earlier failure.

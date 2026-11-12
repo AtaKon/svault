@@ -376,15 +376,25 @@ function providerStatusOf(message: string): number | null {
 }
 
 /**
- * A provider that cannot accept image parts usually says so in a client-error
- * body. Match only image-specific wording and only a 4xx: a bare "unsupported"
- * (e.g. "unsupported parameter: reasoning"), an unrelated "unsupported content
- * type: text/plain", a rate limit, an auth failure or a 5xx must not trigger a
- * second, photo-less call that re-bills the request.
+ * Words a provider uses when it cannot read image input at all. A plain
+ * "image …" mention is not enough: "image too large" or "invalid image URL"
+ * describes the photo, and removing the photo fixes it, so retrying text-only
+ * would throw away a vision read the user paid for. Only an explicit statement
+ * that the model does not support image input earns the photo-less retry.
+ */
+const IMAGE_INPUT_UNSUPPORTED =
+  /(?:does\s+not|doesn['’]t|doesnt|did\s+not|cannot|can['’]t)\s+(?:support|accept|handle|process|read|see)\s+(?:image|images|image[\s_-]*input|image_url|vision|multimodal|visual)|(?:image|images|image[\s_-]*input|image_url|vision|multimodal|visual)[^.]{0,80}\b(?:is|are)?\s*(?:not\s+supported|not\s+available|not\s+enabled|unsupported)\b|(?:image|images|image_url|vision|multimodal)[^.]{0,80}\bonly\s+supported\s+by\s+certain\s+models\b/i;
+
+/**
+ * A provider that cannot accept image parts says so in a client-error body.
+ * Match only explicit model-support wording and only a 4xx: an unrelated
+ * "unsupported parameter: reasoning", a content-type error, a rate limit, an
+ * auth failure or a 5xx must not trigger a second, photo-less call that
+ * re-bills the request.
  */
 function isImageInputError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  if (!/image|vision|multimodal/i.test(message)) return false;
+  if (!IMAGE_INPUT_UNSUPPORTED.test(message)) return false;
   if (
     /rate.?limit|too many requests|quota|unauthor|forbidden|api.?key|reasoning|unsupported\s+(?:parameter|value|option|model|field)/i.test(
       message,

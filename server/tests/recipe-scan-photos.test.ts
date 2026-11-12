@@ -7,6 +7,21 @@ const fixture = await createRecipeScanFixture();
 const { request, aiRequests, aiBase, houseId, base, cookie } = fixture;
 const { encodePng } = await import("../lib/png.js");
 
+async function uploadPhoto(name: string): Promise<string> {
+  const png = encodePng(16, 16, Buffer.alloc(16 * 16 * 4, 200));
+  const bytes = new ArrayBuffer(png.length);
+  new Uint8Array(bytes).set(png);
+  const form = new FormData();
+  form.append("image", new Blob([bytes], { type: "image/png" }), name);
+  const upload = await fetch(`${base}/api/houses/${houseId}/recipes/upload`, {
+    method: "POST",
+    body: form,
+    headers: { cookie },
+  });
+  assert.equal(upload.status, 201);
+  return (await upload.json()).path as string;
+}
+
 after(async () => {
   await fixture.close();
 });
@@ -207,6 +222,59 @@ describe("recipe scan photos and multi-recipe pages", () => {
     });
   });
 
+  it("does not retry without the photo when the photo itself was rejected", async () => {
+    const imagePath = await uploadPhoto("too-large.png");
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { model: "image-too-large-model", visionModel: null } } },
+    });
+    aiRequests.length = 0;
+    const scan = await request(`/api/houses/${houseId}/recipes/scan`, {
+      method: "POST",
+      body: { text: "Pancakes\n2 eggs", image: imagePath },
+    });
+    assert.equal(scan.status, 200);
+    assert.equal(scan.data.provider, "local");
+    assert.equal(aiRequests.length, 1, "an oversized photo must not buy a second text-only call");
+    assert.ok(Array.isArray(aiRequests[0].body.messages[1].content));
+    assert.equal(
+      String(scan.data.warning).includes("did not accept the photo"),
+      false,
+      "the model accepts photos; this one was just too large",
+    );
+    assert.match(scan.data.warning, /AI cleanup failed/i);
+
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { model: "mock-model", visionModel: null } } },
+    });
+  });
+
+  it("recognises OpenAI's image_url support wording as an image-input failure", async () => {
+    const imagePath = await uploadPhoto("image-url.png");
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { model: "image_url-only-supported-model", visionModel: null } } },
+    });
+    aiRequests.length = 0;
+    const scan = await request(`/api/houses/${houseId}/recipes/scan`, {
+      method: "POST",
+      body: { text: "Pancakes\n2 eggs", image: imagePath },
+    });
+    assert.equal(scan.status, 200);
+    assert.equal(scan.data.provider, "ai");
+    assert.match(scan.data.warning, /did not accept the photo/i);
+    assert.equal(aiRequests.length, 2);
+    assert.ok(Array.isArray(aiRequests[0].body.messages[1].content), "the first attempt carried the photo");
+    assert.equal(typeof aiRequests[1].body.messages[1].content, "string", "the retry is text only");
+    assert.equal(scan.data.aiCost, 0.00125);
+
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { model: "mock-model", visionModel: null } } },
+    });
+  });
+
   it("lists the photo chain models when the text-only retry also fails", async () => {
     const png = encodePng(16, 16, Buffer.alloc(16 * 16 * 4, 200));
     const bytes = new ArrayBuffer(png.length);
@@ -383,20 +451,6 @@ describe("recipe scan photos and multi-recipe pages", () => {
   });
 
   it("warns when a save keeps only the first of several recipes and links the first photo", async () => {
-    const uploadPhoto = async (name: string) => {
-      const png = encodePng(16, 16, Buffer.alloc(16 * 16 * 4, 200));
-      const bytes = new ArrayBuffer(png.length);
-      new Uint8Array(bytes).set(png);
-      const form = new FormData();
-      form.append("image", new Blob([bytes], { type: "image/png" }), name);
-      const upload = await fetch(`${base}/api/houses/${houseId}/recipes/upload`, {
-        method: "POST",
-        body: form,
-        headers: { cookie },
-      });
-      assert.equal(upload.status, 201);
-      return (await upload.json()).path as string;
-    };
     const first = await uploadPhoto("page-one.png");
     const second = await uploadPhoto("page-two.png");
 
@@ -423,5 +477,23 @@ describe("recipe scan photos and multi-recipe pages", () => {
       method: "PATCH",
       body: { settings: { ai: { model: "mock-model" } } },
     });
+  });
+
+  it("links the first photo actually sent when a request carries both image and images", async () => {
+    // `images` wins over `image` in the loader, so that is the only photo the
+    // model saw. The saved link must not point at the photo that was ignored.
+    const sent = await uploadPhoto("page-sent.png");
+    const skipped = await uploadPhoto("page-not-sent.png");
+
+    aiRequests.length = 0;
+    const res = await request(`/api/houses/${houseId}/recipes/scan`, {
+      method: "POST",
+      body: { text: "Tsoureki\n17 eggs", image: skipped, images: [sent] },
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.data.provider, "ai");
+    const content = aiRequests[0].body.messages[1].content;
+    assert.equal(content.filter((part: any) => part.type === "image_url").length, 1);
+    assert.equal(res.data.drafts[0].sourceImage, sent, "the link must name the sent photo, not body.image");
   });
 });

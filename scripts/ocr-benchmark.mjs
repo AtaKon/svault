@@ -534,6 +534,39 @@ async function withWorker(lang, fn) {
   }
 }
 
+/**
+ * Validate the manifest before the multi-minute OCR loop starts. A typo in a
+ * later entry used to throw after the earlier pages had already been read,
+ * throwing away every result and the spend needed to produce them.
+ */
+export function parseManifest(value, baseDir) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("The manifest must be a JSON object with an images array.");
+  }
+  if (!Array.isArray(value.images) || value.images.length === 0) {
+    throw new Error("manifest.images must be a non-empty array of { path, label?, keywords?, truth? } entries.");
+  }
+  return value.images.map((entry, index) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error(`manifest.images[${index}] must be an object.`);
+    }
+    if (typeof entry.path !== "string" || !entry.path.trim()) {
+      throw new Error(`manifest.images[${index}].path must be a non-empty string.`);
+    }
+    const file = path.isAbsolute(entry.path) ? entry.path : path.join(baseDir, entry.path);
+    let isFile = false;
+    try {
+      isFile = fs.statSync(file).isFile();
+    } catch {
+      /* missing path */
+    }
+    if (!isFile) {
+      throw new Error(`manifest.images[${index}] names a photo that does not exist: ${file}`);
+    }
+    return { ...entry, file };
+  });
+}
+
 async function main() {
   const manifestFile = process.argv[2];
   if (manifestFile === "--self-check") {
@@ -554,6 +587,16 @@ async function main() {
   const manifest = JSON.parse(fs.readFileSync(manifestFile, "utf8"));
   assertBmpRoundTrip();
   const baseDir = path.dirname(path.resolve(manifestFile));
+  let images;
+  try {
+    images = parseManifest(manifest, baseDir);
+  } catch (error) {
+    console.error(
+      `Invalid manifest ${manifestFile}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    process.exitCode = 1;
+    return;
+  }
   const jsonFlag = process.argv.indexOf("--json");
   const jsonOut = jsonFlag > 0 ? process.argv[jsonFlag + 1] : null;
   const jsonPath = jsonOut ? path.resolve(jsonOut) : null;
@@ -570,8 +613,8 @@ async function main() {
   }
   const results = [];
 
-  for (const entry of manifest.images) {
-    const file = path.isAbsolute(entry.path) ? entry.path : path.join(baseDir, entry.path);
+  for (const entry of images) {
+    const file = entry.file;
     console.log(`\n### ${entry.label ?? path.basename(file)}`);
     const original = decodeImage(file);
     // Every variant reaches Tesseract, not only the cropped ones, so the whole
