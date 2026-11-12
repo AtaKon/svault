@@ -382,15 +382,31 @@ automated visits can still be used by opening the page yourself and pasting its 
 2. Photograph the card. The image is compressed in the browser and uploaded as the source image. Click
    the preview or the original scan on the recipe page to view it full-size.
 3. Tesseract OCR runs **in the browser** using assets served from `/tesseract`, with **English and
-   Greek** language data. The image and the OCR text are not sent to an AI provider unless a vision
-   model is configured.
-4. Correct the recognised text if needed and press **Digitise**.
-5. The server cleans the text:
-   - with an AI provider, it returns structured ingredients and steps and notes any inferences;
-   - without one, a local parser handles sections, quantities, fractions, ranges and timers.
-6. Review the draft, edit anything, then save.
+   Greek** language data loaded together. The language is decided by the page, not by the interface:
+   a Greek notebook is read in Greek even on an English UI. Handwriting is a known limit of Tesseract;
+   when the reading does not look like words, use **Read the photo with AI** so the configured vision
+   model reads the photo itself. When an AI provider is configured, digitising sends the photo to it;
+   without one, the photo never leaves your browser and only the OCR text is parsed locally.
+4. Notebook and diary pages work too. The page is straightened, cropped to the sheet so the desk and
+   the neighbouring page drop out, and read with the ink colour emphasised when the ink is blue, with
+   a plain grayscale reading as the fallback. The printed planner frame (hour gutter, weekday and
+   month headings, week numbers, printer codes) is removed from the recognised text before parsing.
+   Cleanup never hides anything: **Raw OCR text (before cleanup)** shows the untouched reading and
+   **Use the raw text** puts it back.
+5. Correct the recognised text if needed and press **Digitise**.
+6. The server cleans the text:
+   - with an AI provider, it reads the photo directly and returns structured ingredients and steps,
+     noting any inferences;
+   - without one, a local parser handles sections, quantities, fractions, ranges and timers, plus
+     handwritten Greek abbreviations (`γραμμ.`, `φλιτζ.`, `κουτ.`, `κ.γ.`), quantities written as
+     words (`μισό`, `δύο`), mixed fractions and ditto marks (`»` repeats the unit above).
+7. If more than one recipe is written on the page, each is listed separately. Pick one, review it and
+   save it, then pick the next. Recipes are never merged into a single ingredient list.
+8. Review the draft, edit anything, then save.
 
-The recipe records which path was used (AI or local) and keeps the OCR text for reference.
+The recipe records which path was used (AI or local) and keeps the OCR text for reference. For the
+measured accuracy of each path on real handwritten pages, see
+[`docs/recipe-ocr-evaluation.md`](recipe-ocr-evaluation.md).
 
 ### Improve with AI
 
@@ -556,6 +572,56 @@ local meal suggestions.
 
 If you use a vision model, SVault can read the recipe photo when OCR finds no text. Without one, it
 sends only the edited OCR text. A text-only local model never receives images.
+
+### Recipe reasoning
+
+Some models think before answering, and that can help or hurt a handwritten recipe scan. Under
+**Settings -> AI -> Recipe reasoning** choose:
+
+- **Use the model's default** (default) - SVault sends no reasoning setting.
+- **Off - fastest** - ask the model not to think. Use this for hybrid models such as Qwen3 that
+  otherwise spend the whole answer budget on reasoning.
+- **Low / Medium / High** - ask for less or more thinking when the endpoint supports it.
+
+The setting applies to recipe scans only; receipt scans, ideas and recipe cleanup are unchanged. It
+is sent to OpenRouter as its `reasoning` field. Another OpenAI-compatible endpoint that rejects the
+field is retried without it and the scan says so.
+
+If a model returns only hidden reasoning, or the answer is cut off at the token limit, SVault retries
+once with reasoning disabled and tells you in the scan. If that also fails, you keep the locally
+parsed draft instead of an empty recipe. The AI call log shows the finish reason, reasoning tokens and
+the retry.
+
+Model choice matters more than price. In one-photo OpenRouter tests, Gemini 3 Flash Preview
+($0.001557) and Gemini 3.8 Flash ($0.002104) read the key quantities correctly, while the cheaper
+Gemini 2.5 Flash ($0.00119) and Flash Lite ($0.0001895) misread a `2` as `9`. Qwen3.6 35B needed
+reasoning disabled, and Qwen3.7 was rate limited (HTTP 429). These are single-photo observations, not
+a benchmark: check the draft against the photo before saving.
+
+### Recipe vision models and fallback
+
+**Settings -> AI -> Recipe vision models** takes a comma-separated list of up to four model IDs. Recipe
+scans try them in order and move to the next one only when an attempt fails: a provider error, a rate
+limit, an empty answer, a truncation (even if the partial text parsed), or malformed JSON. A successful
+complete answer is never replaced by a later model just because it might look more accurate, so a scan
+costs one call unless something failed. If every model truncates, the last usable partial recipe is kept
+with a warning.
+
+Leave the field empty for the provider default. On OpenRouter that is Gemini 3 Flash Preview, then
+Qwen3.6 35B (reasoning is turned off for it automatically), then Gemini 3.8 Flash. On OpenAI, Ollama,
+LM Studio and any other endpoint the list is not applied: only your configured vision model is used,
+because the built-in IDs belong to OpenRouter. A vision model you chose yourself is always tried before
+the defaults. To turn the extra fallbacks off, enter just your one preferred model.
+
+Every attempt is counted: the scan badge and the AI call log include the cost of a failed first attempt
+as well as the model that finally answered, and the warning names each model that failed. If all models
+fail, you keep the locally parsed draft and the warning lists them. The review card shows the model
+that produced the recipe.
+
+To compare your own model IDs on your own photos, a developer can run the manual benchmark. It scores
+answers against a written ground truth (or an explicitly named reference model) and reports cost; see
+[`recipe-ocr-evaluation.md`](recipe-ocr-evaluation.md).
+
 
 ### AI call log and developer mode
 

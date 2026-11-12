@@ -137,6 +137,7 @@ Mounted at `/api/houses`.
       "baseUrl": "https://api.openai.com/v1",
       "model": "gpt-4o-mini",
       "visionModel": "",
+      "recipeVisionModels": ["google/gemini-3-flash-preview", "qwen/qwen3.6-35b-a3b"],
       "apiKey": "sk-..."
     },
     "notifications": { "lowStock": true, "expiryDays": 7 },
@@ -807,7 +808,11 @@ Scan body:
 ```
 
 Without `save`, the response contains `draft`. With `save: true`, it also contains `recipe`. The
-response always includes `provider` (`ai` or `local`) and an optional `warning`.
+response always includes `provider` (`ai` or `local`) and an optional `warning`. When AI read the page
+it also includes `aiModel` (the model that answered) and `aiModels` (every model tried, in order, up to
+four); `aiCost` covers every attempt, including a failed one. The model list comes from
+`settings.ai.recipeVisionModels`, the `OPENAI_RECIPE_VISION_MODELS` environment variable, or the
+provider default (the tested OpenRouter chain on OpenRouter, the single vision model elsewhere).
 
 Every serialized recipe also carries `nutrition`, derived at read time from the ingredients and the
 nutrition panels of matching items, with a fallback to a small built-in per-100 g reference table for

@@ -28,6 +28,52 @@ All notable changes to SVault are documented here. The format follows
   `recipes` table gains `source_url` on both SQLite and PostgreSQL. Imports follow redirects one hop
   at a time so every target is checked by the outbound guard, and a stored `sourceUrl` is validated
   the same way before it is saved.
+- **Handwritten notebook pages.** Recipe scanning handles photographs of handwritten notebook and
+  diary pages. On-device Tesseract remains the privacy-first default for printed cards, but a measured
+  evaluation on three real handwritten pages recovered **2 of 54 ingredient words**, both accidental (see
+  [`docs/recipe-ocr-evaluation.md`](docs/recipe-ocr-evaluation.md)), so the photo is now sent to the
+  configured AI model first and the recognised text is treated as a hint. The browser still
+  straightens the page, crops it to the bright paper sheet and picks between a grayscale and a blue-ink
+  reading, capped at 5.5 Mpx because larger pages abort the Tesseract worker. The local parser and the
+  AI prompt strip the printed planner frame (hour gutter, weekday and month headings, week numbers,
+  printer codes) and understand Greek abbreviations (`γραμμ.`, `φλιτζ.`, `κουτ.`, `κ.γ.`), quantities
+  written as words (`μισό`, `δύο`), mixed fractions, two ingredients on one ruled row and ditto marks
+  that repeat the unit above. Recognition always loads Greek and English together, since the page
+  language is not the interface language. Cleanup only removes planner furniture and immediately
+  repeated rows, reports what it removed, and keeps the raw reading available. A page that holds more
+  than one recipe is split into separate drafts instead of being merged. The shared helpers live in
+  `shared/notebook-scan.ts`.
+- **Recipe vision model fallback chain.** Recipe scans now try up to four models in order and move to
+  the next one only after a failure — a provider error, rate limit, empty answer, truncation or
+  malformed JSON. A successful complete answer is never replaced because another model looks more
+  accurate, so a normal scan still costs one call; if every model truncates, the last usable partial
+  recipe is kept with a warning. **Settings → AI → Recipe vision models** (or
+  `OPENAI_RECIPE_VISION_MODELS`) overrides the list; one entry opts out. On OpenRouter the default chain
+  follows the one-photo observations in [`docs/recipe-ocr-evaluation.md`](docs/recipe-ocr-evaluation.md)
+  — Gemini 3 Flash Preview, Qwen3.6 35B (reasoning automatically off) and Gemini 3.8 Flash — while
+  OpenAI, Ollama, LM Studio and every other endpoint keep their configured vision model, so OpenRouter
+  IDs are never imposed on another provider. A deliberately chosen vision model is always tried first.
+  Every attempt is visible: the scan warning names the failed models, the review card shows the winning
+  model, `aiCost` and the AI call log include all attempts (with `visionChain`/`visionIndex` metadata),
+  and the locally parsed draft survives when every model fails. The shared helpers live in
+  `shared/recipe-vision.ts`.
+- **Developer recipe-vision benchmark.** `npm run recipe-vision:benchmark -- <manifest.json>` compares
+  user-supplied model IDs on real photos with the production prompt and output budget, and scores every
+  answer against a written ground truth or an explicitly named reference model, reporting cost, tokens
+  and failures. The manifest may only reference photos by path; API keys, tokens, passwords and inline
+  image data are rejected, and the report never contains image bytes. See
+  [`docs/recipe-ocr-evaluation.md`](docs/recipe-ocr-evaluation.md).
+- **Recipe-scan reasoning control.** **Settings → AI → Recipe reasoning** chooses `auto` (default),
+  `off`, `low`, `medium` or `high` for recipe scans only; receipt scans, ideas and recipe cleanup are
+  unchanged. The value is sent to OpenRouter as its `reasoning` field, and an endpoint that rejects
+  the field is retried without it. A response that contains only hidden reasoning, or that hits the
+  token limit before writing an answer, is retried once with reasoning disabled and reported in the
+  scan warning; a truncated answer that still parses is kept with a warning. If the retry fails, the
+  locally parsed draft is kept rather than showing an empty recipe. The AI call log now records the
+  finish reason, reasoning tokens and retry notes. One-photo OpenRouter observations (not a
+  benchmark) are in [`docs/recipe-ocr-evaluation.md`](docs/recipe-ocr-evaluation.md): two Gemini 3
+  models read the key quantities correctly, the two cheaper Gemini 2.5 models misread `2` as `9`,
+  Qwen3.6 35B needed reasoning disabled and Qwen3.7 was rate limited.
 - Open Food Facts lookups now cover all four databases: Open Food Facts, Open Beauty Facts, Open Pet
   Food Facts and Open Products Facts. A universal barcode lookup reports which project owns the
   product, the shared cache is keyed by project, and product cards show a Food/Beauty/Pet food/Products

@@ -7,6 +7,7 @@ import { Icon } from "@/components/icons";
 import { ZoomableImage } from "@/components/ZoomableImage";
 import { useToast } from "@/components/toast";
 import { ocrImage } from "@/ocr";
+import { readableWordRatio } from "@shared/notebook-scan";
 import { aiCostLabel, minutesLabel, plural, qty } from "@/format";
 import type { Recipe } from "@shared/types";
 import { useI18n } from "@/i18n";
@@ -39,25 +40,37 @@ export function RecipeScanPage() {
   const [uploadedPath, setUploadedPath] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [text, setText] = useState("");
+  const [rawText, setRawText] = useState("");
+  const [ocrConfidence, setOcrConfidence] = useState<number | null>(null);
   const [ocrRunning, setOcrRunning] = useState(false);
   const [ocrProgress, setOcrProgress] = useState(0);
   const [ocrStatus, setOcrStatus] = useState("");
   const [ocrError, setOcrError] = useState<string | null>(null);
-  const [draft, setDraft] = useState<Draft | null>(null);
+  const [drafts, setDrafts] = useState<Draft[]>([]);
+  const [selected, setSelected] = useState(0);
   const [provider, setProvider] = useState<"ai" | "local" | null>(null);
+  const [aiModel, setAiModel] = useState<string | null>(null);
+  const [aiModels, setAiModels] = useState<string[]>([]);
   const [warning, setWarning] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
 
+  const draft = drafts[selected] ?? null;
+  const updateDraft = (patch: Partial<Draft>) =>
+    setDrafts((current) => current.map((entry, index) => (index === selected ? { ...entry, ...patch } : entry)));
+
   const handleFile = async (file: File | null) => {
     if (!file) return;
     setOcrError(null);
-    setDraft(null);
+    setDrafts([]);
+    setSelected(0);
     setWarning(null);
     const prepared = await prepareImage(file, { maxSize: 2200, quality: 0.9 });
     const url = URL.createObjectURL(prepared);
     setPreview(url);
     setText("");
+    setRawText("");
+    setOcrConfidence(null);
     setUploading(true);
     try {
       const form = new FormData();
@@ -80,10 +93,23 @@ export function RecipeScanPage() {
     setOcrStatus(t("Starting OCR"));
     setOcrError(null);
     try {
-      const result = await ocrImage(target, (progress, status) => {
-        setOcrProgress(progress);
-        setOcrStatus(t(status));
-      });
+      const result = await ocrImage(
+        target,
+        (progress, status) => {
+          setOcrProgress(progress);
+          setOcrStatus(t(status));
+        },
+        // No `script` hint: the page language is not the interface language.
+        // Tesseract runs with the Greek and English models together, and the
+        // photo decides which one wins.
+        {
+          mode: "recipe",
+          onRawText: (value, meta) => {
+            setRawText(value);
+            setOcrConfidence(meta.confidence);
+          },
+        },
+      );
       setText(result.trim());
       if (!result.trim()) setOcrError(t("No text was detected. Try a sharper, brighter photo or type the recipe."));
     } catch (err) {
@@ -93,19 +119,31 @@ export function RecipeScanPage() {
     }
   };
 
-  const digitize = async () => {
+  const digitize = async (preferAi = false) => {
     if (!text.trim() && !uploadedPath) {
       toast.error(t("Add a photo or paste some text first"));
       return;
     }
     setBusy(true);
     try {
-      const data = await api<{ provider: "ai" | "local"; warning: string | null; draft: Draft }>(
-        `/api/houses/${house.id}/recipes/scan`,
-        { method: "POST", body: { text, image: uploadedPath } },
-      );
-      setDraft(data.draft);
+      const data = await api<{
+        provider: "ai" | "local";
+        warning: string | null;
+        aiModel?: string | null;
+        aiModels?: string[];
+        draft?: Draft | null;
+        drafts?: Draft[];
+        count?: number;
+      }>(`/api/houses/${house.id}/recipes/scan`, {
+        method: "POST",
+        body: { text, image: uploadedPath, preferAi },
+      });
+      const list = data.drafts?.length ? data.drafts : data.draft ? [data.draft] : [];
+      setDrafts(list);
+      setSelected(0);
       setProvider(data.provider);
+      setAiModel(data.aiModel ?? null);
+      setAiModels(data.aiModels ?? []);
       setWarning(data.warning);
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (err) {
@@ -129,6 +167,13 @@ export function RecipeScanPage() {
         },
       });
       toast.success(t("Recipe digitised"));
+      // Another recipe on the same page stays selected instead of vanishing.
+      if (drafts.length > 1) {
+        setDrafts((current) => current.filter((_entry, index) => index !== selected));
+        setSelected(0);
+        toast.success(t("Saved one recipe. Pick the next one from this page to digitise it too."));
+        return;
+      }
       navigate(`/recipes/${recipe.id}`, { replace: true });
     } catch (err) {
       toast.error(err instanceof Error ? t(err.message) : t("Could not save the recipe"));
@@ -141,7 +186,10 @@ export function RecipeScanPage() {
     setPreview(null);
     setUploadedPath(null);
     setText("");
-    setDraft(null);
+    setRawText("");
+    setOcrConfidence(null);
+    setDrafts([]);
+    setSelected(0);
     setProvider(null);
     setWarning(null);
     setOcrError(null);
@@ -149,13 +197,22 @@ export function RecipeScanPage() {
     if (fileRef.current) fileRef.current.value = "";
   };
 
+  // Tesseract returns high confidence while reading the ruled lines themselves.
+  // Judge the reading by whether it contains real words, not by confidence.
+  // Real handwriting scored 38–55 % confidence in the evaluation; printed text
+  // sits well above 70 %. Confidence alone is not proof, so words are checked too.
+  const ocrLooksUnreadable =
+    Boolean(text.trim()) &&
+    (readableWordRatio(text) < 0.5 || (ocrConfidence != null && ocrConfidence < 70));
+  const rawDiffersFromText = Boolean(rawText.trim()) && rawText.trim() !== text.trim();
+
   return (
     <div className="space-y-4">
       <PageHeader
         back={() => navigate("/recipes")}
         eyebrow={t("Digitise a recipe")}
         title={t("Scan grandma's recipe")}
-        subtitle={t("Photograph the card or notebook page. We read the text, fix OCR mistakes and rebuild the steps.")}
+        subtitle={t("Photograph the card or notebook page. The configured vision model reads the photo; OCR runs on this device as the private fallback.")}
         actions={
           preview ? (
             <Button variant="ghost" size="sm" icon="refresh" onClick={reset}>
@@ -227,6 +284,15 @@ export function RecipeScanPage() {
                 <div className="mt-2 rounded-xl bg-warn-soft px-3 py-2 text-[11px] text-warn">
                   {t(ocrError)} {' '}{t(" You can still type the text below, or let AI read the photo. ")}</div>
               )}
+              {(ocrLooksUnreadable || (!text.trim() && uploadedPath)) && (
+                <div className="mt-2 rounded-xl bg-warn-soft px-3 py-2 text-[11px] leading-relaxed text-warn">
+                  <p>{t("This looks handwritten, and on-device OCR cannot read handwriting reliably. A vision model reads the photo itself — the recognised text below is only a hint.")}</p>
+                  {uploadedPath ? (
+                    <Button type="button" size="sm" icon="sparkles" className="mt-2" loading={busy} onClick={() => void digitize(true)}>
+                      {t("Read the photo with AI ")}</Button>
+                  ) : null}
+                </div>
+              )}
               <Textarea
                 rows={9}
                 value={text}
@@ -234,17 +300,60 @@ export function RecipeScanPage() {
                 placeholder={t("The recipe text appears here. Fix any OCR mistakes before digitising — AI does the rest.")}
                 className="mt-2 text-[13px]"
               />
+              {rawDiffersFromText && (
+                <details className="mt-2 rounded-xl border border-line bg-raised px-3 py-2 text-[11px]">
+                  <summary className="cursor-pointer font-medium text-ink">{t("Raw OCR text (before cleanup)")}</summary>
+                  <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-muted">{rawText}</pre>
+                  <p className="mt-2 text-muted">{t("Cleanup only removes the printed diary frame and repeated rows. Nothing is deleted from the photo.")}</p>
+                  <Button type="button" size="sm" variant="secondary" className="mt-2" onClick={() => setText(rawText)}>
+                    {t("Use the raw text ")}</Button>
+                </details>
+              )}
               <div className="mt-2 flex flex-wrap gap-2">
                 <Button type="button" size="sm" variant="secondary" icon="refresh" onClick={() => void runOcr()} disabled={ocrRunning}>
                   {t("Re-run OCR ")}</Button>
                 <Button type="button" size="sm" icon="sparkles" loading={busy} onClick={() => void digitize()}>
                   {t("Digitise recipe ")}</Button>
+                {uploadedPath && (
+                  <Button type="button" size="sm" variant="secondary" icon="sparkles" loading={busy} onClick={() => void digitize(true)}>
+                    {t("Read the photo with AI ")}</Button>
+                )}
               </div>
               {!text.trim() && uploadedPath && (
                 <p className="mt-2 text-[11px] text-muted">
-                  {t("No OCR text? You can still digitise — if a vision-capable AI model is configured, it will read the photo itself. ")}</p>
+                  {t("No OCR text? You can still digitise — the photo is sent to the configured AI model, which reads it directly. ")}</p>
               )}
             </Card>
+
+            {!draft && warning && (
+              <Card className="p-4">
+                <p className="rounded-xl bg-raised px-3 py-2 text-[11px] leading-relaxed text-muted">{t(warning)}</p>
+              </Card>
+            )}
+
+            {drafts.length > 1 && (
+              <Card className="p-4">
+                <h2 className="font-display text-lg">{t("This page holds more than one recipe")}</h2>
+                <p className="mt-1 text-[11px] leading-relaxed text-muted">
+                  {t("Each recipe is kept separate — nothing is merged into one list. Pick one to review and save, then come back for the next.")}
+                </p>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {drafts.map((entry, index) => (
+                    <button
+                      key={`${entry.title}-${index}`}
+                      type="button"
+                      onClick={() => setSelected(index)}
+                      className={cn(
+                        "rounded-full border px-3 py-1.5 text-[11px] font-medium",
+                        index === selected ? "border-brand bg-brand-soft text-brand" : "border-line bg-surface text-muted hover:text-ink",
+                      )}
+                    >
+                      {index + 1}. {entry.title}
+                    </button>
+                  ))}
+                </div>
+              </Card>
+            )}
 
             {draft && (
               <Card className="p-4">
@@ -252,15 +361,19 @@ export function RecipeScanPage() {
                   <h2 className="font-display text-lg">{t("Ready to save")}</h2>
                   <div className="flex items-center gap-1.5">
                     <Badge tone={provider === "ai" ? "brand" : "neutral"}>{provider === "ai" ? t("AI cleaned") : t("local parse")}</Badge>
+                    {provider === "ai" && aiModel && <Badge tone="outline">{aiModel}</Badge>}
                     {draft.aiCost != null && <Badge tone="outline">{aiCostLabel(draft.aiCost)}</Badge>}
                   </div>
                 </div>
                 {warning && (
                   <p className="mt-2 rounded-xl bg-raised px-3 py-2 text-[11px] leading-relaxed text-muted">{t(warning)}</p>
                 )}
+                {provider === "ai" && aiModels.length > 1 && (
+                  <p className="mt-1 text-[10px] text-muted">{aiModels.join(" → ")}</p>
+                )}
                 <div className="mt-3 space-y-3">
                   <Field label={t("Title")} required>
-                    <Input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} maxLength={160} />
+                    <Input value={draft.title} onChange={(event) => updateDraft({ title: event.target.value })} maxLength={160} />
                   </Field>
                   <div className="flex flex-wrap gap-1.5">
                     {draft.servings ? <Badge tone="outline">{plural(draft.servings, "serving")}</Badge> : null}
@@ -326,7 +439,8 @@ export function RecipeScanPage() {
           {t("OCR runs in your browser. Clean-up uses the AI provider configured under")}{" "}
           <button onClick={() => navigate("/settings?tab=ai")} className="font-medium text-brand hover:underline">
             {t("Settings → AI ")}</button>
-          {t(". Without a key, SVault still splits ingredients and steps locally — no data leaves the house. ")}</div>
+          {t(". Without a key, SVault still splits ingredients and steps locally — no data leaves the house. ")}
+          {t("Handwriting is only read reliably by a vision model; printed cards work on-device.")}</div>
       </Card>
     </div>
   );

@@ -1,19 +1,19 @@
 import { Router } from "express";
 import { z } from "zod";
-import { AI_ENV } from "../config.js";
 import { all, get, newId, now, parseJson, run, tx } from "../db.js";
 import { memberRole, requireAuth, roleAtLeast } from "../auth.js";
 import { ApiError, handler, parseBody, requireHouse } from "../http.js";
 import { recipeMatch, serializeRecipe, stockQuantity } from "../serialize.js";
-import { aiCleanRecipe, aiCompleteRecipe, fileToDataUrl, resolveAi } from "../ai.js";
+import { aiCleanRecipe, aiCompleteRecipe, aiReadRecipes, fileToDataUrl, resolveAi } from "../ai.js";
 import { normaliseNutrition, recipeNutrition, type NutritionSourceItem } from "../services/nutrition.js";
-import { heuristicRecipe, normaliseRecipeDraft, type ParsedRecipe } from "../services/recipe-local.js";
+import { heuristicRecipes, normaliseRecipeDraft, type ParsedRecipe } from "../services/recipe-local.js";
 import { RecipeImportError, importRecipeFromUrl, normaliseRecipeUrl } from "../services/recipe-import.js";
 import { OutboundBlockedError, assertOutboundUrl } from "../lib/outbound.js";
 import { recipePortion } from "../../shared/recipe-grams.js";
 import { removeUnreferencedUploads } from "../services/upload-cleanup.js";
 import { uploader, uploadPath } from "../upload.js";
 import type { OffProduct, Role, Recipe } from "../../shared/types.js";
+import { readableWordRatio } from "../../shared/notebook-scan.js";
 
 export const recipeRoutes = Router();
 export const singleRecipeRoutes = Router();
@@ -346,6 +346,33 @@ recipeRoutes.post(
   }),
 );
 
+async function loadRecipeImages(paths: string[]): Promise<{ images: string[]; skipped: number }> {
+  const images: string[] = [];
+  let skipped = 0;
+  for (const image of paths.slice(0, 6)) {
+    const dataUrl = await localImageToDataUrl(image);
+    if (dataUrl) images.push(dataUrl);
+    else skipped++;
+  }
+  return { images, skipped };
+}
+
+/** A provider that cannot accept image parts usually says so in the 4xx body. */
+function isImageInputError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /image|vision|multimodal|content[\s_-]*type|unsupported/i.test(message);
+}
+
+/** Notes an AI helper attached to an error, e.g. why a retry happened. */
+function notesFrom(error: unknown): string[] {
+  const notes = (error as { details?: { notes?: unknown } } | null)?.details?.notes;
+  return Array.isArray(notes) ? notes.filter((note): note is string => typeof note === "string") : [];
+}
+
+function roundMicro(value: number): number {
+  return Math.round(value * 1e6) / 1e6;
+}
+
 recipeRoutes.post(
   "/:houseId/recipes/scan",
   handler(async (req, res) => {
@@ -354,64 +381,154 @@ recipeRoutes.post(
       z.object({
         text: z.string().max(30000).optional(),
         image: z.string().max(300).optional(),
+        images: z.array(z.string().max(300)).max(6).optional(),
         title: z.string().max(120).optional(),
         save: z.boolean().optional(),
+        /** Ask for an AI read even when local parsing already produced text. */
+        preferAi: z.boolean().optional(),
       }),
       req.body,
     );
     const rawText = (body.text ?? "").trim();
-    if (!rawText && !body.image) throw new ApiError(400, "Provide recipe text or a scan image");
+    const visionPaths = body.images?.length ? body.images : body.image ? [body.image] : [];
+    if (!rawText && !visionPaths.length) throw new ApiError(400, "Provide recipe text or a scan image");
 
     const house = (await get<any>("SELECT * FROM houses WHERE id = ?", [houseId]))!;
     const settings = parseJson<Record<string, any>>(house.settings, {});
     const cfg = resolveAi(settings);
-    // Only send the photo when a vision model is explicitly configured. With a
-    // text-only local model we rely on the OCR text instead.
-    const hasVisionModel = Boolean(settings?.ai?.visionModel || AI_ENV.visionModel);
-    let draft = heuristicRecipe(rawText, body.title || "Scanned recipe");
+    // Do not gate the photo on a separately configured vision model. `resolveAi`
+    // already falls back to the main model, and most models people configure
+    // accept images; a text-only model is detected by retrying without them.
+    const canUseAi = cfg.enabled && Boolean(rawText || visionPaths.length);
+    const vision = visionPaths.length ? await loadRecipeImages(visionPaths) : { images: [], skipped: 0 };
+    const fallbackTitle = body.title || "Scanned recipe";
+    const warnings: string[] = [];
+
+    let drafts = heuristicRecipes(rawText, fallbackTitle);
     let provider: "ai" | "local" = "local";
     let aiCost: number | null = null;
-    let warning: string | null = null;
+    let aiModel: string | null = null;
+    let aiModels: string[] = [];
 
-    if (cfg.enabled && (rawText || (body.image && hasVisionModel))) {
+    const readWithAi = async (images: string[], reason: string) => {
+      const result = await aiReadRecipes(cfg, rawText, images, {
+        operation: "recipe.scan",
+        houseId,
+        userId: req.user!.id,
+        metadata: {
+          hasImage: images.length > 0,
+          imageCount: images.length,
+          skippedImages: vision.skipped,
+          ocrChars: rawText.length,
+          reason,
+          localRecipeCount: drafts.length,
+          recipeReasoning: cfg.recipeReasoning,
+          visionChain: cfg.recipeVisionCandidates.map((candidate) => candidate.model),
+        },
+      }, reason === "text-only-retry" ? { models: cfg.recipeVisionCandidates.slice(0, 1) } : {});
+      aiCost = result.usage.cost == null ? aiCost : roundMicro((aiCost ?? 0) + result.usage.cost);
+      aiModel = result.model ?? null;
+      aiModels = result.models ?? [];
+      if (result.notes?.length) warnings.push(...result.notes);
+      return result.data.recipes
+        .map((entry, index) => normaliseRecipeDraft(entry, index === 0 ? fallbackTitle : "Recipe"))
+        .filter((recipe) => recipe.ingredients.length > 0 || recipe.steps.length > 0);
+    };
+
+    /** Keep the cost of a failed chain visible instead of reporting none. */
+    const spentOnFailure = (error: unknown) => {
+      const usage = (error as { details?: { usage?: { cost?: number | null } }; usage?: { cost?: number | null } } | null);
+      const cost = usage?.details?.usage?.cost ?? usage?.usage?.cost ?? null;
+      if (cost != null) aiCost = roundMicro((aiCost ?? 0) + cost);
+    };
+
+    if (canUseAi) {
       try {
-        const images =
-          body.image && hasVisionModel
-            ? [await localImageToDataUrl(body.image)].filter((value): value is string => !!value)
-            : [];
-        const aiDraft = await aiCleanRecipe(cfg, rawText, images, {
-          operation: "recipe.scan",
-          houseId,
-          userId: req.user!.id,
-          metadata: {
-            hasImage: Boolean(body.image),
-            hasVisionModel,
-            ocrChars: rawText.length,
-            save: Boolean(body.save),
-          },
-        });
-        draft = normaliseRecipeDraft(aiDraft.data, body.title || draft.title || "Scanned recipe");
-        aiCost = aiDraft.usage.cost;
-        provider = "ai";
+        const aiDrafts = await readWithAi(vision.images, body.preferAi ? "requested" : "image-first");
+        if (aiDrafts.length) {
+          drafts = aiDrafts;
+          provider = "ai";
+          if (vision.skipped) {
+            warnings.push(
+              vision.skipped === visionPaths.length
+                ? "The photo could not be sent to the vision model (missing or larger than 8 MB); only the recognised text was used."
+                : `${vision.skipped} of ${visionPaths.length} photos could not be sent to the vision model; the rest were used.`,
+            );
+          }
+        } else {
+          warnings.push("AI read the page but found no recipe, so the locally parsed version was kept.");
+        }
       } catch (err) {
-        warning = `AI cleanup failed, kept the locally parsed version. ${err instanceof Error ? err.message : ""}`.trim();
+        spentOnFailure(err);
+        if (vision.images.length && isImageInputError(err)) {
+          try {
+            const aiDrafts = await readWithAi([], "text-only-retry");
+            if (aiDrafts.length) {
+              drafts = aiDrafts;
+              provider = "ai";
+            }
+            warnings.push(
+              "The configured AI model did not accept the photo, so only the recognised text was cleaned up. " +
+                "Handwriting is only read reliably by a vision model — pick one under Settings → AI.",
+            );
+          } catch (retryError) {
+            spentOnFailure(retryError);
+            warnings.push(
+              `AI cleanup failed, kept the locally parsed version. ${retryError instanceof Error ? retryError.message : ""}`.trim(),
+            );
+            warnings.push(...notesFrom(retryError));
+          }
+        } else {
+          warnings.push(`AI cleanup failed, kept the locally parsed version. ${err instanceof Error ? err.message : ""}`.trim());
+          warnings.push(...notesFrom(err));
+        }
       }
-    } else if (cfg.enabled) {
-      warning =
-        "No text was recognised in the scan. Add a vision-capable model in Settings → AI to let AI read the photo, or correct the text before digitising.";
     } else {
-      warning = "No AI provider configured — parsed locally. Add a key in Settings → AI to clean up scans automatically.";
+      warnings.push(
+        "No AI provider configured — parsed locally. On-device OCR does not read handwriting, so check the text against the photo.",
+      );
     }
 
+    if (!rawText && provider === "local") {
+      warnings.push(
+        "No text was recognised in the scan. Add a vision-capable model in Settings → AI to let AI read the photo, or type the text before digitising.",
+      );
+    }
+
+    // This is only a rough character-shape heuristic, not a dictionary or a
+    // reliable measure of recognition. Warn without discarding the user's text.
+    const unreadableReading =
+      provider === "local" && Boolean(rawText) && readableWordRatio(rawText) < 0.35;
+    if (unreadableReading) {
+      warnings.push(
+        "The on-device OCR reading may be unreliable. Check it against the photo, use a vision model, or type the text.",
+      );
+    }
+
+    const warning = warnings.length ? warnings.join(" ") : null;
+    const draftInputs = drafts.map((draft) =>
+      draftToInput(draft, {
+        source: "scan",
+        sourceImage: body.image ?? null,
+        ocrText: rawText,
+        aiCost,
+      }),
+    );
+
     if (body.save) {
-      const id = await saveRecipe(houseId, req.user!.id, draftToInput(draft, { source: "scan", sourceImage: body.image ?? null, ocrText: rawText, aiCost }));
+      if (!draftInputs.length) throw new ApiError(400, "No recipe could be read from this page");
+      const id = await saveRecipe(houseId, req.user!.id, draftInputs[0]);
       const row = (await recipeRow(id))!;
       const serialized = serializeRecipe(row, await ingredientsFor(id));
       res.status(201).json({
         provider,
         warning,
         aiCost,
+        aiModel,
+        aiModels,
         saved: true,
+        aiAvailable: canUseAi,
+        count: draftInputs.length,
         recipe: decorateRecipe(serialized, await stockMaps(houseId), await nutritionItems(houseId)),
       });
       return;
@@ -421,8 +538,14 @@ recipeRoutes.post(
       provider,
       warning,
       aiCost,
+      aiModel,
+      aiModels,
       saved: false,
-      draft: draftToInput(draft, { source: "scan", sourceImage: body.image ?? null, ocrText: rawText, aiCost }),
+      aiAvailable: canUseAi,
+      count: draftInputs.length,
+      drafts: draftInputs,
+      // Older clients read `draft`; the first section is the safest default.
+      draft: draftInputs[0] ?? null,
     });
   }),
 );

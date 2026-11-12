@@ -17,6 +17,7 @@ import {
   type ChannelMessage,
 } from "../services/channels.js";
 import { chat, resolveAi } from "../ai.js";
+import { parseRecipeVisionModels } from "../../shared/recipe-vision.js";
 import type { NotificationChannel, Role } from "../../shared/types.js";
 
 export const houseRoutes = Router();
@@ -49,6 +50,11 @@ function mergeSettings(current: Record<string, any>, incoming: Record<string, an
       else delete mergedAi.apiKey;
     }
     if (incoming.ai.apiKey === "" || incoming.ai.apiKey === null) delete mergedAi.apiKey;
+    if (incoming.ai.recipeVisionModels !== undefined) {
+      const parsed = parseRecipeVisionModels(incoming.ai.recipeVisionModels);
+      if (parsed && parsed.length) mergedAi.recipeVisionModels = parsed;
+      else delete mergedAi.recipeVisionModels;
+    }
     next.ai = mergedAi;
   }
   if (incoming.notifications && typeof incoming.notifications === "object") {
@@ -186,6 +192,7 @@ houseRoutes.post(
       ok: true,
       model: cfg.model,
       visionModel: cfg.visionModel,
+      visionModels: cfg.recipeVisionCandidates.map((candidate) => candidate.model),
       reply: reply.text.trim().slice(0, 120),
       cost: reply.usage.cost,
     });

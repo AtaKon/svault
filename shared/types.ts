@@ -67,6 +67,18 @@ export interface HouseSettings {
     model?: string;
     apiKey?: string;
     visionModel?: string;
+    /**
+     * Ordered recipe-scan models, at most four. Unset applies the provider
+     * default (the tested OpenRouter chain on OpenRouter, the single vision
+     * model elsewhere). List one model to opt out of extra fallbacks.
+     */
+    recipeVisionModels?: string[];
+    /**
+     * Recipe-scan reasoning control: `auto` (model default), `off`, `low`,
+     * `medium` or `high`. Sent to OpenRouter as its `reasoning` field; other
+     * endpoints are retried without it if they reject the field.
+     */
+    recipeReasoning?: "auto" | "off" | "low" | "medium" | "high";
     /** USD per 1M prompt tokens, used to estimate the cost of an AI call. */
     inputPrice?: number | null;
     /** USD per 1M completion tokens, used to estimate the cost of an AI call. */

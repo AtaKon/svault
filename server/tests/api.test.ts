@@ -328,6 +328,103 @@ before(async () => {
         }
         aiRequests.push({ headers: req.headers, body });
         const system = String(body?.messages?.[0]?.content ?? "");
+        const userContent = body?.messages?.[1]?.content;
+        // Reasoning models can spend the whole output budget thinking and
+        // return no content at all. The first attempt asks for reasoning; the
+        // recipe route must retry with it disabled.
+        if (body?.model === "reasoning-only-model" && body?.reasoning?.enabled !== false) {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(
+            JSON.stringify({
+              choices: [{ message: { content: null, reasoning: "Let me think about the handwriting…" }, finish_reason: "length" }],
+              usage: {
+                prompt_tokens: 1000,
+                completion_tokens: 8192,
+                total_tokens: 9192,
+                completion_tokens_details: { reasoning_tokens: 8192 },
+                cost: 0.0018,
+              },
+            }),
+          );
+          return;
+        }
+        // An answer cut off at the token limit with no usable text.
+        if (body?.model === "truncated-model") {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(
+            JSON.stringify({
+              choices: [{ message: { content: "" }, finish_reason: "length" }],
+              usage: {
+                prompt_tokens: 1000,
+                completion_tokens: 8192,
+                total_tokens: 9192,
+                completion_tokens_details: { reasoning_tokens: 8100 },
+                cost: 0.0018,
+              },
+            }),
+          );
+          return;
+        }
+        // A plain OpenAI-compatible endpoint that does not know OpenRouter's
+        // `reasoning` field.
+        if (body?.model === "reject-reasoning-model" && body?.reasoning) {
+          res.writeHead(400, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: { message: "Unsupported parameter: reasoning" } }));
+          return;
+        }
+        // A text-only model rejects image parts the way OpenAI-compatible
+        // providers do, so the recipe route's retry can be exercised.
+        if (body?.model === "text-only-model" && Array.isArray(userContent)) {
+          res.writeHead(400, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: { message: "This model does not support image input" } }));
+          return;
+        }
+        // Models used by the recipe fallback-chain tests: a provider failure,
+        // an empty answer, and a rate limit must each move to the next model.
+        if (body?.model === "chain-500-model") {
+          res.writeHead(500, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: { message: "Mock upstream exploded" } }));
+          return;
+        }
+        if (body?.model === "chain-429-model") {
+          res.writeHead(429, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: { message: "Mock rate limit" } }));
+          return;
+        }
+        if (body?.model === "chain-empty-model") {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(
+            JSON.stringify({
+              choices: [{ message: { content: "" }, finish_reason: "stop" }],
+              usage: { prompt_tokens: 900, completion_tokens: 0, total_tokens: 900, cost: 0.0009 },
+            }),
+          );
+          return;
+        }
+        // A usable answer that still hit the output limit: JSON parses, but the
+        // provider says it was cut off. This is an objective truncation, so the
+        // chain may try another model and keep this one as a last resort.
+        if (body?.model === "truncated-json-model") {
+          const partial = {
+            recipes: [
+              {
+                title: "AI pancakes",
+                description: "Cut off at the token limit",
+                ingredients: [{ name: "Flour", quantity: 200, unit: "g", optional: false }],
+                steps: [{ text: "Mix everything." }],
+                notes: null,
+              },
+            ],
+          };
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(
+            JSON.stringify({
+              choices: [{ message: { content: JSON.stringify(partial) }, finish_reason: "length" }],
+              usage: { prompt_tokens: 1000, completion_tokens: 8192, total_tokens: 9192, cost: 0.00125 },
+            }),
+          );
+          return;
+        }
         let payload: any;
         if (system.includes("receipt")) {
           payload = {
@@ -342,8 +439,8 @@ before(async () => {
             notes: "Mock receipt",
           };
         } else if (system.includes("archivist")) {
-          payload = {
-            title: "AI pancakes",
+          const single = {
+            title: body?.model === "chain-ok-model" ? "Fallback pancakes" : "AI pancakes",
             description: "Cleaned by the mock model",
             servings: 3,
             prepMinutes: 5,
@@ -353,6 +450,21 @@ before(async () => {
             steps: [{ text: "Mix everything." }, { text: "Fry until golden.", timerSeconds: 120 }],
             notes: "Mock cleanup",
           };
+          payload =
+            body?.model === "multi-model"
+              ? {
+                  recipes: [
+                    single,
+                    {
+                      ...single,
+                      title: "AI biscuits",
+                      ingredients: [{ name: "Coconut", quantity: 100, unit: "g", optional: false }],
+                      steps: [{ text: "Shape and bake." }],
+                      notes: "Second recipe on the same page",
+                    },
+                  ],
+                }
+              : single;
         } else if (system.includes("home cook")) {
           payload = {
             summary: "Mock ideas from stock",
@@ -5082,6 +5194,18 @@ describe("recipes", () => {
     assert.equal(res.data.provider, "local");
     assert.ok(res.data.warning.includes("No AI provider"));
     assert.equal(res.data.draft.ingredients.length, 2);
+    assert.equal(res.data.count, 1);
+    assert.equal(res.data.drafts.length, 1);
+  });
+
+  it("warns about suspicious OCR without discarding entered text", async () => {
+    const res = await request(`/api/houses/${houseId}/recipes/scan`, {
+      method: "POST",
+      body: { text: "ΞΞΞ\nΕΞ\nΞΞΞΕΞ\n---Ξε\n====" },
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.data.provider, "local");
+    assert.match(res.data.warning, /may be unreliable/);
   });
 
   it("saves recipes and matches stock", async () => {
@@ -5386,7 +5510,7 @@ describe("ai integration", () => {
     });
   });
 
-  it("only sends scan images when a vision model is configured", async () => {
+  it("sends the photo to the configured model even without a separate vision model", async () => {
     const png = encodePng(16, 16, Buffer.alloc(16 * 16 * 4, 200));
     const bytes = new ArrayBuffer(png.length);
     new Uint8Array(bytes).set(png);
@@ -5402,38 +5526,350 @@ describe("ai integration", () => {
     assert.ok(imagePath.startsWith("/uploads/recipes/"));
 
     aiRequests.length = 0;
-    const withoutVision = await request(`/api/houses/${houseId}/recipes/scan`, {
+    const scan = await request(`/api/houses/${houseId}/recipes/scan`, {
       method: "POST",
       body: { text: "flour eggs milk", image: imagePath },
     });
-    assert.equal(withoutVision.status, 200);
-    assert.equal(withoutVision.data.provider, "ai");
-    assert.equal(typeof aiRequests[0].body.messages[1].content, "string");
+    assert.equal(scan.status, 200);
+    assert.equal(scan.data.provider, "ai");
+    assert.equal(aiRequests[0].body.max_tokens, 8192);
+    // The default leaves reasoning to the model; no provider-specific field.
+    assert.equal(aiRequests[0].body.reasoning, undefined);
+    const content = aiRequests[0].body.messages[1].content;
+    assert.ok(Array.isArray(content), "the photo must reach the model by default");
+    assert.ok(content.some((part: any) => part.type === "image_url"));
+    assert.equal(scan.data.aiAvailable, true);
+  });
 
+  it("sends the recipe reasoning setting and records reasoning tokens", async () => {
     await request(`/api/houses/${houseId}`, {
       method: "PATCH",
-      body: { settings: { ai: { visionModel: "mock-vision" } } },
+      body: { settings: { ai: { model: "mock-model", recipeReasoning: "low" } } },
     });
     aiRequests.length = 0;
-    const withVision = await request(`/api/houses/${houseId}/recipes/scan`, {
+    const scan = await request(`/api/houses/${houseId}/recipes/scan`, {
       method: "POST",
-      body: { text: "flour eggs milk", image: imagePath },
+      body: { text: "Pancakes\n2 eggs" },
     });
-    assert.equal(withVision.data.provider, "ai");
-    const content = aiRequests[0].body.messages[1].content;
-    assert.ok(Array.isArray(content));
-    assert.ok(content.some((part: any) => part.type === "image_url"));
+    assert.equal(scan.status, 200);
+    assert.equal(scan.data.provider, "ai");
+    assert.deepEqual(aiRequests[0].body.reasoning, { effort: "low" });
+
+    const logs = await request(`/api/houses/${houseId}/ai/logs?scope=mine`);
+    const entry = logs.data.logs.find((log: any) => log.operation === "recipe.scan" && log.status === "ok");
+    assert.deepEqual(entry.metadata.reasoning, { effort: "low" });
+    assert.equal(entry.metadata.reasoningTokens, 0);
 
     await request(`/api/houses/${houseId}`, {
       method: "PATCH",
-      body: { settings: { ai: { visionModel: null } } },
+      body: { settings: { ai: { model: "mock-model", recipeReasoning: "auto" } } },
     });
-    const noText = await request(`/api/houses/${houseId}/recipes/scan`, {
+  });
+
+  it("retries with reasoning disabled when the model only returns reasoning", async () => {
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { model: "reasoning-only-model", recipeReasoning: "high" } } },
+    });
+    aiRequests.length = 0;
+    const scan = await request(`/api/houses/${houseId}/recipes/scan`, {
       method: "POST",
-      body: { image: imagePath },
+      body: { text: "Pancakes\n2 eggs" },
     });
-    assert.equal(noText.data.provider, "local");
-    assert.match(noText.data.warning, /vision-capable model/);
+    assert.equal(scan.status, 200);
+    assert.equal(scan.data.provider, "ai");
+    assert.match(scan.data.warning, /spent its whole output budget on reasoning/i);
+    assert.equal(aiRequests.length, 2);
+    assert.deepEqual(aiRequests[0].body.reasoning, { effort: "high" });
+    assert.deepEqual(aiRequests[1].body.reasoning, { enabled: false });
+
+    // The failed first call is still in the log, with the reasoning token count.
+    const logs = await request(`/api/houses/${houseId}/ai/logs?scope=mine`);
+    const failed = logs.data.logs.find((log: any) => log.status === "error" && log.operation === "recipe.scan");
+    assert.equal(failed.metadata.reasoningTokens, 8192);
+    assert.match(failed.error, /reasoning/i);
+
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { model: "mock-model", recipeReasoning: "auto" } } },
+    });
+  });
+
+  it("keeps the local parse when a retried answer is still truncated", async () => {
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { model: "truncated-model", recipeReasoning: "high" } } },
+    });
+    aiRequests.length = 0;
+    const scan = await request(`/api/houses/${houseId}/recipes/scan`, {
+      method: "POST",
+      body: { text: "Pancakes\n2 eggs\n1 cup flour" },
+    });
+    assert.equal(scan.status, 200);
+    assert.equal(scan.data.provider, "local");
+    assert.match(scan.data.warning, /token limit/i);
+    assert.match(scan.data.warning, /retried with reasoning disabled/i);
+    assert.equal(aiRequests.length, 2);
+    assert.deepEqual(aiRequests[1].body.reasoning, { enabled: false });
+    assert.ok(scan.data.draft.ingredients.length > 0, "the local draft must survive");
+
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { model: "mock-model", recipeReasoning: "auto" } } },
+    });
+  });
+
+  it("drops the reasoning field when an endpoint rejects it", async () => {
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { model: "reject-reasoning-model", recipeReasoning: "medium" } } },
+    });
+    aiRequests.length = 0;
+    const scan = await request(`/api/houses/${houseId}/recipes/scan`, {
+      method: "POST",
+      body: { text: "Pancakes\n2 eggs" },
+    });
+    assert.equal(scan.status, 200);
+    assert.equal(scan.data.provider, "ai");
+    assert.match(scan.data.warning, /rejected the reasoning setting/i);
+    assert.equal(aiRequests.length, 2);
+    assert.deepEqual(aiRequests[0].body.reasoning, { effort: "medium" });
+    assert.equal(aiRequests[1].body.reasoning, undefined);
+
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { model: "mock-model", recipeReasoning: "auto" } } },
+    });
+  });
+
+  it("falls back to the next recipe model only after a failure", async () => {
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: {
+        settings: {
+          ai: {
+            model: "mock-model",
+            recipeVisionModels: ["chain-500-model", "chain-empty-model", "chain-ok-model"],
+          },
+        },
+      },
+    });
+    aiRequests.length = 0;
+    const scan = await request(`/api/houses/${houseId}/recipes/scan`, {
+      method: "POST",
+      body: { text: "Pancakes\n2 eggs" },
+    });
+    assert.equal(scan.status, 200);
+    assert.equal(scan.data.provider, "ai");
+    assert.equal(scan.data.draft.title, "Fallback pancakes");
+    assert.deepEqual(scan.data.aiModels, ["chain-500-model", "chain-empty-model", "chain-ok-model"]);
+    assert.equal(scan.data.aiModel, "chain-ok-model");
+    assert.equal(aiRequests.length, 3);
+    assert.deepEqual(
+      aiRequests.map((entry) => entry.body.model),
+      ["chain-500-model", "chain-empty-model", "chain-ok-model"],
+    );
+    assert.match(scan.data.warning, /chain-500-model did not return a usable recipe/i);
+    assert.match(scan.data.warning, /chain-empty-model did not return a usable recipe/i);
+    // The successful attempt costs 0.00125 and the empty one 0.0009; the
+    // provider failure is free but must not hide the known spend.
+    assert.equal(scan.data.aiCost, 0.00215);
+
+    const logs = await request(`/api/houses/${houseId}/ai/logs?scope=mine`);
+    const successful = logs.data.logs.find((log: any) => log.status === "ok" && log.model === "chain-ok-model");
+    assert.deepEqual(successful.metadata.visionChain, ["chain-500-model", "chain-empty-model", "chain-ok-model"]);
+    assert.equal(successful.metadata.visionIndex, 2);
+
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { model: "mock-model", recipeVisionModels: [] } } },
+    });
+  });
+
+  it("falls back to the next model when a usable answer is truncated", async () => {
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: {
+        settings: { ai: { model: "mock-model", recipeVisionModels: ["truncated-json-model", "chain-ok-model"] } },
+      },
+    });
+    aiRequests.length = 0;
+    const scan = await request(`/api/houses/${houseId}/recipes/scan`, {
+      method: "POST",
+      body: { text: "Pancakes\n2 eggs\n1 cup flour" },
+    });
+    assert.equal(scan.status, 200);
+    assert.equal(scan.data.provider, "ai");
+    assert.equal(scan.data.draft.title, "Fallback pancakes", "the complete answer wins over the truncated one");
+    assert.match(scan.data.warning, /hit the output token limit/i);
+    assert.match(scan.data.warning, /next model was tried/i);
+    assert.equal(scan.data.aiCost, 0.0025, "both the truncated and the complete call are billed");
+    assert.deepEqual(scan.data.aiModels, ["truncated-json-model", "chain-ok-model"]);
+
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { model: "mock-model", recipeVisionModels: [] } } },
+    });
+  });
+
+  it("keeps a usable truncated recipe when no later model can improve it", async () => {
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { model: "mock-model", recipeVisionModels: ["truncated-json-model"] } } },
+    });
+    aiRequests.length = 0;
+    const scan = await request(`/api/houses/${houseId}/recipes/scan`, {
+      method: "POST",
+      body: { text: "Pancakes\n2 eggs\n1 cup flour" },
+    });
+    assert.equal(scan.status, 200);
+    assert.equal(scan.data.provider, "ai", "the partial answer is better than the local draft");
+    assert.equal(scan.data.draft.title, "AI pancakes");
+    assert.match(scan.data.warning, /may be incomplete/i);
+    assert.equal(scan.data.aiCost, 0.00125);
+    assert.deepEqual(scan.data.aiModels, ["truncated-json-model"]);
+
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { model: "mock-model", recipeVisionModels: [] } } },
+    });
+  });
+
+  it("does not replace a successful recipe with a later model", async () => {
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: {
+        settings: { ai: { model: "mock-model", recipeVisionModels: ["chain-ok-model", "mock-model"] } },
+      },
+    });
+    aiRequests.length = 0;
+    const scan = await request(`/api/houses/${houseId}/recipes/scan`, {
+      method: "POST",
+      body: { text: "Pancakes\n2 eggs" },
+    });
+    assert.equal(scan.status, 200);
+    assert.equal(scan.data.provider, "ai");
+    assert.equal(scan.data.draft.title, "Fallback pancakes");
+    assert.equal(aiRequests.length, 1, "the second model must not be billed after a success");
+    assert.deepEqual(scan.data.aiModels, ["chain-ok-model"]);
+    assert.equal(scan.data.warning, null);
+    assert.equal(scan.data.aiCost, 0.00125);
+
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { model: "mock-model", recipeVisionModels: [] } } },
+    });
+  });
+
+  it("keeps the local draft and reports every failed model when the chain is exhausted", async () => {
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: {
+        settings: { ai: { model: "mock-model", recipeVisionModels: ["chain-429-model", "truncated-model"] } },
+      },
+    });
+    aiRequests.length = 0;
+    const scan = await request(`/api/houses/${houseId}/recipes/scan`, {
+      method: "POST",
+      body: { text: "Pancakes\n2 eggs\n1 cup flour" },
+    });
+    assert.equal(scan.status, 200);
+    assert.equal(scan.data.provider, "local");
+    assert.match(scan.data.warning, /chain-429-model did not return a usable recipe/i);
+    assert.match(scan.data.warning, /truncated-model did not return a usable recipe/i);
+    // The 429 has no price, the truncated answer reported 0.0018; a partial
+    // sum is better than nothing, so the known spend is exposed.
+    assert.equal(scan.data.aiCost, 0.0018);
+    assert.ok(scan.data.draft.ingredients.length > 0, "the local draft must survive");
+    assert.deepEqual(scan.data.aiModels, []);
+
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { model: "mock-model", recipeVisionModels: [] } } },
+    });
+  });
+
+  it("defaults to the single vision model on a non-OpenRouter endpoint", async () => {
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { model: "mock-model", visionModel: "mock-vision", recipeVisionModels: [] } } },
+    });
+    aiRequests.length = 0;
+    const test = await request(`/api/houses/${houseId}/ai/test`, { method: "POST" });
+    assert.equal(test.status, 200);
+    assert.deepEqual(test.data.visionModels, ["mock-vision"]);
+
+    aiRequests.length = 0;
+    const scan = await request(`/api/houses/${houseId}/recipes/scan`, {
+      method: "POST",
+      body: { text: "Pancakes\n2 eggs" },
+    });
+    assert.equal(scan.status, 200);
+    assert.equal(aiRequests[0].body.model, "mock-vision");
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { model: "mock-model", visionModel: null } } },
+    });
+  });
+
+  it("retries without the photo when the model rejects images", async () => {
+    const png = encodePng(16, 16, Buffer.alloc(16 * 16 * 4, 200));
+    const bytes = new ArrayBuffer(png.length);
+    new Uint8Array(bytes).set(png);
+    const form = new FormData();
+    form.append("image", new Blob([bytes], { type: "image/png" }), "card.png");
+    const upload = await fetch(`${base}/api/houses/${houseId}/recipes/upload`, {
+      method: "POST",
+      body: form,
+      headers: { cookie },
+    });
+    const { path: imagePath } = await upload.json();
+
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { model: "text-only-model", visionModel: null } } },
+    });
+    aiRequests.length = 0;
+    const scan = await request(`/api/houses/${houseId}/recipes/scan`, {
+      method: "POST",
+      body: { text: "Pancakes\n2 eggs", image: imagePath },
+    });
+    assert.equal(scan.status, 200);
+    assert.equal(scan.data.provider, "ai");
+    assert.equal(scan.data.draft.title, "AI pancakes");
+    assert.match(scan.data.warning, /did not accept the photo/i);
+    assert.match(scan.data.warning, /vision model/i);
+    // First attempts carried the image; the last attempt is the text-only retry.
+    assert.ok(Array.isArray(aiRequests[0].body.messages[1].content));
+    assert.equal(typeof aiRequests[aiRequests.length - 1].body.messages[1].content, "string");
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { model: "mock-model" } } },
+    });
+  });
+
+  it("returns every recipe on a photographed page separately", async () => {
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { model: "multi-model" } } },
+    });
+    const res = await request(`/api/houses/${houseId}/recipes/scan`, {
+      method: "POST",
+      body: { text: "Tsoureki\n17 eggs" },
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.data.provider, "ai");
+    assert.equal(res.data.count, 2);
+    assert.equal(res.data.drafts.length, 2);
+    assert.equal(res.data.drafts[0].title, "AI pancakes");
+    assert.equal(res.data.drafts[1].title, "AI biscuits");
+    assert.equal(res.data.drafts[1].ingredients[0].name, "Coconut");
+    // The flat `draft` stays the first section for older clients.
+    assert.equal(res.data.draft.title, "AI pancakes");
+    await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      body: { settings: { ai: { model: "mock-model" } } },
+    });
   });
 
   it("generates ideas through the provider", async () => {

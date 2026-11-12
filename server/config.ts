@@ -112,6 +112,19 @@ export const AI_ENV = {
   apiKey: process.env.OPENAI_API_KEY ?? process.env.SVAI_API_KEY ?? "",
   model: process.env.OPENAI_MODEL ?? process.env.SVAI_MODEL ?? "gpt-4o-mini",
   visionModel: process.env.OPENAI_VISION_MODEL ?? process.env.SVAI_VISION_MODEL ?? "",
+  /**
+   * Optional ordered recipe-scan models (comma-separated, at most four). Unset
+   * means "use the provider default": the tested OpenRouter chain there, the
+   * single vision model everywhere else. An explicit list is honoured on any
+   * endpoint because it is the operator's choice.
+   */
+  recipeVisionModels: process.env.OPENAI_RECIPE_VISION_MODELS ?? process.env.SVAI_RECIPE_VISION_MODELS ?? "",
+  /**
+   * Recipe-scan reasoning control: auto (model default), off, low, medium or
+   * high. Sent to OpenRouter as its `reasoning` field; other endpoints fall
+   * back to a request without it.
+   */
+  recipeReasoning: process.env.OPENAI_RECIPE_REASONING ?? process.env.SVAI_RECIPE_REASONING ?? "auto",
   /** Prices in USD per 1M tokens, used to estimate AI cost when the provider does not report it. */
   inputPrice: optionalNumber(process.env.OPENAI_INPUT_PRICE ?? process.env.SVAI_INPUT_PRICE),
   outputPrice: optionalNumber(process.env.OPENAI_OUTPUT_PRICE ?? process.env.SVAI_OUTPUT_PRICE),
