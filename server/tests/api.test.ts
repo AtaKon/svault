@@ -754,6 +754,46 @@ describe("recipe link import", () => {
       await request(`/api/houses/${aiHouse}`, { method: "DELETE" });
     }
   });
+
+  it("warns when a long page is cut off before AI cleanup", async () => {
+    const created = await request("/api/houses", { method: "POST", body: { name: "Import long house", currency: "EUR" } });
+    assert.equal(created.status, 201);
+    const aiHouse = created.data.id;
+    try {
+      const configured = await request(`/api/houses/${aiHouse}`, {
+        method: "PATCH",
+        body: { settings: { ai: { enabled: true, baseUrl: aiBase, apiKey: "test-key", model: "mock-model" } } },
+      });
+      assert.equal(configured.status, 200);
+
+      const longCopy = "Simmer the broth gently until the vegetables are soft. ".repeat(400);
+      const pageServer = http.createServer((_req, res) => {
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        res.end(`<html><head><title>Long soup</title></head><body><h1>Soup</h1><p>${longCopy}</p></body></html>`);
+      });
+      await new Promise<void>((resolve) => pageServer.listen(0, "127.0.0.1", () => resolve()));
+      const pageAddress = pageServer.address();
+      if (!pageAddress || typeof pageAddress === "string") throw new Error("no import page address");
+      try {
+        aiRequests.length = 0;
+        const preview = await request(`/api/houses/${aiHouse}/recipes/import`, {
+          method: "POST",
+          body: { url: `http://127.0.0.1:${pageAddress.port}/long-soup` },
+        });
+        assert.equal(preview.status, 200);
+        assert.equal(preview.data.provider, "ai");
+        // The page is longer than the AI input budget. The truncation must be
+        // visible in the response instead of silently dropping the tail.
+        assert.match(String(preview.data.warning), /cut off at 12000 characters/i);
+        const prompt = String(aiRequests.at(-1)?.body.messages[1].content ?? "");
+        assert.match(prompt, /\[The text was cut off at 12000 characters\.\]/);
+      } finally {
+        await new Promise<void>((resolve, reject) => pageServer.close((error) => (error ? reject(error) : resolve())));
+      }
+    } finally {
+      await request(`/api/houses/${aiHouse}`, { method: "DELETE" });
+    }
+  });
 });
 
 describe("receipt text parsing", () => {

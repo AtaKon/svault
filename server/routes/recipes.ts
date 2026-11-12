@@ -726,7 +726,10 @@ recipeRoutes.post(
     // configured, let it structure the page copy the same way scan clean-up does.
     if (imported.provider === "html" && cfg.enabled && imported.textForAi.trim()) {
       try {
-        const aiDraft = await aiCleanRecipe(cfg, imported.textForAi.slice(0, 12000), [], {
+        // Pass the full page text: `aiCleanRecipe` applies its own 12000-character
+        // budget and reports the cut-off. Slicing here hid the truncation from
+        // the function, so a long page silently lost its tail with no warning.
+        const aiDraft = await aiCleanRecipe(cfg, imported.textForAi, [], {
           operation: "recipe.import",
           houseId,
           userId: req.user!.id,
@@ -748,15 +751,10 @@ recipeRoutes.post(
         aiCost = aiDraft.usage.cost;
         provider = "ai";
         // A cut-off answer still parsed: keep it, but tell the user it may be
-        // incomplete instead of presenting it as a finished import.
-        warning = [
-          aiDraft.truncated
-            ? "The AI answer was cut off at the output token limit, so the imported recipe may be incomplete."
-            : null,
-          ...(aiDraft.notes ?? []),
-        ]
-          .filter(Boolean)
-          .join(" ") || null;
+        // incomplete instead of presenting it as a finished import. The notes
+        // distinguish an input cut-off from an output-token cut-off; the
+        // `truncated` flag alone cannot, so use the notes as the warning.
+        warning = (aiDraft.notes ?? []).join(" ") || null;
       } catch (err) {
         warning = `${warning ?? ""} AI clean-up also failed: ${err instanceof Error ? err.message : "unknown error"}`.trim();
       }

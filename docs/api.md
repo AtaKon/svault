@@ -825,7 +825,7 @@ more than once. `truncated: true` marks a best-effort partial read:
 the response still carries the draft, but `save: true` is refused with `409` so a cut-off answer is never
 persisted unattended. The model list comes from
 `settings.ai.recipeVisionModels`, the `OPENAI_RECIPE_VISION_MODELS` environment variable, or the
-provider default (the tested OpenRouter chain on OpenRouter, the single vision model elsewhere). A
+provider default (the built-in OpenRouter chain on OpenRouter, the single vision model elsewhere). A
 settings write with more than four models, or with an entry that is not a model ID, is rejected with
 `400` rather than truncated.
 

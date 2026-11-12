@@ -114,7 +114,7 @@ export const AI_ENV = {
   visionModel: process.env.OPENAI_VISION_MODEL ?? process.env.SVAI_VISION_MODEL ?? "",
   /**
    * Optional ordered recipe-scan models (comma-separated, at most four). Unset
-   * means "use the provider default": the tested OpenRouter chain there, the
+   * means "use the provider default": the built-in OpenRouter chain there, the
    * single vision model everywhere else. An explicit list is honoured on any
    * endpoint because it is the operator's choice.
    */

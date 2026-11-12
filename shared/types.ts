@@ -70,7 +70,7 @@ export interface HouseSettings {
     visionModel?: string;
     /**
      * Ordered recipe-scan models, at most four. Unset applies the provider
-     * default (the tested OpenRouter chain on OpenRouter, the single vision
+     * default (the built-in OpenRouter chain on OpenRouter, the single vision
      * model elsewhere). List one model to opt out of extra fallbacks.
      */
     recipeVisionModels?: string[];
