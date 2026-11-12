@@ -16,6 +16,7 @@ import {
   isPlannerNoiseLine,
   normaliseLumaFromRgba,
   readableWordRatio,
+  recipeOcrFitScale,
   recipeOcrScale,
   splitRecipeSections,
 } from "../../shared/notebook-scan.js";
@@ -375,6 +376,28 @@ describe("more than one recipe on a page", () => {
     assert.ok(!sections[1].lines.includes("17 αυγά"));
   });
 
+  it("treats multi-digit and word-number amounts as recipe content", () => {
+    // Section detection needs at least one amount row under a title. A quantity
+    // of 160 or "μισό" must count exactly like "1"; matching only the first
+    // digit (or only ASCII word boundaries) used to hide ordinary pages.
+    const digits = splitRecipeSections(
+      ["Τσουρέκι", "160 γραμμ. βούτυρο", "17 αυγά", "Κουραμπιέδες", "250 γραμμ. αλεύρι", "3 αυγά"].join("\n"),
+    );
+    assert.equal(digits.length, 2);
+    assert.equal(digits[0].title, "Τσουρέκι");
+    assert.equal(digits[1].title, "Κουραμπιέδες");
+
+    const words = splitRecipeSections(
+      ["Τσουρέκι", "μισό κιλό αλεύρι", "δύο αυγά", "Κουραμπιέδες", "ένα φλιτζάνι βούτυρο", "τρία αυγά"].join("\n"),
+    );
+    assert.equal(words.length, 2);
+    assert.equal(words[0].title, "Τσουρέκι");
+    assert.equal(words[1].title, "Κουραμπιέδες");
+
+    // The wider boundary must not turn a printed planner code into content.
+    assert.equal(isPlannerNoiseLine("41-325"), true);
+  });
+
   it("returns one draft per recipe instead of merging them", () => {
     const drafts = heuristicRecipes(page);
     assert.equal(drafts.length, 2);
@@ -421,6 +444,21 @@ describe("recipe OCR size budget", () => {
     assert.ok(scale < 1, "an oversized crop must be downscaled");
     assert.ok(Math.round(width * scale) <= MAX_RECIPE_OCR_WIDTH);
     assert.ok(Math.round(width * scale) * Math.round(height * scale) <= MAX_RECIPE_OCR_PIXELS);
+  });
+
+  it("fits an uncropped straightened frame to the budget without upscaling it", () => {
+    // When the crop looks like a detector miss the scanner keeps the whole
+    // photo. Straightening already grew that frame past the caps, so it must
+    // still be shrunk; otherwise the rejected-crop path hands Tesseract a page
+    // larger than the size that aborts the worker.
+    const width = 2093;
+    const height = 2760;
+    const scale = recipeOcrFitScale(width, height);
+    assert.ok(scale < 1, "an oversized full frame must be downscaled");
+    assert.ok(Math.round(width * scale) <= MAX_RECIPE_OCR_WIDTH);
+    assert.ok(Math.round(width * scale) * Math.round(height * scale) <= MAX_RECIPE_OCR_PIXELS);
+    assert.equal(recipeOcrFitScale(1500, 2000), 1, "a page inside the budget is left alone");
+    assert.equal(recipeOcrFitScale(100, 100), 1, "a full frame is never upscaled");
   });
 
   it("upscales a small crop and leaves a crop at the width cap alone", () => {

@@ -8,6 +8,7 @@ import {
   inkLumaFromRgba,
   measureBlueInk,
   normaliseLumaFromRgba,
+  recipeOcrFitScale,
   recipeOcrScale,
   scoreRecipeText,
 } from "@shared/notebook-scan";
@@ -426,8 +427,15 @@ function tightenRecipePage(source: HTMLCanvasElement): HTMLCanvasElement {
   }
 
   // A crop that would throw away most of the frame means the detector found a
-  // small block of ink, not the page edge. Keep the full photo instead.
-  if (box.width < analysis.width * 0.3 || box.height < analysis.height * 0.3) return page;
+  // small block of ink, not the page edge. Keep the full photo instead — but a
+  // straightened frame is larger than the one `prepareDocument` capped, so it
+  // must still fit the worker budget or Tesseract aborts on the whole page.
+  if (box.width < analysis.width * 0.3 || box.height < analysis.height * 0.3) {
+    const scale = recipeOcrFitScale(page.width, page.height);
+    return scale < 1
+      ? cropCanvas(page, { left: 0, top: 0, width: page.width, height: page.height }, scale)
+      : page;
+  }
 
   const scaleX = page.width / analysis.width;
   const scaleY = page.height / analysis.height;

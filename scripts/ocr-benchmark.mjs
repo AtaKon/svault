@@ -47,6 +47,7 @@ import {
   estimateSkewDegrees,
   inkLumaFromRgba,
   normaliseLumaFromRgba,
+  recipeOcrFitScale,
   recipeOcrScale,
 } from "../shared/notebook-scan.ts";
 
@@ -253,7 +254,7 @@ export function contentScale(width, height) {
 
 /** Shrink an image that is already larger than the shared Tesseract budget. */
 function limitToBudget(image) {
-  const scale = Math.min(1, contentScale(image.width, image.height));
+  const scale = recipeOcrFitScale(image.width, image.height);
   if (scale >= 1) return image;
   return resize(image, Math.max(1, Math.round(image.width * scale)), Math.max(1, Math.round(image.height * scale)));
 }

@@ -694,6 +694,12 @@ export async function aiReadRecipes(
       const canRetryWithReasoningOff = canRetryRecipeReasoningOff(cfg.reasoningControl, configured);
       if (!incomplete || !canRetryWithReasoningOff) throw error;
 
+      // The retry's spend is summed with this failed attempt's usage below. A
+      // provider that returns no usage (or no price) for a reasoning-only
+      // response would otherwise disappear from the total without a warning,
+      // contradicting `addUsages`' promise that every unpriced attempt is named.
+      if (incomplete.usage?.cost == null) noteUnpriced(candidate.model);
+
       notes.push(
         incomplete.reason === "truncated"
           ? "The AI ran out of output tokens before writing the recipe, so the scan was retried with reasoning disabled."

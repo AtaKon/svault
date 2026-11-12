@@ -51,6 +51,16 @@ export function recipeOcrScale(width: number, height: number): number {
   );
 }
 
+/**
+ * Scale for a frame that is not being cropped: it may only shrink. The
+ * scanner returns the whole photo when the content box looks like a detector
+ * miss, but straightening grows that frame, so a "keep everything" result can
+ * still be over the worker budget and must be downscaled before recognition.
+ */
+export function recipeOcrFitScale(width: number, height: number): number {
+  return Math.min(1, recipeOcrScale(width, height));
+}
+
 /** A pixel is ink when it is clearly darker than its neighbourhood. */
 const INK_CONTRAST = 20;
 /** How dark a pixel must be on its own before a faint contrast still counts. */
@@ -357,8 +367,17 @@ const SAINT_LINE = /^[†‡✝✞☦]/u;
 const GUTTER_TIME = /^(\d{1,2})\s*[:.]\s*(\d{2})(?!\d)/;
 const TRAILING_TIME = /\s+\d{1,2}\s*[:.]\s*(\d{2})$/;
 
-/** A row that starts with an amount is recipe content, never planner furniture. */
-const CONTENT_START = /^\s*(?:\d|[½¼¾⅓⅔]|μισ[όήο]|ένα|δύο|τρία|τέσσερα|πέντε|half|one|two|three)\b/iu;
+/**
+ * A row that starts with an amount is recipe content, never planner furniture.
+ *
+ * The boundary is Unicode-aware on purpose: `\b` is ASCII-only, so it never
+ * matched after a Greek word or a fraction, and it also failed after the first
+ * digit of a multi-digit quantity ("160" looked like "1" followed by a word
+ * character). Only single digits ever counted as content, which kept
+ * `splitRecipeSections` from seeing ordinary rows such as "160 γραμμ. βούτυρο".
+ */
+const CONTENT_START =
+  /^\s*(?:\d+|[½¼¾⅓⅔]|μισ[όήο]|ένα|δύο|τρία|τέσσερα|πέντε|half|one|two|three)(?![\p{L}\p{N}])/iu;
 
 function letterCount(line: string): number {
   return (line.match(/\p{L}/gu) ?? []).length;

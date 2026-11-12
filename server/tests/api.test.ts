@@ -349,6 +349,18 @@ before(async () => {
           );
           return;
         }
+        // A reasoning model that returns no answer and omits `usage` entirely:
+        // the first attempt's spend cannot be priced, so the retry must still
+        // name it rather than silently reporting only the retry's cost.
+        if (body?.model === "reasoning-unpriced-model" && body?.reasoning?.enabled !== false) {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(
+            JSON.stringify({
+              choices: [{ message: { content: null, reasoning: "Thinking about the handwriting…" }, finish_reason: "length" }],
+            }),
+          );
+          return;
+        }
         // An answer cut off at the token limit with no usable text.
         if (body?.model === "truncated-model") {
           res.writeHead(200, { "content-type": "application/json" });
@@ -5730,6 +5742,33 @@ describe("ai integration", () => {
     assert.match(result.notes?.join(" ") ?? "", /retried with reasoning disabled/i);
     // Both attempts are billed in the reported usage.
     assert.equal(result.usage.cost, 0.00305);
+  });
+
+  it("names a reasoning attempt that reported no price before the retry", async () => {
+    // The first attempt returns no text and no usage at all. Its spend cannot
+    // be priced, so the total (which sums both attempts) must warn instead of
+    // silently reporting only the retry's cost.
+    const cfg = {
+      ...resolveAi({
+        ai: { enabled: true, baseUrl: aiBase, apiKey: "test-key", model: "mock-model", recipeReasoning: "auto" },
+      }),
+      reasoningControl: true,
+    };
+    aiRequests.length = 0;
+    const result = await aiReadRecipes(
+      cfg,
+      "Pancakes\n2 eggs",
+      [],
+      { operation: "recipe.scan", houseId },
+      { models: [{ model: "reasoning-unpriced-model" }] },
+    );
+    assert.equal(result.data.recipes.length, 1);
+    assert.equal(aiRequests.length, 2);
+    assert.deepEqual(aiRequests[1].body.reasoning, { enabled: false });
+    assert.equal(result.usage.cost, 0.00125, "the priced retry is still reported");
+    const notes = result.notes?.join(" ") ?? "";
+    assert.match(notes, /reasoning-unpriced-model did not report a price/i);
+    assert.match(notes, /lower than the actual spend/i);
   });
 
   it("honours an explicit reasoning mode instead of retrying it away", async () => {

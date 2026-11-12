@@ -219,12 +219,20 @@ describe("shared recipe prompt", () => {
     assert.doesNotMatch(recipeArchivistPrompt("short", 0), /cut off/);
   });
 
-  it("accepts a bare recipe object or a recipes array", () => {
+  it("accepts a bare recipe object, a recipes array or a top-level array", () => {
     assert.deepEqual(recipeListFromJson({ title: "x" }), [{ title: "x" }]);
     assert.deepEqual(recipeListFromJson({ recipes: [{ title: "a" }, null, "nope", { title: "b" }] }), [
       { title: "a" },
       { title: "b" },
     ]);
+    // Some models answer with the array itself instead of wrapping it in
+    // `recipes`. Returning [] made the caller reject a usable page.
+    assert.deepEqual(recipeListFromJson([{ title: "a" }, { title: "b" }, null]), [
+      { title: "a" },
+      { title: "b" },
+    ]);
+    assert.deepEqual(recipeListFromJson([]), []);
+    assert.deepEqual(recipeListFromJson(null), []);
   });
 });
 
@@ -247,6 +255,21 @@ describe("recipe truth scoring", () => {
     assert.equal(normaliseUnit("κ.γ."), "tsp");
     assert.equal(normaliseUnit("κγ"), "tsp");
     assert.equal(normaliseUnit(""), "");
+  });
+
+  it("recognises the Greek singular and plural forms as one unit", () => {
+    // A truth row that says "κουταλιές" and a model that writes "κουταλιά"
+    // describe the same unit; the plural must not fall through as raw text.
+    assert.equal(normaliseUnit("κουταλιές"), "tbsp");
+    assert.equal(normaliseUnit("κουταλιά"), "tbsp");
+    assert.equal(normaliseUnit("κουταλάκι"), "tsp");
+    assert.equal(normaliseUnit("φλιτζάνια"), "cup");
+    assert.equal(normaliseUnit("φλιτζάνι"), "cup");
+    assert.equal(normaliseUnit("γραμμάριο"), "g");
+    assert.equal(normaliseUnit("κιλό"), "kg");
+    assert.equal(normaliseUnit("λίτρο"), "l");
+    assert.equal(normaliseUnit("τεμάχιο"), "pcs");
+    assert.equal(normaliseUnit("πρέζες"), "pinch");
   });
 
   it("scores an exact reading as 1 even when spelled differently", () => {

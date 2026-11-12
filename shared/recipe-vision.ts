@@ -312,11 +312,16 @@ export function extractJsonValue(text: string): JsonExtraction {
   }
 }
 
-/** Every recipe object from a parsed answer, whether it used `recipes[]` or a bare object. */
+/**
+ * Every recipe object from a parsed answer, whether it used `recipes[]`, a
+ * top-level array (which models occasionally return despite the schema) or a
+ * bare object. Entries that are not objects are ignored.
+ */
 export function recipeListFromJson(value: unknown): Record<string, unknown>[] {
-  const list = Array.isArray((value as { recipes?: unknown } | null)?.recipes)
-    ? ((value as { recipes: unknown[] }).recipes as unknown[])
-    : [value];
+  const source = Array.isArray(value)
+    ? value
+    : (value as { recipes?: unknown } | null)?.recipes;
+  const list = Array.isArray(source) ? source : [value];
   return list.filter(
     (entry): entry is Record<string, unknown> =>
       Boolean(entry) && typeof entry === "object" && !Array.isArray(entry),
