@@ -495,36 +495,40 @@ async function recognizeRecipePage(
     user_defined_dpi: "300",
   });
 
-  const passes: { text: string; score: number; confidence: number }[] = [];
+  const passes: { canvas: HTMLCanvasElement; text: string; score: number; confidence: number }[] = [];
   const average = (pass: { text: string; score: number }) =>
     pass.score / Math.max(1, pass.text.split("\n").filter((line) => line.trim()).length);
 
   setPhase(0.35, 0.4);
   const primary = buildVariant(preferInk);
   const first = await worker.recognize(primary);
-  passes.push({ text: first.data.text, score: scoreRecipeText(first.data.text), confidence: first.data.confidence });
+  passes.push({ canvas: primary, text: first.data.text, score: scoreRecipeText(first.data.text), confidence: first.data.confidence });
 
   // Only spend the second preparation and pass when the first reading is thin.
   // Most pages are decided by the variant chosen from the ink colour.
   if (average(passes[0]) < 1.6) {
     setPhase(0.7, 0.2);
-    const second = await worker.recognize(buildVariant(!preferInk));
-    passes.push({ text: second.data.text, score: scoreRecipeText(second.data.text), confidence: second.data.confidence });
+    const secondary = buildVariant(!preferInk);
+    const second = await worker.recognize(secondary);
+    passes.push({ canvas: secondary, text: second.data.text, score: scoreRecipeText(second.data.text), confidence: second.data.confidence });
   }
 
   passes.sort((a, b) => b.score - a.score);
-  let best = passes[0];
+  const bestPass = passes[0];
+  let best = { text: bestPass.text, score: bestPass.score, confidence: bestPass.confidence };
 
   if (average(best) < 0.8) {
     // Handwriting spread over a ruled page: sparse mode keeps separate words
-    // apart instead of merging rows into one blob.
+    // apart instead of merging rows into one blob. Run it on the variant that
+    // produced the best reading, not always the ink-colour-first one: the
+    // second variant can win the two layout passes.
     setPhase(0.9, 0.1);
     await worker.setParameters({
       tessedit_pageseg_mode: psm.SPARSE_TEXT,
       preserve_interword_spaces: "1",
       user_defined_dpi: "300",
     });
-    const sparse = await worker.recognize(primary);
+    const sparse = await worker.recognize(bestPass.canvas);
     const candidate = {
       text: sparse.data.text,
       score: scoreRecipeText(sparse.data.text),

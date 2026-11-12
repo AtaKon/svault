@@ -1,4 +1,5 @@
 import { Router } from "express";
+import fs from "node:fs/promises";
 import { z } from "zod";
 import { all, get, newId, now, parseJson, run, tx } from "../db.js";
 import { memberRole, requireAuth, roleAtLeast } from "../auth.js";
@@ -290,6 +291,20 @@ async function localImageToDataUrl(image: string): Promise<string | null> {
   if (!image.startsWith("/uploads/recipes/")) return Promise.resolve(null);
   const filename = image.split("/").pop()!;
   return await fileToDataUrl(uploadPath("recipes", filename), "image/jpeg");
+}
+
+/**
+ * True only for a recipe upload that is still on disk. A scan may skip every
+ * photo (missing file or over 8 MB), and the saved `sourceImage` must not point
+ * at a path that no longer exists: that renders as a broken image and is not a
+ * usable reference.
+ */
+async function recipeUploadExists(image: string | undefined): Promise<boolean> {
+  if (!image || !image.startsWith("/uploads/recipes/")) return false;
+  const filename = image.split("/").pop();
+  if (!filename) return false;
+  const stat = await fs.stat(uploadPath("recipes", filename)).catch(() => null);
+  return Boolean(stat?.isFile());
 }
 
 /* ------------------------------------------------------------- house routes */
@@ -599,15 +614,18 @@ recipeRoutes.post(
     // recipes, so each draft carries its share: storing the full scan cost on
     // every saved recipe would count the same spend once per recipe.
     const draftAiCost = aiCost == null ? null : roundMicro(aiCost / Math.max(1, usableDrafts.length));
+    // Link to the photo that was actually sent to the model. A request can
+    // carry both `image` and `images`; the loader then uses `images` only, so
+    // `body.image` may name a photo the model never saw. When every photo was
+    // skipped (missing or larger than 8 MB) keep the first supplied path only
+    // if it is still on disk: an oversized upload is a useful reference, a
+    // missing file is a broken image.
+    const sourceImage =
+      vision.usedPaths[0] ?? ((await recipeUploadExists(visionPaths[0])) ? visionPaths[0]! : null);
     const draftInputs = usableDrafts.map((draft) =>
       draftToInput(draft, {
         source: "scan",
-        // Link to the photo that was actually sent to the model. A request can
-        // carry both `image` and `images`; the loader then uses `images` only,
-        // so `body.image` may name a photo the model never saw. Fall back to
-        // the first supplied path when every photo was skipped (the file still
-        // exists on disk, so the link is still useful).
-        sourceImage: vision.usedPaths[0] ?? visionPaths[0] ?? null,
+        sourceImage,
         ocrText: rawText,
         aiCost: draftAiCost,
       }),
@@ -625,6 +643,10 @@ recipeRoutes.post(
         throw new ApiError(
           409,
           "The AI answer was cut off at the output token limit, so nothing was saved. Review the draft and save it when it looks complete.",
+          // Same reason as the 400 above: the call was billed even though no
+          // recipe was persisted, so the spend must not disappear from the
+          // response just because the draft was truncated.
+          { aiCost, aiModels },
         );
       }
       const id = await saveRecipe(houseId, req.user!.id, draftInputs[0]);

@@ -186,6 +186,8 @@ describe("recipe scan fallback chains and truncation", () => {
     });
     assert.equal(scan.status, 409, "a partial read must be reviewed, not saved silently");
     assert.match(scan.data.error, /cut off at the output token limit/i);
+    assert.equal(scan.data.details?.aiCost, 0.00125, "the billed partial read is reported on the 409");
+    assert.deepEqual(scan.data.details?.aiModels, ["truncated-json-model"]);
     const after = await request(`/api/houses/${houseId}/recipes`);
     assert.equal(after.data.length, before.data.length, "nothing was persisted");
 

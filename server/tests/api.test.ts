@@ -148,7 +148,9 @@ async function request(
   pathname: string,
   options: { method?: string; body?: unknown; auth?: string; headers?: Record<string, string> } = {},
 ) {
-  const headers: Record<string, string> = { ...(options.headers ?? {}) };
+  // Some suites leave the server idle during slow migration tests. Avoid
+  // reusing a socket that the server may have closed during that interval.
+  const headers: Record<string, string> = { connection: "close", ...(options.headers ?? {}) };
   const useCookie = options.auth === undefined ? cookie : options.auth;
   if (useCookie) headers.cookie = useCookie;
   let body: BodyInit | undefined;

@@ -496,4 +496,21 @@ describe("recipe scan photos and multi-recipe pages", () => {
     assert.equal(content.filter((part: any) => part.type === "image_url").length, 1);
     assert.equal(res.data.drafts[0].sourceImage, sent, "the link must name the sent photo, not body.image");
   });
+
+  it("does not link a saved recipe to an upload that is missing on disk", async () => {
+    // Every supplied photo is skipped (the file does not exist), so the old
+    // fallback saved the dangling path as `sourceImage`, which renders as a
+    // broken image on the recipe page.
+    const res = await request(`/api/houses/${houseId}/recipes/scan`, {
+      method: "POST",
+      body: {
+        text: "Pancakes\n2 eggs\n1 cup flour",
+        image: "/uploads/recipes/does-not-exist.png",
+        save: true,
+      },
+    });
+    assert.equal(res.status, 201);
+    assert.equal(res.data.saved, true);
+    assert.equal(res.data.recipe.sourceImage, null, "a missing upload must not become a dangling link");
+  });
 });
