@@ -456,6 +456,11 @@ async function recognizeRecipePage(
   onRawText?: (text: string, meta: { confidence: number }) => void,
 ): Promise<string> {
   if (!(prepared instanceof HTMLCanvasElement)) {
+    // Deliberately a degraded path: a `File` reaches here only when
+    // `prepareDocument` could not draw it to a canvas (undecodable image).
+    // Drawing it again would repeat that failure, so the single-column pass
+    // runs on the raw file. It still returns the same cleaned-text contract and
+    // reports the raw text once, so callers cannot tell the passes apart.
     await worker.setParameters({
       tessedit_pageseg_mode: psm.SINGLE_COLUMN,
       preserve_interword_spaces: "1",

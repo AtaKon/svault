@@ -365,7 +365,7 @@ export async function chat(
     notes.push("The AI endpoint rejected the reasoning setting, so the request was retried without it.");
     result = await runAttempt(Boolean(opts.json), false);
   }
-  if (!result.ok && opts.json && isFieldRejection(result.status, result.text)) {
+  if (!result.ok && opts.json && shouldRetryWithoutJson(result.status, result.text)) {
     result = await runAttempt(false, useReasoning);
   }
   responseText = result.text ?? "";
@@ -461,13 +461,34 @@ export async function chat(
  * identically the second time and bill the user twice.
  */
 const FIELD_REJECTION =
-  /(?:unknown|unrecognized|unexpected|unsupported|invalid)\s+(?:request\s+)?(?:parameter|field|argument|property|option|response_format|reasoning|max_tokens|temperature)/i;
+  /(?:unknown|unrecognized|unexpected|unsupported|invalid)\s+(?:request\s+)?(?:parameter|field|argument|property|option|name|response_format|reasoning|max_tokens|temperature)/i;
 const FIELD_NOT_SUPPORTED =
   /(?:parameter|field|argument|property|option|response_format|reasoning|max_tokens|temperature)\b[^.]{0,40}\b(?:not supported|unsupported|unknown|unrecognized|invalid)/i;
+
+/**
+ * A 400/422 whose body blames something other than a request field. Those calls
+ * fail identically without `response_format` and would only bill twice, so the
+ * generic-400 retry below is skipped for them.
+ */
+const NON_FIELD_FAILURE =
+  /image|vision|multimodal|photo|too large|payload (?:too large|exceeds|is too)|context length|maximum context|content (?:type|policy)|safety|moderation|authentication|unauthor|api.?key|quota|rate.?limit|permission|forbidden|not found|does not exist|(?:invalid|unknown|unsupported) model|model .{0,40}not (?:found|supported)/i;
 
 function isFieldRejection(status: number, body: string): boolean {
   if (status !== 400 && status !== 422) return false;
   return FIELD_REJECTION.test(body) || FIELD_NOT_SUPPORTED.test(body);
+}
+
+/**
+ * Some OpenAI-compatible providers reject `response_format` with a generic
+ * 400/422 body ("Invalid request") that does not name the field. JSON mode is
+ * therefore retried once without `response_format` for those, restoring the
+ * compatibility the older unconditional 4xx retry had. A failure that clearly
+ * blames the photo, the model or the account is not retried.
+ */
+function shouldRetryWithoutJson(status: number, body: string): boolean {
+  if (status !== 400 && status !== 422) return false;
+  if (isFieldRejection(status, body)) return true;
+  return !NON_FIELD_FAILURE.test(body);
 }
 
 function roundCost(value: number): number {

@@ -14,6 +14,7 @@ import {
   cropToContent,
   evaluate,
   keywordFound,
+  rotate,
   temporaryPath,
   toBmpFile,
   tokensOf,
@@ -117,6 +118,56 @@ describe("ocr benchmark keyword scoring", () => {
 
   it("returns null recall when the manifest lists no keywords", () => {
     assert.equal(evaluate({}, "anything").keywordRecall, null);
+  });
+});
+
+describe("ocr benchmark rotation", () => {
+  it("rotates by a positive angle clockwise", () => {
+    // Two marked pixels either side of the centre. Clockwise means the left
+    // (red) mark moves up and the right (blue) mark moves down. `tighten()`
+    // calls rotate(-skew), so an inverted sign here would silently change every
+    // benchmark number.
+    const width = 5;
+    const height = 5;
+    const data = new Uint8ClampedArray(width * height * 4).fill(255);
+    const mark = (x, y, r, g, b) => {
+      const index = (y * width + x) * 4;
+      data[index] = r;
+      data[index + 1] = g;
+      data[index + 2] = b;
+    };
+    mark(1, 2, 255, 0, 0);
+    mark(3, 2, 0, 0, 255);
+    const image = { width, height, data };
+
+    const pixel = (source, x, y) => {
+      const index = (y * source.width + x) * 4;
+      return { r: source.data[index], g: source.data[index + 1], b: source.data[index + 2] };
+    };
+    const findStrongest = (source, score) => {
+      let best = null;
+      for (let y = 0; y < source.height; y++) {
+        for (let x = 0; x < source.width; x++) {
+          const value = score(pixel(source, x, y));
+          if (value > 60 && (!best || value > best.value)) best = { x, y, value };
+        }
+      }
+      return best;
+    };
+    const reddest = (p) => p.r - Math.max(p.g, p.b);
+    const bluest = (p) => p.b - Math.max(p.r, p.g);
+
+    const clockwise = rotate(image, 90);
+    assert.ok(
+      findStrongest(clockwise, reddest).y < findStrongest(clockwise, bluest).y,
+      "clockwise: the left mark ends above the right mark",
+    );
+
+    const counter = rotate(image, -90);
+    assert.ok(
+      findStrongest(counter, reddest).y > findStrongest(counter, bluest).y,
+      "negative is anticlockwise",
+    );
   });
 });
 

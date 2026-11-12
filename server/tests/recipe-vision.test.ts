@@ -99,6 +99,20 @@ describe("recipe vision fallback chain", () => {
     assert.ok(chain.every((candidate) => candidate.model !== "openai/gpt-4o-mini" || chain.indexOf(candidate) === 0));
   });
 
+  it("keeps the built-in reasoning override for a deliberately configured vision model", () => {
+    // Picking the built-in Qwen3.6 ID as the house vision model must not turn
+    // thinking back on: with reasoning asked for, the model can answer with
+    // nothing but reasoning tokens.
+    const chain = recipeVisionChain({
+      baseUrl: "https://openrouter.ai/api/v1",
+      visionModel: "qwen/qwen3.6-35b-a3b",
+      visionModelExplicit: true,
+    });
+    assert.equal(chain[0].model, "qwen/qwen3.6-35b-a3b");
+    assert.deepEqual(chain[0].reasoning, { enabled: false }, "the first entry must carry its override");
+    assert.equal(chain.filter((candidate) => candidate.model === "qwen/qwen3.6-35b-a3b").length, 1, "no duplicate entry");
+  });
+
   it("honours an explicit list, dedupes it and caps it at four", () => {
     const chain = recipeVisionChain({
       baseUrl: "https://api.openai.com/v1",
@@ -185,6 +199,17 @@ describe("shared recipe prompt", () => {
     assert.deepEqual(extractJsonValue('{"a":1} trailing }'), { ok: false, reason: "malformed" });
     // Trailing prose is not a truncation.
     assert.deepEqual(extractJsonValue('{"a":1} — hope that helps'), { ok: true, value: { a: 1 } });
+    // A cut-off multi-recipe answer that stops on a complete inner object is
+    // rejected outright, never returned as a complete single-recipe answer.
+    assert.deepEqual(extractJsonValue('{"recipes":[{"title":"A"}'), { ok: false, reason: "malformed" });
+    assert.deepEqual(extractJsonValue('{"recipes":[{"title":"A"},{"title":"B"}'), {
+      ok: false,
+      reason: "malformed",
+    });
+    assert.deepEqual(extractJsonValue('{"recipes":[{"title":"A","ingredients":[{"name":"wa'), {
+      ok: false,
+      reason: "malformed",
+    });
   });
 
   it("marks a long text prompt as cut off instead of truncating silently", () => {
@@ -273,6 +298,24 @@ describe("recipe truth scoring", () => {
     assert.equal(score.score, 1);
     assert.equal(score.titleScore, 1);
     assert.equal(score.stepsScore, 1);
+  });
+
+  it("does not award quantity or unit credit the truth never recorded", () => {
+    // The truth names two ingredients but carries no quantities or units, so
+    // those dimensions cannot be judged. Leaving their weights in would award
+    // 35 % of the score for free and inflate an incomplete reading.
+    const namesOnly = {
+      title: "Ρεβάνι",
+      ingredients: [{ name: "βούτυρο" }, { name: "ζάχαρη" }],
+    };
+    const partial = { title: "Ρεβάνι", ingredients: [{ name: "βούτυρο" }] };
+    const score = scoreRecipeAgainstTruth(partial, namesOnly);
+    assert.equal(score.expectedQuantities, 0);
+    assert.equal(score.expectedUnits, 0);
+    // names F1 = 2 * 0.5 / 1.5, title = 1; no steps in the truth.
+    const expected = (0.1 * 1 + 0.35 * (2 * 0.5 * 1) / 1.5) / (0.1 + 0.35);
+    assert.ok(Math.abs(score.score - expected) < 0.01, `score ${score.score} should be ${expected}`);
+    assert.ok(score.score < 0.8, "the missing ingredient must not be hidden by free quantity credit");
   });
 
   it("scores steps by word coverage, not exact wording", () => {
@@ -461,7 +504,7 @@ describe("benchmark request and report", () => {
   it("uses provider cost first and configured prices otherwise", () => {
     assert.equal(benchmarkCost({ cost: 0.001557, prompt_tokens: 1000, completion_tokens: 500 }, { input: null, output: null }), 0.001557);
     assert.equal(benchmarkCost({ prompt_tokens: 1_000_000, completion_tokens: 1_000_000 }, { input: 1, output: 2 }), 3);
-    assert.equal(benchmarkCost({ prompt_tokens: 1000 }, { input: null, output: null }), null);
+    assert.equal(benchmarkCost({ prompt_tokens: 1000, completion_tokens: 500 }, { input: null, output: null }), null);
     // A reported zero is a real price, not an unknown one.
     assert.equal(benchmarkCost({ cost: 0, prompt_tokens: 10 }, { input: 1, output: 1 }), 0);
     // No usage at all with configured prices is unknown, not free.
@@ -471,8 +514,16 @@ describe("benchmark request and report", () => {
     assert.equal(benchmarkCost({}, { input: 1, output: 2 }), null);
     // Explicit null counts are absent, not zero priced tokens.
     assert.equal(benchmarkCost({ cost: null, prompt_tokens: null, completion_tokens: null }, { input: 1, output: 2 }), null);
-    // Usage with no price falls back to the configured prices.
-    assert.equal(benchmarkCost({ prompt_tokens: 1_000_000 }, { input: 1, output: 2 }), 1);
+    // Half a usage object is unknown, not a free half: pricing the reported
+    // side and calling the other zero would report a complete but understated
+    // cost.
+    assert.equal(benchmarkCost({ prompt_tokens: 1_000_000 }, { input: 1, output: 2 }), null);
+    assert.equal(benchmarkCost({ completion_tokens: 1_000_000 }, { input: 1, output: 2 }), null);
+    assert.equal(
+      benchmarkCost({ prompt_tokens: 1_000_000, completion_tokens: 1_000_000 }, { input: null, output: 2 }),
+      null,
+      "one configured price cannot price both token sides",
+    );
   });
 
   it("summarises scores and flags incomplete cost", () => {

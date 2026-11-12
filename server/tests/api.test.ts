@@ -373,6 +373,13 @@ before(async () => {
           res.end(JSON.stringify({ error: { message: "Unsupported parameter: reasoning" } }));
           return;
         }
+        // A provider that rejects `response_format` with a generic 400 body
+        // that does not name the field. JSON mode must be retried without it.
+        if (body?.model === "json-reject-model" && body?.response_format) {
+          res.writeHead(400, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: { message: "Invalid request" } }));
+          return;
+        }
         // A provider that rejects an unknown field but has no idea about the
         // photo: the recipe route must not mistake "unsupported parameter" for
         // an image-input failure and re-bill a text-only retry.
@@ -6382,6 +6389,27 @@ describe("ai integration", () => {
     });
   });
 
+  it("attributes a kept partial answer to the model that produced it and keeps its cost", async () => {
+    // Model A is truncated but usable; the later model fails without ever
+    // producing text. The returned recipe belongs to A, so the attribution and
+    // its billed cost must both survive the chain walk.
+    const cfg = resolveAi({
+      ai: { enabled: true, baseUrl: aiBase, apiKey: "test-key", model: "mock-model" },
+    });
+    aiRequests.length = 0;
+    const result = await aiReadRecipes(cfg, "Pancakes\n2 eggs", [], { operation: "recipe.scan", houseId }, {
+      models: [{ model: "truncated-json-model" }, { model: "chain-500-model" }],
+    });
+    assert.equal(result.model, "truncated-json-model");
+    assert.deepEqual(result.models, ["truncated-json-model", "chain-500-model"]);
+    assert.equal(result.truncated, true);
+    assert.equal(result.data.recipes.length, 1);
+    // The producer's usage must be in the total even though its error was the
+    // one that carried it, not the successful return.
+    assert.equal(result.usage.cost, 0.00125, "the truncated model's cost is counted once");
+    assert.match(result.notes?.join(" ") ?? "", /output token limit/i);
+  });
+
   it("does not retry an auth failure without the reasoning field", async () => {
     const cfg = {
       ...resolveAi({
@@ -6409,6 +6437,32 @@ describe("ai integration", () => {
       () => extractJson('{"recipes":[{"title":"A"}]}, {"recipes":[{"title":"B"'),
       /cut off before the answer was complete/i,
     );
+  });
+
+  it("retries JSON mode without response_format when a provider sends a generic 400", async () => {
+    const cfg = resolveAi({
+      ai: { enabled: true, baseUrl: aiBase, apiKey: "test-key", model: "json-reject-model" },
+    });
+    aiRequests.length = 0;
+    const result = await aiReadRecipes(cfg, "Pancakes\n2 eggs", [], { operation: "recipe.scan", houseId }, {
+      models: [{ model: "json-reject-model" }],
+    });
+    assert.equal(result.data.recipes.length, 1);
+    assert.equal(aiRequests.length, 2, "the JSON-mode request is retried once without response_format");
+    assert.deepEqual(aiRequests[0].body.response_format, { type: "json_object" });
+    assert.equal(aiRequests[1].body.response_format, undefined);
+  });
+
+  it("does not retry a content-type 400 without response_format", async () => {
+    const cfg = resolveAi({
+      ai: { enabled: true, baseUrl: aiBase, apiKey: "test-key", model: "content-type-model" },
+    });
+    aiRequests.length = 0;
+    await assert.rejects(
+      aiCleanRecipe(cfg, "A note about soup", [], { operation: "recipe.import", houseId }),
+      /Unsupported content type/,
+    );
+    assert.equal(aiRequests.length, 1, "an error that blames the request body is not a field rejection");
   });
 
   it("cleans link-import text without the photo prompt or vision budget", async () => {
@@ -6603,6 +6657,38 @@ describe("ai integration", () => {
       method: "PATCH",
       body: { settings: { ai: { model: "mock-model" } } },
     });
+  });
+
+  it("links the first photo actually sent when a request carries both image and images", async () => {
+    const uploadPhoto = async (name: string) => {
+      const png = encodePng(16, 16, Buffer.alloc(16 * 16 * 4, 200));
+      const bytes = new ArrayBuffer(png.length);
+      new Uint8Array(bytes).set(png);
+      const form = new FormData();
+      form.append("image", new Blob([bytes], { type: "image/png" }), name);
+      const upload = await fetch(`${base}/api/houses/${houseId}/recipes/upload`, {
+        method: "POST",
+        body: form,
+        headers: { cookie },
+      });
+      assert.equal(upload.status, 201);
+      return (await upload.json()).path as string;
+    };
+    const sent = await uploadPhoto("page-sent.png");
+    const skipped = await uploadPhoto("page-not-sent.png");
+
+    aiRequests.length = 0;
+    const res = await request(`/api/houses/${houseId}/recipes/scan`, {
+      method: "POST",
+      body: { text: "Tsoureki\n17 eggs", image: skipped, images: [sent] },
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.data.provider, "ai");
+    // `images` wins over `image` in the loader, so that is the only photo the
+    // model saw. The saved link must not point at the photo that was ignored.
+    const content = aiRequests[0].body.messages[1].content;
+    assert.equal(content.filter((part: any) => part.type === "image_url").length, 1);
+    assert.equal(res.data.drafts[0].sourceImage, sent, "the link must name the sent photo, not body.image");
   });
 
   it("generates ideas through the provider", async () => {

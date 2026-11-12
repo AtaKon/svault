@@ -307,7 +307,6 @@ export function scoreRecipeAgainstTruth(draft: RecipeLike, truth: RecipeTruth): 
     weights.units = 0;
   }
   if (!truthSteps.length) weights.steps = 0;
-  const weightTotal = Object.values(weights).reduce((sum, value) => sum + value, 0) || 1;
 
   const pairing = pairIngredients(expected, actual);
   const matchedIngredients = pairing.bestDraft.filter((index) => index != null).length;
@@ -341,6 +340,12 @@ export function scoreRecipeAgainstTruth(draft: RecipeLike, truth: RecipeTruth): 
   });
   const quantityScore = expectedQuantities ? matchedQuantities / expectedQuantities : 1;
   const unitScore = expectedUnits ? matchedUnits / expectedUnits : 1;
+  // A truth that records no quantity (or no unit) cannot judge that dimension.
+  // Leaving its weight in would award full credit for information the truth
+  // never contained and inflate the score of an otherwise incomplete reading.
+  if (!expectedQuantities) weights.quantities = 0;
+  if (!expectedUnits) weights.units = 0;
+  const weightTotal = Object.values(weights).reduce((sum, value) => sum + value, 0) || 1;
 
   const stepsScore = truthSteps.length
     ? truthSteps.reduce((sum, step) => {

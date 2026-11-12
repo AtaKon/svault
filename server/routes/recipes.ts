@@ -349,15 +349,24 @@ recipeRoutes.post(
 /** One scan accepts at most this many photos; the schema and loader share it. */
 const MAX_RECIPE_SCAN_IMAGES = 6;
 
-async function loadRecipeImages(paths: string[]): Promise<{ images: string[]; skipped: number }> {
+async function loadRecipeImages(
+  paths: string[],
+): Promise<{ images: string[]; skipped: number; usedPaths: string[] }> {
   const images: string[] = [];
+  // Keep the paths that actually produced a data URL so the saved link names a
+  // photo the model really saw, not one that was skipped for being too large.
+  const usedPaths: string[] = [];
   let skipped = 0;
   for (const image of paths.slice(0, MAX_RECIPE_SCAN_IMAGES)) {
     const dataUrl = await localImageToDataUrl(image);
-    if (dataUrl) images.push(dataUrl);
-    else skipped++;
+    if (dataUrl) {
+      images.push(dataUrl);
+      usedPaths.push(image);
+    } else {
+      skipped++;
+    }
   }
-  return { images, skipped };
+  return { images, skipped, usedPaths };
 }
 
 /** The provider status the AI layer embedded in a chain failure message, if any. */
@@ -443,7 +452,7 @@ recipeRoutes.post(
     // already falls back to the main model, and most models people configure
     // accept images; a text-only model is detected by retrying without them.
     const canUseAi = cfg.enabled && Boolean(rawText || visionPaths.length);
-    const vision = visionPaths.length ? await loadRecipeImages(visionPaths) : { images: [], skipped: 0 };
+    const vision = visionPaths.length ? await loadRecipeImages(visionPaths) : { images: [], skipped: 0, usedPaths: [] };
     const fallbackTitle = body.title || "Scanned recipe";
     const warnings: string[] = [];
 
@@ -583,9 +592,12 @@ recipeRoutes.post(
     const draftInputs = usableDrafts.map((draft) =>
       draftToInput(draft, {
         source: "scan",
-        // The first photo is the page the user scanned; the other pages of a
-        // multi-photo scan are follow-ups, so keep the link to the first one.
-        sourceImage: body.image ?? body.images?.[0] ?? null,
+        // Link to the photo that was actually sent to the model. A request can
+        // carry both `image` and `images`; the loader then uses `images` only,
+        // so `body.image` may name a photo the model never saw. Fall back to
+        // the first supplied path when every photo was skipped (the file still
+        // exists on disk, so the link is still useful).
+        sourceImage: vision.usedPaths[0] ?? visionPaths[0] ?? null,
         ocrText: rawText,
         aiCost: draftAiCost,
       }),

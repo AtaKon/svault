@@ -198,7 +198,11 @@ export function recipeVisionChain(input: RecipeVisionChainInput): RecipeVisionCa
   if (isOpenRouterBaseUrl(input.baseUrl)) {
     const candidates = [...DEFAULT_RECIPE_VISION_MODELS];
     if (input.visionModelExplicit && visionModel) {
-      candidates.unshift({ model: visionModel });
+      // An explicit vision model may be one of the built-in candidates, and
+      // dropping its override would turn thinking back on for Qwen3.6 — the
+      // model can then answer with nothing but reasoning.
+      const known = DEFAULT_RECIPE_VISION_MODELS.find((candidate) => candidate.model === visionModel);
+      candidates.unshift(known?.reasoning ? { model: visionModel, reasoning: known.reasoning } : { model: visionModel });
     }
     return dedupeCandidates(candidates);
   }

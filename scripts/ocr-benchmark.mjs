@@ -488,6 +488,12 @@ function levenshtein(a, b) {
   return previous[b.length];
 }
 
+/**
+ * Score one reading. `characterErrorRate` is normalised by the truth length, so
+ * it is insertion-dominated: a short truth against long OCR noise can exceed 1
+ * and is not comparable across pages. It is kept for a rough per-page signal;
+ * keyword recall is the metric the report's conclusions use.
+ */
 export function evaluate(entry, text) {
   const pageTokens = tokensOf(text);
   const keywords = entry.keywords ?? [];

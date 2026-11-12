@@ -189,8 +189,14 @@ async function runOnce({ baseUrl, apiKey, manifest, model, image, referenceRecip
     promptTokens += Number(usage?.prompt_tokens ?? 0) || 0;
     completionTokens += Number(usage?.completion_tokens ?? 0) || 0;
     const reported = benchmarkCost(usage, manifest.prices);
-    if (reported == null) costKnown = false;
-    else cost = Math.round((cost + reported) * 1e6) / 1e6;
+    if (reported == null) {
+      costKnown = false;
+      const note =
+        "The provider reported no usable price and the manifest prices cannot price this usage, so the run's cost is unknown.";
+      if (!notes.includes(note)) notes.push(note);
+    } else {
+      cost = Math.round((cost + reported) * 1e6) / 1e6;
+    }
     return {
       text: textOf(choice?.message?.content),
       finishReason: typeof choice?.finish_reason === "string" ? choice.finish_reason : null,

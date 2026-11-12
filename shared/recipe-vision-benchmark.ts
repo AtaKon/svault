@@ -321,7 +321,10 @@ export function benchmarkChatBody(input: BenchmarkRequestInput): Record<string, 
  * Cost of one provider response. Provider-reported cost wins; prices are a
  * fallback. A response that carried no `usage` at all is unknown, not free:
  * returning 0 would make a failed or empty call look fully priced and
- * understate the totals.
+ * understate the totals. The same holds for a usage object with only one of
+ * the two token counts: pricing the reported half and calling the missing half
+ * zero would understate a real charge while still reporting a complete cost, so
+ * both counts are required.
  */
 export function benchmarkCost(
   usage: { cost?: unknown; prompt_tokens?: unknown; completion_tokens?: unknown } | null | undefined,
@@ -332,15 +335,18 @@ export function benchmarkCost(
   if (usage.cost != null && Number.isFinite(reported) && reported >= 0) {
     return Math.round(reported * 1e6) / 1e6;
   }
-  if (prices.input == null && prices.output == null) return null;
+  // Both prices are needed for a complete total. Pricing only the side that has
+  // a configured price would charge the other side at zero and still report a
+  // complete cost, which is the same understatement as a partial token count.
+  if (prices.input == null || prices.output == null) return null;
   const hasPrompt = usage.prompt_tokens != null && Number.isFinite(Number(usage.prompt_tokens));
   const hasCompletion = usage.completion_tokens != null && Number.isFinite(Number(usage.completion_tokens));
-  // A usage object with no token counts cannot be priced: reporting 0 would
-  // make an unmeasured call look free and understate the total.
-  if (!hasPrompt && !hasCompletion) return null;
-  const prompt = hasPrompt ? Number(usage.prompt_tokens) : 0;
-  const completion = hasCompletion ? Number(usage.completion_tokens) : 0;
-  return Math.round(((prompt * (prices.input ?? 0) + completion * (prices.output ?? 0)) / 1_000_000) * 1e6) / 1e6;
+  // A partial usage object cannot be priced: reporting 0 for the missing side
+  // would make an unmeasured half look free and understate the total.
+  if (!hasPrompt || !hasCompletion) return null;
+  const prompt = Number(usage.prompt_tokens);
+  const completion = Number(usage.completion_tokens);
+  return Math.round(((prompt * prices.input + completion * prices.output) / 1_000_000) * 1e6) / 1e6;
 }
 
 export interface BenchmarkRun {
