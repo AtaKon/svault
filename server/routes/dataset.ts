@@ -14,6 +14,8 @@ datasetRoutes.use(requireAuth);
 
 /* The membership check runs before multer, and the archive goes to a temp
    file instead of memory so non-members cannot fill RAM or disk. */
+const datasetSplit = z.enum(["unassigned", "train", "val", "test"]);
+
 const datasetUpload = archiveUploader("dataset", DATASET_MAX_BYTES, "member");
 
 async function withArchive<T>(req: Request, fn: (buffer: Buffer) => Promise<T>): Promise<T> {
@@ -67,6 +69,13 @@ datasetRoutes.post(
   datasetUpload,
   handler(async (req, res) => {
     const { houseId } = await requireHouse(req, "member");
+    // The split becomes a folder name in exported zips, so only the known values are stored.
+    let splitOverride: DatasetSplit | null = null;
+    if (req.body?.splitOverride) {
+      const parsed = datasetSplit.safeParse(String(req.body.splitOverride));
+      if (!parsed.success) throw new ApiError(400, "Choose a valid dataset split");
+      splitOverride = parsed.data;
+    }
     const result = await withArchive(req, async (buffer) => {
       let mapping: Record<string, string> = {};
       if (req.body?.mapping) {
@@ -83,7 +92,7 @@ datasetRoutes.post(
           buffer,
           mapping,
           collectionName: req.body?.collectionName ? String(req.body.collectionName) : undefined,
-          splitOverride: req.body?.splitOverride ? (String(req.body.splitOverride) as DatasetSplit) : null,
+          splitOverride,
         });
       } catch (error) {
         throw new ApiError(400, error instanceof Error ? error.message : "Could not import the dataset");

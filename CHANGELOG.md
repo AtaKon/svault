@@ -42,6 +42,10 @@ All notable changes to SVault are documented here. The format follows
 - Account-wide passkeys can be deleted only by their owner or an instance administrator. A household
   owner can no longer delete another member's passkeys.
 
+- Dataset imports accept only the known split names (`unassigned`, `train`, `val`, `test`) as a
+  split override, and exports fall back to `unassigned` for any other stored value. A member could
+  previously store `../` paths that became entry names in a later dataset zip export.
+
 ### Added
 
 - **Recipe portion, weight and calorie estimates.** Recipes now estimate the total prepared weight and

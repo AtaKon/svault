@@ -2277,6 +2277,7 @@ const EL: Record<string, string> = {
   "Could not load this product from OpenFoodFacts": "Δεν ήταν δυνατή η φόρτωση αυτού του προϊόντος από το OpenFoodFacts.",
   "Current password is not correct": "Ο τρέχων κωδικός πρόσβασης δεν είναι σωστός.",
   "Email domain is not allowed for single sign-on": "Ο τομέας email δεν επιτρέπεται για ενιαία σύνδεση.",
+  "Choose a valid dataset split": "Διάλεξε ένα έγκυρο τμήμα συνόλου δεδομένων.",
   "Enable developer mode in your profile to view AI call logs": "Ενεργοποίησε τη λειτουργία προγραμματιστή στο προφίλ σου για να δεις τις καταγραφές κλήσεων AI.",
   "Enter a current code to disable 2FA": "Πληκτρολόγησε έναν τρέχοντα κωδικό για να απενεργοποιήσεις τον έλεγχο δύο παραγόντων.",
   "Enter your current password to change your email or username": "Πληκτρολόγησε τον τρέχοντα κωδικό πρόσβασής σου για να αλλάξεις email ή όνομα χρήστη.",

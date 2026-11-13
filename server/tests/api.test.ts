@@ -7902,6 +7902,24 @@ describe("dataset import", () => {
     await assert.rejects(async () => inspectDataset(await crowded.generateAsync({ type: "nodebuffer" })), /more than 20000 entries/);
   });
 
+  it("rejects a dataset split override that is not a known split", async () => {
+    const zip = new JSZip();
+    zip.file("classes.txt", "apple\n");
+    zip.file("train/images/a.png", png());
+    zip.file("train/labels/a.txt", "0 0.5 0.5 0.2 0.2\n");
+    const archive = await zip.generateAsync({ type: "nodebuffer" });
+    const form = new FormData();
+    form.append("dataset", new Blob([new Uint8Array(archive)], { type: "application/zip" }), "split.zip");
+    form.append("splitOverride", "../../../escaped");
+    const response = await fetch(`${base}/api/houses/${houseId}/photos/dataset/import`, {
+      method: "POST", headers: { cookie }, body: form,
+    });
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).error, "Choose a valid dataset split");
+    const listed = await request(`/api/houses/${houseId}/photos?split=..%2F..%2F..%2Fescaped`);
+    assert.equal(listed.data.total, 0);
+  });
+
   it("reads COCO annotations with absolute boxes", async () => {
     const zip = new JSZip();
     zip.file("images/c.png", png());

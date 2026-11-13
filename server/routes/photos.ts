@@ -430,7 +430,8 @@ async function exportBundle(houseId: string, format: "yolo" | "coco", collection
   let annId = 1;
 
   for (const photo of photos) {
-    const split = photo.split === "unassigned" ? "unassigned" : photo.split;
+    // Older rows may hold any text; never let it become a path inside the zip.
+    const split = splitSchema.catch("unassigned").parse(photo.split);
     const buffer = await fs.readFile(uploadPath("photos", photo.filename)).catch(() => null);
     if (!buffer) continue;
     dataset.file(`images/${split}/${photo.filename}`, buffer);
