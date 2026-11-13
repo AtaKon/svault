@@ -224,6 +224,9 @@ All notable changes to SVault are documented here. The format follows
 
 ### Fixed
 
+- Recipe edits preserve ingredient links and notes and step timers. Replacing a recipe scan no longer
+  reuses a previous photo or OCR result; the espresso form and photo filters also work on small screens.
+
 - Archive upload cleanup now covers Multer errors while keeping deletion inside the temporary destination. PDF.js 6 is smoke-tested in CI, and the Docker runtime enforces its Node.js engine floor.
 - Bill photo resizing now treats a positive-infinite edge limit as “do not downscale”; invalid nonpositive or NaN limits still produce a valid minimum canvas.
 - Deleting an item now removes its low-stock and expiry reminders, and the reminder scan

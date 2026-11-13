@@ -25,7 +25,7 @@ export function recipeFormRows(ingredients: RecipeIngredient[], steps: RecipeSte
 
 export function recipeFormPayload(ingredients: IngredientRow[], steps: RecipeStep[]) {
   return {
-    steps: steps.map((step) => ({ ...step, text: step.text.trim() })).filter((step) => step.text),
+    steps: steps.map((step) => ({ text: step.text.trim(), timerSeconds: step.timerSeconds })).filter((step) => step.text),
     ingredients: ingredients.filter((row) => row.name.trim()).map((row) => ({
       itemId: row.itemId ?? null,
       note: row.note ?? null,

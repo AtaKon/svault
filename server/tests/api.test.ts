@@ -2052,6 +2052,13 @@ describe("inventory and stock", () => {
     assert.equal(localLine.status, 201);
     const shoppingPatch = await request(`/api/houses/${houseId}/shopping/${localLine.data.item.id}`, { method: "PATCH", body: { categoryId } });
     assert.equal(shoppingPatch.status, 400);
+    const setCategory = await request(`/api/houses/${houseId}/shopping/${localLine.data.item.id}`, { method: "PATCH", body: { categoryId: localCategories.data[0].id } });
+    assert.equal(setCategory.status, 200);
+    const clearCategory = await request(`/api/houses/${houseId}/shopping/${localLine.data.item.id}`, { method: "PATCH", body: { categoryId: null } });
+    assert.equal(clearCategory.status, 200);
+    assert.equal(clearCategory.data.item.categoryId, null);
+    const stranger = await request(`/api/items/${itemId}`, { method: "PATCH", auth: secondUserCookie, body: { categoryId, name: "Unauthorized" } });
+    assert.equal(stranger.status, 404);
     const localLocations = await request(`/api/houses/${houseId}/locations`);
     for (const [fromLocationId, toLocationId] of [[locationId, localLocations.data[0].id], [localLocations.data[0].id, locationId]]) {
       const move = await request(`/api/items/${itemId}/stock`, { method: "POST", body: { action: "move", quantity: 1, fromLocationId, toLocationId } });
@@ -5084,6 +5091,8 @@ describe("recipes", () => {
     assert.equal(created.status, 201);
     const loaded = await request(`/api/recipes/${created.data.id}`);
     const rows = recipeFormRows(loaded.data.ingredients, loaded.data.steps);
+    const shaped = recipeFormPayload(rows.ingredients, [{ text: "Wait", timerSeconds: 90, extra: "ignored" } as any]);
+    assert.deepEqual(shaped.steps[0], { text: "Wait", timerSeconds: 90 });
     const saved = await request(`/api/recipes/${created.data.id}`, { method: "PATCH", body: { title: "Renamed", ...recipeFormPayload(rows.ingredients, rows.steps) } });
     assert.equal(saved.status, 200);
     const reloaded = await request(`/api/recipes/${created.data.id}`);
@@ -5497,6 +5506,27 @@ describe("photos and datasets", () => {
       assert.equal(upload.status, 201);
       const deleted = await request(`/api/photos/${upload.data.photos[0].id}`, { method: "DELETE" });
       assert.equal(deleted.status, 200);
+    }
+  });
+
+  it("rolls back rows and removes files if a photo insert fails", async () => {
+    if (databaseKind() !== "sqlite") return;
+    const imageDir = path.join(dataDir, "uploads", "photos");
+    const before = readdirSync(imageDir).sort();
+    const countBefore = await get<any>("SELECT COUNT(*) AS n FROM photos WHERE house_id = ?", [houseId]);
+    await run(`CREATE TRIGGER reject_test_photo BEFORE INSERT ON photos WHEN NEW.original_name = 'fail.png'
+      BEGIN SELECT RAISE(FAIL, 'forced photo insert failure'); END`);
+    try {
+      const png = encodePng(8, 8, Buffer.alloc(8 * 8 * 4, 220));
+      const form = new FormData();
+      form.append("photos", new Blob([new Uint8Array(png)], { type: "image/png" }), "first.png");
+      form.append("photos", new Blob([new Uint8Array(png)], { type: "image/png" }), "fail.png");
+      const upload = await request(`/api/houses/${houseId}/photos`, { method: "POST", body: form });
+      assert.equal(upload.status, 500);
+      assert.deepEqual(readdirSync(imageDir).sort(), before);
+      assert.equal((await get<any>("SELECT COUNT(*) AS n FROM photos WHERE house_id = ?", [houseId]))?.n, countBefore?.n);
+    } finally {
+      await run("DROP TRIGGER IF EXISTS reject_test_photo");
     }
   });
 
