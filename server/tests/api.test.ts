@@ -6986,6 +6986,10 @@ describe("two-factor authentication", () => {
   });
 
   it("exposes passkey options and rejects an unknown assertion", async () => {
+    const fixture = await request("/api/auth/register", {
+      method: "POST", body: { name: "Passkey Fixture", email: "passkey-fixture@example.com", password: "test password" },
+    });
+    assert.equal(fixture.status, 201);
     const options = await request("/api/auth/passkeys/login/options", { method: "POST", body: {} });
     assert.equal(options.status, 200);
     assert.ok(options.data.challengeId);
@@ -7000,7 +7004,7 @@ describe("two-factor authentication", () => {
     assert.equal(unknown.data.hasPasskeys, false);
     assert.equal(unknown.data.discoverable, false);
     const known = await request("/api/auth/passkeys/login/options", {
-      method: "POST", body: { identifier: "owner@example.com" },
+      method: "POST", body: { identifier: "passkey-fixture@example.com" },
     });
     assert.equal(known.status, 200);
     // This fixture must have no credentials for the comparison to be meaningful.
@@ -7008,7 +7012,7 @@ describe("two-factor authentication", () => {
     assert.deepEqual(unknown.data.options.allowCredentials, known.data.options.allowCredentials);
     assert.equal(unknown.data.hasPasskeys, known.data.hasPasskeys);
     assert.equal(unknown.data.discoverable, known.data.discoverable);
-    const owner = await get<any>("SELECT id FROM users WHERE email = ?", ["owner@example.com"]);
+    const owner = fixture.data.user;
     const otherUser = (await request("/api/auth/me", { auth: secondUserCookie })).data.user;
     await run("INSERT INTO passkeys (id, user_id, credential_id, public_key, created_at) VALUES (?, ?, ?, ?, ?)",
       ["passkey-options-test", owner.id, "credential-options-test", "key", new Date().toISOString()]);
@@ -7016,7 +7020,7 @@ describe("two-factor authentication", () => {
       ["passkey-foreign-test", otherUser.id, "credential-foreign-test", "key", new Date().toISOString()]);
     try {
       const withPasskey = await request("/api/auth/passkeys/login/options", {
-        method: "POST", body: { identifier: "owner@example.com" },
+        method: "POST", body: { identifier: "passkey-fixture@example.com" },
       });
       assert.equal(withPasskey.data.hasPasskeys, true);
       assert.equal(withPasskey.data.options.allowCredentials[0].id, "credential-options-test");
@@ -7031,7 +7035,7 @@ describe("two-factor authentication", () => {
       await run("DELETE FROM passkeys WHERE id = ?", ["passkey-options-test"]);
       await run("DELETE FROM passkeys WHERE id = ?", ["passkey-foreign-test"]);
     }
-    for (const identifier of ["owner@example.com", "missing-passkey-user@example.com"]) {
+    for (const identifier of ["passkey-fixture@example.com", "missing-passkey-user@example.com"]) {
       const challenge = await request("/api/auth/passkeys/login/options", { method: "POST", body: { identifier } });
       const rejected = await request("/api/auth/passkeys/login/verify", {
         method: "POST", body: { challengeId: challenge.data.challengeId, response: { id: "missing" } },
@@ -9655,7 +9659,12 @@ describe("insights, household split and admin console", () => {
   it("allows settlement by a party and by an uninvolved admin", async () => {
     const house = await request("/api/houses", { method: "POST", body: { name: "Settlement permissions", currency: "EUR" } });
     const ownerId = (await request("/api/auth/me")).data.user.id;
-    const memberId = (await request("/api/auth/me", { auth: secondUserCookie })).data.user.id;
+    const member = await request("/api/auth/register", {
+      method: "POST", body: { name: "Settlement Member", email: "settlement-member@example.com", password: "test password" },
+    });
+    assert.equal(member.status, 201);
+    const memberId = member.data.user.id;
+    assert.notEqual(memberId, ownerId);
     const admin = await request("/api/auth/register", {
       method: "POST", body: { name: "Settlement Admin", email: "settlement-admin@example.com", password: "test password" },
     });
@@ -9666,7 +9675,7 @@ describe("insights, household split and admin console", () => {
       method: "POST", body: { vendorName: "Market", currency: "EUR", total: 2, paidBy: ownerId, splitWith: [ownerId, memberId], lines: [{ description: "Shared", quantity: 1, lineTotal: 2 }] },
     });
     assert.equal(receipt.status, 201, JSON.stringify(receipt.data));
-    for (const auth of [secondUserCookie, admin.cookie]) {
+    for (const auth of [member.cookie, admin.cookie]) {
       const result = await request(`/api/houses/${house.data.id}/insights/settlements`, {
         method: "POST", auth: auth ?? undefined, body: { fromUserId: memberId, toUserId: ownerId, amount: 0.01, idempotencyKey: randomUUID() },
       });

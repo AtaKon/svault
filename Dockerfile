@@ -7,9 +7,10 @@ COPY package.json package-lock.json ./
 RUN npm ci --include=optional --no-audit --no-fund
 
 FROM deps AS build
+ARG APP_BUILD_VERSION=""
 WORKDIR /app
 COPY . .
-RUN npm run build && npm prune --omit=dev --omit=optional
+RUN SV_VERSION="$APP_BUILD_VERSION" npm run build && npm prune --omit=dev --omit=optional
 
 FROM node:22-bookworm-slim AS runtime
 ARG APP_BUILD_VERSION=""
