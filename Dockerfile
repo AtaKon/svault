@@ -12,9 +12,11 @@ COPY . .
 RUN npm run build && npm prune --omit=dev --omit=optional
 
 FROM node:22-bookworm-slim AS runtime
+ARG APP_BUILD_VERSION=""
 ENV NODE_ENV=production \
     PORT=4000 \
-    DATA_DIR=/data
+    DATA_DIR=/data \
+    SV_VERSION=${APP_BUILD_VERSION}
 WORKDIR /app
 RUN groupadd --system svault && useradd --system --gid svault svault \
  && mkdir -p /data && chown -R svault:svault /data

@@ -9564,6 +9564,27 @@ describe("insights, household split and admin console", () => {
     assert.ok(waste.data.topItems.some((item: any) => item.itemName === "Waste bread"));
   });
 
+  it("hides foreign category names in purchase and waste reports", async () => {
+    const foreign = await request("/api/houses", { method: "POST", body: { name: "Foreign report categories" } });
+    const category = (await request(`/api/houses/${foreign.data.id}/categories`)).data[0];
+    const bread = await get<any>("SELECT id, category_id FROM items WHERE house_id = ? AND name = ?", [insightHouse, "Waste bread"]);
+    const milk = await get<any>("SELECT category_id FROM items WHERE id = ?", [milkId]);
+    await run("UPDATE items SET category_id = ? WHERE id IN (?, ?)", [category.id, milkId, bread.id]);
+    try {
+      const spend = await request(`/api/houses/${insightHouse}/insights/spend?months=6`);
+      assert.ok(spend.data.byCategory.some((entry: any) => entry.name === "Everything else"));
+      assert.ok(!spend.data.byCategory.some((entry: any) => entry.name === category.name));
+      const purchases = await request(`/api/houses/${insightHouse}/purchases/analytics`);
+      assert.ok(purchases.data.byCategory.some((entry: any) => entry.categoryName === "Uncategorised"));
+      assert.ok(!purchases.data.byCategory.some((entry: any) => entry.categoryName === category.name));
+      const waste = await request(`/api/houses/${insightHouse}/insights/waste?months=6`);
+      assert.equal(waste.data.topItems.find((entry: any) => entry.itemName === "Waste bread").category, null);
+    } finally {
+      await run("UPDATE items SET category_id = ? WHERE id = ?", [milk.category_id, milkId]);
+      await run("UPDATE items SET category_id = ? WHERE id = ?", [bread.category_id, bread.id]);
+    }
+  });
+
   it("splits receipts between the people who paid", async () => {
     const changed = await request(`/api/receipts/${latestReceiptId}`, {
       method: "PATCH",
@@ -9615,6 +9636,28 @@ describe("insights, household split and admin console", () => {
     });
     assert.equal(untouched.status, 200);
     assert.equal(untouched.data.paidBy, first.userId);
+  });
+
+  it("allows settlement by a party and by an uninvolved admin", async () => {
+    const house = await request("/api/houses", { method: "POST", body: { name: "Settlement permissions", currency: "EUR" } });
+    const ownerId = (await request("/api/auth/me")).data.user.id;
+    const memberId = (await request("/api/auth/me", { auth: secondUserCookie })).data.user.id;
+    const admin = await request("/api/auth/register", {
+      method: "POST", body: { name: "Settlement Admin", email: "settlement-admin@example.com", password: "test password" },
+    });
+    for (const [id, role] of [[memberId, "member"], [admin.data.user.id, "admin"]]) {
+      await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [house.data.id, id, role, new Date().toISOString()]);
+    }
+    const receipt = await request(`/api/houses/${house.data.id}/receipts`, {
+      method: "POST", body: { vendorName: "Market", currency: "EUR", total: 2, paidBy: ownerId, splitWith: [ownerId, memberId], lines: [{ description: "Shared", quantity: 1, lineTotal: 2 }] },
+    });
+    assert.equal(receipt.status, 201, JSON.stringify(receipt.data));
+    for (const auth of [secondUserCookie, admin.cookie]) {
+      const result = await request(`/api/houses/${house.data.id}/insights/settlements`, {
+        method: "POST", auth: auth ?? undefined, body: { fromUserId: memberId, toUserId: ownerId, amount: 0.01, idempotencyKey: randomUUID() },
+      });
+      assert.equal(result.status, 201, JSON.stringify(result.data));
+    }
   });
 
   it("settles a three-person house with the smallest set of transfers", async () => {

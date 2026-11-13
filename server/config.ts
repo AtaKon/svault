@@ -59,7 +59,7 @@ const megabytes = (value: string | undefined, fallback: number) => {
 export const RESTORE_MAX_BYTES = megabytes(process.env.SV_RESTORE_MAX_MB, 512);
 /** YOLO/COCO zip archives accepted by the dataset import. */
 export const DATASET_MAX_BYTES = megabytes(process.env.SV_DATASET_MAX_MB, 256);
-export const APP_VERSION = process.env.SV_VERSION ?? PACKAGE_VERSION;
+export const APP_VERSION = process.env.SV_VERSION || PACKAGE_VERSION;
 export const SCHEMA_VERSION = 4;
 
 /**
