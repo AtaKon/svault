@@ -8,6 +8,8 @@ All notable changes to SVault are documented here. The format follows
 
 ### Security
 
+- The development request log and the AI provider label no longer print query strings, which can
+  carry OIDC `code`/`state`, invite codes or search terms.
 - Recipe ingredients can link only to items of the recipe's household, and the meal-plan shopping
   list only reads categories from the plan's own household.
 - Open Food Facts contributions refuse an item from another household (price contributions accepted

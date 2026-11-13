@@ -34,6 +34,7 @@ import { insightRoutes } from "./routes/insights.js";
 import { adminRoutes } from "./routes/admin.js";
 import { apiTokenRoutes } from "./routes/api-tokens.js";
 import { inMaintenance } from "./maintenance.js";
+import { stripQuery } from "./lib/redact.js";
 import { assertAiBudget } from "./services/ai-budget.js";
 import { scanAllHouses } from "./services/notifications.js";
 import { seedVendorCatalog } from "./services/vendors.js";
@@ -194,7 +195,7 @@ if (!IS_PROD) {
     const start = Date.now();
     res.on("finish", () => {
       if (req.path.startsWith("/api")) {
-        console.log(`${req.method} ${req.originalUrl} ${res.statusCode} ${Date.now() - start}ms`);
+        console.log(`${req.method} ${stripQuery(req.originalUrl)} ${res.statusCode} ${Date.now() - start}ms`);
       }
     });
     next();

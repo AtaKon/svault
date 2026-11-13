@@ -6466,6 +6466,14 @@ describe("security hardening", () => {
     assert.ok(missing > known * 0.4, `unknown ${missing.toFixed(1)}ms vs known ${known.toFixed(1)}ms`);
   });
 
+  it("drops query strings and fragments before a URL is logged", async () => {
+    const { stripQuery } = await import("../lib/redact.js");
+    assert.equal(stripQuery("/api/auth/oidc/callback?code=abc&state=xyz"), "/api/auth/oidc/callback");
+    assert.equal(stripQuery("/api/auth/invites/CODE?x=1#frag"), "/api/auth/invites/CODE");
+    assert.equal(stripQuery("/api/houses/1/items"), "/api/houses/1/items");
+    assert.equal(stripQuery("not a url?token=secret"), "not a url");
+  });
+
   it("masks card numbers, IDs and contact details in AI log previews", async () => {
     const { maskSensitiveText, isValidGtin } = await import("../lib/redact.js");
     const receipt = [

@@ -1,6 +1,7 @@
 import { AI_ENV, AI_LOG_PREVIEW_CHARS } from "./config.js";
 import { ApiError } from "./http.js";
 import { recordAiCall } from "./services/ai-logs.js";
+import { stripQuery } from "./lib/redact.js";
 import { OutboundBlockedError, assertOutboundUrl, outboundFetch, outboundRedirectMode } from "./lib/outbound.js";
 import {
   canRetryRecipeReasoningOff,
@@ -198,7 +199,7 @@ function providerLabel(baseUrl: string): string {
     const url = new URL(baseUrl);
     return `${url.host}${url.pathname.replace(/\/+$/, "")}`.slice(0, 200);
   } catch {
-    return (baseUrl || "").replace(/\/+$/, "").slice(0, 200);
+    return stripQuery(baseUrl || "").replace(/\/+$/, "").slice(0, 200);
   }
 }
 
