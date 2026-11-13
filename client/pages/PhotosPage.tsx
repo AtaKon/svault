@@ -218,8 +218,10 @@ export function PhotosPage() {
       <div className="no-scrollbar -mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
         <button
           onClick={() => {
-            setParam("collection", null);
-            setParam("unlabeled", null);
+            const next = new URLSearchParams(params);
+            next.delete("collection");
+            next.delete("unlabeled");
+            setParams(next, { replace: true });
           }}
           className={cn(
             "flex shrink-0 items-center gap-2 rounded-xl border px-3 py-2 text-left transition-colors",

@@ -146,13 +146,8 @@ passkeyRoutes.delete(
   requireAuth,
   handler(async (req, res) => {
     const targetId = String(req.params.userId);
-    if (targetId !== req.user!.id) {
-      const sharedOwner = await get<any>(
-        `SELECT 1 AS ok FROM house_members a JOIN house_members b ON b.house_id = a.house_id
-         WHERE a.user_id = ? AND b.user_id = ? AND a.role = 'owner' LIMIT 1`,
-        [req.user!.id, targetId],
-      );
-      if (!req.user!.isAdmin && !sharedOwner) throw new ApiError(403, "Requires owner or instance admin access");
+    if (targetId !== req.user!.id && !req.user!.isAdmin) {
+      throw new ApiError(403, "Requires instance admin access");
     }
     await deleteAllPasskeys(targetId);
     res.json({ ok: true });

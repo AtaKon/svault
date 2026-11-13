@@ -75,6 +75,7 @@ shoppingRoutes.post(
   handler(async (req, res) => {
     const { houseId } = await requireHouse(req, "member");
     const body = parseBody(lineBody, req.body);
+    if (body.categoryId && !await get("SELECT id FROM categories WHERE id = ? AND house_id = ?", [body.categoryId, houseId])) throw new ApiError(400, "Category does not exist in this house");
     let item: any = null;
     if (body.itemId) {
       item = await itemRow(houseId, body.itemId);
@@ -102,6 +103,7 @@ shoppingRoutes.patch(
     const current = await shoppingRow(houseId, String(req.params.entryId));
     if (!current) throw new ApiError(404, "Shopping list item not found");
     const body = parseBody(lineBody.partial().extend({ checked: z.boolean().optional() }), req.body);
+    if (body.categoryId && !await get("SELECT id FROM categories WHERE id = ? AND house_id = ?", [body.categoryId, houseId])) throw new ApiError(400, "Category does not exist in this house");
     let itemId = current.item_id;
     if (body.itemId !== undefined) {
       if (body.itemId) {

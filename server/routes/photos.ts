@@ -191,6 +191,9 @@ photoRoutes.post(
     if (collectionId && !await get("SELECT id FROM photo_collections WHERE id = ? AND house_id = ?", [collectionId, houseId])) {
       throw new ApiError(400, "Folder does not belong to this house");
     }
+    if (req.body.itemId && !await get("SELECT id FROM items WHERE id = ? AND house_id = ?", [String(req.body.itemId), houseId])) {
+      throw new ApiError(400, "Item does not belong to this house");
+    }
     const split = splitSchema.catch("unassigned").parse(req.body.split ?? "unassigned");
     let meta: any[] = [];
     if (req.body.meta) {
@@ -251,6 +254,12 @@ singlePhotoRoutes.patch(
       }),
       req.body,
     );
+    if (body.collectionId && !await get("SELECT id FROM photo_collections WHERE id = ? AND house_id = ?", [body.collectionId, photo.house_id])) {
+      throw new ApiError(400, "Folder does not belong to this house");
+    }
+    if (body.itemId && !await get("SELECT id FROM items WHERE id = ? AND house_id = ?", [body.itemId, photo.house_id])) {
+      throw new ApiError(400, "Item does not belong to this house");
+    }
     await run(
       `UPDATE photos SET collection_id = ?, notes = ?, split = ?, item_id = ?, width = ?, height = ?, captured_at = ?
        WHERE id = ?`,

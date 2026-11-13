@@ -715,6 +715,9 @@ inventoryRoutes.post(
     if (body.categoryId && !await get("SELECT id FROM categories WHERE id = ? AND house_id = ?", [body.categoryId, houseId])) {
       throw new ApiError(400, "Category does not exist in this house");
     }
+    if (body.initialStock?.locationId && !await get("SELECT id FROM locations WHERE id = ? AND house_id = ?", [body.initialStock.locationId, houseId])) {
+      throw new ApiError(400, "Location does not exist in this house");
+    }
     if (body.initialStock?.vendorId && !await get("SELECT id FROM vendors WHERE id = ? AND house_id = ?", [body.initialStock.vendorId, houseId])) {
       throw new ApiError(400, "Shop does not exist in this house");
     }
@@ -1000,6 +1003,9 @@ itemRoutes.patch(
       }),
       req.body,
     );
+    if (body.categoryId && !await get("SELECT id FROM categories WHERE id = ? AND house_id = ?", [body.categoryId, item.house_id])) {
+      throw new ApiError(400, "Category does not exist in this house");
+    }
     const normalized = normalizeItemAttributes(
       body.attributes ?? parseJson<Record<string, unknown>>(item.attributes, {}),
       body.brand === undefined ? (item.brand ?? undefined) : body.brand,

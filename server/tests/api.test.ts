@@ -2025,6 +2025,24 @@ describe("inventory and stock", () => {
     itemId = res.data.id;
   });
 
+  it("rejects category and stock locations outside the household", async () => {
+    const foreignHouse = await request("/api/houses", { method: "POST", body: { name: "Foreign references" } });
+    assert.equal(foreignHouse.status, 201);
+    const foreignId = foreignHouse.data.id;
+    const categories = await request(`/api/houses/${foreignId}/categories`);
+    const locations = await request(`/api/houses/${foreignId}/locations`);
+    const categoryId = categories.data[0].id;
+    const locationId = locations.data[0].id;
+    const patch = await request(`/api/items/${itemId}`, { method: "PATCH", body: { categoryId } });
+    assert.equal(patch.status, 400);
+    const shopping = await request(`/api/houses/${houseId}/shopping`, { method: "POST", body: { name: "Foreign category", categoryId } });
+    assert.equal(shopping.status, 400);
+    const stock = await request(`/api/items/${itemId}/stock`, { method: "POST", body: { action: "add", quantity: 1, locationId } });
+    assert.equal(stock.status, 400);
+    const create = await request(`/api/houses/${houseId}/items`, { method: "POST", body: { name: "Invalid location", initialStock: { quantity: 1, locationId } } });
+    assert.equal(create.status, 400);
+  });
+
   it("rejects duplicate barcodes", async () => {
     const res = await request(`/api/houses/${houseId}/items`, {
       method: "POST",

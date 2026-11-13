@@ -11,6 +11,7 @@ import type { Recipe } from "@shared/types";
 import { useI18n } from "@/i18n";
 
 interface IngredientRow {
+  itemId?: string | null;
   name: string;
   quantity: string;
   unit: string;
@@ -42,7 +43,7 @@ export function RecipeFormPage() {
   const [aiNotes, setAiNotes] = useState<string | null>(null);
   const [favorite, setFavorite] = useState(false);
   const [ingredients, setIngredients] = useState<IngredientRow[]>([{ name: "", quantity: "", unit: "", optional: false }]);
-  const [steps, setSteps] = useState<string[]>([""]);
+  const [steps, setSteps] = useState<{ text: string; timerSeconds?: number | null }[]>([{ text: "" }]);
 
   useEffect(() => {
     if (!editing) return;
@@ -63,6 +64,7 @@ export function RecipeFormPage() {
         setIngredients(
           recipe.ingredients.length
             ? recipe.ingredients.map((ingredient) => ({
+                itemId: ingredient.itemId,
                 name: ingredient.name,
                 quantity: ingredient.quantity != null ? String(ingredient.quantity) : "",
                 unit: ingredient.unit ?? "",
@@ -70,7 +72,7 @@ export function RecipeFormPage() {
               }))
             : [{ name: "", quantity: "", unit: "", optional: false }],
         );
-        setSteps(recipe.steps.length ? recipe.steps.map((step) => step.text) : [""]);
+        setSteps(recipe.steps.length ? recipe.steps.map((step) => ({ text: step.text, timerSeconds: step.timerSeconds })) : [{ text: "" }]);
         setLoading(false);
       })
       .catch((err) => {
@@ -116,10 +118,11 @@ export function RecipeFormPage() {
         source,
         aiNotes,
         favorite,
-        steps: steps.map((text) => text.trim()).filter(Boolean).map((text) => ({ text })),
+        steps: steps.map((step) => ({ ...step, text: step.text.trim() })).filter((step) => step.text),
         ingredients: ingredients
           .filter((row) => row.name.trim())
           .map((row) => ({
+            itemId: row.itemId ?? null,
             name: row.name.trim(),
             quantity: row.quantity ? Number(row.quantity) : null,
             unit: row.unit.trim() || null,
@@ -236,7 +239,7 @@ export function RecipeFormPage() {
           <Card className="p-4">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="font-display text-lg">{t("Method")}</h2>
-              <Button type="button" size="sm" variant="secondary" icon="plus" onClick={() => setSteps((current) => [...current, ""])}>
+              <Button type="button" size="sm" variant="secondary" icon="plus" onClick={() => setSteps((current) => [...current, { text: "" }])}>
                 {t("Add step ")}</Button>
             </div>
             <div className="space-y-2">
@@ -247,8 +250,8 @@ export function RecipeFormPage() {
                   </span>
                   <Textarea
                     rows={2}
-                    value={step}
-                    onChange={(e) => setSteps((current) => current.map((value, i) => (i === index ? e.target.value : value)))}
+                    value={step.text}
+                    onChange={(e) => setSteps((current) => current.map((value, i) => (i === index ? { ...value, text: e.target.value } : value)))}
                     placeholder={index === 0 ? t("Preheat the oven to 180°C…") : t("Next step…")}
                     className="text-[13px]"
                   />
