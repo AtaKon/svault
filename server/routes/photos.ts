@@ -200,7 +200,8 @@ photoRoutes.post(
     let meta: any[] = [];
     if (req.body.meta) {
       try {
-        meta = JSON.parse(String(req.body.meta));
+        const parsed: unknown = JSON.parse(String(req.body.meta));
+        meta = Array.isArray(parsed) ? parsed : [];
       } catch {
         meta = [];
       }

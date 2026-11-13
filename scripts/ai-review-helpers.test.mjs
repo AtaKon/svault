@@ -138,3 +138,9 @@ test("review lookup finds comments past the first page and stops at the limit", 
   assert.equal(await findReviewComment(async () => [], "<!-- marker -->"), undefined);
   await assert.rejects(findReviewComment(async () => ordinary, "<!-- marker -->"), /Too many comments/);
 });
+
+test("per-commit lookup does not reuse a legacy review comment", async () => {
+  const legacy = { user: { login: "github-actions[bot]" }, body: "<!-- svault-ai-review -->\nOld review" };
+  const result = await findReviewComment(async () => [legacy], "<!-- svault-ai-review:abcdef -->");
+  assert.equal(result, undefined);
+});

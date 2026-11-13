@@ -5487,6 +5487,19 @@ describe("photos and datasets", () => {
     assert.equal(split.data.split, "train");
   });
 
+  it("accepts malformed and non-array photo metadata as empty metadata", async () => {
+    const png = encodePng(8, 8, Buffer.alloc(8 * 8 * 4, 220));
+    for (const meta of ["null", "{}", "not json"]) {
+      const form = new FormData();
+      form.append("photos", new Blob([new Uint8Array(png)], { type: "image/png" }), "metadata.png");
+      form.append("meta", meta);
+      const upload = await request(`/api/houses/${houseId}/photos`, { method: "POST", body: form });
+      assert.equal(upload.status, 201);
+      const deleted = await request(`/api/photos/${upload.data.photos[0].id}`, { method: "DELETE" });
+      assert.equal(deleted.status, 200);
+    }
+  });
+
   it("rejects links to another household's item and folder", async () => {
     const other = await request("/api/auth/me", { auth: secondUserCookie });
     const otherHouse = other.data.houses.find((h: any) => h.role === "owner").id;
