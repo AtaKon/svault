@@ -347,6 +347,12 @@ async function itemDetail(itemId: string, userId: string) {
   return { ...item, lots, movements, priceHistory, recipes, priceStats: await priceStats(itemId, item.unit) };
 }
 
+async function validateHouseReference(table: "locations" | "categories", id: string | null | undefined, houseId: string, selfId?: string) {
+  if (id != null && (id === selfId || !await get(`SELECT id FROM ${table} WHERE id = ? AND house_id = ?`, [id, houseId]))) {
+    throw new ApiError(400, "Invalid household reference");
+  }
+}
+
 /* ---------------------------------------------------------------- locations */
 
 inventoryRoutes.get(
@@ -375,6 +381,7 @@ inventoryRoutes.post(
       }),
       req.body,
     );
+    await validateHouseReference("locations", body.parentId, houseId);
     const id = newId("loc");
     await run("INSERT INTO locations (id, house_id, name, kind, icon, parent_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", [
       id,
@@ -404,6 +411,7 @@ inventoryRoutes.patch(
     );
     const current = await get<any>("SELECT * FROM locations WHERE id = ? AND house_id = ?", [req.params.locationId, houseId]);
     if (!current) throw new ApiError(404, "Location not found");
+    await validateHouseReference("locations", body.parentId, houseId, current.id);
     await run("UPDATE locations SET name = ?, kind = ?, icon = ?, parent_id = ? WHERE id = ?", [
       body.name ?? current.name,
       body.kind ?? current.kind,
@@ -451,6 +459,7 @@ inventoryRoutes.post(
       }),
       req.body,
     );
+    await validateHouseReference("categories", body.parentId, houseId);
     const id = newId("cat");
     await run("INSERT INTO categories (id, house_id, name, icon, parent_id, created_at) VALUES (?, ?, ?, ?, ?, ?)", [
       id,
@@ -478,6 +487,7 @@ inventoryRoutes.patch(
     );
     const current = await get<any>("SELECT * FROM categories WHERE id = ? AND house_id = ?", [req.params.categoryId, houseId]);
     if (!current) throw new ApiError(404, "Category not found");
+    await validateHouseReference("categories", body.parentId, houseId, current.id);
     await run("UPDATE categories SET name = ?, icon = ?, parent_id = ? WHERE id = ?", [
       body.name ?? current.name,
       body.icon === undefined ? current.icon : body.icon,
@@ -532,6 +542,7 @@ inventoryRoutes.post(
   handler(async (req, res) => {
     const { houseId } = await requireHouse(req, "admin");
     const body = parseBody(attributeBody, req.body);
+    await validateHouseReference("categories", body.categoryId, houseId);
     if (RESERVED_ATTRIBUTE_KEY_SET.has(body.key)) {
       throw new ApiError(400, `"${body.key}" is a built-in item field and cannot be a custom attribute`);
     }
@@ -570,6 +581,7 @@ inventoryRoutes.patch(
     ]);
     if (!current) throw new ApiError(404, "Attribute not found");
     const body = parseBody(attributeBody.partial(), req.body);
+    await validateHouseReference("categories", body.categoryId, houseId);
     if (body.key && RESERVED_ATTRIBUTE_KEY_SET.has(body.key)) {
       throw new ApiError(400, `"${body.key}" is a built-in item field and cannot be a custom attribute`);
     }

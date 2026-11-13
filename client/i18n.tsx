@@ -2264,6 +2264,7 @@ const EL: Record<string, string> = {
   "Attach a YOLO or COCO zip": "Επισύναψε ένα αρχείο zip YOLO ή COCO.",
   "Attribute not found": "Το χαρακτηριστικό δεν βρέθηκε.",
   "Category does not exist in this house": "Η κατηγορία δεν υπάρχει σε αυτό το σπίτι.",
+  "Invalid household reference": "Μη έγκυρη αναφορά νοικοκυριού.",
   "Category not found": "Η κατηγορία δεν βρέθηκε.",
   "Choose the target label": "Επίλεξε την ετικέτα προορισμού.",
   "Class mapping must be JSON": "Η αντιστοίχιση κλάσεων πρέπει να είναι JSON.",

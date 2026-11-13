@@ -13,6 +13,8 @@ All notable changes to SVault are documented here. The format follows
 - Dataset imports read archive entries with a size cap per entry, a total inflate budget and an entry
   limit, so a small zip can no longer expand into gigabytes in server memory.
 
+- Validate location and category parents and attribute categories against their household.
+
 - Item categories, stock locations, and photo folder and item links are now validated against the
   owning household to prevent cross-household references.
 

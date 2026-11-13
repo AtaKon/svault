@@ -2035,6 +2035,27 @@ describe("inventory and stock", () => {
     itemId = res.data.id;
   });
 
+  it("rejects foreign and self references in household taxonomies", async () => {
+    const foreign = await request("/api/houses", { method: "POST", body: { name: "Foreign taxonomy" } });
+    const foreignId = foreign.data.id;
+    for (const type of ["locations", "categories"]) {
+      const foreignRows = await request(`/api/houses/${foreignId}/${type}`);
+      const localRows = await request(`/api/houses/${houseId}/${type}`);
+      const foreignIdValue = foreignRows.data[0].id;
+      const localId = localRows.data[0].id;
+      assert.equal((await request(`/api/houses/${houseId}/${type}`, { method: "POST", body: { name: "Invalid", parentId: foreignIdValue } })).status, 400);
+      for (const parentId of [foreignIdValue, localId]) {
+        assert.equal((await request(`/api/houses/${houseId}/${type}/${localId}`, { method: "PATCH", body: { parentId } })).status, 400);
+      }
+    }
+    const foreignCategories = await request(`/api/houses/${foreignId}/categories`);
+    const categoryId = foreignCategories.data[0].id;
+    assert.equal((await request(`/api/houses/${houseId}/attributes`, { method: "POST", body: { key: "cross_house", label: "Cross house", type: "text", categoryId } })).status, 400);
+    const created = await request(`/api/houses/${houseId}/attributes`, { method: "POST", body: { key: "local_test", label: "Local test", type: "text" } });
+    assert.equal(created.status, 201);
+    assert.equal((await request(`/api/houses/${houseId}/attributes/${created.data.id}`, { method: "PATCH", body: { categoryId } })).status, 400);
+  });
+
   it("rejects category and stock locations outside the household", async () => {
     const foreignHouse = await request("/api/houses", { method: "POST", body: { name: "Foreign references" } });
     assert.equal(foreignHouse.status, 201);
