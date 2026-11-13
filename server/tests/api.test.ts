@@ -6992,6 +6992,19 @@ describe("two-factor authentication", () => {
     assert.equal(unknown.status, 200);
     assert.equal(unknown.data.hasPasskeys, false);
     assert.equal(unknown.data.discoverable, false);
+    const known = await request("/api/auth/passkeys/login/options", {
+      method: "POST", body: { identifier: "owner@example.com" },
+    });
+    assert.equal(known.status, 200);
+    assert.deepEqual(unknown.data.options.allowCredentials, known.data.options.allowCredentials);
+    assert.equal(unknown.data.hasPasskeys, known.data.hasPasskeys);
+    assert.equal(unknown.data.discoverable, known.data.discoverable);
+    const mismatch = await request("/api/auth/passkeys/login/verify", {
+      method: "POST",
+      body: { challengeId: unknown.data.challengeId, response: { id: "missing" } },
+    });
+    assert.equal(mismatch.status, 401);
+    assert.equal(mismatch.data.error, "Passkey does not match this account");
     const bad = await request("/api/auth/passkeys/login/verify", {
       method: "POST",
       body: { challengeId: options.data.challengeId, response: { id: "missing" } },
