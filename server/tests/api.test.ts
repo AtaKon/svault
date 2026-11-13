@@ -5352,6 +5352,13 @@ describe("ai integration", () => {
       });
       assert.equal(filled.status, 200);
       assert.equal(filled.data.settings.ai.model, "old-model");
+      const partial = await request(`/api/houses/${resetHouse}`, {
+        method: "PATCH", body: { settings: { ai: { baseUrl: null } } },
+      });
+      assert.equal(partial.status, 200);
+      assert.equal("baseUrl" in partial.data.settings.ai, false);
+      assert.equal(partial.data.settings.ai.model, "old-model");
+      assert.equal(partial.data.settings.ai.visionModel, "old-vision");
       const cleared = await request(`/api/houses/${resetHouse}`, {
         method: "PATCH",
         body: { settings: { ai: { baseUrl: "", model: "", visionModel: "" } } },
@@ -7002,29 +7009,36 @@ describe("two-factor authentication", () => {
     assert.equal(unknown.data.hasPasskeys, known.data.hasPasskeys);
     assert.equal(unknown.data.discoverable, known.data.discoverable);
     const owner = await get<any>("SELECT id FROM users WHERE email = ?", ["owner@example.com"]);
+    const otherUser = (await request("/api/auth/me", { auth: secondUserCookie })).data.user;
     await run("INSERT INTO passkeys (id, user_id, credential_id, public_key, created_at) VALUES (?, ?, ?, ?, ?)",
       ["passkey-options-test", owner.id, "credential-options-test", "key", new Date().toISOString()]);
+    await run("INSERT INTO passkeys (id, user_id, credential_id, public_key, created_at) VALUES (?, ?, ?, ?, ?)",
+      ["passkey-foreign-test", otherUser.id, "credential-foreign-test", "key", new Date().toISOString()]);
     try {
       const withPasskey = await request("/api/auth/passkeys/login/options", {
         method: "POST", body: { identifier: "owner@example.com" },
       });
       assert.equal(withPasskey.data.hasPasskeys, true);
       assert.equal(withPasskey.data.options.allowCredentials[0].id, "credential-options-test");
+      for (const challengeId of [known.data.challengeId, withPasskey.data.challengeId, unknown.data.challengeId]) {
+        const crossAccount = await request("/api/auth/passkeys/login/verify", {
+          method: "POST", body: { challengeId, response: { id: "credential-foreign-test" } },
+        });
+        assert.equal(crossAccount.status, 401);
+        assert.equal(crossAccount.data.error, "Passkey does not match this account");
+      }
     } finally {
       await run("DELETE FROM passkeys WHERE id = ?", ["passkey-options-test"]);
+      await run("DELETE FROM passkeys WHERE id = ?", ["passkey-foreign-test"]);
     }
-    const knownAssertion = await request("/api/auth/passkeys/login/verify", {
-      method: "POST",
-      body: { challengeId: known.data.challengeId, response: { id: "missing" } },
-    });
-    assert.equal(knownAssertion.status, 401);
-    assert.equal(knownAssertion.data.error, "Passkey does not match this account");
-    const mismatch = await request("/api/auth/passkeys/login/verify", {
-      method: "POST",
-      body: { challengeId: unknown.data.challengeId, response: { id: "missing" } },
-    });
-    assert.equal(mismatch.status, 401);
-    assert.equal(mismatch.data.error, knownAssertion.data.error);
+    for (const identifier of ["owner@example.com", "missing-passkey-user@example.com"]) {
+      const challenge = await request("/api/auth/passkeys/login/options", { method: "POST", body: { identifier } });
+      const rejected = await request("/api/auth/passkeys/login/verify", {
+        method: "POST", body: { challengeId: challenge.data.challengeId, response: { id: "missing" } },
+      });
+      assert.equal(rejected.status, 401);
+      assert.equal(rejected.data.error, "Passkey does not match this account");
+    }
     const bad = await request("/api/auth/passkeys/login/verify", {
       method: "POST",
       body: { challengeId: options.data.challengeId, response: { id: "missing" } },
@@ -9658,6 +9672,16 @@ describe("insights, household split and admin console", () => {
       });
       assert.equal(result.status, 201, JSON.stringify(result.data));
     }
+    await run("UPDATE house_members SET role = ? WHERE house_id = ? AND user_id = ?", ["viewer", house.data.id, admin.data.user.id]);
+    const attempt = () => request(`/api/houses/${house.data.id}/insights/settlements`, {
+      method: "POST", auth: admin.cookie ?? undefined,
+      body: { fromUserId: memberId, toUserId: ownerId, amount: 0.01, idempotencyKey: randomUUID() },
+    });
+    assert.equal((await attempt()).status, 403);
+    const foreign = await request("/api/houses", { method: "POST", body: { name: "Foreign admin house" } });
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [foreign.data.id, admin.data.user.id, "admin", new Date().toISOString()]);
+    await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [house.data.id, admin.data.user.id]);
+    assert.equal((await attempt()).status, 404);
   });
 
   it("settles a three-person house with the smallest set of transfers", async () => {
