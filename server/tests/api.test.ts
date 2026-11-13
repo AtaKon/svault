@@ -4113,6 +4113,78 @@ describe("OpenFoodFacts links and shared catalogue", () => {
     }
   });
 
+  it("refuses to retry or send a contribution after the contributor loses member access", async () => {
+    const strangerMe = await request("/api/auth/me", { auth: secondUserCookie });
+    const strangerId = strangerMe.data.user.id;
+    if (!strangerMe.data.houses.some((house: any) => house.id === houseId)) {
+      const invite = await request(`/api/houses/${houseId}/members`, {
+        method: "POST",
+        body: { email: "stranger@example.com", role: "member" },
+      });
+      assert.equal(invite.status, 201);
+      const accepted = await request(`/api/auth/invites/${invite.data.invite.code}/accept`, {
+        method: "POST",
+        auth: secondUserCookie,
+      });
+      assert.equal(accepted.status, 200);
+    } else {
+      const promoted = await request(`/api/houses/${houseId}/members/${strangerId}`, {
+        method: "PATCH",
+        body: { role: "member" },
+      });
+      assert.equal(promoted.status, 200);
+    }
+    const contributionId = `offc_left_${randomUUID().slice(0, 8)}`;
+    const stamp = new Date().toISOString();
+    await run(
+      `INSERT INTO off_contributions
+         (id, idempotency_key, user_id, house_id, project, code, kind, payload, field_keys, status, attempts, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'off', '0000000000017', 'missing_fields', '{}', '["brand"]', 'failed', 3, ?, ?)`,
+      [contributionId, `left-${contributionId}`, strangerId, houseId, stamp, stamp],
+    );
+    const savedWrites = process.env.SV_OFF_WRITE_ENABLED;
+    const savedDryRun = process.env.SV_OFF_DRY_RUN;
+    process.env.SV_OFF_WRITE_ENABLED = "true";
+    process.env.SV_OFF_DRY_RUN = "true";
+    try {
+      const demoted = await request(`/api/houses/${houseId}/members/${strangerId}`, {
+        method: "PATCH",
+        body: { role: "viewer" },
+      });
+      assert.equal(demoted.status, 200);
+      const viewerRetry = await request(`/api/off/contributions/${contributionId}/retry`, {
+        method: "POST",
+        auth: secondUserCookie,
+      });
+      assert.equal(viewerRetry.status, 403);
+
+      const removed = await request(`/api/houses/${houseId}/members/${strangerId}`, { method: "DELETE" });
+      assert.equal(removed.status, 200);
+      const formerRetry = await request(`/api/off/contributions/${contributionId}/retry`, {
+        method: "POST",
+        auth: secondUserCookie,
+      });
+      assert.equal(formerRetry.status, 403);
+      const row = await get<any>("SELECT status FROM off_contributions WHERE id = ?", [contributionId]);
+      assert.equal(row.status, "failed");
+
+      // A row already queued (e.g. by the worker's retry schedule) is not sent either.
+      await run("UPDATE off_contributions SET status = 'queued' WHERE id = ?", [contributionId]);
+      const { processContribution, CONTRIBUTOR_LEFT_HOUSE } = await import("../services/off/contributions.js");
+      await processContribution(contributionId);
+      const after = await get<any>("SELECT status, remote_message FROM off_contributions WHERE id = ?", [contributionId]);
+      assert.equal(after.status, "failed");
+      assert.equal(after.remote_message, CONTRIBUTOR_LEFT_HOUSE);
+    } finally {
+      await run("DELETE FROM off_contribution_events WHERE contribution_id = ?", [contributionId]);
+      await run("DELETE FROM off_contributions WHERE id = ?", [contributionId]);
+      if (savedWrites === undefined) delete process.env.SV_OFF_WRITE_ENABLED;
+      else process.env.SV_OFF_WRITE_ENABLED = savedWrites;
+      if (savedDryRun === undefined) delete process.env.SV_OFF_DRY_RUN;
+      else process.env.SV_OFF_DRY_RUN = savedDryRun;
+    }
+  });
+
   it("offers and files a wrong-project report", async () => {
     const beautyCode = "3560070791460";
     const timestamp = new Date().toISOString();

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { all, get, newId, now, parseJson, run } from "../../db.js";
 import { ApiError } from "../../http.js";
+import { memberRole, roleAtLeast } from "../../auth.js";
 import type {
   OffCandidateKind,
   OffContribution,
@@ -276,6 +277,20 @@ function retryDate(attempts: number): string {
   return new Date(Date.now() + delay).toISOString();
 }
 
+/** Message stored when a queued write outlives the contributor's house access. */
+export const CONTRIBUTOR_LEFT_HOUSE = "You are no longer a member of this household, so this contribution was not sent";
+
+/**
+ * A contribution sends one household's data (item details, receipt photos) to
+ * a public service. Only a current member+ of that house may send it, so a
+ * person removed from the house or demoted to viewer cannot replay it later.
+ */
+async function canContributeFor(userId: string, houseId: string | null): Promise<boolean> {
+  if (!houseId) return false;
+  const role = await memberRole(userId, houseId);
+  return Boolean(role && roleAtLeast(role, "member"));
+}
+
 /** Process one queued/retry row. Safe to call from the worker or a test. */
 export async function processContribution(id: string): Promise<void> {
   const claimed = await run(
@@ -289,6 +304,9 @@ export async function processContribution(id: string): Promise<void> {
   if (!row) return;
   const attempts = Number(row.attempts ?? 1);
   try {
+    if (!(await canContributeFor(row.user_id, row.house_id))) {
+      throw new OffWriteError(CONTRIBUTOR_LEFT_HOUSE, { retryable: false });
+    }
     let identity = null;
     if (row.kind !== "price") {
       const identityProject = row.kind === "report" ? "off" : (row.project as OffProjectId);
@@ -337,6 +355,7 @@ export async function retryContribution(id: string, userId: string): Promise<Off
   }
   const row = await get<ContributionRow>("SELECT * FROM off_contributions WHERE id = ? AND user_id = ?", [id, userId]);
   if (!row) return null;
+  if (!(await canContributeFor(userId, row.house_id))) throw new ApiError(403, "Requires member access");
   if (!["failed", "retry"].includes(row.status)) return getContribution(id, userId);
   await run(
     "UPDATE off_contributions SET status = 'queued', attempts = 0, next_attempt_at = ?, updated_at = ? WHERE id = ?",

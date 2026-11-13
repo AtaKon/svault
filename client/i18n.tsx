@@ -2635,6 +2635,7 @@ const EL: Record<string, string> = {
   "New item": "Νέο αντικείμενο",
   "Household bills, PDFs and shared costs": "Λογαριασμοί σπιτιού, PDF και κοινόχρηστα έξοδα",
   "Contribution not found": "Η συνεισφορά δεν βρέθηκε.",
+  "You are no longer a member of this household, so this contribution was not sent": "Δεν είσαι πλέον μέλος αυτού του νοικοκυριού, οπότε η συνεισφορά δεν στάλθηκε.",
   "Contributions appear under your Open Food Facts username. SVault stores only an encrypted session cookie, never your password.": "Οι συνεισφορές εμφανίζονται με το όνομα χρήστη σου στο Open Food Facts. Το SVault αποθηκεύει μόνο ένα κρυπτογραφημένο cookie συνεδρίας, ποτέ τον κωδικό σου.",
   "Share a missing brand, category, nutrition panel or front photo. Review each item's fields before sending; bulk share sends the fields shown on the selected cards.": "Μοιράσου ένα εμπορικό σήμα, κατηγορία, διατροφικό πίνακα ή μπροστινή φωτογραφία που λείπει. Έλεγξε τα πεδία κάθε στοιχείου πριν το στείλεις· η μαζική κοινοποίηση στέλνει τα πεδία που εμφανίζονται στις επιλεγμένες κάρτες.",
   "Contributions are disabled on this server": "Οι συνεισφορές είναι απενεργοποιημένες σε αυτόν τον διακομιστή.",
