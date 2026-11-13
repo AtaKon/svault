@@ -48,6 +48,8 @@ All notable changes to SVault are documented here. The format follows
 - Dataset exports quote class names in `data.yaml` and flatten line breaks in label text. A label
   with a line break could add top-level keys (for example a training tool's `download:` command)
   to the YAML that another household member later trains with.
+- Saving a food idea from another household now answers `404 Idea not found`, the same as an unknown
+  id, instead of `403`, which confirmed that the idea id existed.
 
 ### Added
 

@@ -5478,6 +5478,16 @@ describe("ideas", () => {
     assert.ok(Array.isArray(res.data.ideas));
     assert.ok(res.data.ideas.length > 0);
   });
+
+  it("answers a non-member saving another household's idea as not found", async () => {
+    const idea = await request(`/api/houses/${houseId}/ideas`, { method: "POST", body: { prompt: "quick" } });
+    assert.equal(idea.status, 200);
+    const foreign = await request(`/api/ideas/${idea.data.id}/save`, { method: "POST", auth: secondUserCookie, body: { index: 0 } });
+    const missing = await request(`/api/ideas/ida_does_not_exist/save`, { method: "POST", auth: secondUserCookie, body: { index: 0 } });
+    assert.equal(missing.status, 404);
+    assert.equal(foreign.status, 404);
+    assert.equal(foreign.data.error, "Idea not found");
+  });
 });
 
 describe("ai integration", () => {
