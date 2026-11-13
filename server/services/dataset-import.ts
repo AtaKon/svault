@@ -4,6 +4,58 @@ import { randomBytes } from "node:crypto";
 import JSZip from "jszip";
 import { newId, now, run } from "../db.js";
 import { sniffImage, uploadPath } from "../upload.js";
+import { MAX_UPLOAD_BYTES } from "../config.js";
+
+/*
+ * A zip entry can inflate far beyond the archive size, and JSZip only checks
+ * the real size after it has inflated the whole entry into memory. Entries are
+ * therefore read as streams with a hard cap, and one import may inflate at most
+ * TOTAL_INFLATE_BYTES across all entries.
+ */
+const MAX_ENTRIES = 20_000;
+const MAX_TEXT_BYTES = 32 * 1024 * 1024;
+const TOTAL_INFLATE_BYTES = 2 * 1024 * 1024 * 1024;
+
+type InflateBudget = { remaining: number };
+const newBudget = (): InflateBudget => ({ remaining: TOTAL_INFLATE_BYTES });
+
+async function readEntry(entry: JSZip.JSZipObject, maxBytes: number, budget: InflateBudget): Promise<Buffer> {
+  const declared = (entry as unknown as { _data?: { uncompressedSize?: number } })._data?.uncompressedSize;
+  if (typeof declared === "number" && (declared > maxBytes || declared > budget.remaining)) {
+    throw new Error(`${entry.name} is too large to import`);
+  }
+  const stream = entry.nodeStream("nodebuffer") as NodeJS.ReadableStream & { destroy?: () => void };
+  return await new Promise<Buffer>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let settled = false;
+    stream.on("data", (chunk: Buffer) => {
+      if (settled) return;
+      size += chunk.length;
+      budget.remaining -= chunk.length;
+      if (size > maxBytes || budget.remaining < 0) {
+        settled = true;
+        stream.destroy?.();
+        reject(new Error(budget.remaining < 0 ? "The archive expands to too much data" : `${entry.name} is too large to import`));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    stream.on("error", (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      reject(error instanceof Error ? error : new Error("Could not read the archive"));
+    });
+    stream.on("end", () => {
+      if (settled) return;
+      settled = true;
+      resolve(Buffer.concat(chunks));
+    });
+  });
+}
+
+const readText = async (entry: JSZip.JSZipObject, budget: InflateBudget) =>
+  (await readEntry(entry, MAX_TEXT_BYTES, budget)).toString("utf8");
 
 export type DatasetKind = "yolo" | "coco";
 export type DatasetSplit = "unassigned" | "train" | "val" | "test";
@@ -148,13 +200,13 @@ function parseYoloLabels(text: string): { boxes: DatasetBox[]; errors: string[] 
   return { boxes, errors };
 }
 
-async function inspectYolo(zip: JSZip, errors: string[]): Promise<DatasetInspection> {
+async function inspectYolo(zip: JSZip, errors: string[], budget: InflateBudget): Promise<DatasetInspection> {
   let classes: string[] = [];
   const classFile = zip.file("classes.txt");
-  if (classFile) classes = (await classFile.async("string")).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (classFile) classes = (await readText(classFile, budget)).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   if (!classes.length) {
     const yamlFile = zip.file(/(^|\/)data\.ya?ml$/i)[0];
-    if (yamlFile) classes = parseYamlNames(await yamlFile.async("string"));
+    if (yamlFile) classes = parseYamlNames(await readText(yamlFile, budget));
   }
   const images: DatasetImage[] = [];
   for (const entry of Object.values(zip.files)) {
@@ -167,7 +219,7 @@ async function inspectYolo(zip: JSZip, errors: string[]): Promise<DatasetInspect
       const labelFile = zip.file(candidate);
       if (!labelFile) continue;
       labelled = true;
-      const parsed = parseYoloLabels(await labelFile.async("string"));
+      const parsed = parseYoloLabels(await readText(labelFile, budget));
       labels = parsed.boxes;
       errors.push(...parsed.errors.map((message) => `${candidate}: ${message}`));
       break;
@@ -198,7 +250,7 @@ function finishInspection(kind: DatasetKind, classes: string[], images: DatasetI
   };
 }
 
-async function inspectCoco(zip: JSZip, errors: string[]): Promise<DatasetInspection> {
+async function inspectCoco(zip: JSZip, errors: string[], budget: InflateBudget): Promise<DatasetInspection> {
   const annotationEntry =
     zip.file("annotations.json") ??
     zip.file("annotations.coco.json") ??
@@ -210,7 +262,7 @@ async function inspectCoco(zip: JSZip, errors: string[]): Promise<DatasetInspect
         !entry.name.includes("/labels/"),
     );
   if (!annotationEntry) throw new Error("No COCO annotations.json found in the archive");
-  const payload = JSON.parse(await annotationEntry.async("string"));
+  const payload = JSON.parse(await readText(annotationEntry, budget));
   const categories = Array.isArray(payload.categories) ? payload.categories : [];
   const classes = categories.map((category: any) => String(category.name ?? `class_${category.id}`));
   const classById = new Map<number, number>();
@@ -265,15 +317,18 @@ export async function inspectDataset(buffer: Buffer): Promise<DatasetInspection>
   } catch {
     throw new Error("This file is not a readable zip archive");
   }
-  for (const name of Object.keys(zip.files)) {
+  const names = Object.keys(zip.files);
+  if (names.length > MAX_ENTRIES) throw new Error(`The archive has more than ${MAX_ENTRIES} entries`);
+  for (const name of names) {
     if (!safeName(name)) throw new Error(`Unsafe archive path: ${name}`);
   }
+  const budget = newBudget();
   const errors: string[] = [];
   const hasCoco = Object.values(zip.files).some(
     (entry) => !entry.dir && /(^|\/)(annotations|instances[^/]*)\.json$/i.test(entry.name),
   );
   const hasYolo = Object.values(zip.files).some((entry) => !entry.dir && /\.txt$/i.test(entry.name));
-  const inspection = hasCoco && !hasYolo ? await inspectCoco(zip, errors) : await inspectYolo(zip, errors);
+  const inspection = hasCoco && !hasYolo ? await inspectCoco(zip, errors, budget) : await inspectYolo(zip, errors, budget);
   if (!inspection.images.length) throw new Error("The archive does not contain any supported images");
   if (inspection.images.length > 2000) throw new Error("Import at most 2000 images at a time");
   return inspection;
@@ -306,6 +361,7 @@ export async function importDataset(opts: {
   };
 
   const errors: { file: string; error: string }[] = [];
+  const budget = newBudget();
   let imported = 0;
   let skipped = 0;
   let labels = 0;
@@ -314,7 +370,7 @@ export async function importDataset(opts: {
     try {
       const entry = zip.file(image.path);
       if (!entry) throw new Error("Image is missing from the archive");
-      const data = await entry.async("nodebuffer");
+      const data = await readEntry(entry, MAX_UPLOAD_BYTES, budget);
       const ext = path.extname(image.path).toLowerCase();
       const mime = IMAGE_TYPES[ext];
       if (!mime) throw new Error(`Unsupported image type: ${ext}`);

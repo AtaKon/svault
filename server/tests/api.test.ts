@@ -7659,6 +7659,36 @@ describe("dataset import", () => {
     await assert.rejects(() => inspectDataset(buffer), /Unsafe archive path/);
   });
 
+  it("caps how far a dataset archive may inflate", async () => {
+    const compressed = { compression: "DEFLATE" as const };
+    // A label file of 40 MB compresses to a few kilobytes.
+    const bomb = new JSZip();
+    bomb.file("classes.txt", "a".repeat(40 * 1024 * 1024), compressed);
+    bomb.file("train/images/a.png", png());
+    const bombBuffer = await bomb.generateAsync({ type: "nodebuffer", ...compressed });
+    assert.ok(bombBuffer.length < 1024 * 1024);
+    await assert.rejects(() => inspectDataset(bombBuffer), /too large to import/);
+
+    // An "image" that inflates past the upload limit is skipped, not written.
+    const big = new JSZip();
+    big.file("classes.txt", "apple\n");
+    big.file("train/images/a.png", Buffer.concat([png(), Buffer.alloc(20 * 1024 * 1024 + 1024)]), compressed);
+    big.file("train/images/b.png", png());
+    const result = await importDataset({
+      houseId,
+      userId: (await request("/api/auth/me")).data.user.id,
+      buffer: await big.generateAsync({ type: "nodebuffer", ...compressed }),
+      collectionName: "Oversized dataset",
+    });
+    assert.equal(result.imported, 1);
+    assert.equal(result.skipped, 1);
+    assert.match(result.errors[0].error, /too large to import/);
+
+    const crowded = new JSZip();
+    for (let index = 0; index <= 20_000; index += 1) crowded.file(`x/${index}.txt`, "");
+    await assert.rejects(async () => inspectDataset(await crowded.generateAsync({ type: "nodebuffer" })), /more than 20000 entries/);
+  });
+
   it("reads COCO annotations with absolute boxes", async () => {
     const zip = new JSZip();
     zip.file("images/c.png", png());

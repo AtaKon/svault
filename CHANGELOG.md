@@ -10,6 +10,9 @@ All notable changes to SVault are documented here. The format follows
 
 - House-wide notification scans now require member access.
 
+- Dataset imports read archive entries with a size cap per entry, a total inflate budget and an entry
+  limit, so a small zip can no longer expand into gigabytes in server memory.
+
 - Item categories, stock locations, and photo folder and item links are now validated against the
   owning household to prevent cross-household references.
 
