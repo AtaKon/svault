@@ -10966,3 +10966,15 @@ describe("bill ledger confirmation migration", () => {
     }
   });
 });
+
+describe("trust proxy setting", () => {
+  it("defaults to one hop and can be disabled for direct exposure", async () => {
+    const { trustProxySetting } = await import("../config.js");
+    assert.equal(trustProxySetting(undefined), 1);
+    assert.equal(trustProxySetting(""), 1);
+    assert.equal(trustProxySetting("false"), false);
+    assert.equal(trustProxySetting("0"), 0);
+    assert.equal(trustProxySetting("2"), 2);
+    assert.equal(trustProxySetting("loopback, 10.0.0.0/8"), "loopback, 10.0.0.0/8");
+  });
+});

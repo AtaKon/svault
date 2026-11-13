@@ -2,7 +2,7 @@ import express from "express";
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { PORT, CLIENT_DIR, IS_PROD, RP_ORIGIN, UPLOAD_DIR, ensureDirs } from "./config.js";
+import { PORT, CLIENT_DIR, IS_PROD, RP_ORIGIN, UPLOAD_DIR, ensureDirs, trustProxySetting } from "./config.js";
 import { ApiError } from "./http.js";
 import { IMAGE_EXTENSIONS } from "./upload.js";
 import { RateLimitError, limitRequests, limiters, userOrIp } from "./rate-limit.js";
@@ -59,7 +59,7 @@ startOffContributionWorker();
 
 export const app = express();
 app.disable("x-powered-by");
-app.set("trust proxy", 1);
+app.set("trust proxy", trustProxySetting(process.env.SV_TRUST_PROXY));
 
 /**
  * Content-Security-Policy for the app shell. The only inline script is the

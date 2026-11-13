@@ -130,6 +130,7 @@ Docker Compose reads `.env` next to `docker-compose.yml`.
 | `SV_REGISTRATION` | `open` until the first account exists, then `invite` | Server | `open`: anyone can sign up. `invite`: sign-up only with a valid house invite. `closed`: no self sign-up. The first account (the instance admin) can always be created. |
 | `SV_INVITE_DAYS` | `14` | Server | Lifetime of new house invites. Older invites without an expiry count from their creation date. |
 | `SV_OUTBOUND_ALLOW_PRIVATE` | `true` | Server | Set `false` to refuse house-configured AI base URLs and reminder channel URLs that resolve to loopback, private or link-local addresses (and to stop following redirects for them). Keep `true` if houses use a LAN Ollama, LM Studio or ntfy server. |
+| `SV_TRUST_PROXY` | `1` | Server | Reverse-proxy hops whose `X-Forwarded-*` headers are trusted. Set `false` when clients reach the container directly, so they cannot pick their own IP for rate limits; raise it for chained proxies, or give an address/subnet list such as `loopback, 10.0.0.0/8`. |
 | `SV_RATE_LIMIT` | on | Server | `off` disables the built-in rate limits (for example when the proxy already limits). |
 | `SV_RATE_LIMIT_<NAME>` | see [Rate limits](#rate-limits) | Server | Override one limit as `<max>/<seconds>`, e.g. `SV_RATE_LIMIT_LOGIN=30/600`. |
 | `SV_CSP` | on | Server | `off` disables the Content-Security-Policy header (only for debugging a custom build). |
@@ -181,7 +182,7 @@ request gets `429 Too Many Requests` with a `Retry-After` header.
 | `AI` | `60/600` per user | receipt and recipe scans, recipe link imports, intake parse, ideas, recipe completion, AI connection test |
 
 Override with `SV_RATE_LIMIT_<NAME>=<max>/<seconds>`. Limits are keyed by `req.ip`, which honours one
-reverse-proxy hop (`X-Forwarded-For`); make sure your proxy sets it, otherwise every client shares the
+reverse-proxy hop (`X-Forwarded-For`, see `SV_TRUST_PROXY`); make sure your proxy sets it, otherwise every client shares the
 proxy's address.
 
 ### Registration
@@ -250,8 +251,9 @@ server {
 }
 ```
 
-The server sets `trust proxy` to 1, so `X-Forwarded-*` headers are respected. Do not chain multiple
-proxies without adjusting that value.
+By default the server trusts one proxy hop (`SV_TRUST_PROXY=1`), so `X-Forwarded-*` headers are
+respected. Set `SV_TRUST_PROXY` to the number of hops for chained proxies, or `false` if the container
+is ever reached without a proxy in front of it.
 
 ### Nginx Proxy Manager
 
