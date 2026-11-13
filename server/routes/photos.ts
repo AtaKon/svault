@@ -392,6 +392,10 @@ async function exportBundle(houseId: string, format: "yolo" | "coco", collection
     })),
   }));
 
+  // Labels are member-supplied text; a line break would add lines to classes.txt
+  // and keys to data.yaml, so flatten control characters before writing them.
+  const flat = (label: string) => String(label).replace(/[\u0000-\u001f\u007f]+/g, " ").trim() || "unnamed";
+  for (const photo of photos) for (const label of photo.labels) label.label = flat(label.label);
   const classes = Array.from(new Set(photos.flatMap((p) => p.labels.map((l) => l.label)))).sort();
   const classIndex = new Map(classes.map((name, i) => [name, i]));
 
@@ -478,7 +482,8 @@ async function exportBundle(houseId: string, format: "yolo" | "coco", collection
       "val: images/val",
       "test: images/test",
       "names:",
-      ...classes.map((name, i) => `  ${i}: ${name}`),
+      // JSON strings are valid double-quoted YAML scalars.
+      ...classes.map((name, i) => `  ${i}: ${JSON.stringify(name)}`),
     ].join("\n") + "\n",
   );
   dataset.file("annotations.coco.json", JSON.stringify(coco, null, 2));

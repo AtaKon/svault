@@ -45,6 +45,9 @@ All notable changes to SVault are documented here. The format follows
 - Dataset imports accept only the known split names (`unassigned`, `train`, `val`, `test`) as a
   split override, and exports fall back to `unassigned` for any other stored value. A member could
   previously store `../` paths that became entry names in a later dataset zip export.
+- Dataset exports quote class names in `data.yaml` and flatten line breaks in label text. A label
+  with a line break could add top-level keys (for example a training tool's `download:` command)
+  to the YAML that another household member later trains with.
 
 ### Added
 

