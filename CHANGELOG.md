@@ -8,6 +8,8 @@ All notable changes to SVault are documented here. The format follows
 
 ### Security
 
+- House-wide notification scans now require member access.
+
 - Item categories, stock locations, and photo folder and item links are now validated against the
   owning household to prevent cross-household references.
 

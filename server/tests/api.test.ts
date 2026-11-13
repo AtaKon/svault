@@ -6843,6 +6843,19 @@ describe("CSV inventory import", () => {
   });
 });
 
+describe("notification scan authorization", () => {
+  it("rejects a viewer and a user outside the household", async () => {
+    const owner = await request("/api/auth/register", { method: "POST", body: { name: "Scan owner", email: "scan-owner@example.com", password: "test password" } });
+    const viewer = await request("/api/auth/register", { method: "POST", body: { name: "Scan viewer", email: "scan-viewer@example.com", password: "test password" } });
+    const target = owner.data.houses[0].id;
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [target, viewer.data.user.id, "viewer", new Date().toISOString()]);
+    const endpoint = `/api/houses/${target}/notifications/scan`;
+    assert.equal((await request(endpoint, { method: "POST", auth: viewer.cookie!, body: {} })).status, 403);
+    assert.equal((await request(endpoint, { method: "POST", auth: cookie, body: {} })).status, 404);
+    assert.equal((await request(endpoint, { method: "POST", auth: owner.cookie!, body: {} })).status, 200);
+  });
+});
+
 describe("ownership transfer", () => {
   it("requires confirmation and a member target", async () => {
     const house = await request(`/api/houses/${houseId}`);
