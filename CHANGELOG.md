@@ -15,6 +15,8 @@ All notable changes to SVault are documented here. The format follows
 
 - Validate location and category parents and attribute categories against their household.
 
+- Instance backups now require a signed-in session, preventing API tokens from downloading or listing full-instance archives.
+
 - Item categories, stock locations, and photo folder and item links are now validated against the
   owning household to prevent cross-household references.
 

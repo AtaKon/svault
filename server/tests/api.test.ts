@@ -10539,6 +10539,8 @@ describe("insights, household split and admin console", () => {
     assert.equal(remove.status, 403);
     assert.equal((await request("/api/admin/overview", { auth: "", headers: bearer })).status, 403);
     assert.equal((await request("/api/tokens", { auth: "", headers: bearer })).status, 403);
+    assert.equal((await request(`/api/houses/${houseId}/backup`, { auth: "", headers: bearer })).status, 403);
+    assert.equal((await request(`/api/houses/${houseId}/backups`, { auth: "", headers: bearer })).status, 403);
 
     const list = await request("/api/tokens");
     assert.equal(list.status, 200);
