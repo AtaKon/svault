@@ -340,7 +340,7 @@ export function DashboardPage() {
           <section>
             <div className="mb-2.5 flex items-center justify-between">
               <h2 className="font-display text-xl">{t("Recent activity")}</h2>
-              <button onClick={() => void load()} className="text-muted transition-colors hover:text-ink" aria-label={t("Refresh activity")}>
+              <button onClick={() => void load()} className="-my-2 -mr-2 flex h-10 w-10 items-center justify-center rounded-lg text-muted transition-colors hover:text-ink" aria-label={t("Refresh activity")}>
                 <Icon name="refresh" size={15} />
               </button>
             </div>
