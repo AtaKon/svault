@@ -395,6 +395,12 @@ async function exportBundle(houseId: string, format: "yolo" | "coco", collection
   const classes = Array.from(new Set(photos.flatMap((p) => p.labels.map((l) => l.label)))).sort();
   const classIndex = new Map(classes.map((name, i) => [name, i]));
 
+  // Quoting alone does not stop spreadsheet applications evaluating formulas.
+  const csvCell = (value: unknown) => {
+    let text = String(value ?? "");
+    if (/^[\s\u0000-\u001f]*[=+\-@]/.test(text)) text = `'${text}`;
+    return `"${text.replace(/"/g, '""')}"`;
+  };
   const zip = new JSZip();
   const dataset = zip.folder("svault-dataset")!;
   dataset.file("classes.txt", classes.join("\n") + (classes.length ? "\n" : ""));
@@ -405,11 +411,11 @@ async function exportBundle(houseId: string, format: "yolo" | "coco", collection
       ...photos.map((p) =>
         [
           p.filename,
-          `"${p.originalName.replace(/"/g, "'")}"`,
+          csvCell(p.originalName),
           p.split,
           p.width ?? "",
           p.height ?? "",
-          `"${p.labels.map((l) => l.label).join("|")}"`,
+          csvCell(p.labels.map((l) => l.label).join("|")),
         ].join(","),
       ),
     ].join("\n"),

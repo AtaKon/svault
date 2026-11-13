@@ -5675,6 +5675,26 @@ describe("photos and datasets", () => {
     assert.equal(res.headers.get("content-type"), "application/zip");
   });
 
+  it("neutralizes spreadsheet formulas in dataset manifest cells", async () => {
+    const png = encodePng(8, 8, Buffer.alloc(8 * 8 * 4, 220));
+    const form = new FormData();
+    form.append("photos", new Blob([new Uint8Array(png)], { type: "image/png" }), "test.png");
+    form.append("meta", JSON.stringify([{ originalName: '=1+1,"quoted"' }]));
+    const upload = await request(`/api/houses/${houseId}/photos`, { method: "POST", body: form });
+    assert.equal(upload.status, 201);
+    const id = upload.data.photos[0].id;
+    try {
+      assert.equal((await request(`/api/photos/${id}/labels`, { method: "POST", body: { label: "+1+1" } })).status, 201);
+      const response = await fetch(`${base}/api/houses/${houseId}/photos/export?format=yolo`, { headers: { cookie } });
+      const zip = await JSZip.loadAsync(Buffer.from(await response.arrayBuffer()));
+      const manifest = await zip.file("svault-dataset/manifest.csv")!.async("string");
+      assert.ok(manifest.includes(`"'=1+1,""quoted"""`));
+      assert.ok(manifest.includes(`"'+1+1"`));
+    } finally {
+      await request(`/api/photos/${id}`, { method: "DELETE" });
+    }
+  });
+
   it("exports images, labels and classes as a YOLO zip", async () => {
     const res = await fetch(`${base}/api/houses/${houseId}/photos/export?format=yolo`, { headers: { cookie } });
     const zip = await JSZip.loadAsync(Buffer.from(await res.arrayBuffer()));
