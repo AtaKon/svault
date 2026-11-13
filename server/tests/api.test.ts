@@ -5346,7 +5346,7 @@ describe("ai integration", () => {
         method: "PATCH",
         body: {
           settings: {
-            ai: { enabled: true, baseUrl: "https://ai.example/v1", model: "old-model", visionModel: "old-vision" },
+            ai: { enabled: true, baseUrl: "https://ai.example/v1", apiKey: "reset-test-key", model: "old-model", visionModel: "old-vision" },
           },
         },
       });
@@ -5359,12 +5359,20 @@ describe("ai integration", () => {
       assert.equal("baseUrl" in partial.data.settings.ai, false);
       assert.equal(partial.data.settings.ai.model, "old-model");
       assert.equal(partial.data.settings.ai.visionModel, "old-vision");
+      const other = (await request("/api/auth/me", { auth: secondUserCookie })).data.user;
+      await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [resetHouse, other.id, "member", new Date().toISOString()]);
+      const forbidden = await request(`/api/houses/${resetHouse}`, {
+        method: "PATCH", auth: secondUserCookie, body: { settings: { ai: { apiKey: null } } },
+      });
+      assert.equal(forbidden.status, 403);
+      assert.equal((await request(`/api/houses/${resetHouse}`)).data.settings.ai.apiKey, "***");
       const cleared = await request(`/api/houses/${resetHouse}`, {
         method: "PATCH",
-        body: { settings: { ai: { baseUrl: "", model: "", visionModel: "" } } },
+        body: { settings: { ai: { baseUrl: "", apiKey: "", model: "", visionModel: "" } } },
       });
       assert.equal(cleared.status, 200, JSON.stringify(cleared.data));
       assert.equal("baseUrl" in cleared.data.settings.ai, false);
+      assert.equal("apiKey" in cleared.data.settings.ai, false);
       assert.equal("model" in cleared.data.settings.ai, false);
       assert.equal("visionModel" in cleared.data.settings.ai, false);
       assert.equal(cleared.data.settings.ai.enabled, true);
@@ -9353,6 +9361,19 @@ describe("insights, household split and admin console", () => {
     const result = await request(`/api/houses/${insightHouse}/insights/use-it-up?days=7`);
     assert.equal(result.status, 200);
     assert.ok(result.data.items.some((item: any) => item.name === "Useup yoghurt"));
+    const other = await request("/api/auth/me", { auth: secondUserCookie });
+    const foreignHouse = other.data.houses.find((h: any) => h.role === "owner").id;
+    const foreignLocations = await request(`/api/houses/${foreignHouse}/locations`, { auth: secondUserCookie });
+    const lot = await get<any>("SELECT id, location_id FROM stock_lots WHERE item_id = ?", [yoghurt.data.id]);
+    await run("UPDATE stock_lots SET location_id = ? WHERE id = ?", [foreignLocations.data[0].id, lot.id]);
+    try {
+      const useUp = await request(`/api/houses/${insightHouse}/insights/use-it-up?days=7`);
+      assert.equal(useUp.data.items.find((item: any) => item.itemId === yoghurt.data.id).locationName, null);
+      const dashboard = await request(`/api/houses/${insightHouse}/dashboard`);
+      assert.equal(dashboard.data.expiring.find((entry: any) => entry.id === lot.id).locationName, null);
+    } finally {
+      await run("UPDATE stock_lots SET location_id = ? WHERE id = ?", [lot.location_id, lot.id]);
+    }
   });
 
   it("prices open shopping lines from recent receipts", async () => {

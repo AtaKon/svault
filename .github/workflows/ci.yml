@@ -38,6 +38,12 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Verify compiled server version
+        run: |
+          test -f dist/shared/version.js
+          SV_VERSION= node --input-type=module -e 'import { APP_VERSION } from "./dist/server/config.js"; import pkg from "./package.json" with { type: "json" }; if (APP_VERSION !== pkg.version) throw new Error(`Expected ${pkg.version}, got ${APP_VERSION}`)'
+          SV_VERSION=9.8.7 node --input-type=module -e 'import { APP_VERSION } from "./dist/server/config.js"; if (APP_VERSION !== "9.8.7") throw new Error(`Unexpected version: ${APP_VERSION}`)'
+
       - name: Test
         run: npm test
 
