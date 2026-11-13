@@ -31,6 +31,7 @@ import {
 } from "../services/openfoodfacts.js";
 import { uploader } from "../upload.js";
 import { removeUnreferencedUploads } from "../services/upload-cleanup.js";
+import { assertImageReference } from "../services/receipt-scans.js";
 import { RESERVED_ATTRIBUTE_KEYS, type Role } from "../../shared/types.js";
 
 export const inventoryRoutes = Router();
@@ -345,6 +346,15 @@ async function itemDetail(itemId: string, userId: string) {
     [row.house_id, itemId, row.name],
   );
   return { ...item, lots, movements, priceHistory, recipes, priceStats: await priceStats(itemId, item.unit) };
+}
+
+/** Item pictures are the house's own item uploads or remote http(s) images (OpenFoodFacts). */
+async function assertItemImage(image: string | null | undefined, houseId: string) {
+  try {
+    await assertImageReference(image, houseId, "items", true);
+  } catch (error) {
+    throw new ApiError(400, error instanceof Error ? error.message : "Invalid item image");
+  }
 }
 
 async function validateHouseReference(table: "locations" | "categories", id: string | null | undefined, houseId: string, selfId?: string) {
@@ -727,6 +737,7 @@ inventoryRoutes.post(
     if (body.categoryId && !await get("SELECT id FROM categories WHERE id = ? AND house_id = ?", [body.categoryId, houseId])) {
       throw new ApiError(400, "Category does not exist in this house");
     }
+    await assertItemImage(body.image, houseId);
     if (body.initialStock?.locationId && !await get("SELECT id FROM locations WHERE id = ? AND house_id = ?", [body.initialStock.locationId, houseId])) {
       throw new ApiError(400, "Location does not exist in this house");
     }
@@ -1018,6 +1029,7 @@ itemRoutes.patch(
     if (body.categoryId && !await get("SELECT id FROM categories WHERE id = ? AND house_id = ?", [body.categoryId, item.house_id])) {
       throw new ApiError(400, "Category does not exist in this house");
     }
+    if (body.image !== undefined && body.image !== item.image) await assertItemImage(body.image, item.house_id);
     const normalized = normalizeItemAttributes(
       body.attributes ?? parseJson<Record<string, unknown>>(item.attributes, {}),
       body.brand === undefined ? (item.brand ?? undefined) : body.brand,

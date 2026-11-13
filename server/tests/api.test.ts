@@ -5880,18 +5880,60 @@ describe("security hardening", () => {
     const ok = await uploadImage(`/api/houses/${houseId}/recipes/upload`, new Uint8Array(png), "image/png", "photo.html");
     assert.equal(ok.status, 201);
     assert.match(ok.data.path, /^\/uploads\/recipes\/[\w-]+\.png$/);
-    const served = await fetch(`${base}${ok.data.path}`);
+    const served = await fetch(`${base}${ok.data.path}`, { headers: { cookie } });
     assert.equal(served.status, 200);
     assert.equal(served.headers.get("x-content-type-options"), "nosniff");
     assert.match(served.headers.get("content-security-policy") ?? "", /sandbox/);
     assert.equal(served.headers.get("content-disposition"), null);
   });
 
+  it("keeps uploads inside their household", async () => {
+    const png = new Uint8Array(encodePng(4, 4, Buffer.alloc(4 * 4 * 4, 120)));
+    const recipeUpload = await uploadImage(`/api/houses/${houseId}/recipes/upload`, png, "image/png", "card.png");
+    const receiptUpload = await uploadImage(`/api/houses/${houseId}/receipts/upload`, png, "image/png", "receipt.png");
+    assert.equal(recipeUpload.status, 201);
+    assert.equal(receiptUpload.status, 201);
+    const recipePath: string = recipeUpload.data.path;
+    const receiptPath: string = receiptUpload.data.path;
+
+    // Files need a signed-in session, and are cached privately.
+    assert.equal((await fetch(`${base}${receiptPath}`)).status, 404);
+    const own = await fetch(`${base}${receiptPath}`, { headers: { cookie } });
+    assert.equal(own.status, 200);
+    assert.match(own.headers.get("cache-control") ?? "", /private/);
+
+    // Another household cannot read, attach or delete them by naming the path.
+    const as = (pathname: string, method: string, body: unknown) =>
+      request(`/api/houses/${strangerHouseId}${pathname}`, { method, auth: secondUserCookie, body });
+    assert.equal((await as("/recipes/scan", "POST", { text: "Soup", images: [recipePath] })).status, 400);
+    assert.equal((await as("/receipts/scan", "POST", { images: [receiptPath] })).status, 400);
+    assert.equal((await as("/intake/parse", "POST", { image: receiptPath })).status, 400);
+    assert.equal((await as("/recipes", "POST", { title: "Borrowed", sourceImage: recipePath })).status, 400);
+    assert.equal((await as("/recipes", "POST", { title: "Borrowed", image: recipePath })).status, 400);
+    assert.equal((await as("/items", "POST", { name: "Borrowed", image: recipePath })).status, 400);
+    assert.equal((await as("/receipts/upload", "DELETE", { path: receiptPath })).status, 404);
+    assert.equal(existsSync(path.join(dataDir, "uploads", "receipts", receiptPath.split("/").pop()!)), true);
+
+    // Only uploads and http(s) links are accepted where the client renders them.
+    assert.equal((await as("/recipes", "POST", { title: "Script", image: "javascript:alert(1)" })).status, 400);
+    assert.equal((await as("/recipes", "POST", { title: "Script", sourceImage: "https://example.com/a.png" })).status, 400);
+    const remote = await as("/items", "POST", { name: "Remote picture", image: "https://images.openfoodfacts.org/x.jpg" });
+    assert.ok(remote.status < 300, JSON.stringify(remote.data));
+
+    // The owning house can still use its own upload.
+    const saved = await request(`/api/houses/${houseId}/recipes`, {
+      method: "POST",
+      body: { title: "Own card", sourceImage: recipePath, image: recipePath },
+    });
+    assert.ok(saved.status < 300, JSON.stringify(saved.data));
+    assert.equal(saved.data.sourceImage, recipePath);
+  });
+
   it("serves non-image files under /uploads as sandboxed downloads", async () => {
     const { writeFileSync, mkdirSync } = await import("node:fs");
     mkdirSync(path.join(dataDir, "uploads", "recipes"), { recursive: true });
     writeFileSync(path.join(dataDir, "uploads", "recipes", "legacy.html"), "<script>alert(1)</script>");
-    const res = await fetch(`${base}/uploads/recipes/legacy.html`);
+    const res = await fetch(`${base}/uploads/recipes/legacy.html`, { headers: { cookie } });
     assert.equal(res.status, 200);
     assert.equal(res.headers.get("content-disposition"), "attachment");
     assert.equal(res.headers.get("content-type"), "application/octet-stream");

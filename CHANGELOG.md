@@ -8,6 +8,13 @@ All notable changes to SVault are documented here. The format follows
 
 ### Security
 
+- Uploaded files under `/uploads` now need a signed-in session and are cached privately; a leaked
+  link alone no longer opens a receipt photo.
+- Uploads are bound to the household that made them (new file names carry a house tag). Receipt and
+  recipe scans, receipt intake, saved receipts, recipe photos and item pictures refuse another
+  household's upload, so one household can no longer send another's photo to its AI provider, attach
+  it, or delete it. Recipe and item image fields accept only the house's own uploads or http(s) links.
+
 - House-wide notification scans now require member access.
 
 - Dataset imports read archive entries with a size cap per entry, a total inflate budget and an entry

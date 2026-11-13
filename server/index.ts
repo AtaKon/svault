@@ -272,6 +272,13 @@ app.get("/api/health", (_req, res) => {
 // Keep this before express.static below: bill PDFs are served by authenticated
 // API routes, never by their storage paths.
 app.use("/uploads/bills", (_req, _res, next) => next(new ApiError(404, "Not found")));
+// Receipt photos and other uploads hold household data. Their names are random,
+// but a leaked link must not be enough on its own: require a signed-in session.
+// API tokens are for automation and are not accepted here either.
+app.use("/uploads", (req, _res, next) => {
+  if (!req.user || req.apiTokenReadOnly) return next(new ApiError(404, "Not found"));
+  next();
+});
 app.use(
   "/uploads",
   express.static(UPLOAD_DIR, {
@@ -281,6 +288,8 @@ app.use(
     dotfiles: "deny",
     setHeaders: (res, filePath) => {
       res.setHeader("X-Content-Type-Options", "nosniff");
+      // Signed-in content: browsers may cache it, shared proxies may not.
+      res.setHeader("Cache-Control", "private, max-age=2592000");
       res.setHeader("Content-Security-Policy", "default-src 'none'; img-src 'self'; sandbox");
       if (!IMAGE_EXTENSIONS.has(path.extname(filePath).toLowerCase())) {
         res.setHeader("Content-Type", "application/octet-stream");

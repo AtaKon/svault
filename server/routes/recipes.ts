@@ -13,6 +13,7 @@ import { OutboundBlockedError, assertOutboundUrl } from "../lib/outbound.js";
 import { recipePortion } from "../../shared/recipe-grams.js";
 import { removeUnreferencedUploads } from "../services/upload-cleanup.js";
 import { uploader, uploadPath } from "../upload.js";
+import { assertImageReference, assertUploadsOwned, rememberUpload } from "../services/receipt-scans.js";
 import type { OffProduct, Role, Recipe } from "../../shared/types.js";
 import { readableWordRatio } from "../../shared/notebook-scan.js";
 
@@ -54,6 +55,20 @@ export const recipeInput = z.object({
   favorite: z.boolean().optional(),
   ingredients: z.array(ingredientSchema).max(150).optional(),
 });
+
+/**
+ * `image` and `sourceImage` are rendered as <img src> and a link. The source
+ * photo must be one of the house's own recipe uploads; the cover may also be a
+ * remote http(s) picture kept from an imported recipe.
+ */
+async function assertRecipeImages(body: { image?: string | null; sourceImage?: string | null }, houseId: string) {
+  try {
+    await assertImageReference(body.image, houseId, "recipes", true);
+    await assertImageReference(body.sourceImage, houseId, "recipes", false);
+  } catch (error) {
+    throw new ApiError(400, error instanceof Error ? error.message : "Invalid recipe image");
+  }
+}
 
 async function stockMaps(houseId: string) {
   const rows = await all<any>(
@@ -344,6 +359,7 @@ recipeRoutes.post(
   handler(async (req, res) => {
     const { houseId } = await requireHouse(req, "member");
     const body = parseBody(recipeInput, req.body);
+    await assertRecipeImages(body, houseId);
     const id = await saveRecipe(houseId, req.user!.id, body);
     const row = (await recipeRow(id))!;
     const serialized = serializeRecipe(row, await ingredientsFor(id));
@@ -355,9 +371,11 @@ recipeRoutes.post(
   "/:houseId/recipes/upload",
   uploader("recipes").single("image"),
   handler(async (req, res) => {
-    await requireHouse(req, "member");
+    const { houseId } = await requireHouse(req, "member");
     if (!req.file) throw new ApiError(400, "No image uploaded");
-    res.status(201).json({ path: `/uploads/recipes/${req.file.filename}` });
+    const path = `/uploads/recipes/${req.file.filename}`;
+    rememberUpload(path, houseId);
+    res.status(201).json({ path });
   }),
 );
 
@@ -469,6 +487,10 @@ recipeRoutes.post(
     const rawText = (body.text ?? "").trim();
     const visionPaths = body.images?.length ? body.images : body.image ? [body.image] : [];
     if (!rawText && !visionPaths.length) throw new ApiError(400, "Provide recipe text or a scan image");
+    // The loader reads these files and sends them to this house's AI provider.
+    await assertUploadsOwned([...(body.images ?? []), body.image], houseId).catch((error: Error) => {
+      throw new ApiError(400, error.message);
+    });
 
     const house = (await get<any>("SELECT * FROM houses WHERE id = ?", [houseId]))!;
     const settings = parseJson<Record<string, any>>(house.settings, {});
@@ -818,6 +840,14 @@ singleRecipeRoutes.patch(
   handler(async (req, res) => {
     const { recipe, houseId } = await recipeAccess(req, "member");
     const body = parseBody(recipeInput.partial(), req.body);
+    // Values already stored on this recipe are left alone; only new ones are checked.
+    await assertRecipeImages(
+      {
+        image: body.image === recipe.image ? undefined : body.image,
+        sourceImage: body.sourceImage === recipe.source_image ? undefined : body.sourceImage,
+      },
+      houseId,
+    );
     const current = serializeRecipe(recipe, await ingredientsFor(recipe.id));
     const merged = recipeInput.parse({
       ...current,

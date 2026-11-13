@@ -14,7 +14,7 @@ import { canonicalVendor, detectCatalogVendor } from "../services/vendors.js";
 import { addStock, afterStockChange } from "../services/stock.js";
 import { ITEM_SELECT, barcodesForItem, serializeItem } from "../serialize.js";
 import { uploader } from "../upload.js";
-import { loadVisionImages, rememberUpload, skippedImagesWarning } from "../services/receipt-scans.js";
+import { assertUploadsOwned, loadVisionImages, rememberUpload, skippedImagesWarning } from "../services/receipt-scans.js";
 import { UNITS, convert } from "../units.js";
 import type { IntakeParseResult, IntakeRow } from "../../shared/types.js";
 
@@ -138,6 +138,9 @@ intakeRoutes.post(
 
     let rawText = (body.text ?? "").trim();
     if (!rawText && !body.image) throw new ApiError(400, "Provide receipt text, an image or barcodes");
+    await assertUploadsOwned([body.image], houseId).catch((error: Error) => {
+      throw new ApiError(400, error.message);
+    });
     const house = (await get<any>("SELECT * FROM houses WHERE id = ?", [houseId]))!;
     const settings = parseJson<Record<string, any>>(house.settings, {});
     const cfg = resolveAi(settings);
