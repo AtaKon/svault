@@ -17,6 +17,9 @@ All notable changes to SVault are documented here. The format follows
 - Open Food Facts contribution retries, and queued sends, now re-check that the contributor is still a
   member of the household. Someone removed from a house or demoted to viewer could retry a failed
   contribution and send that house's item data or receipt photo to Open Food Facts.
+- Recipe link imports keep the page's cover image only when it is an http(s) link of at most 2000
+  characters. A hostile page could store a `javascript:` or `data:` value (of any size) as the recipe
+  image, bypassing the image check that recipe create and edit apply.
 - Uploaded files under `/uploads` now need a signed-in session and are cached privately; a leaked
   link alone no longer opens a receipt photo.
 - Uploads are bound to the household that made them (new file names carry a house tag). Receipt and

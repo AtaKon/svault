@@ -337,13 +337,21 @@ function pageTitle(html: string): string | null {
   return metaContent(html, "og:title") ?? text(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]) ?? null;
 }
 
-/** Resolve relative cover images against the page that advertised them. */
+/**
+ * Resolve relative cover images against the page that advertised them. The
+ * result is saved as the recipe image, which elsewhere accepts only the house's
+ * uploads or an http(s) link, so any other scheme (javascript:, data:, file:)
+ * or an unparsable or oversized value is dropped.
+ */
 function absoluteUrl(value: string | null, base: string): string | null {
   if (!value) return null;
   try {
-    return new URL(value, base).toString();
+    const url = new URL(value, base);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    const text = url.toString();
+    return text.length <= 2000 ? text : null;
   } catch {
-    return value;
+    return null;
   }
 }
 

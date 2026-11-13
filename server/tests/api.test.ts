@@ -5420,6 +5420,46 @@ describe("recipes", () => {
     }
   });
 
+  it("drops a non-http cover image advertised by an imported page", async () => {
+    const html = `<!doctype html><html><head><title>Scheme soup</title>
+      <meta property="og:image" content="data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=">
+      <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "Recipe",
+        "name": "Scheme soup",
+        "recipeIngredient": ["1 l water", "1 onion"],
+        "recipeInstructions": ["Boil the water."],
+        "image": "javascript:alert(document.cookie)"
+      }
+      </script></head><body></body></html>`;
+    const pageServer = http.createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(html);
+    });
+    await new Promise<void>((resolve) => pageServer.listen(0, "127.0.0.1", () => resolve()));
+    const pageAddress = pageServer.address();
+    if (!pageAddress || typeof pageAddress === "string") throw new Error("no import page address");
+    const link = `http://127.0.0.1:${pageAddress.port}/scheme-soup`;
+    try {
+      const preview = await request(`/api/houses/${houseId}/recipes/import`, { method: "POST", body: { url: link } });
+      assert.equal(preview.status, 200);
+      assert.equal(preview.data.image, null);
+      const saved = await request(`/api/houses/${houseId}/recipes/import`, { method: "POST", body: { url: link, save: true } });
+      assert.equal(saved.status, 201);
+      assert.equal(saved.data.recipe.image, null);
+      const stored = await get<any>("SELECT image FROM recipes WHERE id = ?", [saved.data.recipe.id]);
+      assert.equal(stored.image, null);
+      await request(`/api/recipes/${saved.data.recipe.id}`, { method: "DELETE" });
+      assert.equal(
+        parseRecipePage(html.replace("javascript:alert(document.cookie)", "/covers/soup.jpg"), link).image,
+        `http://127.0.0.1:${pageAddress.port}/covers/soup.jpg`,
+      );
+    } finally {
+      await new Promise<void>((resolve, reject) => pageServer.close((error) => (error ? reject(error) : resolve())));
+    }
+  });
+
   it("rejects an unreachable import link", async () => {
     const res = await request(`/api/houses/${houseId}/recipes/import`, {
       method: "POST",
