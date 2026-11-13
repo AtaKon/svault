@@ -676,19 +676,28 @@ describe("recipe link import", () => {
   });
 
   it("refuses a redirect to a private address", async () => {
-    const originalFetch = globalThis.fetch;
+    const { setOutboundResolverForTests } = await import("../lib/outbound.js");
     const previous = process.env.SV_OUTBOUND_ALLOW_PRIVATE;
     process.env.SV_OUTBOUND_ALLOW_PRIVATE = "false";
     let calls = 0;
-    globalThis.fetch = (async () => {
+    const site = http.createServer((_req, res) => {
       calls += 1;
-      return new Response(null, { status: 302, headers: { location: "http://127.0.0.1:9/secret" } });
-    }) as typeof fetch;
+      res.writeHead(302, { location: "http://internal.example:9/secret" });
+      res.end();
+    });
+    await new Promise<void>((resolve) => site.listen(0, "127.0.0.1", resolve));
+    const port = (site.address() as import("node:net").AddressInfo).port;
+    // recipe.example stands in for a public site; internal.example for the LAN.
+    setOutboundResolverForTests(
+      async (host) => [{ address: host === "internal.example" ? "10.0.0.5" : "127.0.0.1", family: 4 }],
+      (address) => address.startsWith("10."),
+    );
     try {
-      await assert.rejects(importRecipeFromUrl("http://93.184.216.34/recipe"), /private or local network/i);
+      await assert.rejects(importRecipeFromUrl(`http://recipe.example:${port}/recipe`), /private or local network/i);
       assert.equal(calls, 1, "the private hop must be rejected before it is fetched");
     } finally {
-      globalThis.fetch = originalFetch;
+      setOutboundResolverForTests();
+      await new Promise((resolve) => site.close(resolve));
       if (previous === undefined) delete process.env.SV_OUTBOUND_ALLOW_PRIVATE;
       else process.env.SV_OUTBOUND_ALLOW_PRIVATE = previous;
     }
@@ -5956,6 +5965,84 @@ describe("security hardening", () => {
       assert.match(channel.data.error, /private or local network/);
     } finally {
       delete process.env.SV_OUTBOUND_ALLOW_PRIVATE;
+    }
+  });
+
+  it("checks the address it connects to, not only the address it validated", async () => {
+    const { fetchOutbound, outboundFetch, setOutboundResolverForTests } = await import("../lib/outbound.js");
+    let hits = 0;
+    const target = http.createServer((_req, res) => {
+      hits += 1;
+      res.end("internal");
+    });
+    await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
+    const port = (target.address() as import("node:net").AddressInfo).port;
+    let lookups = 0;
+    // A rebinding name answers public for the guard, then loopback for the socket.
+    setOutboundResolverForTests(async () => {
+      lookups += 1;
+      return [{ address: lookups === 1 ? "93.184.216.34" : "127.0.0.1", family: 4 }];
+    });
+    process.env.SV_OUTBOUND_ALLOW_PRIVATE = "false";
+    try {
+      await assert.rejects(() => fetchOutbound(`http://rebind.example:${port}/`, { label: "The link" }), /private or local network/);
+      assert.ok(lookups >= 2);
+      await assert.rejects(() => outboundFetch(`http://rebind.example:${port}/`, { method: "POST", body: "{}" }), /private or local network/);
+      assert.equal(hits, 0);
+
+      // Private targets stay reachable when the instance allows them.
+      process.env.SV_OUTBOUND_ALLOW_PRIVATE = "true";
+      const allowed = await outboundFetch(`http://127.0.0.1:${port}/`);
+      assert.equal(await allowed.text(), "internal");
+      assert.equal(hits, 1);
+    } finally {
+      delete process.env.SV_OUTBOUND_ALLOW_PRIVATE;
+      setOutboundResolverForTests();
+      await new Promise((resolve) => target.close(resolve));
+    }
+  });
+
+  it("returns status, headers and body over a pinned connection", async () => {
+    const { outboundFetch, setOutboundResolverForTests } = await import("../lib/outbound.js");
+    const target = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        if (req.url === "/moved") {
+          res.writeHead(302, { location: "/" });
+          res.end();
+          return;
+        }
+        res.writeHead(201, { "content-type": "application/json", "x-echo": String(req.headers["x-test"] ?? "") });
+        res.end(JSON.stringify({ method: req.method, body }));
+      });
+    });
+    await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
+    const port = (target.address() as import("node:net").AddressInfo).port;
+    // Treat the local test server as public so the pinned request path runs end to end.
+    setOutboundResolverForTests(async () => [{ address: "127.0.0.1", family: 4 }], () => false);
+    process.env.SV_OUTBOUND_ALLOW_PRIVATE = "false";
+    try {
+      const response = await outboundFetch(`http://pinned.example:${port}/`, {
+        method: "POST",
+        headers: { "x-test": "yes", "content-type": "application/json" },
+        body: "{\"a\":1}",
+      });
+      assert.equal(response.status, 201);
+      assert.equal(response.headers.get("x-echo"), "yes");
+      assert.deepEqual(await response.json(), { method: "POST", body: "{\"a\":1}" });
+
+      await assert.rejects(() => outboundFetch(`http://pinned.example:${port}/moved`, { redirect: "error" }), /redirect/);
+      const manual = await outboundFetch(`http://pinned.example:${port}/moved`, { redirect: "manual" });
+      assert.equal(manual.status, 302);
+      assert.equal(manual.headers.get("location"), "/");
+
+      setOutboundResolverForTests();
+      await assert.rejects(() => outboundFetch(`http://127.0.0.1:${port}/`), /private or local network/);
+    } finally {
+      delete process.env.SV_OUTBOUND_ALLOW_PRIVATE;
+      setOutboundResolverForTests();
+      await new Promise((resolve) => target.close(resolve));
     }
   });
 

@@ -1,7 +1,7 @@
 import { AI_ENV, AI_LOG_PREVIEW_CHARS } from "./config.js";
 import { ApiError } from "./http.js";
 import { recordAiCall } from "./services/ai-logs.js";
-import { OutboundBlockedError, assertOutboundUrl, outboundRedirectMode } from "./lib/outbound.js";
+import { OutboundBlockedError, assertOutboundUrl, outboundFetch, outboundRedirectMode } from "./lib/outbound.js";
 import {
   canRetryRecipeReasoningOff,
   normaliseRecipeReasoning,
@@ -294,7 +294,7 @@ export async function chat(
     if (!withReasoning) delete payload.reasoning;
     const payloadText = JSON.stringify(payload);
     requestBytes = Math.max(requestBytes, payloadText.length);
-    const res = await fetch(`${cfg.baseUrl}/chat/completions`, {
+    const res = await (cfg.customEndpoint ? outboundFetch : fetch)(`${cfg.baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
         "content-type": "application/json",

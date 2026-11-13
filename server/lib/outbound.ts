@@ -1,5 +1,29 @@
 import dns from "node:dns/promises";
+import http from "node:http";
+import https from "node:https";
 import net from "node:net";
+import { Readable } from "node:stream";
+
+type ResolvedAddress = { address: string; family: number };
+type Resolver = (host: string) => Promise<ResolvedAddress[]>;
+
+const systemResolver: Resolver = (host) => dns.lookup(host, { all: true, verbatim: true });
+let resolveHost: Resolver = systemResolver;
+let blockedForTests: ((address: string) => boolean) | null = null;
+
+/**
+ * Tests swap the resolver to simulate DNS rebinding, and may override which
+ * connect-time addresses count as private so the pinned path can reach a local
+ * test server. Call with no arguments to restore both.
+ */
+export function setOutboundResolverForTests(resolver?: Resolver, blocked?: (address: string) => boolean): void {
+  resolveHost = resolver ?? systemResolver;
+  blockedForTests = blocked ?? null;
+}
+
+function blockedAtConnect(address: string): boolean {
+  return blockedForTests ? blockedForTests(address) : isPrivateAddress(address);
+}
 
 /**
  * Outbound requests to URLs that house admins configure (AI providers,
@@ -27,10 +51,9 @@ const REDIRECT_STATUS = new Set([301, 302, 303, 307, 308]);
  *
  * `redirect: "follow"` would let a public URL bounce to a private address after
  * the guard on the first URL already passed, so hops are followed by hand here
- * and each one goes through `assertOutboundUrl`. The host is still resolved
- * twice (once by the guard, once by fetch), which leaves the same narrow
- * DNS-rebinding window as the other outbound callers; instances that accept
- * untrusted links should keep `SV_OUTBOUND_ALLOW_PRIVATE=false`.
+ * and each one goes through `assertOutboundUrl`. With private targets refused,
+ * the connection itself goes through `outboundFetch`, which re-checks the
+ * addresses it actually connects to, so DNS rebinding cannot slip past.
  */
 export async function fetchOutbound(
   rawUrl: string,
@@ -40,7 +63,7 @@ export async function fetchOutbound(
   const { label, ...requestInit } = init;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
     await assertOutboundUrl(current.toString(), label);
-    const response = await fetch(current, { ...requestInit, redirect: "manual" });
+    const response = await outboundFetch(current, { ...requestInit, redirect: "manual" });
     if (!REDIRECT_STATUS.has(response.status)) return { response, url: current.toString() };
     const location = response.headers.get("location");
     if (!location) return { response, url: current.toString() };
@@ -127,14 +150,103 @@ export async function assertOutboundUrl(raw: string, label: string): Promise<voi
     addresses = [host];
   } else {
     try {
-      addresses = (await dns.lookup(host, { all: true, verbatim: true })).map((entry) => entry.address);
+      addresses = (await resolveHost(host)).map((entry) => entry.address);
     } catch {
       throw new OutboundBlockedError(`${label} could not be resolved`);
     }
   }
-  if (!addresses.length || addresses.some(isPrivateAddress)) {
+  if (!addresses.length || addresses.some(blockedAtConnect)) {
     throw new OutboundBlockedError(
       `${label} points to a private or local network address, which this server does not allow`,
     );
   }
+}
+
+const NULL_BODY_STATUS = new Set([101, 204, 205, 304]);
+
+/**
+ * `lookup` for node:http that refuses private answers. Validating the URL and
+ * then letting fetch resolve the host again leaves a DNS-rebinding window (a
+ * short-TTL name can answer public first and 127.0.0.1 second); checking the
+ * answer that the socket will actually use closes it. IP literals skip lookup
+ * and are already checked by `assertOutboundUrl`.
+ */
+function guardedLookup(
+  hostname: string,
+  options: { all?: boolean } | number | undefined,
+  callback: (error: Error | null, address?: string | ResolvedAddress[], family?: number) => void,
+): void {
+  resolveHost(hostname).then(
+    (entries) => {
+      if (!entries.length || entries.some((entry) => blockedAtConnect(entry.address))) {
+        callback(new OutboundBlockedError("The address resolved to a private or local network address, which this server does not allow"));
+        return;
+      }
+      if (typeof options === "object" && options?.all) callback(null, entries);
+      else callback(null, entries[0].address, entries[0].family);
+    },
+    (error) => callback(error instanceof Error ? error : new Error(String(error))),
+  );
+}
+
+function pinnedRequest(url: URL, init: RequestInit): Promise<Response> {
+  const client = url.protocol === "https:" ? https : http;
+  const headers = Object.fromEntries(new Headers(init.headers ?? {}).entries());
+  const method = (init.method ?? "GET").toUpperCase();
+  const body = init.body;
+  if (body !== undefined && body !== null && typeof body !== "string") {
+    return Promise.reject(new TypeError("outboundFetch only sends string bodies"));
+  }
+  return new Promise((resolve, reject) => {
+    const request = client.request(
+      url,
+      { method, headers, lookup: guardedLookup as never, signal: init.signal ?? undefined },
+      (incoming) => {
+        const responseHeaders = new Headers();
+        for (const [name, value] of Object.entries(incoming.headers)) {
+          if (value === undefined) continue;
+          if (Array.isArray(value)) value.forEach((entry) => responseHeaders.append(name, entry));
+          else responseHeaders.set(name, String(value));
+        }
+        const status = incoming.statusCode ?? 502;
+        const empty = NULL_BODY_STATUS.has(status) || method === "HEAD";
+        if (empty) incoming.resume();
+        resolve(
+          new Response(empty ? null : (Readable.toWeb(incoming) as ReadableStream<Uint8Array>), {
+            status,
+            statusText: incoming.statusMessage,
+            headers: responseHeaders,
+          }),
+        );
+      },
+    );
+    request.on("error", reject);
+    if (typeof body === "string") request.write(body);
+    request.end();
+  });
+}
+
+/**
+ * `fetch` for house-configured or user-supplied URLs. While private targets are
+ * allowed (the default) it is plain `fetch`. Otherwise the request is made over
+ * a connection whose resolved address is checked, and redirects are either
+ * returned (`manual`) or rejected, never followed blindly.
+ */
+export async function outboundFetch(input: string | URL, init: RequestInit = {}): Promise<Response> {
+  if (outboundAllowPrivate()) return fetch(input, init);
+  const url = new URL(input);
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new OutboundBlockedError("Only http:// and https:// addresses are allowed");
+  }
+  // IP literals never reach the lookup hook, so check them here.
+  const literal = url.hostname.replace(/^\[|\]$/g, "");
+  if (net.isIP(literal) && blockedAtConnect(literal)) {
+    throw new OutboundBlockedError("The address is a private or local network address, which this server does not allow");
+  }
+  const response = await pinnedRequest(url, init);
+  if (init.redirect !== "manual" && REDIRECT_STATUS.has(response.status)) {
+    await response.body?.cancel();
+    throw new OutboundBlockedError("The address redirected, which this server does not follow for private-network protection");
+  }
+  return response;
 }
