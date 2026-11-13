@@ -6133,7 +6133,7 @@ describe("security hardening", () => {
         `${base}/api/auth/oidc/callback?code=${encodeURIComponent(authorize.searchParams.get("nonce")!)}&state=${encodeURIComponent(
           authorize.searchParams.get("state")!,
         )}`,
-        { redirect: "manual" },
+        { redirect: "manual", headers: { cookie: start.headers.get("set-cookie")!.split(";")[0] } },
       );
       assert.equal(callback.status, 302);
       assert.match(callback.headers.get("location") ?? "", /oidc_error=.*invite/);
@@ -7149,12 +7149,19 @@ describe("two-factor authentication", () => {
     const nonce = authorize.searchParams.get("nonce")!;
     assert.ok(state && nonce);
 
+    for (const supplied of ["", "sv_oidc_state=wrong"]) {
+      const rejected = await fetch(`${base}/api/auth/oidc/callback?code=${encodeURIComponent(nonce)}&state=${encodeURIComponent(state)}`, {
+        redirect: "manual", headers: { cookie: supplied },
+      });
+      assert.match(rejected.headers.get("location") ?? "", /oidc_error=/);
+      assert.doesNotMatch(rejected.headers.get("set-cookie") ?? "", /sv_session=/);
+    }
     const callback = await fetch(`${base}/api/auth/oidc/callback?code=${encodeURIComponent(nonce)}&state=${encodeURIComponent(state)}`, {
-      redirect: "manual",
+      redirect: "manual", headers: { cookie: start.headers.get("set-cookie")!.split(";")[0] },
     });
     assert.equal(callback.status, 302);
     assert.match(callback.headers.get("location") ?? "", /sso=1/);
-    const setCookie = callback.headers.get("set-cookie")!.split(";")[0];
+    const setCookie = callback.headers.getSetCookie().find((value) => value.startsWith("sv_session="))!.split(";")[0];
     const me = await fetch(`${base}/api/auth/me`, { headers: { cookie: setCookie } });
     assert.equal(me.status, 200);
     const meData = (await me.json()) as any;
@@ -7173,7 +7180,7 @@ describe("two-factor authentication", () => {
     const nonce = authorize.searchParams.get("nonce")!;
     const callback = await fetch(
       `${base}/api/auth/oidc/callback?code=${encodeURIComponent(`unverified-${nonce}`)}&state=${encodeURIComponent(state)}`,
-      { redirect: "manual" },
+      { redirect: "manual", headers: { cookie: start.headers.get("set-cookie")!.split(";")[0] } },
     );
     assert.equal(callback.status, 302);
     assert.match(callback.headers.get("location") ?? "", /oidc_error=/);
