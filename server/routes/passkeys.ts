@@ -207,7 +207,7 @@ passkeyRoutes.post(
     if (stored.data.identifierProvided && !stored.userId) throw new ApiError(401, "Passkey does not match this account");
     const credentialId = String((body.response as any)?.id ?? "");
     const passkey = credentialId ? await passkeyByCredentialId(credentialId) : null;
-    if (!passkey) throw new ApiError(401, "Unknown passkey");
+    if (!passkey) throw new ApiError(401, "Passkey does not match this account");
     if (stored.userId && stored.userId !== passkey.userId) throw new ApiError(401, "Passkey does not match this account");
     const { origin, rpID } = relyingParty(req);
     const verification = await verifyAuthenticationResponse({

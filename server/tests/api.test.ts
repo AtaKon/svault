@@ -7001,18 +7001,30 @@ describe("two-factor authentication", () => {
     assert.deepEqual(unknown.data.options.allowCredentials, known.data.options.allowCredentials);
     assert.equal(unknown.data.hasPasskeys, known.data.hasPasskeys);
     assert.equal(unknown.data.discoverable, known.data.discoverable);
+    const owner = await get<any>("SELECT id FROM users WHERE email = ?", ["owner@example.com"]);
+    await run("INSERT INTO passkeys (id, user_id, credential_id, public_key, created_at) VALUES (?, ?, ?, ?, ?)",
+      ["passkey-options-test", owner.id, "credential-options-test", "key", new Date().toISOString()]);
+    try {
+      const withPasskey = await request("/api/auth/passkeys/login/options", {
+        method: "POST", body: { identifier: "owner@example.com" },
+      });
+      assert.equal(withPasskey.data.hasPasskeys, true);
+      assert.equal(withPasskey.data.options.allowCredentials[0].id, "credential-options-test");
+    } finally {
+      await run("DELETE FROM passkeys WHERE id = ?", ["passkey-options-test"]);
+    }
     const knownAssertion = await request("/api/auth/passkeys/login/verify", {
       method: "POST",
       body: { challengeId: known.data.challengeId, response: { id: "missing" } },
     });
     assert.equal(knownAssertion.status, 401);
-    assert.equal(knownAssertion.data.error, "Unknown passkey");
+    assert.equal(knownAssertion.data.error, "Passkey does not match this account");
     const mismatch = await request("/api/auth/passkeys/login/verify", {
       method: "POST",
       body: { challengeId: unknown.data.challengeId, response: { id: "missing" } },
     });
     assert.equal(mismatch.status, 401);
-    assert.equal(mismatch.data.error, "Passkey does not match this account");
+    assert.equal(mismatch.data.error, knownAssertion.data.error);
     const bad = await request("/api/auth/passkeys/login/verify", {
       method: "POST",
       body: { challengeId: options.data.challengeId, response: { id: "missing" } },
