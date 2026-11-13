@@ -189,6 +189,14 @@ export async function saveRecipe(houseId: string, userId: string, body: z.infer<
   // A stored source link is rendered for every member, so only keep links the
   // server itself would be willing to open (same policy as the importer).
   const sourceUrl = await validateSourceUrl(body.sourceUrl ?? null);
+  // Linked stock items must belong to this house; a foreign id would join
+  // another house's item into stock checks and shopping lists.
+  const linked = [...new Set((body.ingredients ?? []).map((ing) => ing.itemId).filter((itemId): itemId is string => Boolean(itemId)))];
+  for (const itemId of linked) {
+    if (!(await get("SELECT id FROM items WHERE id = ? AND house_id = ?", [itemId, houseId]))) {
+      throw new ApiError(400, "An ingredient is linked to an item that is not in this house");
+    }
+  }
   const steps = (body.steps ?? []).map((s) =>
     typeof s === "string" ? { text: s, timerSeconds: null } : { text: s.text, timerSeconds: s.timerSeconds ?? null },
   );

@@ -130,13 +130,13 @@ export async function listContributions(
   const rows = status
     ? await all<ContributionRow & { item_name: string | null }>(
         `SELECT c.*, i.name AS item_name FROM off_contributions c
-         LEFT JOIN items i ON i.id = c.item_id
+         LEFT JOIN items i ON i.id = c.item_id AND i.house_id = c.house_id
          WHERE c.user_id = ? AND c.status = ? ORDER BY c.created_at DESC LIMIT ?`,
         [userId, status, limit],
       )
     : await all<ContributionRow & { item_name: string | null }>(
         `SELECT c.*, i.name AS item_name FROM off_contributions c
-         LEFT JOIN items i ON i.id = c.item_id
+         LEFT JOIN items i ON i.id = c.item_id AND i.house_id = c.house_id
          WHERE c.user_id = ? ORDER BY c.created_at DESC LIMIT ?`,
         [userId, limit],
       );
@@ -146,7 +146,7 @@ export async function listContributions(
 export async function getContribution(id: string, userId: string): Promise<OffContribution | null> {
   const row = await get<ContributionRow & { item_name: string | null }>(
     `SELECT c.*, i.name AS item_name FROM off_contributions c
-     LEFT JOIN items i ON i.id = c.item_id
+     LEFT JOIN items i ON i.id = c.item_id AND i.house_id = c.house_id
      WHERE c.id = ? AND c.user_id = ?`,
     [id, userId],
   );
@@ -186,6 +186,11 @@ export async function createContribution(opts: {
   if (!(await offConsent(opts.userId))) {
     throw new ApiError(403, "Accept the Open Food Facts license before contributing");
   }
+  // Price contributions are built from a receipt line, so the optional item is
+  // otherwise never checked; every kind must name an item of this house.
+  if (opts.itemId && !(await get("SELECT id FROM items WHERE id = ? AND house_id = ?", [opts.itemId, opts.houseId]))) {
+    throw new ApiError(404, "Item not found");
+  }
   const prepared = await buildContribution(opts);
   if (prepared.kind === "price") {
     const token = (await serviceBearer(opts.userId, "prices")) ?? (await instanceServiceBearer("prices"));
@@ -209,7 +214,7 @@ export async function createContribution(opts: {
   const existing = await get<ContributionRow>("SELECT * FROM off_contributions WHERE idempotency_key = ?", [key]);
   if (existing) {
     const item = existing.item_id
-      ? await get<{ name: string }>("SELECT name FROM items WHERE id = ?", [existing.item_id])
+      ? await get<{ name: string }>("SELECT name FROM items WHERE id = ? AND house_id = ?", [existing.item_id, existing.house_id])
       : null;
     return serializeContribution(existing, item?.name ?? null);
   }

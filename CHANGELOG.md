@@ -8,6 +8,10 @@ All notable changes to SVault are documented here. The format follows
 
 ### Security
 
+- Recipe ingredients can link only to items of the recipe's household, and the meal-plan shopping
+  list only reads categories from the plan's own household.
+- Open Food Facts contributions refuse an item from another household (price contributions accepted
+  one unchecked and returned its name).
 - Uploaded files under `/uploads` now need a signed-in session and are cached privately; a leaked
   link alone no longer opens a receipt photo.
 - Uploads are bound to the household that made them (new file names carry a house tag). Receipt and

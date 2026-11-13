@@ -4071,6 +4071,20 @@ describe("OpenFoodFacts links and shared catalogue", () => {
       assert.ok(price);
       assert.equal(price.ready, true);
 
+      // An item from another household must not ride along on a price contribution.
+      const otherHouse = (await request("/api/auth/me", { auth: secondUserCookie })).data.houses.find((house: any) => house.role === "owner").id;
+      const foreignItem = await request(`/api/houses/${otherHouse}/items`, {
+        method: "POST",
+        auth: secondUserCookie,
+        body: { name: "Other household secret" },
+      });
+      assert.equal(foreignItem.status, 201);
+      const smuggled = await request("/api/off/contributions", {
+        method: "POST",
+        body: { houseId, receiptLineId: lineId, itemId: foreignItem.data.id, kind: "price", fields: ["price"] },
+      });
+      assert.equal(smuggled.status, 404);
+
       const queued = await request("/api/off/contributions", {
         method: "POST",
         body: { houseId, receiptLineId: lineId, kind: "price", fields: ["price"] },
@@ -5927,6 +5941,22 @@ describe("security hardening", () => {
     });
     assert.ok(saved.status < 300, JSON.stringify(saved.data));
     assert.equal(saved.data.sourceImage, recipePath);
+  });
+
+  it("refuses recipe ingredients linked to another household's item", async () => {
+    const borrowed = await request(`/api/houses/${strangerHouseId}/recipes`, {
+      method: "POST",
+      auth: secondUserCookie,
+      body: { title: "Borrowed stock", ingredients: [{ name: "Their item", quantity: 1, unit: "pcs", itemId }] },
+    });
+    assert.equal(borrowed.status, 400);
+    assert.match(borrowed.data.error, /not in this house/);
+
+    const own = await request(`/api/houses/${houseId}/recipes`, {
+      method: "POST",
+      body: { title: "Own stock", ingredients: [{ name: "Our item", quantity: 1, unit: "pcs", itemId }] },
+    });
+    assert.ok(own.status < 300, JSON.stringify(own.data));
   });
 
   it("serves non-image files under /uploads as sandboxed downloads", async () => {

@@ -2266,6 +2266,7 @@ const EL: Record<string, string> = {
   "Category does not exist in this house": "Η κατηγορία δεν υπάρχει σε αυτό το σπίτι.",
   "Invalid household reference": "Μη έγκυρη αναφορά νοικοκυριού.",
   "Invalid item image": "Μη έγκυρη εικόνα αντικειμένου.",
+  "An ingredient is linked to an item that is not in this house": "Ένα υλικό είναι συνδεδεμένο με αντικείμενο που δεν ανήκει σε αυτό το σπίτι",
   "Invalid recipe image": "Μη έγκυρη εικόνα συνταγής.",
   "That upload was not found in this house. Upload the photo again.": "Το αρχείο δεν βρέθηκε σε αυτό το σπίτι. Ανέβασε ξανά τη φωτογραφία.",
   "The image must be an uploaded photo or an http(s) link": "Η εικόνα πρέπει να είναι φωτογραφία που ανέβηκε ή σύνδεσμος http(s)",
