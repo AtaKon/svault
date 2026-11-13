@@ -1,6 +1,6 @@
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { createHmac, createSign, generateKeyPairSync, randomUUID } from "node:crypto";
+import { createHash, createHmac, createSign, generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -5632,6 +5632,35 @@ describe("photos and datasets", () => {
     }
   });
 
+  it("counts only photos and labels belonging to the collection's house", async () => {
+    const other = await request("/api/auth/me", { auth: secondUserCookie });
+    const foreignHouse = other.data.houses.find((h: any) => h.role === "owner").id;
+    const folder = await request(`/api/houses/${houseId}/collections`, { body: { name: "Count isolation" } });
+    const createdAt = new Date().toISOString();
+    const insertPhoto = (id: string, photoHouse: string) => run(
+      "INSERT INTO photos (id, house_id, collection_id, filename, original_name, mime, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      [id, photoHouse, folder.data.id, `${id}.png`, `${id}.png`, "image/png", 1, createdAt],
+    );
+    await insertPhoto("photo-count-local-test", houseId);
+    await insertPhoto("photo-count-foreign-test", foreignHouse);
+    await run("INSERT INTO photo_labels (id, photo_id, house_id, label, created_at) VALUES (?, ?, ?, ?, ?)",
+      ["label-count-foreign-test", "photo-count-local-test", foreignHouse, "foreign", createdAt]);
+    try {
+      let collections = await request(`/api/houses/${houseId}/collections`);
+      let count = collections.data.find((entry: any) => entry.id === folder.data.id);
+      assert.equal(count.photoCount, 1);
+      assert.equal(count.labeledCount, 0);
+      await run("INSERT INTO photo_labels (id, photo_id, house_id, label, created_at) VALUES (?, ?, ?, ?, ?)",
+        ["label-count-local-test", "photo-count-local-test", houseId, "local", createdAt]);
+      collections = await request(`/api/houses/${houseId}/collections`);
+      count = collections.data.find((entry: any) => entry.id === folder.data.id);
+      assert.equal(count.labeledCount, 1);
+    } finally {
+      await run("DELETE FROM photos WHERE id IN (?, ?)", ["photo-count-local-test", "photo-count-foreign-test"]);
+      await run("DELETE FROM photo_collections WHERE id = ?", [folder.data.id]);
+    }
+  });
+
   it("exports an empty dataset", async () => {
     const res = await fetch(`${base}/api/houses/${houseId}/photos/export?format=yolo`, { headers: { cookie } });
     assert.equal(res.status, 200);
@@ -7048,6 +7077,36 @@ describe("two-factor authentication", () => {
       body: { challengeId: options.data.challengeId, response: { id: "missing" } },
     });
     assert.equal(bad.status, 401);
+  });
+
+  it("authenticates a discoverable passkey without an identifier", async () => {
+    const user = (await request("/api/auth/me")).data.user;
+    const keys = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+    const jwk = keys.publicKey.export({ format: "jwk" });
+    const cose = Buffer.concat([Buffer.from("a5010203262001215820", "hex"), Buffer.from(jwk.x!, "base64url"), Buffer.from("225820", "hex"), Buffer.from(jwk.y!, "base64url")]);
+    const credentialId = Buffer.from("discoverable-test-credential").toString("base64url");
+    await run("INSERT INTO passkeys (id, user_id, credential_id, public_key, created_at) VALUES (?, ?, ?, ?, ?)",
+      ["passkey-discoverable-test", user.id, credentialId, cose.toString("base64url"), new Date().toISOString()]);
+    try {
+      const options = await request("/api/auth/passkeys/login/options", { method: "POST", body: {} });
+      assert.equal(options.data.discoverable, true);
+      assert.deepEqual(options.data.options.allowCredentials, []);
+      const origin = new URL(base).origin;
+      const clientData = Buffer.from(JSON.stringify({ type: "webauthn.get", challenge: options.data.options.challenge, origin }));
+      const authenticatorData = Buffer.concat([createHash("sha256").update(new URL(base).hostname).digest(), Buffer.from([1, 0, 0, 0, 1])]);
+      const signature = sign("sha256", Buffer.concat([authenticatorData, createHash("sha256").update(clientData).digest()]), keys.privateKey);
+      const result = await request("/api/auth/passkeys/login/verify", {
+        method: "POST", body: { challengeId: options.data.challengeId, response: {
+          id: credentialId, rawId: credentialId, type: "public-key", response: {
+            authenticatorData: authenticatorData.toString("base64url"), clientDataJSON: clientData.toString("base64url"), signature: signature.toString("base64url"),
+          }, clientExtensionResults: {},
+        } },
+      });
+      assert.equal(result.status, 200, JSON.stringify(result.data));
+      assert.equal(result.data.user.id, user.id);
+    } finally {
+      await run("DELETE FROM passkeys WHERE id = ?", ["passkey-discoverable-test"]);
+    }
   });
 
   it("reports OIDC enabled and auto-provisions a verified email", async () => {

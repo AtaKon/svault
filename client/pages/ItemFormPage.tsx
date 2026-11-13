@@ -65,10 +65,11 @@ export function ItemFormPage() {
 
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(params.get("image") ?? null);
+  const ownedPreviews = useRef(new Set<string>());
   // A replacement preview owns the previous blob URL; revoke it when it is
   // swapped out or the page unmounts. Server image paths are left alone.
   useEffect(() => () => {
-    if (imagePreview?.startsWith("blob:")) URL.revokeObjectURL(imagePreview);
+    if (imagePreview && ownedPreviews.current.delete(imagePreview)) URL.revokeObjectURL(imagePreview);
   }, [imagePreview]);
 
   useEffect(() => {
@@ -120,7 +121,9 @@ export function ItemFormPage() {
     if (!file) return;
     const prepared = await prepareImage(file, { maxSize: 1400 });
     setImageFile(prepared);
-    setImagePreview(URL.createObjectURL(prepared));
+    const preview = URL.createObjectURL(prepared);
+    ownedPreviews.current.add(preview);
+    setImagePreview(preview);
   };
 
   const addBarcode = (code: string) => {
