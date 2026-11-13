@@ -6,6 +6,7 @@ import { Avatar, Badge, Button, Card, ConfirmDialog, PageHeader, cn } from "@/co
 import { Icon, LogoMark, type IconName } from "@/components/icons";
 import { useToast } from "@/components/toast";
 import { currentTheme, toggleTheme } from "@/theme";
+import { APP_VERSION } from "@shared/version";
 
 const LINKS: { to: string; label: string; description: string; icon: IconName; tint: string }[] = [
   { to: "/insights", label: "Insights", description: "Spending, prices, waste and use-it-up", icon: "price", tint: "bg-warn-soft text-warn" },
@@ -164,7 +165,7 @@ export function MorePage() {
       <div className="flex items-center gap-2.5 px-1 py-2">
         <LogoMark size={28} />
         <div className="text-[11px] leading-tight text-muted">
-          <div className="font-medium text-ink">{"SVault 1.0"}</div>
+          <div className="font-medium text-ink">SVault {APP_VERSION}</div>
           <div>{t("Self-hosted · your data stays on your machine")}</div>
         </div>
       </div>

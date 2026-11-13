@@ -51,6 +51,11 @@ function mergeSettings(current: Record<string, any>, incoming: Record<string, an
       else delete mergedAi.apiKey;
     }
     if (incoming.ai.apiKey === "" || incoming.ai.apiKey === null) delete mergedAi.apiKey;
+    // An explicit blank clears a stored value. Without this, JSON omits an
+    // empty string and the previous base URL, model or vision model would stay.
+    for (const key of ["baseUrl", "model", "visionModel"] as const) {
+      if (incoming.ai[key] === "" || incoming.ai[key] === null) delete mergedAi[key];
+    }
     if (incoming.ai.recipeVisionModels !== undefined) {
       // Reject a malformed or over-long list instead of deleting it or cutting
       // it silently: "up to four" is a user-facing promise.

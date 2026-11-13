@@ -143,7 +143,7 @@ export function AppShell() {
         </button>
 
         <nav className="mt-5 flex flex-col gap-0.5">
-          {NAV.filter((item) => item.to !== "/scan" && item.to !== "/more").map((item) => (
+          {NAV.filter((item) => item.to !== "/more").map((item) => (
             <SideLink key={item.to} {...item} label={t(item.label)} />
           ))}
           <div className="my-2 h-px bg-line" />

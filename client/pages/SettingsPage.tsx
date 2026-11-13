@@ -1203,9 +1203,9 @@ function AiTab({ house, onSave }: { house: House; onSave: (patch: Record<string,
     try {
       const payload: Record<string, unknown> = {
         enabled,
-        baseUrl: baseUrl.trim() || undefined,
-        model: model.trim() || undefined,
-        visionModel: visionModel.trim() || undefined,
+        baseUrl: baseUrl.trim() || null,
+        model: model.trim() || null,
+        visionModel: visionModel.trim() || null,
         recipeVisionModels: visionModels,
         recipeReasoning,
         inputPrice: priceOrNull(inputPrice),
@@ -1949,7 +1949,7 @@ function DataTab({ house, detail }: { house: House; detail: HouseDetail | null }
         </div>
       </Card>
 
-      <Card className="space-y-3 p-4">
+      {can("member") && <Card className="space-y-3 p-4">
         <div className="flex items-start justify-between gap-3">
           <div>
             <h2 className="font-display text-lg">{t("Import inventory CSV")}</h2>
@@ -2048,7 +2048,7 @@ function DataTab({ house, detail }: { house: House; detail: HouseDetail | null }
             </div>
           </>
         )}
-      </Card>
+      </Card>}
 
       {user?.isAdmin && (
         <Card className="p-4">

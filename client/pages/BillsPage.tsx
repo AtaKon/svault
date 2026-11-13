@@ -120,7 +120,7 @@ function UsageHistory({ bills }: { bills: UtilityBill[] }) {
 
 export function BillsPage() {
   const { t } = useI18n();
-  const { house } = useHouse();
+  const { house, can } = useHouse();
   const { user } = useAuth();
   const toast = useToast();
   const [bills, setBills] = useState<UtilityBill[]>([]);
@@ -503,7 +503,7 @@ export function BillsPage() {
     <PageHeader eyebrow={t("Household finances")} title={t("Bills & splitting")} subtitle={t("Track household bills, attach PDFs or photos, and see who owes what for shared costs.")} />
     <p className="rounded-xl border border-line bg-raised/40 px-4 py-3 text-sm text-muted">{t("Bills and purchase receipts are separate ledger entries. Record each expense in one place to avoid counting it twice.")}</p>
 
-    <Card className="p-4 sm:p-5">
+    {can("member") && <Card className="p-4 sm:p-5">
       <form className="space-y-4" onSubmit={(event) => void save(event)}>
         <div className="flex items-center gap-2"><Icon name="plus" size={17} className="text-brand"/><h2 className="font-display text-lg">{t("Add a bill")}</h2></div>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
@@ -560,7 +560,7 @@ export function BillsPage() {
         <Field label={t("Notes")}><Textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder={t("Optional details or account reference")} /></Field>
         <Button type="submit" loading={saving} disabled={scanning} icon="plus">{t("Save bill")}</Button>
       </form>
-    </Card>
+    </Card>}
 
     <UsageHistory bills={bills} />
     <section className="space-y-3">
@@ -574,19 +574,21 @@ export function BillsPage() {
           <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h3 className="truncate font-semibold">{bill.name}</h3><Badge>{t(BILL_TYPES.find((type) => type.value === bill.billType)?.label ?? "Other")}</Badge><Badge tone={bill.category === "to_split" ? "brand" : "neutral"}>{bill.category === "to_split" ? t("To be split") : t("Personal")}</Badge>{bill.source === "scan" && <Badge>{t("Read from file")}</Badge>}</div>
             <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted">{bill.dueDate && <span>{t("Due {date}", { date: shortDate(bill.dueDate) })}</span>}{payer && <span>{t("Paid by {name}", { name: payer.name })}</span>}{bill.category === "to_split" && participants.length > 0 && <span>{participants.map((member, index) => `${member.name}: ${money(shares[index], bill.currency)}`).join(" · ")}</span>}</div>
             {bill.notes && <p className="mt-2 text-sm text-muted">{bill.notes}</p>}
-          </div><div className="flex items-center gap-3"><div className="text-right"><div className="font-display text-xl">{money(bill.amount, bill.currency)}</div>{bill.subtotal != null && <div className="text-[11px] text-muted">{t("Subtotal")}: {money(bill.subtotal, bill.currency)}{bill.taxTotal != null ? ` · ${t("Tax")}: ${money(bill.taxTotal, bill.currency)}` : ""}</div>}</div><button onClick={() => void removeBill(bill)} className="rounded-lg p-2 text-muted hover:bg-raised hover:text-danger" aria-label={t("Delete bill")}><Icon name="trash" size={17}/></button></div>
+          </div><div className="flex items-center gap-3"><div className="text-right"><div className="font-display text-xl">{money(bill.amount, bill.currency)}</div>{bill.subtotal != null && <div className="text-[11px] text-muted">{t("Subtotal")}: {money(bill.subtotal, bill.currency)}{bill.taxTotal != null ? ` · ${t("Tax")}: ${money(bill.taxTotal, bill.currency)}` : ""}</div>}</div>{can("member") && <button onClick={() => void removeBill(bill)} className="rounded-lg p-2 text-muted hover:bg-raised hover:text-danger" aria-label={t("Delete bill")}><Icon name="trash" size={17}/></button>}</div>
           </div>
           {bill.breakdown.length > 0 && <details className="mt-4 border-t border-line pt-3">
             <summary className="cursor-pointer text-sm font-medium text-brand">{t("Bill breakdown")} · {bill.breakdown.length}</summary>
             <BreakdownTable lines={bill.breakdown} currency={bill.currency} />
           </details>}
-          {(bill.billType === "electricity" || bill.billType === "natural_gas") && <BillMetricsEditor key={`${bill.id}-${bill.consumptionKwh}-${bill.consumptionM3}-${bill.municipalCharges}-${bill.stateCharges}`} bill={bill} save={(data) => patchBill(bill, data)} />}
+          {(bill.billType === "electricity" || bill.billType === "natural_gas") && can("member") && <BillMetricsEditor key={`${bill.id}-${bill.consumptionKwh}-${bill.consumptionM3}-${bill.municipalCharges}-${bill.stateCharges}`} bill={bill} save={(data) => patchBill(bill, data)} />}
           <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-line pt-3">
+            {can("member") && <>
             {bill.billType === "electricity" && <Field label={t("Electricity contract color")} className="w-44"><Select value={bill.contractColor ?? ""} onChange={(e) => void patchBill(bill, { contractColor: e.target.value || null })}><option value="">{t("Not specified")}</option>{ELECTRICITY_CONTRACT_COLORS.map((color) => <option key={color} value={color}>{t(CONTRACT_COLOR_LABELS[color])}</option>)}</Select></Field>}
             <Field label={t("Category")} className="w-44"><Select value={bill.category} onChange={(e) => changeCategory(bill, e.target.value as UtilityBill["category"])}><option value="to_split">{t("To be split")}</option><option value="personal">{t("Personal")}</option></Select></Field>
             {bill.category === "to_split" && <><Field label={t("Paid by")} className="w-44"><Select value={bill.paidBy ?? ""} onChange={(e) => void patchBill(bill, { paidBy: e.target.value })}>{household?.members.map((member) => <option key={member.userId} value={member.userId}>{member.name}</option>)}</Select></Field><Field label={t("Split between")} className="min-w-[220px] flex-1"><div className="flex flex-wrap gap-2">{household?.members.map((member) => <label key={member.userId} className="flex cursor-pointer items-center gap-1.5 text-xs"><input type="checkbox" checked={bill.splitWith.includes(member.userId)} onChange={(event) => { if (!event.target.checked && bill.splitWith.length === 1) { toast.error(t("Select at least one person to split the bill.")); return; } const next = event.target.checked ? [...bill.splitWith, member.userId] : bill.splitWith.filter((id) => id !== member.userId); void patchBill(bill, { splitWith: next }); }} />{member.name}</label>)}</div></Field></>}
-            {bill.document ? <a className="inline-flex items-center gap-2 text-sm font-medium text-brand hover:underline" href={bill.document} target="_blank" rel="noreferrer"><Icon name="receipt" size={16}/>{t("View bill document")}</a> : <label className="inline-flex cursor-pointer items-center gap-2 text-sm font-medium text-brand hover:underline"><Icon name="upload" size={16}/>{t("Attach document")}<input type="file" accept={DOCUMENT_ACCEPT} className="sr-only" disabled={uploading} onChange={(event) => { const nextFile = event.target.files?.[0]; if (nextFile) void uploadDocument(bill, nextFile); event.target.value = ""; }} /></label>}
-            {bill.document && <Button type="button" size="sm" variant="ghost" icon="scan" loading={readingBillId === bill.id} disabled={readingBillId != null || scanning} onClick={() => void readSavedBill(bill)}>{t("Read document")}{readingBillId === bill.id ? ` ${Math.round(readingProgress * 100)}%` : ""}</Button>}
+            </>}
+            {bill.document ? <a className="inline-flex items-center gap-2 text-sm font-medium text-brand hover:underline" href={bill.document} target="_blank" rel="noreferrer"><Icon name="receipt" size={16}/>{t("View bill document")}</a> : can("member") ? <label className="inline-flex cursor-pointer items-center gap-2 text-sm font-medium text-brand hover:underline"><Icon name="upload" size={16}/>{t("Attach document")}<input type="file" accept={DOCUMENT_ACCEPT} className="sr-only" disabled={uploading} onChange={(event) => { const nextFile = event.target.files?.[0]; if (nextFile) void uploadDocument(bill, nextFile); event.target.value = ""; }} /></label> : null}
+            {bill.document && can("member") && <Button type="button" size="sm" variant="ghost" icon="scan" loading={readingBillId === bill.id} disabled={readingBillId != null || scanning} onClick={() => void readSavedBill(bill)}>{t("Read document")}{readingBillId === bill.id ? ` ${Math.round(readingProgress * 100)}%` : ""}</Button>}
           </div>
         </Card>;
       })}</div>}

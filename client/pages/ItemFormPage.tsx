@@ -65,6 +65,11 @@ export function ItemFormPage() {
 
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(params.get("image") ?? null);
+  // A replacement preview owns the previous blob URL; revoke it when it is
+  // swapped out or the page unmounts. Server image paths are left alone.
+  useEffect(() => () => {
+    if (imagePreview?.startsWith("blob:")) URL.revokeObjectURL(imagePreview);
+  }, [imagePreview]);
 
   useEffect(() => {
     Promise.all([

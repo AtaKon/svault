@@ -42,20 +42,20 @@ dashboardRoutes.get(
     const expiring = (await all<any>(
       `SELECT l.*, i.name AS item_name, loc.name AS location_name FROM stock_lots l
        JOIN items i ON i.id = l.item_id
-       LEFT JOIN locations loc ON loc.id = l.location_id
+       LEFT JOIN locations loc ON loc.id = l.location_id AND loc.house_id = ?
        WHERE l.house_id = ? AND l.quantity > 0 AND l.expires_at IS NOT NULL AND l.expires_at <= ?
        ORDER BY l.expires_at ASC LIMIT 12`,
-      [houseId, horizon],
+      [houseId, houseId, horizon],
     )).map((row) => ({ ...serializeLot(row), itemName: row.item_name, itemId: row.item_id }));
 
     const recent = (await all<any>(
       `SELECT m.*, i.name AS item_name, i.unit AS item_unit, loc.name AS location_name, u.name AS user_name
        FROM stock_movements m
        JOIN items i ON i.id = m.item_id
-       LEFT JOIN locations loc ON loc.id = m.location_id
+       LEFT JOIN locations loc ON loc.id = m.location_id AND loc.house_id = ?
        LEFT JOIN users u ON u.id = m.user_id
        WHERE m.house_id = ? ORDER BY m.created_at DESC LIMIT 10`,
-      [houseId],
+      [houseId, houseId],
     )).map((row) => ({ ...serializeMovement(row), itemName: row.item_name }));
 
     const recentRecipeRow = await get<any>(

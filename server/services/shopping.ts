@@ -25,7 +25,7 @@ export function serializeShoppingItem(row: any): ShoppingItem {
 export async function shoppingRow(houseId: string, id: string) {
   return await get<any>(
     `SELECT s.*, c.name AS category_name, c.icon AS category_icon
-     FROM shopping_list_items s LEFT JOIN categories c ON c.id = s.category_id
+     FROM shopping_list_items s LEFT JOIN categories c ON c.id = s.category_id AND c.house_id = s.house_id
      WHERE s.id = ? AND s.house_id = ?`,
     [id, houseId],
   );
@@ -34,7 +34,7 @@ export async function shoppingRow(houseId: string, id: string) {
 export async function listShopping(houseId: string, includeChecked = true): Promise<ShoppingItem[]> {
   return (await all<any>(
     `SELECT s.*, c.name AS category_name, c.icon AS category_icon
-     FROM shopping_list_items s LEFT JOIN categories c ON c.id = s.category_id
+     FROM shopping_list_items s LEFT JOIN categories c ON c.id = s.category_id AND c.house_id = s.house_id
      WHERE s.house_id = ? ${includeChecked ? "" : "AND s.checked = 0"}
      ORDER BY s.checked ASC, lower(COALESCE(c.name, '')), s.created_at`,
     [houseId],

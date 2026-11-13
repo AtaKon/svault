@@ -2041,6 +2041,32 @@ describe("inventory and stock", () => {
     const patch = await request(`/api/items/${itemId}`, { method: "PATCH", body: { categoryId } });
     assert.equal(patch.status, 400);
     assert.equal((await request(`/api/items/${itemId}`)).data.categoryId, before.data.categoryId);
+    // Defence in depth: a pre-existing cross-house reference must not expose
+    // the other house's category name through the serializer join.
+    await run("UPDATE items SET category_id = ? WHERE id = ?", [categoryId, itemId]);
+    const corrupt = await request(`/api/items/${itemId}`);
+    assert.equal(corrupt.data.categoryId, categoryId);
+    assert.equal(corrupt.data.categoryName, null);
+    await run("UPDATE items SET category_id = NULL WHERE id = ?", [itemId]);
+    // The same defence covers location names in lots and movements.
+    const createdAt = new Date().toISOString();
+    await run(
+      "INSERT INTO stock_lots (id, item_id, house_id, location_id, quantity, unit, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      ["lot_cross_house_test", itemId, houseId, locationId, 0, "pcs", createdAt],
+    );
+    await run(
+      `INSERT INTO stock_movements (id, item_id, house_id, type, delta, unit, quantity, location_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ["mov_cross_house_test", itemId, houseId, "in", 0, "pcs", 1, locationId, createdAt],
+    );
+    try {
+      const withLocation = await request(`/api/items/${itemId}`);
+      assert.equal(withLocation.data.lots.find((entry: any) => entry.id === "lot_cross_house_test").locationName, null);
+      assert.equal(withLocation.data.movements.find((entry: any) => entry.id === "mov_cross_house_test").locationName, null);
+    } finally {
+      await run("DELETE FROM stock_movements WHERE id = ?", ["mov_cross_house_test"]);
+      await run("DELETE FROM stock_lots WHERE id = ?", ["lot_cross_house_test"]);
+    }
     const localCategories = await request(`/api/houses/${houseId}/categories`);
     assert.equal((await request(`/api/items/${itemId}`, { method: "PATCH", body: { categoryId: localCategories.data[0].id } })).status, 200);
     const cleared = await request(`/api/items/${itemId}`, { method: "PATCH", body: { categoryId: null } });
@@ -2052,6 +2078,12 @@ describe("inventory and stock", () => {
     assert.equal(localLine.status, 201);
     const shoppingPatch = await request(`/api/houses/${houseId}/shopping/${localLine.data.item.id}`, { method: "PATCH", body: { categoryId } });
     assert.equal(shoppingPatch.status, 400);
+    await run("UPDATE shopping_list_items SET category_id = ? WHERE id = ?", [categoryId, localLine.data.item.id]);
+    const corruptList = await request(`/api/houses/${houseId}/shopping`);
+    const corruptLine = corruptList.data.items.find((entry: any) => entry.id === localLine.data.item.id);
+    assert.equal(corruptLine.categoryId, categoryId);
+    assert.equal(corruptLine.categoryName, null);
+    await run("UPDATE shopping_list_items SET category_id = NULL WHERE id = ?", [localLine.data.item.id]);
     const setCategory = await request(`/api/houses/${houseId}/shopping/${localLine.data.item.id}`, { method: "PATCH", body: { categoryId: localCategories.data[0].id } });
     assert.equal(setCategory.status, 200);
     const clearCategory = await request(`/api/houses/${houseId}/shopping/${localLine.data.item.id}`, { method: "PATCH", body: { categoryId: null } });
@@ -5305,6 +5337,35 @@ describe("ai integration", () => {
     assert.equal(res.data.settings.ai.model, "mock-model");
   });
 
+  it("clears an AI base URL, model and vision model when explicitly blank", async () => {
+    const created = await request("/api/houses", { method: "POST", body: { name: "AI settings reset" } });
+    assert.equal(created.status, 201);
+    const resetHouse = created.data.id;
+    try {
+      const filled = await request(`/api/houses/${resetHouse}`, {
+        method: "PATCH",
+        body: {
+          settings: {
+            ai: { enabled: true, baseUrl: "https://ai.example/v1", model: "old-model", visionModel: "old-vision" },
+          },
+        },
+      });
+      assert.equal(filled.status, 200);
+      assert.equal(filled.data.settings.ai.model, "old-model");
+      const cleared = await request(`/api/houses/${resetHouse}`, {
+        method: "PATCH",
+        body: { settings: { ai: { baseUrl: "", model: "", visionModel: "" } } },
+      });
+      assert.equal(cleared.status, 200, JSON.stringify(cleared.data));
+      assert.equal("baseUrl" in cleared.data.settings.ai, false);
+      assert.equal("model" in cleared.data.settings.ai, false);
+      assert.equal("visionModel" in cleared.data.settings.ai, false);
+      assert.equal(cleared.data.settings.ai.enabled, true);
+    } finally {
+      await request(`/api/houses/${resetHouse}`, { method: "DELETE" });
+    }
+  });
+
   it("cleans scans through the provider", async () => {
     aiRequests.length = 0;
     const res = await request(`/api/houses/${houseId}/recipes/scan`, {
@@ -6922,6 +6983,15 @@ describe("two-factor authentication", () => {
     assert.equal(options.status, 200);
     assert.ok(options.data.challengeId);
     assert.ok(options.data.options.challenge);
+    // An unknown identifier must look like a known account without passkeys:
+    // no 404 oracle for account enumeration.
+    const unknown = await request("/api/auth/passkeys/login/options", {
+      method: "POST",
+      body: { identifier: "missing-passkey-user@example.com" },
+    });
+    assert.equal(unknown.status, 200);
+    assert.equal(unknown.data.hasPasskeys, false);
+    assert.equal(unknown.data.discoverable, false);
     const bad = await request("/api/auth/passkeys/login/verify", {
       method: "POST",
       body: { challengeId: options.data.challengeId, response: { id: "missing" } },
@@ -9678,6 +9748,31 @@ describe("insights, household split and admin console", () => {
     ]);
     assert.equal(ledger.data.balances.find((entry: any) => entry.userId === memberId).balance, -0.5);
     assert.equal(ledger.data.balances.find((entry: any) => entry.userId === ownerId).balance, 0.5);
+
+    // A member who is not one of the two parties cannot settle their debt.
+    const third = await request("/api/auth/register", {
+      method: "POST",
+      body: { name: "Test Third", email: "third-settlement@example.com", password: "test password" },
+    });
+    assert.equal(third.status, 201);
+    const thirdId = third.data.user.id;
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
+      house.data.id,
+      thirdId,
+      "member",
+      new Date().toISOString(),
+    ]);
+    try {
+      const thirdParty = await request(path, {
+        method: "POST",
+        auth: third.cookie ?? undefined,
+        body: { fromUserId: memberId, toUserId: ownerId, amount: 0.01, idempotencyKey: randomUUID() },
+      });
+      assert.equal(thirdParty.status, 403);
+      assert.equal(thirdParty.data.error, "Only the people involved can record this payment");
+    } finally {
+      await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [house.data.id, thirdId]);
+    }
 
     const invalidCases = [
       { fromUserId: memberId, toUserId: memberId, amount: 0.1 },

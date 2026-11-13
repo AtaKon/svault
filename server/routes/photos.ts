@@ -52,8 +52,8 @@ photoRoutes.get(
     const { houseId } = await requireHouse(req);
     const rows = await all<any>(
       `SELECT c.*,
-        (SELECT COUNT(*) FROM photos p WHERE p.collection_id = c.id) AS photo_count,
-        (SELECT COUNT(*) FROM photos p WHERE p.collection_id = c.id
+        (SELECT COUNT(*) FROM photos p WHERE p.collection_id = c.id AND p.house_id = c.house_id) AS photo_count,
+        (SELECT COUNT(*) FROM photos p WHERE p.collection_id = c.id AND p.house_id = c.house_id
            AND EXISTS (SELECT 1 FROM photo_labels l WHERE l.photo_id = p.id)) AS labeled_count
        FROM photo_collections c WHERE c.house_id = ? ORDER BY lower(c.name)`,
       [houseId],

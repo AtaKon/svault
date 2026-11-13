@@ -1101,7 +1101,7 @@ receiptRoutes.get(
        FROM receipt_lines rl
        JOIN receipts r ON r.id = rl.receipt_id
        LEFT JOIN items i ON i.id = rl.item_id
-       LEFT JOIN categories c ON c.id = i.category_id
+       LEFT JOIN categories c ON c.id = i.category_id AND c.house_id = i.house_id
        WHERE ${where.join(" AND ")}
        GROUP BY c.id, c.name, COALESCE(c.name, 'Uncategorised')
        ORDER BY total DESC`,

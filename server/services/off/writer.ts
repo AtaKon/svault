@@ -172,7 +172,7 @@ export async function buildContribution(opts: {
 
   const item = await get<any>(
     `SELECT i.*, c.name AS category_name FROM items i
-     LEFT JOIN categories c ON c.id = i.category_id
+     LEFT JOIN categories c ON c.id = i.category_id AND c.house_id = i.house_id
      WHERE i.id = ? AND i.house_id = ?`,
     [opts.itemId, opts.houseId],
   );

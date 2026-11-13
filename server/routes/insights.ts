@@ -1,6 +1,6 @@
 import { Router, type Response } from "express";
 import { z } from "zod";
-import { requireAuth } from "../auth.js";
+import { requireAuth, roleAtLeast } from "../auth.js";
 import { ApiError, handler, parseBody, requireHouse } from "../http.js";
 import { limitRequests, limiters, userOrIp } from "../rate-limit.js";
 import { all, get, lockHouseholdLedger, newId, now, parseJson, tx } from "../db.js";
@@ -99,12 +99,15 @@ insightRoutes.post(
   "/:houseId/insights/settlements",
   limitRequests(limiters.settlements, userOrIp, "Too many settlement requests. Try again later."),
   handler(async (req, res) => {
-    // Shared household bookkeeping: any edit-capable member may record a
-    // transfer between any two current members, even when they are not a party.
-    const { houseId } = await requireHouse(req, "member");
+    // A payment changes the ledger of the people involved, so only one of them
+    // may record it. A house admin or owner can help settle on their behalf.
+    const { houseId, role } = await requireHouse(req, "member");
     const body = parseBody(settlementBody, req.body);
     const amount = body.amount;
     if (body.fromUserId === body.toUserId) throw new ApiError(400, "Choose two different household members");
+    if (body.fromUserId !== req.user!.id && body.toUserId !== req.user!.id && !roleAtLeast(role, "admin")) {
+      throw new ApiError(403, "Only the people involved can record this payment");
+    }
     const result = await tx(async (session) => {
       // Lock the house before reading. Receipt, bill, membership, and other
       // settlement writes use the same lock before changing the household ledger.

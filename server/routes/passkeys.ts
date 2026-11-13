@@ -160,13 +160,14 @@ passkeyRoutes.post(
     const body = parseBody(z.object({ identifier: z.string().trim().max(220).optional() }), req.body ?? {});
     const { rpID } = relyingParty(req);
     const identifier = (body.identifier ?? "").trim();
+    // Never reveal whether an account exists: an unknown identifier returns the
+    // same empty, non-discoverable options as a known account without passkeys.
     const user = identifier
       ? await get<any>("SELECT * FROM users WHERE lower(email) = lower(?) OR lower(username) = lower(?)", [
           identifier,
           identifier,
         ])
       : null;
-    if (identifier && !user) throw new ApiError(404, "No passkey is registered for that account");
     const allowed = user ? await listPasskeys(user.id) : [];
     const options = await generateAuthenticationOptions({
       rpID,
@@ -185,7 +186,7 @@ passkeyRoutes.post(
     res.json({
       challengeId,
       options,
-      discoverable: !user,
+      discoverable: !identifier,
       hasPasskeys: Boolean(user && allowed.length),
     });
   }),
