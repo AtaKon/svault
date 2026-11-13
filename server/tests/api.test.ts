@@ -6996,9 +6996,17 @@ describe("two-factor authentication", () => {
       method: "POST", body: { identifier: "owner@example.com" },
     });
     assert.equal(known.status, 200);
+    // This fixture must have no credentials for the comparison to be meaningful.
+    assert.deepEqual(known.data.options.allowCredentials, []);
     assert.deepEqual(unknown.data.options.allowCredentials, known.data.options.allowCredentials);
     assert.equal(unknown.data.hasPasskeys, known.data.hasPasskeys);
     assert.equal(unknown.data.discoverable, known.data.discoverable);
+    const knownAssertion = await request("/api/auth/passkeys/login/verify", {
+      method: "POST",
+      body: { challengeId: known.data.challengeId, response: { id: "missing" } },
+    });
+    assert.equal(knownAssertion.status, 401);
+    assert.equal(knownAssertion.data.error, "Unknown passkey");
     const mismatch = await request("/api/auth/passkeys/login/verify", {
       method: "POST",
       body: { challengeId: unknown.data.challengeId, response: { id: "missing" } },
