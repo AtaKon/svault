@@ -5,6 +5,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { recipeFormPayload, recipeFormRows } from "../../client/recipe-form-data.js";
 import { splitAmountEvenly } from "../../shared/bill-splitting.js";
 import { BILL_TYPE_LABELS, BILL_TYPE_VALUES } from "../../shared/bill-types.js";
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA, POSTGRES_TABLE_ORDER } from "../database/postgres-schema.js";
@@ -2034,6 +2035,9 @@ describe("inventory and stock", () => {
     const categoryId = categories.data[0].id;
     const locationId = locations.data[0].id;
     const before = await request(`/api/items/${itemId}`);
+    for (const invalid of ["", 0]) {
+      assert.equal((await request(`/api/items/${itemId}`, { method: "PATCH", body: { categoryId: invalid } })).status, 400);
+    }
     const patch = await request(`/api/items/${itemId}`, { method: "PATCH", body: { categoryId } });
     assert.equal(patch.status, 400);
     assert.equal((await request(`/api/items/${itemId}`)).data.categoryId, before.data.categoryId);
@@ -2056,6 +2060,7 @@ describe("inventory and stock", () => {
     for (const action of ["add", "remove", "set"]) {
       const stock = await request(`/api/items/${itemId}/stock`, { method: "POST", body: { action, quantity: 1, target: 1, locationId } });
       assert.equal(stock.status, 400);
+      assert.equal(stock.data.error, "Location does not exist in this house");
     }
     const emptyMove = await request(`/api/items/${itemId}/stock`, { method: "POST", body: { action: "move", quantity: 1, fromLocationId: "", toLocationId: "" } });
     assert.equal(emptyMove.status, 400);
@@ -5071,6 +5076,22 @@ describe("receipts and shops", () => {
 });
 
 describe("recipes", () => {
+  it("preserves ingredient links, notes and timers through the edit form", async () => {
+    const created = await request(`/api/houses/${houseId}/recipes`, { body: {
+      title: "Round trip", ingredients: [{ name: "Milk", itemId, quantity: 1, unit: "l", note: "cold" }],
+      steps: [{ text: "Wait", timerSeconds: 90 }],
+    } });
+    assert.equal(created.status, 201);
+    const loaded = await request(`/api/recipes/${created.data.id}`);
+    const rows = recipeFormRows(loaded.data.ingredients, loaded.data.steps);
+    const saved = await request(`/api/recipes/${created.data.id}`, { method: "PATCH", body: { title: "Renamed", ...recipeFormPayload(rows.ingredients, rows.steps) } });
+    assert.equal(saved.status, 200);
+    const reloaded = await request(`/api/recipes/${created.data.id}`);
+    assert.equal(reloaded.data.ingredients[0].itemId, itemId);
+    assert.equal(reloaded.data.ingredients[0].note, "cold");
+    assert.equal(reloaded.data.steps[0].timerSeconds, 90);
+  });
+
   it("parses a scan without an AI provider", async () => {
     const res = await request(`/api/houses/${houseId}/recipes/scan`, {
       method: "POST",
@@ -5478,11 +5499,26 @@ describe("photos and datasets", () => {
     assert.equal((await request(`/api/photos/${photoId}`, { method: "PATCH", body: { collectionId: folder.data.id } })).status, 400);
     const after = await get<any>("SELECT item_id, collection_id FROM photos WHERE id = ?", [photoId]);
     assert.deepEqual(after, before);
+    const localFolder = await request(`/api/houses/${houseId}/collections`, { body: { name: "Clear links" } });
+    const linked = await request(`/api/photos/${photoId}`, { method: "PATCH", body: { itemId, collectionId: localFolder.data.id } });
+    assert.equal(linked.status, 200);
+    const cleared = await request(`/api/photos/${photoId}`, { method: "PATCH", body: { itemId: null, collectionId: null } });
+    assert.equal(cleared.status, 200);
+    assert.equal(cleared.data.itemId, null);
+    assert.equal(cleared.data.collectionId, null);
+    for (const field of ["itemId", "collectionId"]) {
+      assert.equal((await request(`/api/photos/${photoId}`, { method: "PATCH", body: { [field]: "" } })).status, 400);
+    }
+    const imageDir = path.join(dataDir, "uploads", "photos");
+    const filesBefore = readdirSync(imageDir).sort();
     const png = encodePng(8, 8, Buffer.alloc(8 * 8 * 4, 220));
-    const form = new FormData();
-    form.append("photos", new Blob([new Uint8Array(png)], { type: "image/png" }), "foreign.png");
-    form.append("itemId", item.data.id);
-    assert.equal((await request(`/api/houses/${houseId}/photos`, { method: "POST", body: form })).status, 400);
+    for (const [field, value] of [["itemId", item.data.id], ["collectionId", folder.data.id]]) {
+      const form = new FormData();
+      form.append("photos", new Blob([new Uint8Array(png)], { type: "image/png" }), "foreign.png");
+      form.append(field, value);
+      assert.equal((await request(`/api/houses/${houseId}/photos`, { method: "POST", body: form })).status, 400);
+      assert.deepEqual(readdirSync(imageDir).sort(), filesBefore);
+    }
   });
 
   it("exports an empty dataset", async () => {

@@ -8,6 +8,9 @@ All notable changes to SVault are documented here. The format follows
 
 ### Security
 
+- Item categories, stock locations, and photo folder and item links are now validated against the
+  owning household to prevent cross-household references.
+
 - Account-wide passkeys can be deleted only by their owner or an instance administrator. A household
   owner can no longer delete another member's passkeys.
 

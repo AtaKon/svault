@@ -10,13 +10,7 @@ import { UNIT_OPTIONS } from "@/units";
 import type { Recipe } from "@shared/types";
 import { useI18n } from "@/i18n";
 
-interface IngredientRow {
-  itemId?: string | null;
-  name: string;
-  quantity: string;
-  unit: string;
-  optional: boolean;
-}
+import { recipeFormPayload, recipeFormRows, type IngredientRow } from "@/recipe-form-data";
 
 export function RecipeFormPage() {
   const { t } = useI18n();
@@ -61,18 +55,9 @@ export function RecipeFormPage() {
         setSource(recipe.source);
         setAiNotes(recipe.aiNotes);
         setFavorite(recipe.favorite);
-        setIngredients(
-          recipe.ingredients.length
-            ? recipe.ingredients.map((ingredient) => ({
-                itemId: ingredient.itemId,
-                name: ingredient.name,
-                quantity: ingredient.quantity != null ? String(ingredient.quantity) : "",
-                unit: ingredient.unit ?? "",
-                optional: ingredient.optional,
-              }))
-            : [{ name: "", quantity: "", unit: "", optional: false }],
-        );
-        setSteps(recipe.steps.length ? recipe.steps.map((step) => ({ text: step.text, timerSeconds: step.timerSeconds })) : [{ text: "" }]);
+        const rows = recipeFormRows(recipe.ingredients, recipe.steps);
+        setIngredients(rows.ingredients);
+        setSteps(rows.steps);
         setLoading(false);
       })
       .catch((err) => {
@@ -118,16 +103,7 @@ export function RecipeFormPage() {
         source,
         aiNotes,
         favorite,
-        steps: steps.map((step) => ({ ...step, text: step.text.trim() })).filter((step) => step.text),
-        ingredients: ingredients
-          .filter((row) => row.name.trim())
-          .map((row) => ({
-            itemId: row.itemId ?? null,
-            name: row.name.trim(),
-            quantity: row.quantity ? Number(row.quantity) : null,
-            unit: row.unit.trim() || null,
-            optional: row.optional,
-          })),
+        ...recipeFormPayload(ingredients, steps),
       };
       const recipe = editing
         ? await api<Recipe>(`/api/recipes/${recipeId}`, { method: "PATCH", body })

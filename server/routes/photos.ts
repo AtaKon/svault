@@ -246,10 +246,10 @@ singlePhotoRoutes.patch(
     const { photo } = await photoAccess(req, "member");
     const body = parseBody(
       z.object({
-        collectionId: z.string().max(60).nullish(),
+        collectionId: z.string().trim().min(1).max(60).nullish(),
         notes: z.string().max(1000).nullish(),
         split: splitSchema.optional(),
-        itemId: z.string().max(60).nullish(),
+        itemId: z.string().trim().min(1).max(60).nullish(),
         width: z.number().int().min(1).max(20000).nullish(),
         height: z.number().int().min(1).max(20000).nullish(),
         capturedAt: z.string().max(40).nullish(),

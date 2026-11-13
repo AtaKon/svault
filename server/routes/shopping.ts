@@ -22,7 +22,7 @@ const lineBody = z.object({
   quantity: z.number().min(0).max(1e9).nullish(),
   unit: z.string().trim().max(10).nullish(),
   itemId: z.string().max(60).nullish(),
-  categoryId: z.string().max(60).nullish(),
+  categoryId: z.string().trim().min(1).max(60).nullish(),
   note: z.string().trim().max(300).nullish(),
 });
 
