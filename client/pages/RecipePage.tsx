@@ -194,7 +194,7 @@ export function RecipePage() {
         <span className="text-[11px] text-muted">{t("updated ")}{' '}{relativeTime(recipe.updatedAt)}</span>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[1fr_1.1fr]">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
         <div className="space-y-4">
           {(recipe.image || recipe.sourceImage) && (
             <Card className="overflow-hidden">
@@ -235,7 +235,7 @@ export function RecipePage() {
                       >
                         {stocked ? <Icon name="check" size={12} /> : <Icon name="minus" size={11} />}
                       </span>
-                      <span className="min-w-0 flex-1 text-sm">
+                      <span className="min-w-0 flex-1 break-words text-sm">
                         {ingredient.quantity != null && <span className="font-medium">{qty(ingredient.quantity)} </span>}
                         {ingredient.unit && <span className="text-muted">{ingredient.unit} </span>}
                         {ingredient.name}
@@ -418,7 +418,7 @@ export function RecipePage() {
                       >
                         {done.has(index) ? <Icon name="check" size={12} /> : index + 1}
                       </span>
-                      <span className={cn("flex-1 text-sm leading-relaxed", done.has(index) && "text-muted line-through")}>
+                      <span className={cn("min-w-0 flex-1 break-words text-sm leading-relaxed", done.has(index) && "text-muted line-through")}>
                         {step.text}
                         {step.timerSeconds ? (
                           <span className="mt-1 flex items-center gap-1 text-[11px] font-medium text-brand">

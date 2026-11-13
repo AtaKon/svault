@@ -312,9 +312,9 @@ export function PageHeader({
           </button>
         )}
         <div className="min-w-0">
-          {eyebrow && <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">{eyebrow}</div>}
+          {eyebrow && <div className="mb-1 truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">{eyebrow}</div>}
           <h1 className="break-words font-display text-[26px] leading-tight tracking-tight sm:text-3xl">{title}</h1>
-          {subtitle && <p className="mt-1 max-w-2xl text-sm text-muted">{subtitle}</p>}
+          {subtitle && <p className="mt-1 max-w-2xl break-words text-sm text-muted">{subtitle}</p>}
         </div>
       </div>
       {actions && <div className="flex shrink-0 flex-wrap items-center gap-2 sm:pt-1">{actions}</div>}

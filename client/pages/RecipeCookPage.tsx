@@ -267,7 +267,7 @@ export function RecipeCookPage() {
                       <Icon name="check" size={13} />
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className={cn("block text-[15px]", done && "line-through")}>{ingredient.name}</span>
+                      <span className={cn("block break-words text-[15px]", done && "line-through")}>{ingredient.name}</span>
                       {ingredient.note && <span className="block text-[11px] text-muted">{ingredient.note}</span>}
                     </span>
                     <span className="shrink-0 text-right">
@@ -329,7 +329,7 @@ export function RecipeCookPage() {
                     >
                       {done ? <Icon name="check" size={13} /> : index + 1}
                     </span>
-                    <span className={cn("flex-1 text-[15px] leading-relaxed", done && "text-muted line-through")}>
+                    <span className={cn("min-w-0 flex-1 break-words text-[15px] leading-relaxed", done && "text-muted line-through")}>
                       {step.text}
                       {step.timerSeconds ? (
                         <span className="mt-1 flex items-center gap-1 text-[12px] font-medium text-brand">
