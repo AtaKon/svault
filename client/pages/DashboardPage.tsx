@@ -16,7 +16,7 @@ interface DashboardData extends Omit<Dashboard, "recent"> {
 }
 
 export function DashboardPage() {
-  const { house } = useHouse();
+  const { house, can } = useHouse();
   const { user } = useAuth();
   const { t, locale } = useI18n();
   const navigate = useNavigate();
@@ -89,9 +89,9 @@ export function DashboardPage() {
             <Button variant="secondary" icon="scan" onClick={() => navigate("/scan")}>
               {t("Scan")}
             </Button>
-            <Button icon="plus" onClick={() => navigate("/items/new")}>
+            {can("member") && <Button icon="plus" onClick={() => navigate("/items/new")}>
               {t("Add item")}
-            </Button>
+            </Button>}
           </div>
         }      />
 
@@ -124,9 +124,9 @@ export function DashboardPage() {
                 {t("Add the first thing you own, scan a barcode, or set up a room in this house. Everything else builds from here.")}
               </p>
               <div className="mt-4 flex flex-wrap gap-2">
-                <Button variant="secondary" icon="plus" onClick={() => navigate("/items/new")}>
+                {can("member") && <Button variant="secondary" icon="plus" onClick={() => navigate("/items/new")}>
                   {t("Add an item")}
-                </Button>
+                </Button>}
                 <Button variant="secondary" icon="scan" onClick={() => navigate("/scan")}>
                   {t("Scan a barcode")}
                 </Button>
@@ -145,7 +145,7 @@ export function DashboardPage() {
             <div className="mb-2.5 flex items-center justify-between">
               <h2 className="font-display text-xl">{t("Running low")}</h2>
               <div className="flex items-center gap-3">
-                {data && data.lowStock.length > 0 && (
+                {can("member") && data && data.lowStock.length > 0 && (
                   <button onClick={() => void addLowStock()} className="text-xs font-medium text-brand hover:underline">
                     {t("Add to list")}
                   </button>
@@ -383,9 +383,9 @@ export function DashboardPage() {
       {error && <div className="rounded-xl border border-danger/30 bg-danger-soft px-3 py-2 text-xs text-danger">{error}</div>}
 
       <div className="sm:hidden">
-        <Button block icon="plus" onClick={() => navigate("/items/new")}>
+        {can("member") && <Button block icon="plus" onClick={() => navigate("/items/new")}>
           {t("Add item")}
-        </Button>
+        </Button>}
       </div>
     </div>
   );

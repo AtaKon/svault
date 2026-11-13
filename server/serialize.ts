@@ -32,7 +32,7 @@ export const ITEM_SELECT = `
        WHERE sm.item_id = i.id AND sm.normalized_price IS NOT NULL AND sm.normalized_price > 0
        ORDER BY sm.created_at DESC LIMIT 1) AS latest_price
   FROM items i
-  LEFT JOIN categories c ON c.id = i.category_id
+  LEFT JOIN categories c ON c.id = i.category_id AND c.house_id = i.house_id
   LEFT JOIN catalog_products cp ON cp.code = i.off_code AND cp.project = i.off_project
 `;
 

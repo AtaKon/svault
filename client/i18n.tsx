@@ -1552,6 +1552,7 @@ const EL: Record<string, string> = {
   "Payment recorded": "Η πληρωμή καταχωρίστηκε",
   "Record full payment": "Καταχώριση πλήρους πληρωμής",
   "Could not record the payment": "Δεν ήταν δυνατή η καταχώριση της πληρωμής",
+  "Only the people involved can record this payment": "Μόνο τα άτομα που εμπλέκονται μπορούν να καταχωρίσουν αυτή την πληρωμή.",
   "Net sent {amount}": "Καθαρά στάλθηκαν {amount}",
   "Net received {amount}": "Καθαρά λήφθηκαν {amount}",
   "Loading…": "Φόρτωση…",

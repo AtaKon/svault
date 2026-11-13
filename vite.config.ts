@@ -10,6 +10,7 @@ const publicDir = fileURLToPath(new URL("./public", import.meta.url));
 export default defineConfig({
   root,
   publicDir,
+  define: { __SV_BUILD_VERSION__: JSON.stringify(process.env.SV_VERSION || null) },
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {

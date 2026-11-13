@@ -151,7 +151,7 @@ export async function spendInsight(houseId: string, months = 6): Promise<SpendIn
      FROM receipt_lines rl
      JOIN receipts r ON r.id = rl.receipt_id
      LEFT JOIN items i ON i.id = rl.item_id
-     LEFT JOIN categories c ON c.id = i.category_id
+     LEFT JOIN categories c ON c.id = i.category_id AND c.house_id = i.house_id
      WHERE r.house_id = ? AND substr(COALESCE(r.purchased_at, r.created_at), 1, 7) = ?
      GROUP BY COALESCE(c.name, 'Everything else')
      ORDER BY total DESC`,
@@ -192,7 +192,7 @@ export async function wasteInsight(houseId: string, months = 6): Promise<WasteIn
        i.name AS item_name, i.unit AS item_unit, c.name AS category_name
      FROM stock_movements m
      JOIN items i ON i.id = m.item_id
-     LEFT JOIN categories c ON c.id = i.category_id
+     LEFT JOIN categories c ON c.id = i.category_id AND c.house_id = i.house_id
      WHERE m.house_id = ? AND m.type = 'waste' AND substr(m.created_at, 1, 10) >= ?`,
     [houseId, since],
   );
@@ -565,11 +565,11 @@ export async function useItUp(houseId: string, days?: number): Promise<{
     `SELECT l.*, i.name AS item_name, i.unit AS item_unit, i.category_id, loc.name AS location_name
      FROM stock_lots l
      JOIN items i ON i.id = l.item_id
-     LEFT JOIN locations loc ON loc.id = l.location_id
+     LEFT JOIN locations loc ON loc.id = l.location_id AND loc.house_id = ?
      WHERE l.house_id = ? AND l.quantity > 0 AND l.expires_at IS NOT NULL
        AND l.expires_at >= ? AND l.expires_at <= ?
      ORDER BY l.expires_at ASC`,
-    [houseId, earliest, until],
+    [houseId, houseId, earliest, until],
   );
 
   const grouped = new Map<string, UseItUpItem>();

@@ -1,6 +1,6 @@
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { createHmac, createSign, generateKeyPairSync, randomUUID } from "node:crypto";
+import { createHash, createHmac, createSign, generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -2041,6 +2041,32 @@ describe("inventory and stock", () => {
     const patch = await request(`/api/items/${itemId}`, { method: "PATCH", body: { categoryId } });
     assert.equal(patch.status, 400);
     assert.equal((await request(`/api/items/${itemId}`)).data.categoryId, before.data.categoryId);
+    // Defence in depth: a pre-existing cross-house reference must not expose
+    // the other house's category name through the serializer join.
+    await run("UPDATE items SET category_id = ? WHERE id = ?", [categoryId, itemId]);
+    const corrupt = await request(`/api/items/${itemId}`);
+    assert.equal(corrupt.data.categoryId, categoryId);
+    assert.equal(corrupt.data.categoryName, null);
+    await run("UPDATE items SET category_id = NULL WHERE id = ?", [itemId]);
+    // The same defence covers location names in lots and movements.
+    const createdAt = new Date().toISOString();
+    await run(
+      "INSERT INTO stock_lots (id, item_id, house_id, location_id, quantity, unit, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      ["lot_cross_house_test", itemId, houseId, locationId, 0, "pcs", createdAt],
+    );
+    await run(
+      `INSERT INTO stock_movements (id, item_id, house_id, type, delta, unit, quantity, location_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ["mov_cross_house_test", itemId, houseId, "in", 0, "pcs", 1, locationId, createdAt],
+    );
+    try {
+      const withLocation = await request(`/api/items/${itemId}`);
+      assert.equal(withLocation.data.lots.find((entry: any) => entry.id === "lot_cross_house_test").locationName, null);
+      assert.equal(withLocation.data.movements.find((entry: any) => entry.id === "mov_cross_house_test").locationName, null);
+    } finally {
+      await run("DELETE FROM stock_movements WHERE id = ?", ["mov_cross_house_test"]);
+      await run("DELETE FROM stock_lots WHERE id = ?", ["lot_cross_house_test"]);
+    }
     const localCategories = await request(`/api/houses/${houseId}/categories`);
     assert.equal((await request(`/api/items/${itemId}`, { method: "PATCH", body: { categoryId: localCategories.data[0].id } })).status, 200);
     const cleared = await request(`/api/items/${itemId}`, { method: "PATCH", body: { categoryId: null } });
@@ -2052,6 +2078,12 @@ describe("inventory and stock", () => {
     assert.equal(localLine.status, 201);
     const shoppingPatch = await request(`/api/houses/${houseId}/shopping/${localLine.data.item.id}`, { method: "PATCH", body: { categoryId } });
     assert.equal(shoppingPatch.status, 400);
+    await run("UPDATE shopping_list_items SET category_id = ? WHERE id = ?", [categoryId, localLine.data.item.id]);
+    const corruptList = await request(`/api/houses/${houseId}/shopping`);
+    const corruptLine = corruptList.data.items.find((entry: any) => entry.id === localLine.data.item.id);
+    assert.equal(corruptLine.categoryId, categoryId);
+    assert.equal(corruptLine.categoryName, null);
+    await run("UPDATE shopping_list_items SET category_id = NULL WHERE id = ?", [localLine.data.item.id]);
     const setCategory = await request(`/api/houses/${houseId}/shopping/${localLine.data.item.id}`, { method: "PATCH", body: { categoryId: localCategories.data[0].id } });
     assert.equal(setCategory.status, 200);
     const clearCategory = await request(`/api/houses/${houseId}/shopping/${localLine.data.item.id}`, { method: "PATCH", body: { categoryId: null } });
@@ -5305,6 +5337,50 @@ describe("ai integration", () => {
     assert.equal(res.data.settings.ai.model, "mock-model");
   });
 
+  it("clears an AI base URL, model and vision model when explicitly blank", async () => {
+    const created = await request("/api/houses", { method: "POST", body: { name: "AI settings reset" } });
+    assert.equal(created.status, 201);
+    const resetHouse = created.data.id;
+    try {
+      const filled = await request(`/api/houses/${resetHouse}`, {
+        method: "PATCH",
+        body: {
+          settings: {
+            ai: { enabled: true, baseUrl: "https://ai.example/v1", apiKey: "reset-test-key", model: "old-model", visionModel: "old-vision" },
+          },
+        },
+      });
+      assert.equal(filled.status, 200);
+      assert.equal(filled.data.settings.ai.model, "old-model");
+      const partial = await request(`/api/houses/${resetHouse}`, {
+        method: "PATCH", body: { settings: { ai: { baseUrl: null } } },
+      });
+      assert.equal(partial.status, 200);
+      assert.equal("baseUrl" in partial.data.settings.ai, false);
+      assert.equal(partial.data.settings.ai.model, "old-model");
+      assert.equal(partial.data.settings.ai.visionModel, "old-vision");
+      const other = (await request("/api/auth/me", { auth: secondUserCookie })).data.user;
+      await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [resetHouse, other.id, "member", new Date().toISOString()]);
+      const forbidden = await request(`/api/houses/${resetHouse}`, {
+        method: "PATCH", auth: secondUserCookie, body: { settings: { ai: { apiKey: null } } },
+      });
+      assert.equal(forbidden.status, 403);
+      assert.equal((await request(`/api/houses/${resetHouse}`)).data.settings.ai.apiKey, "***");
+      const cleared = await request(`/api/houses/${resetHouse}`, {
+        method: "PATCH",
+        body: { settings: { ai: { baseUrl: "", apiKey: "", model: "", visionModel: "" } } },
+      });
+      assert.equal(cleared.status, 200, JSON.stringify(cleared.data));
+      assert.equal("baseUrl" in cleared.data.settings.ai, false);
+      assert.equal("apiKey" in cleared.data.settings.ai, false);
+      assert.equal("model" in cleared.data.settings.ai, false);
+      assert.equal("visionModel" in cleared.data.settings.ai, false);
+      assert.equal(cleared.data.settings.ai.enabled, true);
+    } finally {
+      await request(`/api/houses/${resetHouse}`, { method: "DELETE" });
+    }
+  });
+
   it("cleans scans through the provider", async () => {
     aiRequests.length = 0;
     const res = await request(`/api/houses/${houseId}/recipes/scan`, {
@@ -5561,6 +5637,35 @@ describe("photos and datasets", () => {
       form.append(field, value);
       assert.equal((await request(`/api/houses/${houseId}/photos`, { method: "POST", body: form })).status, 400);
       assert.deepEqual(readdirSync(imageDir).sort(), filesBefore);
+    }
+  });
+
+  it("counts only photos and labels belonging to the collection's house", async () => {
+    const other = await request("/api/auth/me", { auth: secondUserCookie });
+    const foreignHouse = other.data.houses.find((h: any) => h.role === "owner").id;
+    const folder = await request(`/api/houses/${houseId}/collections`, { body: { name: "Count isolation" } });
+    const createdAt = new Date().toISOString();
+    const insertPhoto = (id: string, photoHouse: string) => run(
+      "INSERT INTO photos (id, house_id, collection_id, filename, original_name, mime, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      [id, photoHouse, folder.data.id, `${id}.png`, `${id}.png`, "image/png", 1, createdAt],
+    );
+    await insertPhoto("photo-count-local-test", houseId);
+    await insertPhoto("photo-count-foreign-test", foreignHouse);
+    await run("INSERT INTO photo_labels (id, photo_id, house_id, label, created_at) VALUES (?, ?, ?, ?, ?)",
+      ["label-count-foreign-test", "photo-count-local-test", foreignHouse, "foreign", createdAt]);
+    try {
+      let collections = await request(`/api/houses/${houseId}/collections`);
+      let count = collections.data.find((entry: any) => entry.id === folder.data.id);
+      assert.equal(count.photoCount, 1);
+      assert.equal(count.labeledCount, 0);
+      await run("INSERT INTO photo_labels (id, photo_id, house_id, label, created_at) VALUES (?, ?, ?, ?, ?)",
+        ["label-count-local-test", "photo-count-local-test", houseId, "local", createdAt]);
+      collections = await request(`/api/houses/${houseId}/collections`);
+      count = collections.data.find((entry: any) => entry.id === folder.data.id);
+      assert.equal(count.labeledCount, 1);
+    } finally {
+      await run("DELETE FROM photos WHERE id IN (?, ?)", ["photo-count-local-test", "photo-count-foreign-test"]);
+      await run("DELETE FROM photo_collections WHERE id = ?", [folder.data.id]);
     }
   });
 
@@ -6918,15 +7023,98 @@ describe("two-factor authentication", () => {
   });
 
   it("exposes passkey options and rejects an unknown assertion", async () => {
+    const fixture = await request("/api/auth/register", {
+      method: "POST", body: { name: "Passkey Fixture", email: "passkey-fixture@example.com", password: "test password" },
+    });
+    assert.equal(fixture.status, 201);
     const options = await request("/api/auth/passkeys/login/options", { method: "POST", body: {} });
     assert.equal(options.status, 200);
     assert.ok(options.data.challengeId);
     assert.ok(options.data.options.challenge);
+    // An unknown identifier must look like a known account without passkeys:
+    // no 404 oracle for account enumeration.
+    const unknown = await request("/api/auth/passkeys/login/options", {
+      method: "POST",
+      body: { identifier: "missing-passkey-user@example.com" },
+    });
+    assert.equal(unknown.status, 200);
+    assert.equal(unknown.data.hasPasskeys, false);
+    assert.equal(unknown.data.discoverable, false);
+    const known = await request("/api/auth/passkeys/login/options", {
+      method: "POST", body: { identifier: "passkey-fixture@example.com" },
+    });
+    assert.equal(known.status, 200);
+    // This fixture must have no credentials for the comparison to be meaningful.
+    assert.deepEqual(known.data.options.allowCredentials, []);
+    assert.deepEqual(unknown.data.options.allowCredentials, known.data.options.allowCredentials);
+    assert.equal(unknown.data.hasPasskeys, known.data.hasPasskeys);
+    assert.equal(unknown.data.discoverable, known.data.discoverable);
+    const owner = fixture.data.user;
+    const otherUser = (await request("/api/auth/me", { auth: secondUserCookie })).data.user;
+    await run("INSERT INTO passkeys (id, user_id, credential_id, public_key, created_at) VALUES (?, ?, ?, ?, ?)",
+      ["passkey-options-test", owner.id, "credential-options-test", "key", new Date().toISOString()]);
+    await run("INSERT INTO passkeys (id, user_id, credential_id, public_key, created_at) VALUES (?, ?, ?, ?, ?)",
+      ["passkey-foreign-test", otherUser.id, "credential-foreign-test", "key", new Date().toISOString()]);
+    try {
+      const withPasskey = await request("/api/auth/passkeys/login/options", {
+        method: "POST", body: { identifier: "passkey-fixture@example.com" },
+      });
+      assert.equal(withPasskey.data.hasPasskeys, true);
+      assert.equal(withPasskey.data.options.allowCredentials[0].id, "credential-options-test");
+      for (const challengeId of [known.data.challengeId, withPasskey.data.challengeId, unknown.data.challengeId]) {
+        const crossAccount = await request("/api/auth/passkeys/login/verify", {
+          method: "POST", body: { challengeId, response: { id: "credential-foreign-test" } },
+        });
+        assert.equal(crossAccount.status, 401);
+        assert.equal(crossAccount.data.error, "Passkey does not match this account");
+      }
+    } finally {
+      await run("DELETE FROM passkeys WHERE id = ?", ["passkey-options-test"]);
+      await run("DELETE FROM passkeys WHERE id = ?", ["passkey-foreign-test"]);
+    }
+    for (const identifier of ["passkey-fixture@example.com", "missing-passkey-user@example.com"]) {
+      const challenge = await request("/api/auth/passkeys/login/options", { method: "POST", body: { identifier } });
+      const rejected = await request("/api/auth/passkeys/login/verify", {
+        method: "POST", body: { challengeId: challenge.data.challengeId, response: { id: "missing" } },
+      });
+      assert.equal(rejected.status, 401);
+      assert.equal(rejected.data.error, "Passkey does not match this account");
+    }
     const bad = await request("/api/auth/passkeys/login/verify", {
       method: "POST",
       body: { challengeId: options.data.challengeId, response: { id: "missing" } },
     });
     assert.equal(bad.status, 401);
+  });
+
+  it("authenticates a discoverable passkey without an identifier", async () => {
+    const user = (await request("/api/auth/me")).data.user;
+    const keys = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+    const jwk = keys.publicKey.export({ format: "jwk" });
+    const cose = Buffer.concat([Buffer.from("a5010203262001215820", "hex"), Buffer.from(jwk.x!, "base64url"), Buffer.from("225820", "hex"), Buffer.from(jwk.y!, "base64url")]);
+    const credentialId = Buffer.from("discoverable-test-credential").toString("base64url");
+    await run("INSERT INTO passkeys (id, user_id, credential_id, public_key, created_at) VALUES (?, ?, ?, ?, ?)",
+      ["passkey-discoverable-test", user.id, credentialId, cose.toString("base64url"), new Date().toISOString()]);
+    try {
+      const options = await request("/api/auth/passkeys/login/options", { method: "POST", body: {} });
+      assert.equal(options.data.discoverable, true);
+      assert.deepEqual(options.data.options.allowCredentials, []);
+      const origin = new URL(base).origin;
+      const clientData = Buffer.from(JSON.stringify({ type: "webauthn.get", challenge: options.data.options.challenge, origin }));
+      const authenticatorData = Buffer.concat([createHash("sha256").update(new URL(base).hostname).digest(), Buffer.from([1, 0, 0, 0, 1])]);
+      const signature = sign("sha256", Buffer.concat([authenticatorData, createHash("sha256").update(clientData).digest()]), keys.privateKey);
+      const result = await request("/api/auth/passkeys/login/verify", {
+        method: "POST", body: { challengeId: options.data.challengeId, response: {
+          id: credentialId, rawId: credentialId, type: "public-key", response: {
+            authenticatorData: authenticatorData.toString("base64url"), clientDataJSON: clientData.toString("base64url"), signature: signature.toString("base64url"),
+          }, clientExtensionResults: {},
+        } },
+      });
+      assert.equal(result.status, 200, JSON.stringify(result.data));
+      assert.equal(result.data.user.id, user.id);
+    } finally {
+      await run("DELETE FROM passkeys WHERE id = ?", ["passkey-discoverable-test"]);
+    }
   });
 
   it("reports OIDC enabled and auto-provisions a verified email", async () => {
@@ -9173,6 +9361,19 @@ describe("insights, household split and admin console", () => {
     const result = await request(`/api/houses/${insightHouse}/insights/use-it-up?days=7`);
     assert.equal(result.status, 200);
     assert.ok(result.data.items.some((item: any) => item.name === "Useup yoghurt"));
+    const other = await request("/api/auth/me", { auth: secondUserCookie });
+    const foreignHouse = other.data.houses.find((h: any) => h.role === "owner").id;
+    const foreignLocations = await request(`/api/houses/${foreignHouse}/locations`, { auth: secondUserCookie });
+    const lot = await get<any>("SELECT id, location_id FROM stock_lots WHERE item_id = ?", [yoghurt.data.id]);
+    await run("UPDATE stock_lots SET location_id = ? WHERE id = ?", [foreignLocations.data[0].id, lot.id]);
+    try {
+      const useUp = await request(`/api/houses/${insightHouse}/insights/use-it-up?days=7`);
+      assert.equal(useUp.data.items.find((item: any) => item.itemId === yoghurt.data.id).locationName, null);
+      const dashboard = await request(`/api/houses/${insightHouse}/dashboard`);
+      assert.equal(dashboard.data.expiring.find((entry: any) => entry.id === lot.id).locationName, null);
+    } finally {
+      await run("UPDATE stock_lots SET location_id = ? WHERE id = ?", [lot.location_id, lot.id]);
+    }
   });
 
   it("prices open shopping lines from recent receipts", async () => {
@@ -9461,6 +9662,27 @@ describe("insights, household split and admin console", () => {
     assert.ok(waste.data.topItems.some((item: any) => item.itemName === "Waste bread"));
   });
 
+  it("hides foreign category names in purchase and waste reports", async () => {
+    const foreign = await request("/api/houses", { method: "POST", body: { name: "Foreign report categories" } });
+    const category = (await request(`/api/houses/${foreign.data.id}/categories`)).data[0];
+    const bread = await get<any>("SELECT id, category_id FROM items WHERE house_id = ? AND name = ?", [insightHouse, "Waste bread"]);
+    const milk = await get<any>("SELECT category_id FROM items WHERE id = ?", [milkId]);
+    await run("UPDATE items SET category_id = ? WHERE id IN (?, ?)", [category.id, milkId, bread.id]);
+    try {
+      const spend = await request(`/api/houses/${insightHouse}/insights/spend?months=6`);
+      assert.ok(spend.data.byCategory.some((entry: any) => entry.name === "Everything else"));
+      assert.ok(!spend.data.byCategory.some((entry: any) => entry.name === category.name));
+      const purchases = await request(`/api/houses/${insightHouse}/purchases/analytics`);
+      assert.ok(purchases.data.byCategory.some((entry: any) => entry.categoryName === "Uncategorised"));
+      assert.ok(!purchases.data.byCategory.some((entry: any) => entry.categoryName === category.name));
+      const waste = await request(`/api/houses/${insightHouse}/insights/waste?months=6`);
+      assert.equal(waste.data.topItems.find((entry: any) => entry.itemName === "Waste bread").category, null);
+    } finally {
+      await run("UPDATE items SET category_id = ? WHERE id = ?", [milk.category_id, milkId]);
+      await run("UPDATE items SET category_id = ? WHERE id = ?", [bread.category_id, bread.id]);
+    }
+  });
+
   it("splits receipts between the people who paid", async () => {
     const changed = await request(`/api/receipts/${latestReceiptId}`, {
       method: "PATCH",
@@ -9512,6 +9734,43 @@ describe("insights, household split and admin console", () => {
     });
     assert.equal(untouched.status, 200);
     assert.equal(untouched.data.paidBy, first.userId);
+  });
+
+  it("allows settlement by a party and by an uninvolved admin", async () => {
+    const house = await request("/api/houses", { method: "POST", body: { name: "Settlement permissions", currency: "EUR" } });
+    const ownerId = (await request("/api/auth/me")).data.user.id;
+    const member = await request("/api/auth/register", {
+      method: "POST", body: { name: "Settlement Member", email: "settlement-member@example.com", password: "test password" },
+    });
+    assert.equal(member.status, 201);
+    const memberId = member.data.user.id;
+    assert.notEqual(memberId, ownerId);
+    const admin = await request("/api/auth/register", {
+      method: "POST", body: { name: "Settlement Admin", email: "settlement-admin@example.com", password: "test password" },
+    });
+    for (const [id, role] of [[memberId, "member"], [admin.data.user.id, "admin"]]) {
+      await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [house.data.id, id, role, new Date().toISOString()]);
+    }
+    const receipt = await request(`/api/houses/${house.data.id}/receipts`, {
+      method: "POST", body: { vendorName: "Market", currency: "EUR", total: 2, paidBy: ownerId, splitWith: [ownerId, memberId], lines: [{ description: "Shared", quantity: 1, lineTotal: 2 }] },
+    });
+    assert.equal(receipt.status, 201, JSON.stringify(receipt.data));
+    for (const auth of [member.cookie, admin.cookie]) {
+      const result = await request(`/api/houses/${house.data.id}/insights/settlements`, {
+        method: "POST", auth: auth ?? undefined, body: { fromUserId: memberId, toUserId: ownerId, amount: 0.01, idempotencyKey: randomUUID() },
+      });
+      assert.equal(result.status, 201, JSON.stringify(result.data));
+    }
+    await run("UPDATE house_members SET role = ? WHERE house_id = ? AND user_id = ?", ["viewer", house.data.id, admin.data.user.id]);
+    const attempt = () => request(`/api/houses/${house.data.id}/insights/settlements`, {
+      method: "POST", auth: admin.cookie ?? undefined,
+      body: { fromUserId: memberId, toUserId: ownerId, amount: 0.01, idempotencyKey: randomUUID() },
+    });
+    assert.equal((await attempt()).status, 403);
+    const foreign = await request("/api/houses", { method: "POST", body: { name: "Foreign admin house" } });
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [foreign.data.id, admin.data.user.id, "admin", new Date().toISOString()]);
+    await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [house.data.id, admin.data.user.id]);
+    assert.equal((await attempt()).status, 404);
   });
 
   it("settles a three-person house with the smallest set of transfers", async () => {
@@ -9678,6 +9937,31 @@ describe("insights, household split and admin console", () => {
     ]);
     assert.equal(ledger.data.balances.find((entry: any) => entry.userId === memberId).balance, -0.5);
     assert.equal(ledger.data.balances.find((entry: any) => entry.userId === ownerId).balance, 0.5);
+
+    // A member who is not one of the two parties cannot settle their debt.
+    const third = await request("/api/auth/register", {
+      method: "POST",
+      body: { name: "Test Third", email: "third-settlement@example.com", password: "test password" },
+    });
+    assert.equal(third.status, 201);
+    const thirdId = third.data.user.id;
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
+      house.data.id,
+      thirdId,
+      "member",
+      new Date().toISOString(),
+    ]);
+    try {
+      const thirdParty = await request(path, {
+        method: "POST",
+        auth: third.cookie ?? undefined,
+        body: { fromUserId: memberId, toUserId: ownerId, amount: 0.01, idempotencyKey: randomUUID() },
+      });
+      assert.equal(thirdParty.status, 403);
+      assert.equal(thirdParty.data.error, "Only the people involved can record this payment");
+    } finally {
+      await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [house.data.id, thirdId]);
+    }
 
     const invalidCases = [
       { fromUserId: memberId, toUserId: memberId, amount: 0.1 },

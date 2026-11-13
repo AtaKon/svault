@@ -92,7 +92,7 @@ export async function contributionCandidates(
     `SELECT i.id, i.name, i.description, i.brand, c.name AS category_name, i.image, i.nutrition,
             i.off_code, i.off_project, i.updated_at
      FROM items i
-     LEFT JOIN categories c ON c.id = i.category_id
+     LEFT JOIN categories c ON c.id = i.category_id AND c.house_id = i.house_id
      WHERE i.house_id = ? AND i.archived = 0 ${itemId ? "AND i.id = ?" : ""}
      ORDER BY i.updated_at DESC
      LIMIT 250`,

@@ -305,20 +305,20 @@ async function itemDetail(itemId: string, userId: string) {
   const item = serializeItem(row, await barcodesForItem(itemId));
   const lots = (await all<any>(
     `SELECT l.*, loc.name AS location_name, v.name AS vendor_name FROM stock_lots l
-     LEFT JOIN locations loc ON loc.id = l.location_id
+     LEFT JOIN locations loc ON loc.id = l.location_id AND loc.house_id = ?
      LEFT JOIN vendors v ON v.id = l.vendor_id
      WHERE l.item_id = ?
      ORDER BY CASE WHEN l.quantity > 0 THEN 0 ELSE 1 END, CASE WHEN l.expires_at IS NULL THEN 1 ELSE 0 END,
        l.expires_at ASC, l.created_at ASC`,
-    [itemId],
+    [row.house_id, itemId],
   )).map(serializeLot);
   const movements = (await all<any>(
     `SELECT m.*, loc.name AS location_name, u.name AS user_name, v.name AS vendor_name FROM stock_movements m
-     LEFT JOIN locations loc ON loc.id = m.location_id
+     LEFT JOIN locations loc ON loc.id = m.location_id AND loc.house_id = ?
      LEFT JOIN users u ON u.id = m.user_id
      LEFT JOIN vendors v ON v.id = m.vendor_id
      WHERE m.item_id = ? ORDER BY m.created_at DESC LIMIT 80`,
-    [itemId],
+    [row.house_id, itemId],
   )).map(serializeMovement);
   const priceHistory = (await all<any>(
     `SELECT m.normalized_price AS price, m.created_at AS at, m.unit, m.quantity, m.unit_price,
@@ -1167,11 +1167,11 @@ itemRoutes.get(
     const limit = intParam(req.query.limit, 50, 300);
     const rows = await all<any>(
       `SELECT m.*, loc.name AS location_name, u.name AS user_name, v.name AS vendor_name FROM stock_movements m
-       LEFT JOIN locations loc ON loc.id = m.location_id
+       LEFT JOIN locations loc ON loc.id = m.location_id AND loc.house_id = ?
        LEFT JOIN users u ON u.id = m.user_id
        LEFT JOIN vendors v ON v.id = m.vendor_id
        WHERE m.item_id = ? ORDER BY m.created_at DESC LIMIT ?`,
-      [item.id, limit],
+      [item.house_id, item.id, limit],
     );
     res.json(rows.map(serializeMovement));
   }),

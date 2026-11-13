@@ -160,13 +160,14 @@ passkeyRoutes.post(
     const body = parseBody(z.object({ identifier: z.string().trim().max(220).optional() }), req.body ?? {});
     const { rpID } = relyingParty(req);
     const identifier = (body.identifier ?? "").trim();
+    // An unknown identifier receives the same options shape as an account
+    // without passkeys; accounts with credentials still reveal their presence.
     const user = identifier
       ? await get<any>("SELECT * FROM users WHERE lower(email) = lower(?) OR lower(username) = lower(?)", [
           identifier,
           identifier,
         ])
       : null;
-    if (identifier && !user) throw new ApiError(404, "No passkey is registered for that account");
     const allowed = user ? await listPasskeys(user.id) : [];
     const options = await generateAuthenticationOptions({
       rpID,
@@ -180,12 +181,12 @@ passkeyRoutes.post(
       userId: user?.id ?? null,
       type: "authentication",
       challenge: options.challenge,
-      data: { rpID },
+      data: { rpID, identifierProvided: Boolean(identifier) },
     });
     res.json({
       challengeId,
       options,
-      discoverable: !user,
+      discoverable: !identifier,
       hasPasskeys: Boolean(user && allowed.length),
     });
   }),
@@ -203,9 +204,10 @@ passkeyRoutes.post(
     );
     const stored = await consumeChallenge(body.challengeId, "authentication");
     if (!stored) throw new ApiError(400, "Passkey challenge expired");
+    if (stored.data.identifierProvided && !stored.userId) throw new ApiError(401, "Passkey does not match this account");
     const credentialId = String((body.response as any)?.id ?? "");
     const passkey = credentialId ? await passkeyByCredentialId(credentialId) : null;
-    if (!passkey) throw new ApiError(401, "Unknown passkey");
+    if (!passkey) throw new ApiError(401, "Passkey does not match this account");
     if (stored.userId && stored.userId !== passkey.userId) throw new ApiError(401, "Passkey does not match this account");
     const { origin, rpID } = relyingParty(req);
     const verification = await verifyAuthenticationResponse({

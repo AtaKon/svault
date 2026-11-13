@@ -38,7 +38,7 @@ function packageSize(quantity: string | null | undefined): { amount: string; uni
 }
 
 export function ScanPage() {
-  const { house } = useHouse();
+  const { house, can } = useHouse();
   const { t } = useI18n();
   const navigate = useNavigate();
   const toast = useToast();
@@ -211,11 +211,11 @@ export function ScanPage() {
               <Button block icon="arrowUpRight" onClick={() => navigate(`/items/${result.item!.id}`)}>
                 {t("Open item")}
               </Button>
-            ) : (
+            ) : can("member") ? (
               <Button block icon="plus" onClick={createItem}>
                 {t("Create item")}
               </Button>
-            )}
+            ) : null}
           </div>
         }
       >
@@ -248,6 +248,7 @@ export function ScanPage() {
               </div>
             </div>
             <div className="grid grid-cols-2 gap-2">
+              {can("member") && <>
               <Button
                 variant="secondary"
                 icon="minus"
@@ -260,10 +261,11 @@ export function ScanPage() {
               <Button icon="plus" loading={stockBusy === "add"} disabled={stockBusy !== null} onClick={() => void adjust("add")}>
                 {t("Add one")}
               </Button>
+              </>}
             </div>
-            <div className="rounded-xl bg-raised px-3 py-2 text-[11px] text-muted">
+            {can("member") && <div className="rounded-xl bg-raised px-3 py-2 text-[11px] text-muted">
               {t("Need a different amount or a price? Open the item and choose “Adjust stock”.")}
-            </div>
+            </div>}
           </div>
         ) : result ? (
           <div className="space-y-4">

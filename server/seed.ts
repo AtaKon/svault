@@ -834,7 +834,7 @@ await insertPhoto(lake, gearCollection, headlampShot(), "demo-headlamp-1.png", "
 const inventory = (await all<any>(
   `SELECT i.name, i.unit, c.name AS category_name,
      COALESCE((SELECT SUM(l.quantity) FROM stock_lots l WHERE l.item_id = i.id), 0) AS quantity
-   FROM items i LEFT JOIN categories c ON c.id = i.category_id
+   FROM items i LEFT JOIN categories c ON c.id = i.category_id AND c.house_id = i.house_id
    WHERE i.house_id = ? AND i.archived = 0`,
   [lake],
 ))
