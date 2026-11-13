@@ -6,7 +6,7 @@ import { all, get, newId, now, run } from "../db.js";
 import { memberRole, requireAuth, roleAtLeast } from "../auth.js";
 import { ApiError, handler, intParam, parseBody, requireHouse } from "../http.js";
 import { serializePhoto } from "../serialize.js";
-import { uploader, uploadPath } from "../upload.js";
+import { discardUploads, uploader, uploadPath } from "../upload.js";
 import type { Role } from "../../shared/types.js";
 
 export const photoRoutes = Router();
@@ -189,9 +189,11 @@ photoRoutes.post(
     if (!files.length) throw new ApiError(400, "No photos uploaded");
     const collectionId = req.body.collectionId ? String(req.body.collectionId) : null;
     if (collectionId && !await get("SELECT id FROM photo_collections WHERE id = ? AND house_id = ?", [collectionId, houseId])) {
+      discardUploads(req);
       throw new ApiError(400, "Folder does not belong to this house");
     }
     if (req.body.itemId && !await get("SELECT id FROM items WHERE id = ? AND house_id = ?", [String(req.body.itemId), houseId])) {
+      discardUploads(req);
       throw new ApiError(400, "Item does not belong to this house");
     }
     const split = splitSchema.catch("unassigned").parse(req.body.split ?? "unassigned");

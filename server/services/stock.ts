@@ -303,11 +303,11 @@ export async function setStock(opts: StockOpts & { target: number }): Promise<st
 
 /** Move stock between locations inside the same house. */
 export async function moveStock(opts: { itemId: string; houseId: string; userId: string; quantity: number; unit?: string; fromLocationId: string; toLocationId: string; note?: string }): Promise<string> {
-  await validateLocation(opts.houseId, opts.fromLocationId);
-  await validateLocation(opts.houseId, opts.toLocationId);
   if (!opts.fromLocationId || !opts.toLocationId || opts.fromLocationId === opts.toLocationId) {
     throw new ApiError(400, "Pick two different locations");
   }
+  await validateLocation(opts.houseId, opts.fromLocationId);
+  await validateLocation(opts.houseId, opts.toLocationId);
   return await tx(async () => {
     const item = await itemRow(opts.itemId, opts.houseId);
     const requested = baseQuantity(item, opts.quantity, opts.unit);

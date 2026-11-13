@@ -2033,8 +2033,10 @@ describe("inventory and stock", () => {
     const locations = await request(`/api/houses/${foreignId}/locations`);
     const categoryId = categories.data[0].id;
     const locationId = locations.data[0].id;
+    const before = await request(`/api/items/${itemId}`);
     const patch = await request(`/api/items/${itemId}`, { method: "PATCH", body: { categoryId } });
     assert.equal(patch.status, 400);
+    assert.equal((await request(`/api/items/${itemId}`)).data.categoryId, before.data.categoryId);
     const localCategories = await request(`/api/houses/${houseId}/categories`);
     assert.equal((await request(`/api/items/${itemId}`, { method: "PATCH", body: { categoryId: localCategories.data[0].id } })).status, 200);
     const cleared = await request(`/api/items/${itemId}`, { method: "PATCH", body: { categoryId: null } });
@@ -2051,8 +2053,13 @@ describe("inventory and stock", () => {
       const move = await request(`/api/items/${itemId}/stock`, { method: "POST", body: { action: "move", quantity: 1, fromLocationId, toLocationId } });
       assert.equal(move.status, 400);
     }
-    const stock = await request(`/api/items/${itemId}/stock`, { method: "POST", body: { action: "add", quantity: 1, locationId } });
-    assert.equal(stock.status, 400);
+    for (const action of ["add", "remove", "set"]) {
+      const stock = await request(`/api/items/${itemId}/stock`, { method: "POST", body: { action, quantity: 1, target: 1, locationId } });
+      assert.equal(stock.status, 400);
+    }
+    const emptyMove = await request(`/api/items/${itemId}/stock`, { method: "POST", body: { action: "move", quantity: 1, fromLocationId: "", toLocationId: "" } });
+    assert.equal(emptyMove.status, 400);
+    assert.equal(emptyMove.data.error, "Pick two different locations");
     const create = await request(`/api/houses/${houseId}/items`, { method: "POST", body: { name: "Invalid location", initialStock: { quantity: 1, locationId } } });
     assert.equal(create.status, 400);
   });
@@ -5466,8 +5473,16 @@ describe("photos and datasets", () => {
     const folder = await request(`/api/houses/${otherHouse}/collections`, { auth: secondUserCookie, body: { name: "Foreign folder" } });
     assert.equal(item.status, 201);
     assert.equal(folder.status, 201);
+    const before = await get<any>("SELECT item_id, collection_id FROM photos WHERE id = ?", [photoId]);
     assert.equal((await request(`/api/photos/${photoId}`, { method: "PATCH", body: { itemId: item.data.id } })).status, 400);
     assert.equal((await request(`/api/photos/${photoId}`, { method: "PATCH", body: { collectionId: folder.data.id } })).status, 400);
+    const after = await get<any>("SELECT item_id, collection_id FROM photos WHERE id = ?", [photoId]);
+    assert.deepEqual(after, before);
+    const png = encodePng(8, 8, Buffer.alloc(8 * 8 * 4, 220));
+    const form = new FormData();
+    form.append("photos", new Blob([new Uint8Array(png)], { type: "image/png" }), "foreign.png");
+    form.append("itemId", item.data.id);
+    assert.equal((await request(`/api/houses/${houseId}/photos`, { method: "POST", body: form })).status, 400);
   });
 
   it("exports an empty dataset", async () => {
@@ -6810,13 +6825,17 @@ describe("two-factor authentication", () => {
     const owner = (await request("/api/auth/me", { auth: secondUserCookie })).data;
     const ownerHouse = owner.houses.find((h: any) => h.role === "owner").id;
     await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING", [ownerHouse, admin.id, "member", new Date().toISOString()]);
-    const denied = await request(`/api/auth/passkeys/user/${admin.id}`, { method: "DELETE", auth: secondUserCookie });
-    assert.equal(denied.status, 403);
-    await run("INSERT INTO passkeys (id, user_id, credential_id, public_key, created_at) VALUES (?, ?, ?, ?, ?)", ["passkey-test-delete", owner.user.id, "credential-test-delete", "key", new Date().toISOString()]);
-    const allowed = await request(`/api/auth/passkeys/user/${owner.user.id}`, { method: "DELETE" });
-    assert.equal(allowed.status, 200);
-    assert.equal(await get("SELECT id FROM passkeys WHERE id = ?", ["passkey-test-delete"]), undefined);
-    await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [ownerHouse, admin.id]);
+    try {
+      const denied = await request(`/api/auth/passkeys/user/${admin.id}`, { method: "DELETE", auth: secondUserCookie });
+      assert.equal(denied.status, 403);
+      await run("INSERT INTO passkeys (id, user_id, credential_id, public_key, created_at) VALUES (?, ?, ?, ?, ?)", ["passkey-test-delete", owner.user.id, "credential-test-delete", "key", new Date().toISOString()]);
+      const allowed = await request(`/api/auth/passkeys/user/${owner.user.id}`, { method: "DELETE" });
+      assert.equal(allowed.status, 200);
+      assert.equal(await get("SELECT id FROM passkeys WHERE id = ?", ["passkey-test-delete"]), undefined);
+    } finally {
+      await run("DELETE FROM passkeys WHERE id = ?", ["passkey-test-delete"]);
+      await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [ownerHouse, admin.id]);
+    }
   });
 
   it("exposes passkey options and rejects an unknown assertion", async () => {

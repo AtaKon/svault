@@ -6,6 +6,11 @@ All notable changes to SVault are documented here. The format follows
 
 ## [Unreleased]
 
+### Security
+
+- Account-wide passkeys can be deleted only by their owner or an instance administrator. A household
+  owner can no longer delete another member's passkeys.
+
 ### Added
 
 - **Recipe portion, weight and calorie estimates.** Recipes now estimate the total prepared weight and

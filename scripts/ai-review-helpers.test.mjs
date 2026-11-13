@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  assertCompleteComparison,
+  findReviewComment,
   clipComment,
   failureStopNote,
   mergeChunkReviews,
@@ -120,4 +122,19 @@ test("clipComment closes an unclosed code fence", () => {
   const clipped = clipComment(text, 80);
   assert.match(clipped, /truncated/);
   assert.equal((clipped.match(/^```/gm) || []).length % 2, 0);
+});
+
+test("comparison guard refuses possibly truncated responses", () => {
+  assert.doesNotThrow(() => assertCompleteComparison({ files: Array(299), total_commits: 249 }));
+  assert.throws(() => assertCompleteComparison({ files: Array(300), total_commits: 1 }));
+  assert.throws(() => assertCompleteComparison({ files: [], total_commits: 250 }));
+  assert.throws(() => assertCompleteComparison({ files: [] }));
+});
+
+test("review lookup finds comments past the first page and stops at the limit", async () => {
+  const ordinary = Array.from({ length: 100 }, () => ({ user: { login: "someone" }, body: "text" }));
+  const target = { id: 9, user: { login: "github-actions[bot]" }, body: "<!-- marker -->" };
+  assert.equal(await findReviewComment(async (page) => page === 1 ? ordinary : [target], "<!-- marker -->"), target);
+  assert.equal(await findReviewComment(async () => [], "<!-- marker -->"), undefined);
+  await assert.rejects(findReviewComment(async () => ordinary, "<!-- marker -->"), /Too many comments/);
 });
