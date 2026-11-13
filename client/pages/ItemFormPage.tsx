@@ -263,7 +263,7 @@ export function ItemFormPage() {
             <AttributeFields defs={visibleAttributes} values={values} onChange={setValues} />
           </Card>
 
-          <Card className="space-y-2 p-4">
+          {editing && <Card className="space-y-2 p-4">
             <div className="flex items-center gap-2">
               <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-warn-soft text-warn">
                 <Icon name="cup" size={16} />
@@ -279,7 +279,7 @@ export function ItemFormPage() {
             <p className="text-[11px] leading-relaxed text-muted">
               {t("Use this for a bag of coffee beans you brew as espresso. Leave it off for milk, cups and machines.")}
             </p>
-          </Card>
+          </Card>}
 
           <NutritionFormCard draft={nutrition} onChange={setNutrition} />
 

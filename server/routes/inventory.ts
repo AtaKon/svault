@@ -523,7 +523,7 @@ const attributeBody = z.object({
   unit: z.string().trim().max(20).nullish(),
   options: z.array(z.string().trim().max(40)).max(30).optional(),
   required: z.boolean().optional(),
-  categoryId: z.string().trim().max(60).nullish(),
+  categoryId: z.string().trim().min(1).max(60).nullish(),
   sort: z.number().int().min(0).max(999).optional(),
 });
 
@@ -683,7 +683,7 @@ inventoryRoutes.post(
         name: z.string().trim().min(1).max(120),
         description: z.string().trim().max(2000).nullish(),
         brand: z.string().trim().max(80).nullish(),
-        categoryId: z.string().trim().max(60).nullish(),
+        categoryId: z.string().trim().min(1).max(60).nullish(),
         unit: z.string().trim().min(1).max(10).default("pcs"),
         reorderPoint: z.number().min(0).max(1e9).optional(),
         targetStock: z.number().min(0).max(1e9).nullish(),
@@ -701,7 +701,7 @@ inventoryRoutes.post(
             quantity: z.number().positive(),
             unit: z.string().max(10).optional(),
             unitPrice: z.number().min(0).nullish(),
-            locationId: z.string().max(60).nullish(),
+            locationId: z.string().trim().min(1).max(60).nullish(),
             expiresAt: z.string().max(10).nullish(),
             purchasedAt: z.string().max(10).nullish(),
             note: z.string().max(300).nullish(),
@@ -714,6 +714,9 @@ inventoryRoutes.post(
 
     if (body.categoryId && !await get("SELECT id FROM categories WHERE id = ? AND house_id = ?", [body.categoryId, houseId])) {
       throw new ApiError(400, "Category does not exist in this house");
+    }
+    if (body.initialStock?.locationId && !await get("SELECT id FROM locations WHERE id = ? AND house_id = ?", [body.initialStock.locationId, houseId])) {
+      throw new ApiError(400, "Location does not exist in this house");
     }
     if (body.initialStock?.vendorId && !await get("SELECT id FROM vendors WHERE id = ? AND house_id = ?", [body.initialStock.vendorId, houseId])) {
       throw new ApiError(400, "Shop does not exist in this house");
@@ -985,7 +988,7 @@ itemRoutes.patch(
         name: z.string().trim().min(1).max(120).optional(),
         description: z.string().trim().max(2000).nullish(),
         brand: z.string().trim().max(80).nullish(),
-        categoryId: z.string().trim().max(60).nullish(),
+        categoryId: z.string().trim().min(1).max(60).nullish(),
         unit: z.string().trim().min(1).max(10).optional(),
         reorderPoint: z.number().min(0).max(1e9).optional(),
         targetStock: z.number().min(0).max(1e9).nullish(),
@@ -1000,6 +1003,9 @@ itemRoutes.patch(
       }),
       req.body,
     );
+    if (body.categoryId && !await get("SELECT id FROM categories WHERE id = ? AND house_id = ?", [body.categoryId, item.house_id])) {
+      throw new ApiError(400, "Category does not exist in this house");
+    }
     const normalized = normalizeItemAttributes(
       body.attributes ?? parseJson<Record<string, unknown>>(item.attributes, {}),
       body.brand === undefined ? (item.brand ?? undefined) : body.brand,
@@ -1073,7 +1079,7 @@ itemRoutes.post(
         unit: z.string().max(10).optional(),
         unitPrice: z.number().min(0).max(1e9).nullish(),
         currency: z.string().max(3).nullish(),
-        locationId: z.string().max(60).nullish(),
+        locationId: z.string().trim().min(1).max(60).nullish(),
         lotId: z.string().max(60).nullish(),
         expiresAt: z.string().max(10).nullish(),
         purchasedAt: z.string().max(10).nullish(),

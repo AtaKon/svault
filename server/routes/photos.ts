@@ -2,11 +2,11 @@ import { Router } from "express";
 import { z } from "zod";
 import fs from "node:fs/promises";
 import JSZip from "jszip";
-import { all, get, newId, now, run } from "../db.js";
+import { all, get, newId, now, run, tx } from "../db.js";
 import { memberRole, requireAuth, roleAtLeast } from "../auth.js";
 import { ApiError, handler, intParam, parseBody, requireHouse } from "../http.js";
 import { serializePhoto } from "../serialize.js";
-import { uploader, uploadPath } from "../upload.js";
+import { discardUploads, uploader, uploadPath } from "../upload.js";
 import type { Role } from "../../shared/types.js";
 
 export const photoRoutes = Router();
@@ -184,52 +184,65 @@ photoRoutes.post(
   "/:houseId/photos",
   uploader("photos").array("photos", 30),
   handler(async (req, res) => {
-    const { houseId } = await requireHouse(req, "member");
-    const files = (req.files as Express.Multer.File[]) ?? [];
-    if (!files.length) throw new ApiError(400, "No photos uploaded");
-    const collectionId = req.body.collectionId ? String(req.body.collectionId) : null;
-    if (collectionId && !await get("SELECT id FROM photo_collections WHERE id = ? AND house_id = ?", [collectionId, houseId])) {
-      throw new ApiError(400, "Folder does not belong to this house");
-    }
-    const split = splitSchema.catch("unassigned").parse(req.body.split ?? "unassigned");
-    let meta: any[] = [];
-    if (req.body.meta) {
-      try {
-        meta = JSON.parse(String(req.body.meta));
-      } catch {
-        meta = [];
+    let photos;
+    try {
+      const { houseId } = await requireHouse(req, "member");
+      const files = (req.files as Express.Multer.File[]) ?? [];
+      if (!files.length) throw new ApiError(400, "No photos uploaded");
+      const collectionId = req.body.collectionId ? String(req.body.collectionId) : null;
+      if (collectionId && !await get("SELECT id FROM photo_collections WHERE id = ? AND house_id = ?", [collectionId, houseId])) {
+        throw new ApiError(400, "Folder does not belong to this house");
       }
+      if (req.body.itemId && !await get("SELECT id FROM items WHERE id = ? AND house_id = ?", [String(req.body.itemId), houseId])) {
+        throw new ApiError(400, "Item does not belong to this house");
+      }
+      const split = splitSchema.catch("unassigned").parse(req.body.split ?? "unassigned");
+      let meta: any[] = [];
+      if (req.body.meta) {
+        try {
+          const parsed: unknown = JSON.parse(String(req.body.meta));
+          meta = Array.isArray(parsed) ? parsed : [];
+        } catch {
+          meta = [];
+        }
+      }
+      photos = await tx(async () => {
+        const created: string[] = [];
+        for (const [index, file] of files.entries()) {
+          const m = meta[index] ?? {};
+          const id = newId("pho");
+          await run(
+            `INSERT INTO photos (id, house_id, collection_id, filename, original_name, mime, size, width, height, notes,
+               item_id, split, captured_at, uploaded_by, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              id,
+              houseId,
+              collectionId,
+              file.filename,
+              String(m.originalName ?? file.originalname).slice(0, 200),
+              file.mimetype,
+              file.size,
+              m.width ? Number(m.width) : null,
+              m.height ? Number(m.height) : null,
+              m.notes ? String(m.notes).slice(0, 500) : null,
+              req.body.itemId ? String(req.body.itemId) : null,
+              split,
+              m.capturedAt ? String(m.capturedAt).slice(0, 40) : null,
+              req.user!.id,
+              now(),
+            ],
+          );
+          created.push(id);
+        }
+        const rows = await all<any>(`SELECT * FROM photos WHERE id IN (${created.map(() => "?").join(",")})`, created);
+        return rows.map((row) => serializePhoto(row, []));
+      });
+    } catch (err) {
+      discardUploads(req);
+      throw err;
     }
-    const created: string[] = [];
-    for (const [index, file] of files.entries()) {
-      const m = meta[index] ?? {};
-      const id = newId("pho");
-      await run(
-        `INSERT INTO photos (id, house_id, collection_id, filename, original_name, mime, size, width, height, notes,
-           item_id, split, captured_at, uploaded_by, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          id,
-          houseId,
-          collectionId,
-          file.filename,
-          String(m.originalName ?? file.originalname).slice(0, 200),
-          file.mimetype,
-          file.size,
-          m.width ? Number(m.width) : null,
-          m.height ? Number(m.height) : null,
-          m.notes ? String(m.notes).slice(0, 500) : null,
-          req.body.itemId ? String(req.body.itemId) : null,
-          split,
-          m.capturedAt ? String(m.capturedAt).slice(0, 40) : null,
-          req.user!.id,
-          now(),
-        ],
-      );
-      created.push(id);
-    }
-    const rows = await all<any>(`SELECT * FROM photos WHERE id IN (${created.map(() => "?").join(",")})`, created);
-    res.status(201).json({ photos: rows.map((r) => serializePhoto(r, [])) });
+    res.status(201).json({ photos });
   }),
 );
 
@@ -241,16 +254,22 @@ singlePhotoRoutes.patch(
     const { photo } = await photoAccess(req, "member");
     const body = parseBody(
       z.object({
-        collectionId: z.string().max(60).nullish(),
+        collectionId: z.string().trim().min(1).max(60).nullish(),
         notes: z.string().max(1000).nullish(),
         split: splitSchema.optional(),
-        itemId: z.string().max(60).nullish(),
+        itemId: z.string().trim().min(1).max(60).nullish(),
         width: z.number().int().min(1).max(20000).nullish(),
         height: z.number().int().min(1).max(20000).nullish(),
         capturedAt: z.string().max(40).nullish(),
       }),
       req.body,
     );
+    if (body.collectionId && !await get("SELECT id FROM photo_collections WHERE id = ? AND house_id = ?", [body.collectionId, photo.house_id])) {
+      throw new ApiError(400, "Folder does not belong to this house");
+    }
+    if (body.itemId && !await get("SELECT id FROM items WHERE id = ? AND house_id = ?", [body.itemId, photo.house_id])) {
+      throw new ApiError(400, "Item does not belong to this house");
+    }
     await run(
       `UPDATE photos SET collection_id = ?, notes = ?, split = ?, item_id = ?, width = ?, height = ?, captured_at = ?
        WHERE id = ?`,

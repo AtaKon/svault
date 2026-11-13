@@ -4,6 +4,7 @@ const shared = ["--import", "tsx", "--disable-warning=ExperimentalWarning"];
 const steps = [
   [...shared, "scripts/run-i18n-check.ts"],
   [...shared, "--test", "scripts/check-i18n.test.mjs"],
+  ["--test", "scripts/ai-review-helpers.test.mjs"],
   ["scripts/pdfjs-render-smoke.mjs"],
   [...shared, "--test", "server/tests/recipe-notebook.test.ts"],
   [...shared, "--test", "server/tests/ocr-benchmark.test.mjs"],

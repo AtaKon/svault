@@ -12,8 +12,8 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: ai-review-${{ github.event.issue.number || github.event.pull_request.number }}
-  cancel-in-progress: true
+  group: ai-review-${{ github.event.pull_request.number || github.event.issue.number }}-${{ github.event.pull_request.head.sha || github.run_id }}
+  cancel-in-progress: false
 
 jobs:
   review:

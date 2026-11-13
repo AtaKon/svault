@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, prepareImage } from "@/api";
 import { useHouse } from "@/state";
@@ -35,8 +35,12 @@ export function RecipeScanPage() {
   const navigate = useNavigate();
   const toast = useToast();
   const fileRef = useRef<HTMLInputElement>(null);
+  const fileRun = useRef(0);
+  const ocrRun = useRef(0);
 
   const [preview, setPreview] = useState<string | null>(null);
+  useEffect(() => () => { if (preview?.startsWith("blob:")) URL.revokeObjectURL(preview); }, [preview]);
+  useEffect(() => () => { fileRun.current++; ocrRun.current++; }, []);
   const [uploadedPath, setUploadedPath] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [text, setText] = useState("");
@@ -61,11 +65,26 @@ export function RecipeScanPage() {
 
   const handleFile = async (file: File | null) => {
     if (!file) return;
+    const run = ++fileRun.current;
+    ++ocrRun.current;
+    setOcrRunning(false);
+    setUploadedPath(null);
+    setUploading(true);
     setOcrError(null);
     setDrafts([]);
     setSelected(0);
     setWarning(null);
-    const prepared = await prepareImage(file, { maxSize: 2200, quality: 0.9 });
+    let prepared: File;
+    try {
+      prepared = await prepareImage(file, { maxSize: 2200, quality: 0.9 });
+    } catch (err) {
+      if (run === fileRun.current) {
+        setUploading(false);
+        toast.error(err instanceof Error ? t(err.message) : t("Could not upload the photo"));
+      }
+      return;
+    }
+    if (run !== fileRun.current) return;
     const url = URL.createObjectURL(prepared);
     setPreview(url);
     setText("");
@@ -76,18 +95,19 @@ export function RecipeScanPage() {
       const form = new FormData();
       form.append("image", prepared);
       const data = await api<{ path: string }>(`/api/houses/${house.id}/recipes/upload`, { method: "POST", body: form });
-      setUploadedPath(data.path);
+      if (run === fileRun.current) setUploadedPath(data.path);
     } catch (err) {
-      toast.error(err instanceof Error ? t(err.message) : t("Could not upload the photo"));
+      if (run === fileRun.current) toast.error(err instanceof Error ? t(err.message) : t("Could not upload the photo"));
     } finally {
-      setUploading(false);
+      if (run === fileRun.current) setUploading(false);
     }
-    void runOcr(prepared);
+    if (run === fileRun.current) void runOcr(prepared);
   };
 
   const runOcr = async (file?: File) => {
     const target = file ?? fileRef.current?.files?.[0];
     if (!target) return;
+    const run = ++ocrRun.current;
     setOcrRunning(true);
     setOcrProgress(0);
     setOcrStatus(t("Starting OCR"));
@@ -96,6 +116,7 @@ export function RecipeScanPage() {
       const result = await ocrImage(
         target,
         (progress, status) => {
+          if (run !== ocrRun.current) return;
           setOcrProgress(progress);
           setOcrStatus(t(status));
         },
@@ -105,17 +126,19 @@ export function RecipeScanPage() {
         {
           mode: "recipe",
           onRawText: (value, meta) => {
+            if (run !== ocrRun.current) return;
             setRawText(value);
             setOcrConfidence(meta.confidence);
           },
         },
       );
+      if (run !== ocrRun.current) return;
       setText(result.trim());
       if (!result.trim()) setOcrError(t("No text was detected. Try a sharper, brighter photo or type the recipe."));
     } catch (err) {
-      setOcrError(err instanceof Error ? t(err.message) : t("OCR failed"));
+      if (run === ocrRun.current) setOcrError(err instanceof Error ? t(err.message) : t("OCR failed"));
     } finally {
-      setOcrRunning(false);
+      if (run === ocrRun.current) setOcrRunning(false);
     }
   };
 
@@ -186,6 +209,10 @@ export function RecipeScanPage() {
   };
 
   const reset = () => {
+    ++fileRun.current;
+    ++ocrRun.current;
+    setUploading(false);
+    setOcrRunning(false);
     setPreview(null);
     setUploadedPath(null);
     setText("");
@@ -291,7 +318,7 @@ export function RecipeScanPage() {
                 <div className="mt-2 rounded-xl bg-warn-soft px-3 py-2 text-[11px] leading-relaxed text-warn">
                   <p>{t("This looks handwritten, and on-device OCR cannot read handwriting reliably. A vision model reads the photo itself — the recognised text below is only a hint.")}</p>
                   {uploadedPath ? (
-                    <Button type="button" size="sm" icon="sparkles" className="mt-2" loading={busy} disabled={ocrRunning} onClick={() => void digitize(true)}>
+                    <Button type="button" size="sm" icon="sparkles" className="mt-2" loading={busy} disabled={ocrRunning || uploading} onClick={() => void digitize(true)}>
                       {t("Read the photo with AI ")}</Button>
                   ) : null}
                 </div>
@@ -313,12 +340,12 @@ export function RecipeScanPage() {
                 </details>
               )}
               <div className="mt-2 flex flex-wrap gap-2">
-                <Button type="button" size="sm" variant="secondary" icon="refresh" onClick={() => void runOcr()} disabled={ocrRunning}>
+                <Button type="button" size="sm" variant="secondary" icon="refresh" onClick={() => void runOcr()} disabled={ocrRunning || uploading}>
                   {t("Re-run OCR ")}</Button>
-                <Button type="button" size="sm" icon="sparkles" loading={busy} disabled={ocrRunning} onClick={() => void digitize()}>
+                <Button type="button" size="sm" icon="sparkles" loading={busy} disabled={ocrRunning || uploading} onClick={() => void digitize()}>
                   {t("Digitise recipe ")}</Button>
                 {uploadedPath && (
-                  <Button type="button" size="sm" variant="secondary" icon="sparkles" loading={busy} disabled={ocrRunning} onClick={() => void digitize(true)}>
+                  <Button type="button" size="sm" variant="secondary" icon="sparkles" loading={busy} disabled={ocrRunning || uploading} onClick={() => void digitize(true)}>
                     {t("Read the photo with AI ")}</Button>
                 )}
               </div>

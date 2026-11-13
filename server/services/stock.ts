@@ -27,6 +27,12 @@ async function itemRow(itemId: string, houseId: string) {
   return item;
 }
 
+async function validateLocation(houseId: string, locationId?: string | null) {
+  if (locationId && !await get("SELECT id FROM locations WHERE id = ? AND house_id = ?", [locationId, houseId])) {
+    throw new ApiError(400, "Location does not exist in this house");
+  }
+}
+
 function baseQuantity(item: any, quantity: number, unit?: string): number {
   const from = (unit ?? item.unit).toLowerCase();
   const amount = convert(Math.abs(quantity), from, item.unit);
@@ -93,6 +99,7 @@ async function recordMovement(opts: {
 }
 
 export async function addStock(opts: StockOpts): Promise<string> {
+  await validateLocation(opts.houseId, opts.locationId);
   if (!Number.isFinite(opts.quantity) || opts.quantity <= 0) {
     throw new ApiError(400, "Quantity must be greater than zero");
   }
@@ -150,6 +157,7 @@ export async function addStock(opts: StockOpts): Promise<string> {
 
 /** Consume stock FIFO (oldest expiry first, then oldest purchase). */
 export async function removeStock(opts: StockOpts & { waste?: boolean }): Promise<string> {
+  await validateLocation(opts.houseId, opts.locationId);
   const requested = baseQuantity(
     { unit: (await itemRow(opts.itemId, opts.houseId)).unit },
     opts.quantity,
@@ -213,6 +221,7 @@ export async function removeStock(opts: StockOpts & { waste?: boolean }): Promis
 
 /** Set an absolute quantity (stock count correction). */
 export async function setStock(opts: StockOpts & { target: number }): Promise<string> {
+  await validateLocation(opts.houseId, opts.locationId);
   const item = await itemRow(opts.itemId, opts.houseId);
   const target = round(Number(opts.target));
   if (!Number.isFinite(target) || target < 0) throw new ApiError(400, "Target quantity must be zero or more");
@@ -297,6 +306,8 @@ export async function moveStock(opts: { itemId: string; houseId: string; userId:
   if (!opts.fromLocationId || !opts.toLocationId || opts.fromLocationId === opts.toLocationId) {
     throw new ApiError(400, "Pick two different locations");
   }
+  await validateLocation(opts.houseId, opts.fromLocationId);
+  await validateLocation(opts.houseId, opts.toLocationId);
   return await tx(async () => {
     const item = await itemRow(opts.itemId, opts.houseId);
     const requested = baseQuantity(item, opts.quantity, opts.unit);

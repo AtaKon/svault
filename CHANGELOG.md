@@ -6,6 +6,14 @@ All notable changes to SVault are documented here. The format follows
 
 ## [Unreleased]
 
+### Security
+
+- Item categories, stock locations, and photo folder and item links are now validated against the
+  owning household to prevent cross-household references.
+
+- Account-wide passkeys can be deleted only by their owner or an instance administrator. A household
+  owner can no longer delete another member's passkeys.
+
 ### Added
 
 - **Recipe portion, weight and calorie estimates.** Recipes now estimate the total prepared weight and
@@ -215,6 +223,9 @@ All notable changes to SVault are documented here. The format follows
   development and roadmap.
 
 ### Fixed
+
+- Recipe edits preserve ingredient links and notes and step timers. Replacing a recipe scan no longer
+  reuses a previous photo or OCR result; the espresso form and photo filters also work on small screens.
 
 - Archive upload cleanup now covers Multer errors while keeping deletion inside the temporary destination. PDF.js 6 is smoke-tested in CI, and the Docker runtime enforces its Node.js engine floor.
 - Bill photo resizing now treats a positive-infinite edge limit as “do not downscale”; invalid nonpositive or NaN limits still produce a valid minimum canvas.

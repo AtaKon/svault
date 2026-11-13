@@ -15,7 +15,7 @@
 //                       "low" asks for short thinking, "default" sends nothing.
 
 import { readFile } from "node:fs/promises";
-import { clipComment, failureStopNote, mergeChunkReviews, splitDiff } from "./ai-review-helpers.mjs";
+import { assertCompleteComparison, clipComment, failureStopNote, findReviewComment, mergeChunkReviews, splitDiff } from "./ai-review-helpers.mjs";
 
 const MARKER = "<!-- svault-ai-review -->";
 // Single-call limit stays conservative. Larger PRs are split into file-sized
@@ -132,7 +132,12 @@ let buildChunkPrompt = () => {
   throw new Error("unreachable chunk prompt");
 };
 if (isPullRequest) {
-  const diffResponse = await github(`/repos/${repository}/pulls/${number}`, {
+  const comparePath = `/repos/${repository}/compare/${issue.base.sha}...${issue.head.sha}`;
+  const comparison = await (await github(comparePath)).json();
+  // The JSON comparison is capped at 300 files and 250 commits. Refuse a
+  // potentially incomplete review, even when the count is exactly the cap.
+  assertCompleteComparison(comparison);
+  const diffResponse = await github(comparePath, {
     headers: { Accept: "application/vnd.github.v3.diff" },
   });
   fullDiff = await diffResponse.text();
@@ -397,20 +402,17 @@ if (isPullRequest && fullDiff.length > MAX_DIFF_CHARS) {
 }
 
 const clippedReview = clipComment(review, MAX_COMMENT_CHARS);
-const commentBody = `${MARKER}
-${clippedReview}
+const reviewMarker = isPullRequest ? `<!-- svault-ai-review:${issue.head.sha} -->` : MARKER;
+const commentBody = `${reviewMarker}
+${isPullRequest ? `Review of commit ${issue.head.sha}.\n\n` : ""}${clippedReview}
 
 ---
 <sub>Automated review by SVault's AI bot. This is not a human approval.</sub>`;
 
-const commentsResponse = await github(`/repos/${repository}/issues/${number}/comments?per_page=100`);
-const comments = await commentsResponse.json();
-const existing = comments.find(
-  (comment) =>
-    comment.user?.login === "github-actions[bot]" &&
-    typeof comment.body === "string" &&
-    comment.body.includes(MARKER),
-);
+const existing = await findReviewComment(async (page) => {
+  const response = await github(`/repos/${repository}/issues/${number}/comments?per_page=100&page=${page}`);
+  return response.json();
+}, reviewMarker);
 
 if (existing) {
   await github(`/repos/${repository}/issues/comments/${existing.id}`, {

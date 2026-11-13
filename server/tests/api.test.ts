@@ -5,6 +5,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { recipeFormPayload, recipeFormRows } from "../../client/recipe-form-data.js";
 import { splitAmountEvenly } from "../../shared/bill-splitting.js";
 import { BILL_TYPE_LABELS, BILL_TYPE_VALUES } from "../../shared/bill-types.js";
 import { POSTGRES_MIGRATIONS, POSTGRES_SCHEMA, POSTGRES_TABLE_ORDER } from "../database/postgres-schema.js";
@@ -2023,6 +2024,56 @@ describe("inventory and stock", () => {
     assert.equal(res.data.barcodes.length, 1);
     assert.equal(res.data.priceStats.latest, 1.2);
     itemId = res.data.id;
+  });
+
+  it("rejects category and stock locations outside the household", async () => {
+    const foreignHouse = await request("/api/houses", { method: "POST", body: { name: "Foreign references" } });
+    assert.equal(foreignHouse.status, 201);
+    const foreignId = foreignHouse.data.id;
+    const categories = await request(`/api/houses/${foreignId}/categories`);
+    const locations = await request(`/api/houses/${foreignId}/locations`);
+    const categoryId = categories.data[0].id;
+    const locationId = locations.data[0].id;
+    const before = await request(`/api/items/${itemId}`);
+    for (const invalid of ["", 0]) {
+      assert.equal((await request(`/api/items/${itemId}`, { method: "PATCH", body: { categoryId: invalid } })).status, 400);
+    }
+    const patch = await request(`/api/items/${itemId}`, { method: "PATCH", body: { categoryId } });
+    assert.equal(patch.status, 400);
+    assert.equal((await request(`/api/items/${itemId}`)).data.categoryId, before.data.categoryId);
+    const localCategories = await request(`/api/houses/${houseId}/categories`);
+    assert.equal((await request(`/api/items/${itemId}`, { method: "PATCH", body: { categoryId: localCategories.data[0].id } })).status, 200);
+    const cleared = await request(`/api/items/${itemId}`, { method: "PATCH", body: { categoryId: null } });
+    assert.equal(cleared.status, 200);
+    assert.equal(cleared.data.categoryId, null);
+    const shopping = await request(`/api/houses/${houseId}/shopping`, { method: "POST", body: { name: "Foreign category", categoryId } });
+    assert.equal(shopping.status, 400);
+    const localLine = await request(`/api/houses/${houseId}/shopping`, { method: "POST", body: { name: "Category patch test" } });
+    assert.equal(localLine.status, 201);
+    const shoppingPatch = await request(`/api/houses/${houseId}/shopping/${localLine.data.item.id}`, { method: "PATCH", body: { categoryId } });
+    assert.equal(shoppingPatch.status, 400);
+    const setCategory = await request(`/api/houses/${houseId}/shopping/${localLine.data.item.id}`, { method: "PATCH", body: { categoryId: localCategories.data[0].id } });
+    assert.equal(setCategory.status, 200);
+    const clearCategory = await request(`/api/houses/${houseId}/shopping/${localLine.data.item.id}`, { method: "PATCH", body: { categoryId: null } });
+    assert.equal(clearCategory.status, 200);
+    assert.equal(clearCategory.data.item.categoryId, null);
+    const stranger = await request(`/api/items/${itemId}`, { method: "PATCH", auth: secondUserCookie, body: { categoryId, name: "Unauthorized" } });
+    assert.equal(stranger.status, 404);
+    const localLocations = await request(`/api/houses/${houseId}/locations`);
+    for (const [fromLocationId, toLocationId] of [[locationId, localLocations.data[0].id], [localLocations.data[0].id, locationId]]) {
+      const move = await request(`/api/items/${itemId}/stock`, { method: "POST", body: { action: "move", quantity: 1, fromLocationId, toLocationId } });
+      assert.equal(move.status, 400);
+    }
+    for (const action of ["add", "remove", "set"]) {
+      const stock = await request(`/api/items/${itemId}/stock`, { method: "POST", body: { action, quantity: 1, target: 1, locationId } });
+      assert.equal(stock.status, 400);
+      assert.equal(stock.data.error, "Location does not exist in this house");
+    }
+    const emptyMove = await request(`/api/items/${itemId}/stock`, { method: "POST", body: { action: "move", quantity: 1, fromLocationId: "", toLocationId: "" } });
+    assert.equal(emptyMove.status, 400);
+    assert.equal(emptyMove.data.error, "Pick two different locations");
+    const create = await request(`/api/houses/${houseId}/items`, { method: "POST", body: { name: "Invalid location", initialStock: { quantity: 1, locationId } } });
+    assert.equal(create.status, 400);
   });
 
   it("rejects duplicate barcodes", async () => {
@@ -5032,6 +5083,24 @@ describe("receipts and shops", () => {
 });
 
 describe("recipes", () => {
+  it("preserves ingredient links, notes and timers through the edit form", async () => {
+    const created = await request(`/api/houses/${houseId}/recipes`, { body: {
+      title: "Round trip", ingredients: [{ name: "Milk", itemId, quantity: 1, unit: "l", note: "cold" }],
+      steps: [{ text: "Wait", timerSeconds: 90 }],
+    } });
+    assert.equal(created.status, 201);
+    const loaded = await request(`/api/recipes/${created.data.id}`);
+    const rows = recipeFormRows(loaded.data.ingredients, loaded.data.steps);
+    const shaped = recipeFormPayload(rows.ingredients, [{ text: "Wait", timerSeconds: 90, extra: "ignored" } as any]);
+    assert.deepEqual(shaped.steps[0], { text: "Wait", timerSeconds: 90 });
+    const saved = await request(`/api/recipes/${created.data.id}`, { method: "PATCH", body: { title: "Renamed", ...recipeFormPayload(rows.ingredients, rows.steps) } });
+    assert.equal(saved.status, 200);
+    const reloaded = await request(`/api/recipes/${created.data.id}`);
+    assert.equal(reloaded.data.ingredients[0].itemId, itemId);
+    assert.equal(reloaded.data.ingredients[0].note, "cold");
+    assert.equal(reloaded.data.steps[0].timerSeconds, 90);
+  });
+
   it("parses a scan without an AI provider", async () => {
     const res = await request(`/api/houses/${houseId}/recipes/scan`, {
       method: "POST",
@@ -5425,6 +5494,74 @@ describe("photos and datasets", () => {
     const split = await request(`/api/photos/${photoId}`, { method: "PATCH", body: { split: "train" } });
     assert.equal(split.status, 200);
     assert.equal(split.data.split, "train");
+  });
+
+  it("accepts malformed and non-array photo metadata as empty metadata", async () => {
+    const png = encodePng(8, 8, Buffer.alloc(8 * 8 * 4, 220));
+    for (const meta of ["null", "{}", "not json"]) {
+      const form = new FormData();
+      form.append("photos", new Blob([new Uint8Array(png)], { type: "image/png" }), "metadata.png");
+      form.append("meta", meta);
+      const upload = await request(`/api/houses/${houseId}/photos`, { method: "POST", body: form });
+      assert.equal(upload.status, 201);
+      const deleted = await request(`/api/photos/${upload.data.photos[0].id}`, { method: "DELETE" });
+      assert.equal(deleted.status, 200);
+    }
+  });
+
+  it("rolls back rows and removes files if a photo insert fails", async () => {
+    if (databaseKind() !== "sqlite") return;
+    const imageDir = path.join(dataDir, "uploads", "photos");
+    const before = readdirSync(imageDir).sort();
+    const countBefore = await get<any>("SELECT COUNT(*) AS n FROM photos WHERE house_id = ?", [houseId]);
+    await run(`CREATE TRIGGER reject_test_photo BEFORE INSERT ON photos WHEN NEW.original_name = 'fail.png'
+      BEGIN SELECT RAISE(FAIL, 'forced photo insert failure'); END`);
+    try {
+      const png = encodePng(8, 8, Buffer.alloc(8 * 8 * 4, 220));
+      const form = new FormData();
+      form.append("photos", new Blob([new Uint8Array(png)], { type: "image/png" }), "first.png");
+      form.append("photos", new Blob([new Uint8Array(png)], { type: "image/png" }), "fail.png");
+      const upload = await request(`/api/houses/${houseId}/photos`, { method: "POST", body: form });
+      assert.equal(upload.status, 500);
+      assert.deepEqual(readdirSync(imageDir).sort(), before);
+      assert.equal((await get<any>("SELECT COUNT(*) AS n FROM photos WHERE house_id = ?", [houseId]))?.n, countBefore?.n);
+    } finally {
+      await run("DROP TRIGGER IF EXISTS reject_test_photo");
+    }
+  });
+
+  it("rejects links to another household's item and folder", async () => {
+    const other = await request("/api/auth/me", { auth: secondUserCookie });
+    const otherHouse = other.data.houses.find((h: any) => h.role === "owner").id;
+    const item = await request(`/api/houses/${otherHouse}/items`, { auth: secondUserCookie, body: { name: "Foreign photo item" } });
+    const folder = await request(`/api/houses/${otherHouse}/collections`, { auth: secondUserCookie, body: { name: "Foreign folder" } });
+    assert.equal(item.status, 201);
+    assert.equal(folder.status, 201);
+    const before = await get<any>("SELECT item_id, collection_id FROM photos WHERE id = ?", [photoId]);
+    assert.equal((await request(`/api/photos/${photoId}`, { method: "PATCH", body: { itemId: item.data.id } })).status, 400);
+    assert.equal((await request(`/api/photos/${photoId}`, { method: "PATCH", body: { collectionId: folder.data.id } })).status, 400);
+    const after = await get<any>("SELECT item_id, collection_id FROM photos WHERE id = ?", [photoId]);
+    assert.deepEqual(after, before);
+    const localFolder = await request(`/api/houses/${houseId}/collections`, { body: { name: "Clear links" } });
+    const linked = await request(`/api/photos/${photoId}`, { method: "PATCH", body: { itemId, collectionId: localFolder.data.id } });
+    assert.equal(linked.status, 200);
+    const cleared = await request(`/api/photos/${photoId}`, { method: "PATCH", body: { itemId: null, collectionId: null } });
+    assert.equal(cleared.status, 200);
+    assert.equal(cleared.data.itemId, null);
+    assert.equal(cleared.data.collectionId, null);
+    for (const field of ["itemId", "collectionId"]) {
+      assert.equal((await request(`/api/photos/${photoId}`, { method: "PATCH", body: { [field]: "" } })).status, 400);
+    }
+    const imageDir = path.join(dataDir, "uploads", "photos");
+    const filesBefore = readdirSync(imageDir).sort();
+    const png = encodePng(8, 8, Buffer.alloc(8 * 8 * 4, 220));
+    for (const [field, value] of [["itemId", item.data.id], ["collectionId", folder.data.id]]) {
+      const form = new FormData();
+      form.append("photos", new Blob([new Uint8Array(png)], { type: "image/png" }), "foreign.png");
+      form.append(field, value);
+      assert.equal((await request(`/api/houses/${houseId}/photos`, { method: "POST", body: form })).status, 400);
+      assert.deepEqual(readdirSync(imageDir).sort(), filesBefore);
+    }
   });
 
   it("exports an empty dataset", async () => {
@@ -6760,6 +6897,24 @@ describe("two-factor authentication", () => {
     assert.equal(disabled.status, 200);
     const status = await request("/api/auth/2fa");
     assert.equal(status.data.enabled, false);
+  });
+
+  it("only permits self or instance admins to delete account-wide passkeys", async () => {
+    const admin = (await request("/api/auth/me")).data.user;
+    const owner = (await request("/api/auth/me", { auth: secondUserCookie })).data;
+    const ownerHouse = owner.houses.find((h: any) => h.role === "owner").id;
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING", [ownerHouse, admin.id, "member", new Date().toISOString()]);
+    try {
+      const denied = await request(`/api/auth/passkeys/user/${admin.id}`, { method: "DELETE", auth: secondUserCookie });
+      assert.equal(denied.status, 403);
+      await run("INSERT INTO passkeys (id, user_id, credential_id, public_key, created_at) VALUES (?, ?, ?, ?, ?)", ["passkey-test-delete", owner.user.id, "credential-test-delete", "key", new Date().toISOString()]);
+      const allowed = await request(`/api/auth/passkeys/user/${owner.user.id}`, { method: "DELETE" });
+      assert.equal(allowed.status, 200);
+      assert.equal(await get("SELECT id FROM passkeys WHERE id = ?", ["passkey-test-delete"]), undefined);
+    } finally {
+      await run("DELETE FROM passkeys WHERE id = ?", ["passkey-test-delete"]);
+      await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [ownerHouse, admin.id]);
+    }
   });
 
   it("exposes passkey options and rejects an unknown assertion", async () => {

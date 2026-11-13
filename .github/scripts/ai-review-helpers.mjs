@@ -111,3 +111,23 @@ export function clipComment(text, limit) {
   if (fences % 2) out += "\n```";
   return `${out}${marker}`;
 }
+
+/** Refuse comparisons that could have been truncated by GitHub's API. */
+export function assertCompleteComparison(comparison) {
+  if (!Array.isArray(comparison.files) || comparison.files.length >= 300 ||
+      !Number.isInteger(comparison.total_commits) || comparison.total_commits >= 250) {
+    throw new Error("Comparison reaches GitHub's file or commit limit; split the PR before AI review.");
+  }
+}
+
+/** Find a prior bot review, failing closed if the scan reaches its limit. */
+export async function findReviewComment(getPage, marker) {
+  for (let page = 1; page <= 10; page++) {
+    const comments = await getPage(page);
+    const existing = comments.find((comment) => comment.user?.login === "github-actions[bot]" &&
+      typeof comment.body === "string" && comment.body.includes(marker));
+    if (existing) return existing;
+    if (comments.length < 100) return undefined;
+  }
+  throw new Error("Too many comments to safely locate the existing AI review.");
+}
