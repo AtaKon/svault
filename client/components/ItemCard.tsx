@@ -134,7 +134,7 @@ export function ItemCard({
           <button
             aria-label={t("Remove one {item}", { item: item.name })}
             aria-busy={busy === "remove" || undefined}
-            className="flex h-8 w-8 items-center justify-center rounded-lg border border-line bg-surface text-muted transition-colors hover:border-danger/40 hover:text-danger disabled:opacity-40"
+            className="flex h-10 w-10 items-center justify-center rounded-lg border border-line bg-surface text-muted transition-colors hover:border-danger/40 hover:text-danger disabled:opacity-40 md:h-8 md:w-8"
             disabled={busy !== null || current.quantity <= 0}
             onClick={() => void step("remove")}
           >
@@ -143,7 +143,7 @@ export function ItemCard({
           <button
             aria-label={t("Add one {item}", { item: item.name })}
             aria-busy={busy === "add" || undefined}
-            className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-soft text-brand transition-colors hover:brightness-95 disabled:opacity-40"
+            className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-soft text-brand transition-colors hover:brightness-95 disabled:opacity-40 md:h-8 md:w-8"
             disabled={busy !== null}
             onClick={() => void step("add")}
           >
