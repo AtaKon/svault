@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { all, get, newId, now, parseJson, run } from "../../db.js";
 import { ApiError } from "../../http.js";
+import { memberRole, roleAtLeast } from "../../auth.js";
 import type {
   OffCandidateKind,
   OffContribution,
@@ -127,16 +128,22 @@ export async function listContributions(
 ): Promise<OffContribution[]> {
   const limit = Math.min(Math.max(Number(filters.limit ?? 50), 1), 200);
   const status = String(filters.status ?? "").trim();
+  // The item name is joined live, so it follows the contributor's current
+  // access: after leaving the house the row stays but its item name is hidden.
   const rows = status
     ? await all<ContributionRow & { item_name: string | null }>(
-        `SELECT c.*, i.name AS item_name FROM off_contributions c
-         LEFT JOIN items i ON i.id = c.item_id
+        `SELECT c.*, CASE WHEN m.user_id IS NULL THEN NULL ELSE i.name END AS item_name
+         FROM off_contributions c
+         LEFT JOIN items i ON i.id = c.item_id AND i.house_id = c.house_id
+         LEFT JOIN house_members m ON m.house_id = c.house_id AND m.user_id = c.user_id
          WHERE c.user_id = ? AND c.status = ? ORDER BY c.created_at DESC LIMIT ?`,
         [userId, status, limit],
       )
     : await all<ContributionRow & { item_name: string | null }>(
-        `SELECT c.*, i.name AS item_name FROM off_contributions c
-         LEFT JOIN items i ON i.id = c.item_id
+        `SELECT c.*, CASE WHEN m.user_id IS NULL THEN NULL ELSE i.name END AS item_name
+         FROM off_contributions c
+         LEFT JOIN items i ON i.id = c.item_id AND i.house_id = c.house_id
+         LEFT JOIN house_members m ON m.house_id = c.house_id AND m.user_id = c.user_id
          WHERE c.user_id = ? ORDER BY c.created_at DESC LIMIT ?`,
         [userId, limit],
       );
@@ -145,8 +152,10 @@ export async function listContributions(
 
 export async function getContribution(id: string, userId: string): Promise<OffContribution | null> {
   const row = await get<ContributionRow & { item_name: string | null }>(
-    `SELECT c.*, i.name AS item_name FROM off_contributions c
-     LEFT JOIN items i ON i.id = c.item_id
+    `SELECT c.*, CASE WHEN m.user_id IS NULL THEN NULL ELSE i.name END AS item_name
+     FROM off_contributions c
+     LEFT JOIN items i ON i.id = c.item_id AND i.house_id = c.house_id
+     LEFT JOIN house_members m ON m.house_id = c.house_id AND m.user_id = c.user_id
      WHERE c.id = ? AND c.user_id = ?`,
     [id, userId],
   );
@@ -186,6 +195,11 @@ export async function createContribution(opts: {
   if (!(await offConsent(opts.userId))) {
     throw new ApiError(403, "Accept the Open Food Facts license before contributing");
   }
+  // Price contributions are built from a receipt line, so the optional item is
+  // otherwise never checked; every kind must name an item of this house.
+  if (opts.itemId && !(await get("SELECT id FROM items WHERE id = ? AND house_id = ?", [opts.itemId, opts.houseId]))) {
+    throw new ApiError(404, "Item not found");
+  }
   const prepared = await buildContribution(opts);
   if (prepared.kind === "price") {
     const token = (await serviceBearer(opts.userId, "prices")) ?? (await instanceServiceBearer("prices"));
@@ -209,7 +223,7 @@ export async function createContribution(opts: {
   const existing = await get<ContributionRow>("SELECT * FROM off_contributions WHERE idempotency_key = ?", [key]);
   if (existing) {
     const item = existing.item_id
-      ? await get<{ name: string }>("SELECT name FROM items WHERE id = ?", [existing.item_id])
+      ? await get<{ name: string }>("SELECT name FROM items WHERE id = ? AND house_id = ?", [existing.item_id, existing.house_id])
       : null;
     return serializeContribution(existing, item?.name ?? null);
   }
@@ -271,6 +285,20 @@ function retryDate(attempts: number): string {
   return new Date(Date.now() + delay).toISOString();
 }
 
+/** Message stored when a queued write outlives the contributor's house access. */
+export const CONTRIBUTOR_LEFT_HOUSE = "You are no longer a member of this household, so this contribution was not sent";
+
+/**
+ * A contribution sends one household's data (item details, receipt photos) to
+ * a public service. Only a current member+ of that house may send it, so a
+ * person removed from the house or demoted to viewer cannot replay it later.
+ */
+async function canContributeFor(userId: string, houseId: string | null): Promise<boolean> {
+  if (!houseId) return false;
+  const role = await memberRole(userId, houseId);
+  return Boolean(role && roleAtLeast(role, "member"));
+}
+
 /** Process one queued/retry row. Safe to call from the worker or a test. */
 export async function processContribution(id: string): Promise<void> {
   const claimed = await run(
@@ -284,6 +312,9 @@ export async function processContribution(id: string): Promise<void> {
   if (!row) return;
   const attempts = Number(row.attempts ?? 1);
   try {
+    if (!(await canContributeFor(row.user_id, row.house_id))) {
+      throw new OffWriteError(CONTRIBUTOR_LEFT_HOUSE, { retryable: false });
+    }
     let identity = null;
     if (row.kind !== "price") {
       const identityProject = row.kind === "report" ? "off" : (row.project as OffProjectId);
@@ -332,6 +363,7 @@ export async function retryContribution(id: string, userId: string): Promise<Off
   }
   const row = await get<ContributionRow>("SELECT * FROM off_contributions WHERE id = ? AND user_id = ?", [id, userId]);
   if (!row) return null;
+  if (!(await canContributeFor(userId, row.house_id))) throw new ApiError(403, "Requires member access");
   if (!["failed", "retry"].includes(row.status)) return getContribution(id, userId);
   await run(
     "UPDATE off_contributions SET status = 'queued', attempts = 0, next_attempt_at = ?, updated_at = ? WHERE id = ?",

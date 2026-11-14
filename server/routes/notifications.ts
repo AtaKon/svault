@@ -49,7 +49,7 @@ notificationRoutes.post(
 notificationRoutes.post(
   "/:houseId/notifications/scan",
   handler(async (req, res) => {
-    const { houseId } = await requireHouse(req);
+    const { houseId } = await requireHouse(req, "member");
     const house = await get<any>("SELECT settings FROM houses WHERE id = ?", [houseId]);
     const settings = parseJson<Record<string, any>>(house?.settings, {});
     const expiryDays = Number(settings?.notifications?.expiryDays ?? 7);

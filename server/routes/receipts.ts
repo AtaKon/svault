@@ -39,7 +39,9 @@ import {
   rememberUpload,
   removeReceiptImageIfUnused,
   skippedImagesWarning,
-  uploadBelongsTo,
+  uploadOwnedBy,
+  assertUploadsOwned,
+  UploadOwnershipError,
 } from "../services/receipt-scans.js";
 import { reconcileReceipt } from "../../shared/receipt-reconcile.js";
 import { parseEReceipt, receiptHouseCurrency, scanPriceAlerts } from "../services/insights.js";
@@ -391,7 +393,7 @@ receiptRoutes.delete(
   handler(async (req, res) => {
     const { houseId } = await requireHouse(req, "member");
     const body = parseBody(z.object({ path: receiptImage }), req.body);
-    if (!uploadBelongsTo(body.path, houseId)) throw new ApiError(404, "Upload not found");
+    if (!(await uploadOwnedBy(body.path, houseId))) throw new ApiError(404, "Upload not found");
     if (await get("SELECT id FROM receipts WHERE image = ? LIMIT 1", [body.path])) {
       throw new ApiError(409, "That image belongs to a saved receipt");
     }
@@ -454,6 +456,7 @@ receiptRoutes.post(
     let rawText = (body.text ?? "").trim();
     const visionPaths = body.images?.length ? body.images : body.image ? [body.image] : [];
     if (!rawText && !visionPaths.length) throw new ApiError(400, "Provide receipt text or a scan image");
+    await ownedOr400([...(body.images ?? []), body.image], houseId);
 
     const house = (await get<any>("SELECT * FROM houses WHERE id = ?", [houseId]))!;
     const settings = parseJson<Record<string, any>>(house.settings, {});
@@ -700,10 +703,21 @@ async function findDuplicateReceipt(houseId: string, body: ImportBody, vendor: a
   return null;
 }
 
-async function assertReceiptImage(image: string | null | undefined) {
+async function assertReceiptImage(image: string | null | undefined, houseId: string) {
   if (!image) return;
   if (!isReceiptImagePath(image) || !await receiptImageExists(image)) {
     throw new ApiError(400, "The receipt image must be a scan uploaded with /receipts/upload");
+  }
+  await ownedOr400([image], houseId);
+}
+
+/** Upload paths in a request must belong to the route's house. */
+async function ownedOr400(paths: Iterable<string | null | undefined>, houseId: string) {
+  try {
+    await assertUploadsOwned(paths, houseId);
+  } catch (error) {
+    if (error instanceof UploadOwnershipError) throw new ApiError(400, error.message);
+    throw error;
   }
 }
 
@@ -728,7 +742,7 @@ receiptRoutes.post(
   handler(async (req, res) => {
     const { houseId } = await requireHouse(req, "member");
     const body = parseBody(importBody, req.body);
-    await assertReceiptImage(body.image);
+    await assertReceiptImage(body.image, houseId);
     const vendor = await resolveVendor(houseId, body.vendorId, body.vendorName, { create: false });
     const plans = await planReceiptLines(houseId, vendor?.id ?? null, body.lines);
     const lines = validationLines(plans);
@@ -747,7 +761,7 @@ receiptRoutes.post(
   handler(async (req, res) => {
     const { houseId } = await requireHouse(req, "member");
     const body = parseBody(importBody, req.body);
-    await assertReceiptImage(body.image);
+    await assertReceiptImage(body.image, houseId);
     const scan = getScanRecord(body.scanId, houseId);
 
     const existingVendor = await resolveVendor(houseId, body.vendorId, body.vendorName, { create: false });

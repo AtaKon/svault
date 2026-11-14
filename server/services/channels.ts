@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import { all, get, newId, now, parseJson, run } from "../db.js";
-import { assertOutboundUrl, outboundRedirectMode } from "../lib/outbound.js";
+import { assertOutboundUrl, outboundFetch, outboundRedirectMode } from "../lib/outbound.js";
 import type { NotificationChannel, NotificationChannelEvents, NotificationChannelType } from "../../shared/types.js";
 
 export type DeliveryEvent = "low_stock" | "expiring" | "weekly_summary" | "test";
@@ -120,7 +120,7 @@ export async function sendChannelMessage(channel: NotificationChannel, message: 
         Tags: message.event === "low_stock" ? "warning" : message.event === "expiring" ? "hourglass" : "bell",
       };
       if (channel.token) headers.authorization = `Bearer ${channel.token}`;
-      response = await fetch(ntfyUrl(channel), {
+      response = await outboundFetch(ntfyUrl(channel), {
         method: "POST",
         headers,
         body: message.body,
@@ -134,7 +134,7 @@ export async function sendChannelMessage(channel: NotificationChannel, message: 
       if (channel.key && !/\/notify\/[^/]+$/.test(endpoint)) {
         endpoint = endpoint.endsWith("/notify") ? `${endpoint}/${encodeURIComponent(channel.key)}` : `${endpoint}/notify/${encodeURIComponent(channel.key)}`;
       }
-      response = await fetch(endpoint, {
+      response = await outboundFetch(endpoint, {
         method: "POST",
         headers,
         body: JSON.stringify({
@@ -162,7 +162,7 @@ export async function sendChannelMessage(channel: NotificationChannel, message: 
       if (channel.secret) {
         headers["x-svault-signature"] = `sha256=${createHmac("sha256", channel.secret).update(body).digest("hex")}`;
       }
-      response = await fetch(channel.url, { method: "POST", headers, body, redirect, signal: controller.signal });
+      response = await outboundFetch(channel.url, { method: "POST", headers, body, redirect, signal: controller.signal });
     }
     clearTimeout(timer);
     const ok = response.ok;

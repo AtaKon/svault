@@ -341,17 +341,20 @@ export function ItemPage() {
             )}
             <div className="p-4">
               <div className="flex items-start justify-between gap-4">
-                <div>
+                <div className="min-w-0">
                   <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">{t("In stock")}</div>
-                  <div className="mt-1 flex items-baseline gap-1.5">
-                    <span className="font-display text-5xl leading-none">{qty(item.quantity)}</span>
+                  <div className="mt-1 flex flex-wrap items-baseline gap-x-1.5">
+                    {/* Long amounts step down a size on phones so the quick buttons keep their room. */}
+                    <span className={cn("break-all font-display leading-none", qty(item.quantity).length > 9 ? "text-3xl sm:text-5xl" : qty(item.quantity).length > 6 ? "text-4xl sm:text-5xl" : "text-5xl")}>
+                      {qty(item.quantity)}
+                    </span>
                     <span className="text-sm text-muted">{item.unit}</span>
                   </div>
                   <div className="mt-1.5 text-xs text-muted">
                     {lotValue > 0 ? t("{amount} on the shelf", { amount: money(lotValue, house.currency) }) : t("No purchase price recorded")}
                   </div>
                 </div>
-                <div className="flex items-center gap-1.5">
+                <div className="flex shrink-0 items-center gap-1.5">
                   <button
                     onClick={() => void quick("remove")}
                     disabled={quickBusy || item.quantity <= 0}
@@ -583,7 +586,7 @@ export function ItemPage() {
                   <span key={barcode.id} className="inline-flex items-center gap-1.5 rounded-lg bg-raised px-2 py-1 font-mono text-[11px]">
                     {barcode.code}
                     {can("member") && (
-                      <button onClick={() => void removeBarcode(barcode.id)} aria-label={t("Remove barcode")} className="text-muted hover:text-danger">
+                      <button onClick={() => void removeBarcode(barcode.id)} aria-label={t("Remove barcode")} className="-my-2 -mr-2 flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted hover:text-danger">
                         <Icon name="close" size={11} />
                       </button>
                     )}

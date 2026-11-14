@@ -139,7 +139,9 @@ singleIdeaRoutes.post(
     const idea = await get<any>("SELECT * FROM food_ideas WHERE id = ?", [req.params.ideaId]);
     if (!idea) throw new ApiError(404, "Idea not found");
     const role = await memberRole(req.user!.id, idea.house_id);
-    if (!role || role === "viewer") throw new ApiError(403, "Requires member access");
+    // Non-members get the same answer as an unknown id, so idea ids cannot be probed.
+    if (!role) throw new ApiError(404, "Idea not found");
+    if (role === "viewer") throw new ApiError(403, "Requires member access");
     const body = parseBody(z.object({ index: z.number().int().min(0).default(0) }), req.body ?? {});
     const result = parseJson<IdeaResponse>(idea.result, { provider: "local", summary: "", ideas: [] });
     const pick = result.ideas[body.index];

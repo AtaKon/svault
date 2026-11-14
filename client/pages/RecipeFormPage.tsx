@@ -172,12 +172,12 @@ export function RecipeFormPage() {
             </div>
             <div className="space-y-2">
               {ingredients.map((row, index) => (
-                <div key={index} className="flex items-center gap-1.5">
+                <div key={index} className="grid grid-cols-[minmax(0,1fr)_4rem_5rem_2.5rem] items-center gap-1.5">
                   <Input
                     value={row.name}
                     onChange={(e) => updateIngredient(index, { name: e.target.value })}
                     placeholder={t("Ingredient")}
-                    className="h-10 flex-1 text-[13px]"
+                    className="h-10 text-[13px]"
                   />
                   <Input
                     value={row.quantity}
@@ -196,7 +196,7 @@ export function RecipeFormPage() {
                   <button
                     type="button"
                     onClick={() => setIngredients((current) => current.filter((_, i) => i !== index))}
-                    className="flex h-9 w-8 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-danger-soft hover:text-danger"
+                    className="flex h-10 w-10 items-center justify-center rounded-lg text-muted hover:bg-danger-soft hover:text-danger"
                     aria-label={t("Remove ingredient")}
                   >
                     <Icon name="close" size={14} />

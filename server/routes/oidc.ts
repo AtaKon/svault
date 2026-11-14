@@ -10,9 +10,9 @@ import {
   randomState,
   type Configuration,
 } from "openid-client";
-import { randomBytes } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { get, lockHouseholdLedger, newId, now, run, tx } from "../db.js";
-import { createSession, hashPassword, sessionCookie } from "../auth.js";
+import { createSession, hashPassword, sessionCookie, parseCookies } from "../auth.js";
 import { ApiError, handler } from "../http.js";
 import { OIDC } from "../config.js";
 import { consumeChallenge, storeChallenge } from "../services/passkeys.js";
@@ -21,6 +21,11 @@ import { registrationStatus } from "../services/registration.js";
 import { usernameFromEmail, usernameWithSuffix } from "../username.js";
 
 export const oidcRoutes = Router();
+
+function stateCookie(state: string, maxAge: number) {
+  const secure = process.env.NODE_ENV === "production" && process.env.COOKIE_SECURE !== "false" ? "; Secure" : "";
+  return `sv_oidc_state=${state}; Path=/api/auth/oidc; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure}`;
+}
 
 let cachedConfig: { key: string; config: Configuration } | null = null;
 
@@ -161,6 +166,7 @@ oidcRoutes.get(
       code_challenge: challenge,
       code_challenge_method: "S256",
     });
+    res.setHeader("Set-Cookie", stateCookie(state, 600));
     res.redirect(url.href);
   }),
 );
@@ -170,8 +176,12 @@ oidcRoutes.get(
   handler(async (req, res) => {
     if (!enabled()) throw new ApiError(404, "Single sign-on is not configured");
     const state = typeof req.query.state === "string" ? req.query.state : "";
-    if (!state) {
-      redirectError(res, "The provider did not return a state value");
+    res.setHeader("Set-Cookie", stateCookie("", 0));
+    const cookieState = parseCookies(req.headers.cookie).sv_oidc_state ?? "";
+    const expected = Buffer.from(state);
+    const actual = Buffer.from(cookieState);
+    if (!state || expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
+      redirectError(res, "The sign-in state does not match this browser. Try again.");
       return;
     }
     const stored = await consumeChallenge(state, "oidc");
@@ -191,7 +201,7 @@ oidcRoutes.get(
       if (!claims) throw new ApiError(400, "The provider did not return an ID token");
       const user = await findOrCreateIdentity(claims);
       const token = await createSession(user.id, req.headers["user-agent"]);
-      res.setHeader("Set-Cookie", sessionCookie(token));
+      res.append("Set-Cookie", sessionCookie(token));
       res.redirect("/?sso=1");
     } catch (error) {
       const message =

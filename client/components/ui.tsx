@@ -312,9 +312,9 @@ export function PageHeader({
           </button>
         )}
         <div className="min-w-0">
-          {eyebrow && <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">{eyebrow}</div>}
+          {eyebrow && <div className="mb-1 truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">{eyebrow}</div>}
           <h1 className="break-words font-display text-[26px] leading-tight tracking-tight sm:text-3xl">{title}</h1>
-          {subtitle && <p className="mt-1 max-w-2xl text-sm text-muted">{subtitle}</p>}
+          {subtitle && <p className="mt-1 max-w-2xl break-words text-sm text-muted">{subtitle}</p>}
         </div>
       </div>
       {actions && <div className="flex shrink-0 flex-wrap items-center gap-2 sm:pt-1">{actions}</div>}
@@ -451,8 +451,18 @@ export function Sheet({
             <IconButton icon="close" label={t("Close")} onClick={onClose} className="-mr-1.5 -mt-0.5" />
           </div>
         )}
-        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">{children}</div>
-        {footer && <div className="border-t border-line bg-surface px-5 py-3 safe-bottom">{footer}</div>}
+        <div
+          className={cn(
+            "min-h-0 flex-1 overflow-y-auto px-5 pt-4",
+            // Without a footer the body is the last strip above the home indicator.
+            footer ? "pb-4" : "pb-[max(1rem,env(safe-area-inset-bottom))]",
+          )}
+        >
+          {children}
+        </div>
+        {footer && (
+          <div className="border-t border-line bg-surface px-5 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">{footer}</div>
+        )}
       </div>
     </div>,
     document.body,

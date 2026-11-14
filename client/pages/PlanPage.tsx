@@ -211,7 +211,7 @@ export function PlanPage() {
                           <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted">{t(SLOT_LABELS[slot])}</span>
                           <button
                             onClick={() => setAdding({ day: day.key, slot })}
-                            className="flex h-5 w-5 items-center justify-center rounded-md text-muted transition-colors hover:bg-raised hover:text-ink"
+                            className="-my-2 -mr-2 flex h-9 w-9 items-center justify-center rounded-md text-muted transition-colors hover:bg-raised hover:text-ink md:my-0 md:mr-0 md:h-5 md:w-5"
                             aria-label={t("Add {meal} on {date}", { meal: t(SLOT_LABELS[slot]).toLowerCase(), date: label })}
                             disabled={!can("member")}
                           >

@@ -2,7 +2,7 @@ import multer from "multer";
 import type { Request, RequestHandler } from "express";
 import path from "node:path";
 import os from "node:os";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import { MAX_UPLOAD_BYTES, UPLOAD_DIR } from "./config.js";
 import { ApiError, requireHouse } from "./http.js";
@@ -123,6 +123,21 @@ export function accessGuard(access: UploadAccess): RequestHandler {
   };
 }
 
+/**
+ * Uploads made through a house route start with this tag, so the owning house
+ * can be checked from the name alone, also after a restart. The server chooses
+ * every name and only members can upload to a house, so the tag cannot be
+ * forged by another house.
+ */
+export function houseUploadTag(houseId: string): string {
+  return createHash("sha256").update(`svault-upload:${houseId}`).digest("hex").slice(0, 12);
+}
+
+/** The house tag at the start of an upload's file name, or null for older uploads. */
+export function uploadTagOf(filename: string): string | null {
+  return /^([0-9a-f]{12})-\d{10,}-/.exec(filename)?.[1] ?? null;
+}
+
 export interface ImageUploader {
   single(field: string): RequestHandler[];
   array(field: string, maxCount?: number): RequestHandler[];
@@ -139,8 +154,10 @@ export function uploader(prefix: UploadPrefix, access: UploadAccess = "member"):
   const upload = multer({
     storage: multer.diskStorage({
       destination: (_req, _file, cb) => cb(null, dest),
-      filename: (_req, file, cb) => {
-        cb(null, `${Date.now()}-${randomBytes(6).toString("hex")}${MIME_EXT[file.mimetype] ?? ".img"}`);
+      filename: (req, file, cb) => {
+        const houseId = (req.params as Record<string, string> | undefined)?.houseId;
+        const tag = houseId ? `${houseUploadTag(houseId)}-` : "";
+        cb(null, `${tag}${Date.now()}-${randomBytes(6).toString("hex")}${MIME_EXT[file.mimetype] ?? ".img"}`);
       },
     }),
     limits: { fileSize: MAX_UPLOAD_BYTES, files: 30 },

@@ -31,6 +31,7 @@ import {
 } from "../services/openfoodfacts.js";
 import { uploader } from "../upload.js";
 import { removeUnreferencedUploads } from "../services/upload-cleanup.js";
+import { assertImageReference, UploadOwnershipError } from "../services/receipt-scans.js";
 import { RESERVED_ATTRIBUTE_KEYS, type Role } from "../../shared/types.js";
 
 export const inventoryRoutes = Router();
@@ -347,6 +348,33 @@ async function itemDetail(itemId: string, userId: string) {
   return { ...item, lots, movements, priceHistory, recipes, priceStats: await priceStats(itemId, item.unit) };
 }
 
+/** Item pictures are the house's own item uploads or remote http(s) images (OpenFoodFacts). */
+async function assertItemImage(image: string | null | undefined, houseId: string) {
+  try {
+    await assertImageReference(image, houseId, "items", true);
+  } catch (error) {
+    if (error instanceof UploadOwnershipError) throw new ApiError(400, error.message);
+    throw error;
+  }
+}
+
+async function validateHouseReference(table: "locations" | "categories", id: string | null | undefined, houseId: string, selfId?: string) {
+  if (id != null && (id === selfId || !await get(`SELECT id FROM ${table} WHERE id = ? AND house_id = ?`, [id, houseId]))) {
+    throw new ApiError(400, "Invalid household reference");
+  }
+  // A parent may not be one of the row's own descendants: that would make a
+  // loop (A under B under A) that tree views and exports never finish walking.
+  if (id != null && selfId) {
+    const seen = new Set<string>();
+    for (let current: string | null = id; current && !seen.has(current); ) {
+      if (current === selfId) throw new ApiError(400, "Invalid household reference");
+      seen.add(current);
+      const row: { parent_id: string | null } | undefined = await get(`SELECT parent_id FROM ${table} WHERE id = ? AND house_id = ?`, [current, houseId]);
+      current = row?.parent_id ?? null;
+    }
+  }
+}
+
 /* ---------------------------------------------------------------- locations */
 
 inventoryRoutes.get(
@@ -375,6 +403,7 @@ inventoryRoutes.post(
       }),
       req.body,
     );
+    await validateHouseReference("locations", body.parentId, houseId);
     const id = newId("loc");
     await run("INSERT INTO locations (id, house_id, name, kind, icon, parent_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", [
       id,
@@ -404,6 +433,7 @@ inventoryRoutes.patch(
     );
     const current = await get<any>("SELECT * FROM locations WHERE id = ? AND house_id = ?", [req.params.locationId, houseId]);
     if (!current) throw new ApiError(404, "Location not found");
+    await validateHouseReference("locations", body.parentId, houseId, current.id);
     await run("UPDATE locations SET name = ?, kind = ?, icon = ?, parent_id = ? WHERE id = ?", [
       body.name ?? current.name,
       body.kind ?? current.kind,
@@ -451,6 +481,7 @@ inventoryRoutes.post(
       }),
       req.body,
     );
+    await validateHouseReference("categories", body.parentId, houseId);
     const id = newId("cat");
     await run("INSERT INTO categories (id, house_id, name, icon, parent_id, created_at) VALUES (?, ?, ?, ?, ?, ?)", [
       id,
@@ -478,6 +509,7 @@ inventoryRoutes.patch(
     );
     const current = await get<any>("SELECT * FROM categories WHERE id = ? AND house_id = ?", [req.params.categoryId, houseId]);
     if (!current) throw new ApiError(404, "Category not found");
+    await validateHouseReference("categories", body.parentId, houseId, current.id);
     await run("UPDATE categories SET name = ?, icon = ?, parent_id = ? WHERE id = ?", [
       body.name ?? current.name,
       body.icon === undefined ? current.icon : body.icon,
@@ -532,6 +564,7 @@ inventoryRoutes.post(
   handler(async (req, res) => {
     const { houseId } = await requireHouse(req, "admin");
     const body = parseBody(attributeBody, req.body);
+    await validateHouseReference("categories", body.categoryId, houseId);
     if (RESERVED_ATTRIBUTE_KEY_SET.has(body.key)) {
       throw new ApiError(400, `"${body.key}" is a built-in item field and cannot be a custom attribute`);
     }
@@ -570,6 +603,7 @@ inventoryRoutes.patch(
     ]);
     if (!current) throw new ApiError(404, "Attribute not found");
     const body = parseBody(attributeBody.partial(), req.body);
+    await validateHouseReference("categories", body.categoryId, houseId);
     if (body.key && RESERVED_ATTRIBUTE_KEY_SET.has(body.key)) {
       throw new ApiError(400, `"${body.key}" is a built-in item field and cannot be a custom attribute`);
     }
@@ -715,6 +749,7 @@ inventoryRoutes.post(
     if (body.categoryId && !await get("SELECT id FROM categories WHERE id = ? AND house_id = ?", [body.categoryId, houseId])) {
       throw new ApiError(400, "Category does not exist in this house");
     }
+    await assertItemImage(body.image, houseId);
     if (body.initialStock?.locationId && !await get("SELECT id FROM locations WHERE id = ? AND house_id = ?", [body.initialStock.locationId, houseId])) {
       throw new ApiError(400, "Location does not exist in this house");
     }
@@ -1006,6 +1041,7 @@ itemRoutes.patch(
     if (body.categoryId && !await get("SELECT id FROM categories WHERE id = ? AND house_id = ?", [body.categoryId, item.house_id])) {
       throw new ApiError(400, "Category does not exist in this house");
     }
+    if (body.image !== undefined && body.image !== item.image) await assertItemImage(body.image, item.house_id);
     const normalized = normalizeItemAttributes(
       body.attributes ?? parseJson<Record<string, unknown>>(item.attributes, {}),
       body.brand === undefined ? (item.brand ?? undefined) : body.brand,

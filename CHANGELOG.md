@@ -8,11 +8,58 @@ All notable changes to SVault are documented here. The format follows
 
 ### Security
 
+- Writing an Open Food Facts folksonomy property now needs accepted OFF consent and member access to
+  at least one household. A named `houseId`/`itemId` must belong to a house the caller is a member of,
+  so a signed-in user can no longer write through the instance token or name another house's item.
+- Answering Robotoff questions now needs accepted OFF consent and member access to at least one
+  household, instead of any signed-in session.
+- Open Food Facts contribution lists return an item's name only while the contributor is still a member
+  of that contribution's household. The rest of the row is unchanged, but leaving the house no longer
+  keeps showing what it contained.
+- Deleting a recipe removes only upload files its own household owns. An old recipe that points at
+  another household's upload no longer deletes that file.
+- The development request log and the AI provider label no longer print query strings, which can
+  carry OIDC `code`/`state`, invite codes or search terms.
+- Recipe ingredients can link only to items of the recipe's household, and the meal-plan shopping
+  list only reads categories from the plan's own household.
+- Open Food Facts contributions refuse an item from another household (price contributions accepted
+  one unchecked and returned its name).
+- Open Food Facts contribution retries, and queued sends, now re-check that the contributor is still a
+  member of the household. Someone removed from a house or demoted to viewer could retry a failed
+  contribution and send that house's item data or receipt photo to Open Food Facts.
+- Recipe link imports keep the page's cover image only when it is an http(s) link of at most 2000
+  characters. A hostile page could store a `javascript:` or `data:` value (of any size) as the recipe
+  image, bypassing the image check that recipe create and edit apply.
+- Uploaded files under `/uploads` now need a signed-in session and are cached privately; a leaked
+  link alone no longer opens a receipt photo.
+- Uploads are bound to the household that made them (new file names carry a house tag). Receipt and
+  recipe scans, receipt intake, saved receipts, recipe photos and item pictures refuse another
+  household's upload, so one household can no longer send another's photo to its AI provider, attach
+  it, or delete it. Recipe and item image fields accept only the house's own uploads or http(s) links.
+
+- House-wide notification scans now require member access.
+
+- Dataset imports read archive entries with a size cap per entry, a total inflate budget and an entry
+  limit, so a small zip can no longer expand into gigabytes in server memory.
+
+- Validate location and category parents and attribute categories against their household.
+
+- Instance backups now require a signed-in session, preventing API tokens from downloading or listing full-instance archives.
+
 - Item categories, stock locations, and photo folder and item links are now validated against the
   owning household to prevent cross-household references.
 
 - Account-wide passkeys can be deleted only by their owner or an instance administrator. A household
   owner can no longer delete another member's passkeys.
+
+- Dataset imports accept only the known split names (`unassigned`, `train`, `val`, `test`) as a
+  split override, and exports fall back to `unassigned` for any other stored value. A member could
+  previously store `../` paths that became entry names in a later dataset zip export.
+- Dataset exports quote class names in `data.yaml` and flatten line breaks in label text. A label
+  with a line break could add top-level keys (for example a training tool's `download:` command)
+  to the YAML that another household member later trains with.
+- Saving a food idea from another household now answers `404 Idea not found`, the same as an unknown
+  id, instead of `403`, which confirmed that the idea id existed.
 
 ### Added
 

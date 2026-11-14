@@ -140,3 +140,19 @@ export function ensureDirs() {
   fs.mkdirSync(path.join(UPLOAD_DIR, "receipts"), { recursive: true });
   fs.mkdirSync(BACKUP_DIR, { recursive: true });
 }
+
+/**
+ * Express `trust proxy` value. Defaults to one hop (a single reverse proxy).
+ * `false`/`0` ignores X-Forwarded-* entirely, which is right when the container
+ * is reached directly: otherwise a client can choose its own `req.ip` and
+ * spread attempts past the per-IP rate limits. A larger number trusts that many
+ * hops; any other value is passed through as Express' address/subnet list.
+ */
+export function trustProxySetting(raw: string | undefined): boolean | number | string {
+  const value = (raw ?? "").trim().toLowerCase();
+  if (!value) return 1;
+  if (value === "false" || value === "off" || value === "no") return false;
+  if (value === "true") return 1;
+  if (/^\d+$/.test(value)) return Number(value);
+  return value;
+}

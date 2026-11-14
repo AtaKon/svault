@@ -18,7 +18,9 @@ const TYPE_META: Record<Notification["type"], { icon: IconName; tone: string }> 
 };
 
 export function NotificationsPage() {
-  const { house } = useHouse();
+  const { house, can } = useHouse();
+  // Checks rewrite the house's reminders, so viewers only read them.
+  const canScan = can("member");
   const { t } = useI18n();
   const { refresh, selectHouse } = useAuth();
   const navigate = useNavigate();
@@ -114,11 +116,13 @@ export function NotificationsPage() {
         subtitle={t("Low stock, expiry and house updates across all your houses.")}
         actions={
           <>
-            <div className="hidden sm:block">
-              <Button variant="secondary" icon="refresh" loading={busy} onClick={() => void scan()}>
-                {t("Check now")}
-              </Button>
-            </div>
+            {canScan && (
+              <div className="hidden sm:block">
+                <Button variant="secondary" icon="refresh" loading={busy} onClick={() => void scan()}>
+                  {t("Check now")}
+                </Button>
+              </div>
+            )}
             <Button variant="ghost" onClick={() => void markAll()} disabled={!unread || busy}>
               {t("Mark read")}
             </Button>
@@ -160,9 +164,11 @@ export function NotificationsPage() {
           title={t("No reminders")}
           body={t("Set a reorder point on items you never want to run out of, add expiry dates to batches, or wait for a house invitation.")}
           action={
-            <Button variant="secondary" onClick={() => void scan()}>
-              {t("Run a check")}
-            </Button>
+            canScan ? (
+              <Button variant="secondary" onClick={() => void scan()}>
+                {t("Run a check")}
+              </Button>
+            ) : undefined
           }
         />
       ) : (
@@ -207,11 +213,13 @@ export function NotificationsPage() {
         </div>
       )}
 
-      <div className="mt-4 sm:hidden">
-        <Button block variant="secondary" icon="refresh" loading={busy} onClick={() => void scan()}>
-          {t("Check now")}
-        </Button>
-      </div>
+      {canScan && (
+        <div className="mt-4 sm:hidden">
+          <Button block variant="secondary" icon="refresh" loading={busy} onClick={() => void scan()}>
+            {t("Check now")}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

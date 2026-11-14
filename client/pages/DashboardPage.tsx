@@ -142,9 +142,9 @@ export function DashboardPage() {
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
         <div className="min-w-0 space-y-5">
           <section>
-            <div className="mb-2.5 flex items-center justify-between">
+            <div className="mb-2.5 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
               <h2 className="font-display text-xl">{t("Running low")}</h2>
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 whitespace-nowrap">
                 {can("member") && data && data.lowStock.length > 0 && (
                   <button onClick={() => void addLowStock()} className="text-xs font-medium text-brand hover:underline">
                     {t("Add to list")}
@@ -340,7 +340,7 @@ export function DashboardPage() {
           <section>
             <div className="mb-2.5 flex items-center justify-between">
               <h2 className="font-display text-xl">{t("Recent activity")}</h2>
-              <button onClick={() => void load()} className="text-muted transition-colors hover:text-ink" aria-label={t("Refresh activity")}>
+              <button onClick={() => void load()} className="-my-2 -mr-2 flex h-10 w-10 items-center justify-center rounded-lg text-muted transition-colors hover:text-ink" aria-label={t("Refresh activity")}>
                 <Icon name="refresh" size={15} />
               </button>
             </div>

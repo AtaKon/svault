@@ -931,7 +931,7 @@ See the [user guide](user-guide.md#export-a-dataset) for the archive layout.
 | `GET` | `/api/houses/:houseId/dashboard` | viewer+ | Counts, value, low stock, expiring lots, recent movements, recipe and counts. |
 | `GET` | `/api/houses/:houseId/notifications` | viewer+ | Active reminders. `unread=1`, `limit` up to 200. |
 | `POST` | `/api/houses/:houseId/notifications/read` | viewer+ | Mark all or `{ "ids": [...] }` as read for the current user. |
-| `POST` | `/api/houses/:houseId/notifications/scan` | viewer+ | Recompute low-stock and expiry reminders for the house. |
+| `POST` | `/api/houses/:houseId/notifications/scan` | member+ | Recompute low-stock and expiry reminders for the house. |
 | `GET` | `/api/notifications` | user | Reminders from every house the caller belongs to, including house invitations. `unread=1`, `limit` up to 200. |
 | `POST` | `/api/notifications/read` | user | Mark all or `{ "ids": [...] }` across houses as read. |
 

@@ -392,9 +392,19 @@ async function exportBundle(houseId: string, format: "yolo" | "coco", collection
     })),
   }));
 
+  // Labels are member-supplied text; a line break would add lines to classes.txt
+  // and keys to data.yaml, so flatten control characters before writing them.
+  const flat = (label: string) => String(label).replace(/[\u0000-\u001f\u007f]+/g, " ").trim() || "unnamed";
+  for (const photo of photos) for (const label of photo.labels) label.label = flat(label.label);
   const classes = Array.from(new Set(photos.flatMap((p) => p.labels.map((l) => l.label)))).sort();
   const classIndex = new Map(classes.map((name, i) => [name, i]));
 
+  // Quoting alone does not stop spreadsheet applications evaluating formulas.
+  const csvCell = (value: unknown) => {
+    let text = String(value ?? "");
+    if (/^[\s\u0000-\u001f]*[=+\-@]/.test(text)) text = `'${text}`;
+    return `"${text.replace(/"/g, '""')}"`;
+  };
   const zip = new JSZip();
   const dataset = zip.folder("svault-dataset")!;
   dataset.file("classes.txt", classes.join("\n") + (classes.length ? "\n" : ""));
@@ -405,11 +415,11 @@ async function exportBundle(houseId: string, format: "yolo" | "coco", collection
       ...photos.map((p) =>
         [
           p.filename,
-          `"${p.originalName.replace(/"/g, "'")}"`,
+          csvCell(p.originalName),
           p.split,
           p.width ?? "",
           p.height ?? "",
-          `"${p.labels.map((l) => l.label).join("|")}"`,
+          csvCell(p.labels.map((l) => l.label).join("|")),
         ].join(","),
       ),
     ].join("\n"),
@@ -424,7 +434,8 @@ async function exportBundle(houseId: string, format: "yolo" | "coco", collection
   let annId = 1;
 
   for (const photo of photos) {
-    const split = photo.split === "unassigned" ? "unassigned" : photo.split;
+    // Older rows may hold any text; never let it become a path inside the zip.
+    const split = splitSchema.catch("unassigned").parse(photo.split);
     const buffer = await fs.readFile(uploadPath("photos", photo.filename)).catch(() => null);
     if (!buffer) continue;
     dataset.file(`images/${split}/${photo.filename}`, buffer);
@@ -471,7 +482,8 @@ async function exportBundle(houseId: string, format: "yolo" | "coco", collection
       "val: images/val",
       "test: images/test",
       "names:",
-      ...classes.map((name, i) => `  ${i}: ${name}`),
+      // JSON strings are valid double-quoted YAML scalars.
+      ...classes.map((name, i) => `  ${i}: ${JSON.stringify(name)}`),
     ].join("\n") + "\n",
   );
   dataset.file("annotations.coco.json", JSON.stringify(coco, null, 2));

@@ -137,7 +137,7 @@ export function AppShell() {
           </span>
           <span className="min-w-0 flex-1">
             <span className="block truncate text-sm font-medium">{house.name}</span>
-            <span className="block text-[11px] capitalize text-muted">{house.role} · {house.kind}</span>
+            <span className="block text-[11px] capitalize text-muted">{t(house.role)} · {t(house.kind)}</span>
           </span>
           <Icon name="chevronDown" size={15} className="text-muted" />
         </button>
@@ -191,7 +191,7 @@ export function AppShell() {
             <LogoMark size={30} />
             <span className="min-w-0">
               <span className="block truncate font-display text-[17px] leading-tight">{house.name}</span>
-              <span className="block text-[10px] uppercase tracking-[0.14em] text-muted">{house.role}</span>
+              <span className="block text-[10px] uppercase tracking-[0.14em] text-muted">{t(house.role)}</span>
             </span>
             <Icon name="chevronDown" size={14} className="ml-0.5 shrink-0 text-muted" />
           </button>

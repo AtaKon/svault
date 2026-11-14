@@ -2,7 +2,7 @@ import express from "express";
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { PORT, CLIENT_DIR, IS_PROD, RP_ORIGIN, UPLOAD_DIR, ensureDirs } from "./config.js";
+import { PORT, CLIENT_DIR, IS_PROD, RP_ORIGIN, UPLOAD_DIR, ensureDirs, trustProxySetting } from "./config.js";
 import { ApiError } from "./http.js";
 import { IMAGE_EXTENSIONS } from "./upload.js";
 import { RateLimitError, limitRequests, limiters, userOrIp } from "./rate-limit.js";
@@ -34,6 +34,7 @@ import { insightRoutes } from "./routes/insights.js";
 import { adminRoutes } from "./routes/admin.js";
 import { apiTokenRoutes } from "./routes/api-tokens.js";
 import { inMaintenance } from "./maintenance.js";
+import { stripQuery } from "./lib/redact.js";
 import { assertAiBudget } from "./services/ai-budget.js";
 import { scanAllHouses } from "./services/notifications.js";
 import { seedVendorCatalog } from "./services/vendors.js";
@@ -59,7 +60,7 @@ startOffContributionWorker();
 
 export const app = express();
 app.disable("x-powered-by");
-app.set("trust proxy", 1);
+app.set("trust proxy", trustProxySetting(process.env.SV_TRUST_PROXY));
 
 /**
  * Content-Security-Policy for the app shell. The only inline script is the
@@ -194,7 +195,7 @@ if (!IS_PROD) {
     const start = Date.now();
     res.on("finish", () => {
       if (req.path.startsWith("/api")) {
-        console.log(`${req.method} ${req.originalUrl} ${res.statusCode} ${Date.now() - start}ms`);
+        console.log(`${req.method} ${stripQuery(req.originalUrl)} ${res.statusCode} ${Date.now() - start}ms`);
       }
     });
     next();
@@ -272,6 +273,13 @@ app.get("/api/health", (_req, res) => {
 // Keep this before express.static below: bill PDFs are served by authenticated
 // API routes, never by their storage paths.
 app.use("/uploads/bills", (_req, _res, next) => next(new ApiError(404, "Not found")));
+// Receipt photos and other uploads hold household data. Their names are random,
+// but a leaked link must not be enough on its own: require a signed-in session.
+// API tokens are for automation and are not accepted here either.
+app.use("/uploads", (req, _res, next) => {
+  if (!req.user || req.apiTokenReadOnly) return next(new ApiError(404, "Not found"));
+  next();
+});
 app.use(
   "/uploads",
   express.static(UPLOAD_DIR, {
@@ -281,6 +289,9 @@ app.use(
     dotfiles: "deny",
     setHeaders: (res, filePath) => {
       res.setHeader("X-Content-Type-Options", "nosniff");
+      // Signed-in content: browsers revalidate on every view (a cheap 304), so a
+      // signed-out or removed member does not keep reading it from the cache.
+      res.setHeader("Cache-Control", "private, no-cache");
       res.setHeader("Content-Security-Policy", "default-src 'none'; img-src 'self'; sandbox");
       if (!IMAGE_EXTENSIONS.has(path.extname(filePath).toLowerCase())) {
         res.setHeader("Content-Type", "application/octet-stream");

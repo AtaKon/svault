@@ -60,3 +60,11 @@ export function maskSensitiveText(text: string | null | undefined): string | nul
 
   return out;
 }
+
+/**
+ * Drop the query string and fragment from a URL or request target before it is
+ * logged. Queries can carry OIDC `code`/`state`, invite codes or search terms.
+ */
+export function stripQuery(url: string): string {
+  return url.split(/[?#]/, 1)[0];
+}

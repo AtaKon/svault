@@ -94,8 +94,10 @@ export function OfflineQueueBar() {
     <>
       <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-warn/30 bg-warn-soft px-3 py-2 text-[11px] text-warn">
         <Icon name="clock" size={13} />
-        <strong>{t(actions.length === 1 ? "{count} stock change pending sync" : "{count} stock changes pending sync", { count: actions.length })}</strong>
-        {!online && <span>· {t("offline")}</span>}
+        <span className="min-w-[10rem] flex-1">
+          <strong>{t(actions.length === 1 ? "{count} stock change pending sync" : "{count} stock changes pending sync", { count: actions.length })}</strong>
+          {!online && <> · {t("offline")}</>}
+        </span>
         <span className="ml-auto flex items-center gap-1.5">
           <Button size="sm" variant="secondary" onClick={() => void runSync()} loading={syncing} disabled={!online}>
             {t("Sync now")}

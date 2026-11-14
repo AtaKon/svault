@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { get } from "../db.js";
-import { uploadPath } from "../upload.js";
+import { houseUploadTag, uploadPath, uploadTagOf } from "../upload.js";
 import { fileToDataUrl } from "../ai.js";
+import { UPLOAD_URL_COLUMNS } from "./upload-cleanup.js";
 
 /**
  * Short-lived records of receipt scans and uploads.
@@ -67,10 +68,63 @@ export function rememberUpload(path: string, houseId: string) {
   uploads.set(path, { houseId, createdAt: Date.now() });
 }
 
-/** False only when the upload is known to belong to a different house. */
-export function uploadBelongsTo(path: string, houseId: string): boolean {
+/**
+ * True when `houseId` may use this upload: the house uploaded it during this
+ * server run, or one of the house's rows already references it. Anything else,
+ * including a path whose owner is unknown, is refused, so one house cannot
+ * read, attach or delete another house's file by naming its path.
+ */
+export async function uploadOwnedBy(path: string, houseId: string): Promise<boolean> {
+  prune();
   const entry = uploads.get(path);
-  return !entry || entry.houseId === houseId;
+  if (entry) return entry.houseId === houseId;
+  const tag = uploadTagOf(path.split("/").pop() ?? "");
+  if (tag) return tag === houseUploadTag(houseId);
+  for (const { table, column } of UPLOAD_URL_COLUMNS) {
+    if (await get(`SELECT 1 AS hit FROM ${table} WHERE ${column} = ? AND house_id = ? LIMIT 1`, [path, houseId])) return true;
+  }
+  return false;
+}
+
+const UPLOAD_URL = /^\/uploads\/(items|recipes|photos|receipts)\/([A-Za-z0-9._-]+)$/;
+
+/**
+ * Reject any path in the list that exists on disk but belongs to another house
+ * (or to no house this one can prove). A path with no file behind it is left to
+ * the caller, which already skips or refuses missing uploads.
+ */
+export async function assertUploadsOwned(paths: Iterable<string | null | undefined>, houseId: string): Promise<void> {
+  for (const path of paths) {
+    if (!path) continue;
+    const match = UPLOAD_URL.exec(path);
+    if (match) {
+      const stat = await fs.stat(uploadPath(match[1] as "items" | "recipes" | "photos" | "receipts", match[2])).catch(() => null);
+      if (!stat?.isFile()) continue;
+    }
+    if (!(await uploadOwnedBy(path, houseId))) {
+      throw new UploadOwnershipError("That upload was not found in this house. Upload the photo again.");
+    }
+  }
+}
+
+export class UploadOwnershipError extends Error {}
+
+/**
+ * Validate an image field that the client renders as <img src> or a link:
+ * empty, one of the house's own uploads in `folder`, or (when allowed) a remote
+ * http(s) URL such as an OpenFoodFacts or recipe-site picture.
+ */
+export async function assertImageReference(
+  value: string | null | undefined,
+  houseId: string,
+  folder: "items" | "recipes",
+  allowRemote: boolean,
+): Promise<void> {
+  if (!value) return;
+  if (allowRemote && /^https?:\/\/[^\s]+$/i.test(value)) return;
+  const local = new RegExp(`^/uploads/${folder}/[A-Za-z0-9._-]+$`);
+  if (!local.test(value)) throw new UploadOwnershipError("The image must be an uploaded photo or an http(s) link");
+  await assertUploadsOwned([value], houseId);
 }
 
 export function isReceiptImagePath(value: unknown): value is string {

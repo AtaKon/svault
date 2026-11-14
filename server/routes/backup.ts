@@ -10,6 +10,10 @@ import { archiveUploader } from "../upload.js";
 
 export const backupRoutes = Router();
 backupRoutes.use(requireAuth);
+backupRoutes.use((req, _res, next) => {
+  if (req.apiTokenReadOnly) return next(new ApiError(403, "API tokens cannot use this endpoint. Sign in with a session."));
+  next();
+});
 
 /*
  * Backups contain the whole instance (every house, every user, all uploads),

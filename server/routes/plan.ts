@@ -320,8 +320,8 @@ planRoutes.post(
             ? Number(entry.servings) / Number(recipe.servings)
             : 1;
         for (const ingredient of await all<any>(
-          "SELECT ri.*, i.category_id AS item_category FROM recipe_ingredients ri LEFT JOIN items i ON i.id = ri.item_id WHERE ri.recipe_id = ? ORDER BY ri.sort",
-          [recipe.id],
+          "SELECT ri.*, i.category_id AS item_category FROM recipe_ingredients ri LEFT JOIN items i ON i.id = ri.item_id AND i.house_id = ? WHERE ri.recipe_id = ? ORDER BY ri.sort",
+          [recipe.house_id, recipe.id],
         )) {
           if (ingredient.optional) continue;
           required.push({
