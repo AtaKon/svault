@@ -102,3 +102,5 @@ createdb svault_test
 TEST_DATABASE_URL=postgres://postgres@localhost:5432/svault_test npm run test:postgres
 ```
 
+
+Calendar subscriptions are stored in `calendar_feeds` on both backends. Only SHA-256 token hashes are stored; `house_ids` is JSON or null for all current memberships. Migration and backup include this table.
