@@ -88,6 +88,7 @@ export interface HouseSettings {
   notifications?: {
     lowStock?: boolean;
     expiryDays?: number;
+    warrantyDays?: number;
     channels?: NotificationChannel[];
   };
   units?: "metric" | "imperial";
@@ -969,7 +970,7 @@ export interface Notification {
   id: string;
   houseId: string;
   houseName?: string;
-  type: "low_stock" | "expiring" | "system" | "invite" | "house";
+  type: "low_stock" | "expiring" | "warranty" | "system" | "invite" | "house";
   title: string;
   body: string;
   data: Record<string, unknown>;

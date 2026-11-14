@@ -11,6 +11,7 @@ import type { Notification } from "@shared/types";
 
 const TYPE_META: Record<Notification["type"], { icon: IconName; tone: string }> = {
   low_stock: { icon: "alert", tone: "bg-warn-soft text-warn" },
+  warranty: { icon: "clock", tone: "bg-warn-soft text-warn" },
   expiring: { icon: "clock", tone: "bg-warn-soft text-warn" },
   system: { icon: "bell", tone: "bg-raised text-muted" },
   invite: { icon: "users", tone: "bg-brand-soft text-brand" },

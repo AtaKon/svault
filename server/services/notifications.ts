@@ -44,7 +44,7 @@ export async function createNotification(opts: {
     ],
   );
   const event: DeliveryEvent | null =
-    opts.type === "low_stock" ? "low_stock" : opts.type === "expiring" ? "expiring" : null;
+    opts.type === "low_stock" ? "low_stock" : opts.type === "expiring" ? "expiring" : opts.type === "warranty" ? "warranty" : null;
   if (event && !opts.userId) {
     await queueDeliveries(
       {
@@ -234,21 +234,38 @@ export async function syncHouseExpiry(houseId: string, expiryDays = 7) {
   }
 }
 
+export async function syncHouseWarranties(houseId: string, days = 30) {
+  const safeDays = Number.isFinite(days) ? Math.max(0, Math.min(3650, days)) : 30;
+  const horizon = new Date(Date.now() + safeDays * DAY).toISOString().slice(0, 10);
+  const items = await all<any>("SELECT id, name, warranty_until FROM items WHERE house_id = ? AND archived = 0 AND warranty_until IS NOT NULL AND warranty_until <= ?", [houseId, horizon]);
+  const seen = new Set<string>();
+  for (const item of items) {
+    const key = `warranty:${item.id}:${item.warranty_until}`;
+    seen.add(key);
+    await createNotification({ houseId, type: "warranty", title: `${item.name} warranty ends`, body: `Warranty ends on ${item.warranty_until}.`, data: { itemId: item.id, warrantyUntil: item.warranty_until }, dedupeKey: key });
+  }
+  const active = await all<{ dedupe_key: string }>("SELECT dedupe_key FROM notifications WHERE house_id = ? AND type = 'warranty' AND user_id IS NULL AND resolved_at IS NULL", [houseId]);
+  for (const reminder of active) if (!seen.has(reminder.dedupe_key)) await resolve(houseId, reminder.dedupe_key);
+}
+
 /** Called on boot and on a timer: keep reminders in sync for every house. */
 export async function scanAllHouses() {
   const houses = await all<{ id: string; settings: string }>("SELECT id, settings FROM houses");
   for (const house of houses) {
     await cleanupOrphanNotifications(house.id);
     let expiryDays = 7;
+    let warrantyDays = 30;
     try {
       const settings = JSON.parse(house.settings);
       expiryDays = Number(settings?.notifications?.expiryDays ?? 7);
+      warrantyDays = Number(settings?.notifications?.warrantyDays ?? 30);
     } catch {
       /* ignore */
     }
     const items = await all<{ id: string }>("SELECT id FROM items WHERE house_id = ? AND archived = 0", [house.id]);
     for (const item of items) await syncItemLowStock(item.id);
     await syncHouseExpiry(house.id, expiryDays);
+    await syncHouseWarranties(house.id, warrantyDays);
   }
   await maybeSendWeeklySummaries();
 }

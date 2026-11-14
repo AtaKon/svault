@@ -987,6 +987,7 @@ const EL: Record<string, string> = {
   "SVault checks every 30 minutes and when stock changes.": "Το SVault ελέγχει κάθε 30 λεπτά και όταν αλλάζει το απόθεμα.",
   "Low stock reminders": "Υπενθυμίσεις χαμηλού αποθέματος",
   "Notify when an item falls to or below its reorder point.": "Ειδοποίηση όταν η ποσότητα ενός αντικειμένου φτάσει ή πέσει κάτω από το όριο αναπαραγγελίας.",
+  "Warn about warranties": "Ειδοποίηση για εγγυήσεις",
   "Warn about expiring stock": "Ειδοποίηση για απόθεμα που λήγει",
   "days in advance": "ημέρες νωρίτερα",
   "Save reminders": "Αποθήκευση υπενθυμίσεων",
