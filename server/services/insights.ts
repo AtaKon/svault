@@ -204,6 +204,27 @@ export async function spendInsight(houseId: string, months = 6): Promise<SpendIn
   };
 }
 
+/** Check each threshold independently so a single large purchase can cross both. */
+export async function scanBudgetAlerts(houseId: string): Promise<void> {
+  const spend = await spendInsight(houseId, 1);
+  const targets = [
+    { id: "house", name: "Household", spent: spend.monthTotal, budget: spend.budget },
+    ...spend.categoryBudgets.map((entry) => ({ id: entry.categoryId, name: entry.name, spent: entry.spent, budget: entry.budget })),
+  ];
+  for (const target of targets) {
+    if (target.budget <= 0) continue;
+    for (const threshold of [80, 100]) {
+      if (target.spent / target.budget * 100 < threshold) continue;
+      const dedupeKey = `budget:${spend.month}:${target.id}:${threshold}`;
+      // A resolved alert must not be revived during the same month.
+      if (await get("SELECT id FROM notifications WHERE house_id = ? AND dedupe_key = ?", [houseId, dedupeKey])) continue;
+      await createNotification({ houseId, type: "budget_alert", title: `${target.name} budget at ${threshold}%`,
+        body: `${target.name} spending reached ${threshold}% of its monthly budget.`,
+        data: { month: spend.month, categoryId: target.id === "house" ? null : target.id, threshold, spent: target.spent, budget: target.budget }, dedupeKey });
+    }
+  }
+}
+
 /* ----------------------------------------------------------------- waste */
 
 export async function wasteInsight(houseId: string, months = 6): Promise<WasteInsight> {

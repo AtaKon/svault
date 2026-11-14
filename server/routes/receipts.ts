@@ -43,7 +43,7 @@ import {
   assertUploadsOwned,
 } from "../services/receipt-scans.js";
 import { reconcileReceipt } from "../../shared/receipt-reconcile.js";
-import { parseEReceipt, receiptHouseCurrency, scanPriceAlerts } from "../services/insights.js";
+import { parseEReceipt, receiptHouseCurrency, scanBudgetAlerts, scanPriceAlerts } from "../services/insights.js";
 import type {
   ReceiptDeleteResult,
   ReceiptDraft,
@@ -1007,6 +1007,7 @@ receiptRoutes.post(
     // insight query did.
     try {
       await scanPriceAlerts(houseId);
+      await scanBudgetAlerts(houseId);
     } catch {
       /* ignore */
     }
