@@ -32,6 +32,7 @@ import { datasetRoutes } from "./routes/dataset.js";
 import { aiLogRoutes } from "./routes/ai-logs.js";
 import { insightRoutes } from "./routes/insights.js";
 import { adminRoutes } from "./routes/admin.js";
+import { calendarRoutes } from "./routes/calendar.js";
 import { calendarFeedRoutes } from "./routes/calendar-feed.js";
 import { apiTokenRoutes } from "./routes/api-tokens.js";
 import { inMaintenance } from "./maintenance.js";
@@ -196,7 +197,7 @@ if (!IS_PROD) {
     const start = Date.now();
     res.on("finish", () => {
       if (req.path.startsWith("/api")) {
-        console.log(`${req.method} ${stripQuery(req.originalUrl)} ${res.statusCode} ${Date.now() - start}ms`);
+        console.log(`${req.method} ${stripQuery(req.originalUrl).replace(/^\/api\/calendar\/[^/]+\.ics$/, "/api/calendar/[redacted].ics")} ${res.statusCode} ${Date.now() - start}ms`);
       }
     });
     next();
@@ -255,6 +256,7 @@ app.use("/api/notifications", globalNotificationRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/tokens", apiTokenRoutes);
 app.use("/api/calendar-feed", calendarFeedRoutes);
+app.use("/api/calendar", calendarRoutes);
 app.use("/api/catalog", catalogRoutes);
 app.use("/api/off", offRoutes);
 app.use("/api/items", itemRoutes);
