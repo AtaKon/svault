@@ -218,7 +218,7 @@ shoppingRoutes.post(
     const { houseId } = await requireHouse(req, "member");
     const body = parseBody(z.object({
       includeForecast: z.boolean().optional().default(false),
-      forecastDays: z.number().positive().max(365).optional().default(7),
+      forecastDays: z.number().int().min(1).max(365).optional().default(7),
     }), req.body ?? {});
     const rows = await shoppingFillCandidates(houseId, body.includeForecast, body.forecastDays);
     let added = 0;
