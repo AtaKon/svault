@@ -35,6 +35,8 @@ async function readEntry(entry: JSZip.JSZipObject, maxBytes: number, budget: Inf
       budget.remaining -= chunk.length;
       if (size > maxBytes || budget.remaining < 0) {
         settled = true;
+        // A single oversized entry should not use up the budget for the rest.
+        if (size > maxBytes) budget.remaining += size;
         stream.destroy?.();
         reject(new Error(budget.remaining < 0 ? "The archive expands to too much data" : `${entry.name} is too large to import`));
         return;

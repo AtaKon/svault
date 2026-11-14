@@ -325,9 +325,9 @@ export async function moveStock(opts: { itemId: string; houseId: string; userId:
       await run("UPDATE stock_lots SET quantity = ? WHERE id = ?", [round(Number(lot.quantity) - take), lot.id]);
       await run(
         `INSERT INTO stock_lots
-          (id, item_id, house_id, location_id, quantity, unit, unit_price, currency, purchased_at, expires_at, note,
+          (id, item_id, house_id, location_id, quantity, unit, unit_price, currency, purchased_at, expires_at, opened_at, note,
            vendor_id, receipt_id, created_by, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           newId("lot"),
           item.id,
@@ -339,6 +339,7 @@ export async function moveStock(opts: { itemId: string; houseId: string; userId:
           lot.currency,
           lot.purchased_at,
           lot.expires_at,
+          lot.opened_at,
           lot.note,
           lot.vendor_id ?? null,
           lot.receipt_id ?? null,

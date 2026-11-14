@@ -134,6 +134,17 @@ CREATE TABLE IF NOT EXISTS house_members (
   PRIMARY KEY (house_id, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS member_diet_profiles (
+  house_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  allergens TEXT NOT NULL DEFAULT '[]',
+  diets TEXT NOT NULL DEFAULT '[]',
+  note TEXT NOT NULL DEFAULT '' CHECK (length(note) <= 200),
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (house_id, user_id),
+  FOREIGN KEY (house_id, user_id) REFERENCES house_members(house_id, user_id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS house_invites (
   id TEXT PRIMARY KEY,
   house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
@@ -204,6 +215,7 @@ CREATE TABLE IF NOT EXISTS items (
   unit TEXT NOT NULL DEFAULT 'pcs',
   reorder_point DOUBLE PRECISION NOT NULL DEFAULT 0,
   target_stock DOUBLE PRECISION,
+  opened_shelf_life_days INTEGER,
   attributes TEXT NOT NULL DEFAULT '{}',
   tags TEXT NOT NULL DEFAULT '[]',
   image TEXT,
@@ -371,6 +383,7 @@ CREATE TABLE IF NOT EXISTS stock_lots (
   currency TEXT,
   purchased_at TEXT,
   expires_at TEXT,
+  opened_at TEXT,
   note TEXT,
   created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL
@@ -806,6 +819,18 @@ export const POSTGRES_MIGRATIONS: string[] = [
   created_at TEXT NOT NULL,
   last_used_at TEXT
 );`,
+  `CREATE TABLE IF NOT EXISTS member_diet_profiles (
+  house_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  allergens TEXT NOT NULL DEFAULT '[]',
+  diets TEXT NOT NULL DEFAULT '[]',
+  note TEXT NOT NULL DEFAULT '' CHECK (length(note) <= 200),
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (house_id, user_id),
+  FOREIGN KEY (house_id, user_id) REFERENCES house_members(house_id, user_id) ON DELETE CASCADE
+);`,
+  "ALTER TABLE items ADD COLUMN IF NOT EXISTS opened_shelf_life_days INTEGER",
+  "ALTER TABLE stock_lots ADD COLUMN IF NOT EXISTS opened_at TEXT",
   "ALTER TABLE users ADD COLUMN IF NOT EXISTS developer_mode INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE users ADD COLUMN IF NOT EXISTS password_set INTEGER NOT NULL DEFAULT 1",
   "ALTER TABLE user_totp ADD COLUMN IF NOT EXISTS last_used_step BIGINT",
@@ -916,6 +941,7 @@ export const POSTGRES_TABLE_ORDER = [
   "login_challenges",
   "houses",
   "house_members",
+  "member_diet_profiles",
   "house_invites",
   "locations",
   "categories",

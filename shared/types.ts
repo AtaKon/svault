@@ -422,6 +422,8 @@ export interface CatalogImportResult {
 }
 
 export interface StockLot {
+  openedAt: string | null;
+  effectiveExpiresAt: string | null;
   id: string;
   itemId: string;
   locationId: string | null;
@@ -481,7 +483,10 @@ export interface PriceStats {
   unit: string;
 }
 
+export interface Forecast { dailyRate: number; daysLeft: number; windowDays: number }
+
 export interface Item {
+  openedShelfLifeDays: number | null;
   id: string;
   houseId: string;
   name: string;
@@ -500,6 +505,7 @@ export interface Item {
   /** Coffee item that keeps an espresso shot log. */
   espresso: boolean;
   quantity: number;
+  forecast: Forecast | null;
   value: number;
   latestPrice?: number | null;
   isLow: boolean;
@@ -620,6 +626,9 @@ export interface ItemDetail extends Item {
   recipes: { id: string; title: string }[];
 }
 
+export interface DietWarning { ingredient: string; allergen: string; members: string[] }
+export interface DietCompatibility { member: string; diet: string; status: "compatible" | "incompatible" | "unknown" }
+
 export interface RecipeIngredient {
   id?: string;
   name: string;
@@ -638,6 +647,8 @@ export interface RecipeStep {
 }
 
 export interface Recipe {
+  warnings?: DietWarning[];
+  dietCompatibility?: DietCompatibility[];
   id: string;
   houseId: string;
   title: string;
@@ -946,6 +957,8 @@ export interface PurchaseAnalytics {
 }
 
 export interface FoodIdea {
+  warnings?: DietWarning[];
+  dietCompatibility?: DietCompatibility[];
   title: string;
   rationale: string;
   timeMinutes: number | null;
@@ -1019,6 +1032,7 @@ export interface Dashboard {
   batchCount: number;
   totalValue: number;
   lowStock: Item[];
+  runningOutSoon: Item[];
   expiring: (StockLot & { itemName: string; itemId: string })[];
   recent: Movement[];
   recentRecipe: Recipe | null;
@@ -1068,6 +1082,8 @@ export type MealSlot = "breakfast" | "lunch" | "dinner" | "snack";
 export const MEAL_SLOTS: MealSlot[] = ["breakfast", "lunch", "dinner", "snack"];
 
 export interface MealPlanEntry {
+  warnings?: DietWarning[];
+  dietCompatibility?: DietCompatibility[];
   id: string;
   houseId: string;
   day: string;
@@ -1237,6 +1253,10 @@ export interface AiCallLogPage {
 export interface HouseBudgetSettings {
   /** Monthly grocery budget in the house currency; 0 disables it. */
   monthlyBudget: number;
+  /** Category budgets in house currency; 0 disables a category budget. */
+  categoryBudgets: Record<string, number>;
+  /** Include bills by due date (or creation date); defaults to false. */
+  includeBills: boolean;
   /** A purchase this many percent above the item's average raises an alert. */
   priceAlertPercent: number;
   /** How many days ahead the "use it up" view looks; 1–60. */
@@ -1252,6 +1272,9 @@ export interface SpendInsight {
   budgetRemaining: number | null;
   budgetPercent: number | null;
   averagePerMonth: number;
+  projection: number;
+  categoryBudgets: { categoryId: string; name: string; spent: number; budget: number; percent: number | null }[];
+  history: { month: string; total: number; budget: number }[];
   byMonth: { month: string; total: number; receipts: number }[];
   byShop: { vendorName: string; total: number; receipts: number }[];
   byCategory: { name: string; total: number; lines: number }[];
