@@ -36,14 +36,14 @@ read-only API token as well as a signed-in session cookie.
 svault_token: "Bearer svt_paste_the_token_here"
 ```
 
-The `Bearer ` prefix is part of the stored value because Home Assistant does not template REST
-headers. The token can only read data for houses the creating user belongs to; it cannot change
+Store the whole header value, including the `Bearer ` prefix, so the configuration below can use it
+directly with `!secret`. The token can only read data for houses the creating user belongs to; it cannot change
 anything, and it stops working if the user leaves the house or the token is revoked.
 
 ## 2. Find the house ID
 
-Open the house in SVault and read the ID from the browser address bar (it looks like `hse_...`), or
-list your houses with the token:
+SVault's page addresses do not include the house, so list your houses with the token and copy the
+`id` (it looks like `hse_...`):
 
 ```bash
 curl -H "Authorization: Bearer svt_..." https://svault.example.com/api/houses
