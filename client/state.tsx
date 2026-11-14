@@ -86,11 +86,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       if (generation !== refreshGeneration.current) return;
       // Fall back to the last known session only when the server could not be
-      // reached (status 0) or is restoring a backup (503); any other answer
-      // from a reachable server is trusted as before.
+      // reached at all (status 0). Any answer from a reachable server, including
+      // a 503 during a restore, is trusted as before.
       const status = error instanceof ApiError ? error.status : 0;
       const signedOut = status === 401;
-      const snapshot = status === 0 || status === 503 ? readSessionSnapshot() : null;
+      const snapshot = status === 0 ? readSessionSnapshot() : null;
       if (snapshot) {
         setUser(snapshot.user);
         applyHouses(snapshot.houses);
@@ -108,6 +108,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     void refresh();
     const onUnauthorized = () => {
       writeSessionSnapshot(null);
+      refreshGeneration.current++;
       setUser(null);
       setHouses([]);
       setLoading(false);
