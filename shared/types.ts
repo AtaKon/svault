@@ -36,6 +36,8 @@ export interface NotificationChannelEvents {
   lowStock: boolean;
   expiring: boolean;
   weeklySummary: boolean;
+  /** Monthly budget alerts at 80% and 100%. */
+  budget: boolean;
 }
 
 /** A per-house delivery target for reminders. Secret fields are masked with
