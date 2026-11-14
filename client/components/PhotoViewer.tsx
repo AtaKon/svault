@@ -149,7 +149,7 @@ export function PhotoViewer({
         count: photo.labels.length,
       })}
       footer={
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex gap-1">
             <Button size="sm" variant="ghost" icon="arrowLeft" disabled={index <= 0} onClick={() => onNavigate(photos[index - 1].id)}>
               {t("Prev")}</Button>
@@ -162,7 +162,7 @@ export function PhotoViewer({
             >
               {t("Next")}</Button>
           </div>
-          <div className="flex gap-2">
+          <div className="ml-auto flex gap-2">
             {canEdit && (
               <Button variant="ghost" size="sm" icon="trash" className="text-danger hover:bg-danger-soft" loading={busy} onClick={() => void removePhoto()}>
                 {t("Delete")}</Button>

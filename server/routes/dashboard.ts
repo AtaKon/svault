@@ -1,3 +1,4 @@
+import { forecastsForHouse } from "../services/forecast.js";
 import { Router } from "express";
 import { all, get } from "../db.js";
 import { requireAuth } from "../auth.js";
@@ -167,7 +168,13 @@ dashboardRoutes.get(
       }).length,
     };
 
+    const forecasts = await forecastsForHouse(houseId);
+    const forecastRows = forecasts.size ? await all<any>(`${ITEM_SELECT} WHERE i.house_id = ? AND i.archived = 0`, [houseId]) : [];
+    const runningOutSoon = forecastRows.map((row) => ({ ...serializeItem(row, barcodeMap.get(row.id) ?? []), forecast: forecasts.get(row.id) ?? null }))
+      .filter((item) => item.forecast && item.forecast.daysLeft <= 7)
+      .sort((a, b) => a.forecast!.daysLeft - b.forecast!.daysLeft);
     res.json({
+      runningOutSoon,
       itemCount: Number(stats?.item_count ?? 0),
       unitCount: Number(stats?.unit_count ?? 0),
       batchCount: Number(stats?.batch_count ?? 0),

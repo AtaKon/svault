@@ -481,6 +481,8 @@ export interface PriceStats {
   unit: string;
 }
 
+export interface Forecast { dailyRate: number; daysLeft: number; windowDays: number }
+
 export interface Item {
   id: string;
   houseId: string;
@@ -500,6 +502,7 @@ export interface Item {
   /** Coffee item that keeps an espresso shot log. */
   espresso: boolean;
   quantity: number;
+  forecast: Forecast | null;
   value: number;
   latestPrice?: number | null;
   isLow: boolean;
@@ -1019,6 +1022,7 @@ export interface Dashboard {
   batchCount: number;
   totalValue: number;
   lowStock: Item[];
+  runningOutSoon: Item[];
   expiring: (StockLot & { itemName: string; itemId: string })[];
   recent: Movement[];
   recentRecipe: Recipe | null;
@@ -1237,6 +1241,10 @@ export interface AiCallLogPage {
 export interface HouseBudgetSettings {
   /** Monthly grocery budget in the house currency; 0 disables it. */
   monthlyBudget: number;
+  /** Category budgets in house currency; 0 disables a category budget. */
+  categoryBudgets: Record<string, number>;
+  /** Include bills by due date (or creation date); defaults to false. */
+  includeBills: boolean;
   /** A purchase this many percent above the item's average raises an alert. */
   priceAlertPercent: number;
   /** How many days ahead the "use it up" view looks; 1–60. */
@@ -1252,6 +1260,9 @@ export interface SpendInsight {
   budgetRemaining: number | null;
   budgetPercent: number | null;
   averagePerMonth: number;
+  projection: number;
+  categoryBudgets: { categoryId: string; name: string; spent: number; budget: number; percent: number | null }[];
+  history: { month: string; total: number; budget: number }[];
   byMonth: { month: string; total: number; receipts: number }[];
   byShop: { vendorName: string; total: number; receipts: number }[];
   byCategory: { name: string; total: number; lines: number }[];

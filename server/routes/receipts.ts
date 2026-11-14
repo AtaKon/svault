@@ -41,9 +41,10 @@ import {
   skippedImagesWarning,
   uploadOwnedBy,
   assertUploadsOwned,
+  UploadOwnershipError,
 } from "../services/receipt-scans.js";
 import { reconcileReceipt } from "../../shared/receipt-reconcile.js";
-import { parseEReceipt, receiptHouseCurrency, scanPriceAlerts } from "../services/insights.js";
+import { parseEReceipt, receiptHouseCurrency, scanBudgetAlerts, scanPriceAlerts } from "../services/insights.js";
 import type {
   ReceiptDeleteResult,
   ReceiptDraft,
@@ -715,7 +716,8 @@ async function ownedOr400(paths: Iterable<string | null | undefined>, houseId: s
   try {
     await assertUploadsOwned(paths, houseId);
   } catch (error) {
-    throw new ApiError(400, error instanceof Error ? error.message : "Upload not found");
+    if (error instanceof UploadOwnershipError) throw new ApiError(400, error.message);
+    throw error;
   }
 }
 
@@ -1007,6 +1009,7 @@ receiptRoutes.post(
     // insight query did.
     try {
       await scanPriceAlerts(houseId);
+      await scanBudgetAlerts(houseId);
     } catch {
       /* ignore */
     }
