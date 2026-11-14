@@ -15,6 +15,7 @@ import { scaledCalories } from "@shared/recipe-calories";
 import type { Location, Recipe } from "@shared/types";
 import { useHouse } from "@/state";
 import { useI18n } from "@/i18n";
+import { newQueueId } from "@/offline-queue";
 
 /** Scale an ingredient line and keep a readable quantity. */
 function scaled(quantity: number | null, base: number | null, portions: number): number | null {
@@ -147,7 +148,8 @@ export function RecipeCookPage() {
       ingredientId: ingredient.id!, itemId: ingredient.itemId!, name: ingredient.name,
       quantity: quantity == null ? "" : String(quantity), unit: ingredient.unit ?? "", enabled: true,
     })));
-    setCookKey(crypto.randomUUID());
+    // newQueueId falls back when crypto.randomUUID is missing (plain-HTTP LAN installs).
+    setCookKey(newQueueId());
     setResult(null);
     setReviewOpen(true);
   };
