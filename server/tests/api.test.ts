@@ -7495,6 +7495,8 @@ describe("reminder delivery channels", () => {
     });
     assert.equal(saved.status, 200);
     assert.equal(saved.data.settings.notifications.channels[0].secret, "***");
+    // Channels saved before budget alerts existed keep receiving them until switched off.
+    assert.equal(saved.data.settings.notifications.channels[0].events.budget, true);
 
     const resent = await request(`/api/houses/${houseId}`, {
       method: "PATCH",
@@ -7509,7 +7511,7 @@ describe("reminder delivery channels", () => {
                 url: channelBase,
                 enabled: true,
                 secret: "***",
-                events: { lowStock: true, expiring: true, weeklySummary: false },
+                events: { lowStock: true, expiring: true, weeklySummary: false, budget: false },
               },
             ],
           },
@@ -7517,6 +7519,7 @@ describe("reminder delivery channels", () => {
       },
     });
     assert.equal(resent.status, 200);
+    assert.equal(resent.data.settings.notifications.channels[0].events.budget, false);
 
     const test = await request(`/api/houses/${houseId}/notifications/test`, {
       method: "POST",
@@ -9993,6 +9996,37 @@ describe("insights, household split and admin console", () => {
     assert.equal(spend.data.budget, 10);
     assert.equal(spend.data.budgetPercent, 35);
     assert.equal(spend.data.byShop[0].vendorName, "Price Mart");
+  });
+
+  it("validates category budgets, projects spending, includes optional bills and deduplicates alerts", async () => {
+    const categories = await request(`/api/houses/${insightHouse}/categories`);
+    const category = categories.data.find((entry: any) => entry.id);
+    assert.ok(category);
+    const settingsPath = `/api/houses/${insightHouse}/insights/settings`;
+    assert.equal((await request(settingsPath, { method: "PATCH", body: { categoryBudgets: { nonexistent: 5 } } })).status, 400);
+    assert.equal((await request(settingsPath, { auth: secondUserCookie, method: "PATCH", body: { categoryBudgets: { [category.id]: 5 }, includeBills: true } })).status, 403);
+    await run("UPDATE items SET category_id = ? WHERE id = ?", [category.id, milkId]);
+    assert.equal((await request(settingsPath, { method: "PATCH", body: { monthlyBudget: 4, categoryBudgets: { [category.id]: 4 }, includeBills: false } })).status, 200);
+    const bill = await request(`/api/houses/${insightHouse}/bills`, { method: "POST", body: { name: "Budget bill", amount: 1, currency: "EUR", dueDate: at(1) } });
+    assert.equal(bill.status, 201, JSON.stringify(bill.data));
+    let spend = (await request(`/api/houses/${insightHouse}/insights/spend`)).data;
+    assert.equal(spend.monthTotal, 3.5);
+    const today = new Date();
+    assert.equal(spend.projection, Math.round(3.5 / today.getUTCDate() * new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1, 0)).getUTCDate() * 100) / 100);
+    assert.equal(spend.categoryBudgets.find((entry: any) => entry.categoryId === category.id).spent, 3.5);
+    assert.equal(spend.history.length, 6);
+    await request(settingsPath, { method: "PATCH", body: { includeBills: true } });
+    spend = (await request(`/api/houses/${insightHouse}/insights/spend`)).data;
+    assert.equal(spend.monthTotal, 4.5);
+    const { scanBudgetAlerts } = await import("../services/insights.js");
+    await scanBudgetAlerts(insightHouse);
+    await request(settingsPath, { method: "PATCH", body: { categoryBudgets: { [category.id]: 3.5 } } });
+    await scanBudgetAlerts(insightHouse);
+    await scanBudgetAlerts(insightHouse);
+    const notifications = (await request(`/api/houses/${insightHouse}/notifications`)).data.notifications.filter((n: any) => n.type === "budget_alert");
+    assert.equal(notifications.filter((n: any) => n.data.categoryId === null).length, 2);
+    assert.equal(notifications.filter((n: any) => n.data.categoryId === category.id).length, 2);
+    await request(settingsPath, { method: "PATCH", body: { monthlyBudget: 10, categoryBudgets: {}, includeBills: false } });
   });
 
   it("keeps insights inside the house and settings admin-only", async () => {

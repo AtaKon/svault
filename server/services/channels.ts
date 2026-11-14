@@ -3,7 +3,7 @@ import { all, get, newId, now, parseJson, run } from "../db.js";
 import { assertOutboundUrl, outboundFetch, outboundRedirectMode } from "../lib/outbound.js";
 import type { NotificationChannel, NotificationChannelEvents, NotificationChannelType } from "../../shared/types.js";
 
-export type DeliveryEvent = "low_stock" | "expiring" | "weekly_summary" | "test";
+export type DeliveryEvent = "low_stock" | "expiring" | "budget_alert" | "weekly_summary" | "test";
 
 export const CHANNEL_SECRET_FIELDS = ["token", "key", "secret"] as const;
 
@@ -11,6 +11,7 @@ const DEFAULT_EVENTS: NotificationChannelEvents = {
   lowStock: true,
   expiring: true,
   weeklySummary: false,
+  budget: true,
 };
 
 export function channelsFromSettings(settings: Record<string, any> | null | undefined): NotificationChannel[] {
@@ -32,6 +33,7 @@ export function channelsFromSettings(settings: Record<string, any> | null | unde
         lowStock: entry.events?.lowStock !== false,
         expiring: entry.events?.expiring !== false,
         weeklySummary: entry.events?.weeklySummary === true,
+        budget: entry.events?.budget !== false,
       },
     }));
 }
@@ -72,6 +74,7 @@ function eventEnabled(channel: NotificationChannel, event: DeliveryEvent): boole
   if (!channel.enabled || !channel.url) return false;
   if (event === "low_stock") return channel.events.lowStock;
   if (event === "expiring") return channel.events.expiring;
+  if (event === "budget_alert") return channel.events.budget;
   return channel.events.weeklySummary;
 }
 

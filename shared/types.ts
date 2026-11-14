@@ -36,6 +36,8 @@ export interface NotificationChannelEvents {
   lowStock: boolean;
   expiring: boolean;
   weeklySummary: boolean;
+  /** Monthly budget alerts at 80% and 100%. */
+  budget: boolean;
 }
 
 /** A per-house delivery target for reminders. Secret fields are masked with
@@ -1241,6 +1243,10 @@ export interface AiCallLogPage {
 export interface HouseBudgetSettings {
   /** Monthly grocery budget in the house currency; 0 disables it. */
   monthlyBudget: number;
+  /** Category budgets in house currency; 0 disables a category budget. */
+  categoryBudgets: Record<string, number>;
+  /** Include bills by due date (or creation date); defaults to false. */
+  includeBills: boolean;
   /** A purchase this many percent above the item's average raises an alert. */
   priceAlertPercent: number;
   /** How many days ahead the "use it up" view looks; 1–60. */
@@ -1256,6 +1262,9 @@ export interface SpendInsight {
   budgetRemaining: number | null;
   budgetPercent: number | null;
   averagePerMonth: number;
+  projection: number;
+  categoryBudgets: { categoryId: string; name: string; spent: number; budget: number; percent: number | null }[];
+  history: { month: string; total: number; budget: number }[];
   byMonth: { month: string; total: number; receipts: number }[];
   byShop: { vendorName: string; total: number; receipts: number }[];
   byCategory: { name: string; total: number; lines: number }[];

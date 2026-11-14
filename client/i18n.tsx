@@ -7,6 +7,13 @@ import { buildDynamicMatcher, matchDynamicTranslation } from "@shared/i18n";
 export type Language = "en" | "el";
 
 const EL: Record<string, string> = {
+  "Category must belong to this house": "Η κατηγορία πρέπει να ανήκει σε αυτό το σπίτι.",
+  "Enter valid category budgets.": "Εισαγάγετε έγκυρους προϋπολογισμούς κατηγοριών.",
+  "Projected month-end spending: {amount}": "Εκτιμώμενη δαπάνη τέλους μήνα: {amount}",
+  "Over budget": "Υπέρβαση προϋπολογισμού",
+  "Include bills in budget spending": "Συμπερίληψη λογαριασμών στις δαπάνες",
+  "Previous 6 months vs current budget": "Προηγούμενοι 6 μήνες σε σχέση με τον τρέχοντα προϋπολογισμό",
+
   "Runs out in about {count} days": "Τελειώνει σε περίπου {count} ημέρες",
   "Based on the last {count} days": "Με βάση τις τελευταίες {count} ημέρες",
   "Running out soon": "Τελειώνουν σύντομα",
@@ -2212,6 +2219,12 @@ const EL: Record<string, string> = {
   "{previous} transferred ownership to you. You can manage members and settings.": "Ο/Η {previous} σου μεταβίβασε την ιδιοκτησία. Μπορείς να διαχειριστείς τα μέλη και τις ρυθμίσεις.",
   "Ownership of this house was transferred to you.": "Η ιδιοκτησία αυτού του σπιτιού μεταβιβάστηκε σε εσένα.",
   "{item} is running low": "Το απόθεμα του «{item}» είναι χαμηλό",
+  // Budget alerts: the household pattern must come before the category one.
+  "Budget alerts": "Ειδοποιήσεις προϋπολογισμού",
+  "Monthly budget at {percent}%": "Ο μηνιαίος προϋπολογισμός έφτασε στο {percent}%",
+  "Spending reached {percent}% of the monthly budget.": "Οι δαπάνες έφτασαν στο {percent}% του μηνιαίου προϋπολογισμού.",
+  "{category} budget at {percent}%": "Ο προϋπολογισμός «{category}» έφτασε στο {percent}%",
+  "{category} spending reached {percent}% of its monthly budget.": "Οι δαπάνες «{category}» έφτασαν στο {percent}% του μηνιαίου προϋπολογισμού τους.",
   "You are out of {item}. Tap to review the item.": "Το «{item}» εξαντλήθηκε. Πάτησε για να ελέγξεις το αντικείμενο.",
   "Only {quantity} {unit} left (threshold {threshold} {unit}).": "Απομένουν μόνο {quantity} {unit} (όριο {threshold} {unit}).",
   "{item} has expired": "Το «{item}» έχει λήξει",
