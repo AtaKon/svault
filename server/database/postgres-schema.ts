@@ -43,6 +43,17 @@ CREATE TABLE IF NOT EXISTS api_tokens (
 );
 CREATE INDEX IF NOT EXISTS api_tokens_user ON api_tokens(user_id);
 
+CREATE TABLE IF NOT EXISTS calendar_feeds (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE,
+  house_ids TEXT,
+  include_plan INTEGER NOT NULL DEFAULT 1,
+  include_bills INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  last_used_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS instance_settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,
@@ -798,6 +809,16 @@ CREATE TABLE IF NOT EXISTS schema_meta (
  * the first PostgreSQL release is listed here. Each statement is idempotent.
  */
 export const POSTGRES_MIGRATIONS: string[] = [
+  `CREATE TABLE IF NOT EXISTS calendar_feeds (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE,
+  house_ids TEXT,
+  include_plan INTEGER NOT NULL DEFAULT 1,
+  include_bills INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  last_used_at TEXT
+);`,
   `CREATE TABLE IF NOT EXISTS member_diet_profiles (
   house_id TEXT NOT NULL,
   user_id TEXT NOT NULL,
@@ -912,6 +933,7 @@ export const POSTGRES_MIGRATIONS: string[] = [
 export const POSTGRES_TABLE_ORDER = [
   "users",
   "sessions",
+  "calendar_feeds",
   "user_totp",
   "passkeys",
   "webauthn_challenges",

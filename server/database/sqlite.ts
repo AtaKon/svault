@@ -439,6 +439,17 @@ CREATE TABLE IF NOT EXISTS api_tokens (
 CREATE INDEX IF NOT EXISTS api_tokens_user ON api_tokens(user_id);
 
 /* Instance-wide switches an admin can change without a restart. */
+CREATE TABLE IF NOT EXISTS calendar_feeds (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE,
+  house_ids TEXT,
+  include_plan INTEGER NOT NULL DEFAULT 1,
+  include_bills INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  last_used_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS instance_settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,

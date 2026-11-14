@@ -1,3 +1,4 @@
+import { CalendarFeedCard } from "@/components/CalendarFeedCard";
 import { DietProfileEditor } from "@/components/diet-profile";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
@@ -218,6 +219,7 @@ export function ProfilePage() {
         </div>
       </Card>
 
+      <CalendarFeedCard houses={houses} />
       {user && <DietProfileEditor houses={houses} userId={user.id} />}
 
       <Card className="p-4">

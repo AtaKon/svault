@@ -32,6 +32,8 @@ import { datasetRoutes } from "./routes/dataset.js";
 import { aiLogRoutes } from "./routes/ai-logs.js";
 import { insightRoutes } from "./routes/insights.js";
 import { adminRoutes } from "./routes/admin.js";
+import { calendarRoutes } from "./routes/calendar.js";
+import { calendarFeedRoutes } from "./routes/calendar-feed.js";
 import { apiTokenRoutes } from "./routes/api-tokens.js";
 import { inMaintenance } from "./maintenance.js";
 import { stripQuery } from "./lib/redact.js";
@@ -194,8 +196,10 @@ if (!IS_PROD) {
   app.use((req, res, next) => {
     const start = Date.now();
     res.on("finish", () => {
+      // Diet profiles are health data and are not logged; calendar feed paths carry a secret token.
       if (req.path.startsWith("/api") && !req.path.includes("/diet-profiles")) {
-        console.log(`${req.method} ${stripQuery(req.originalUrl)} ${res.statusCode} ${Date.now() - start}ms`);
+        const target = req.path.startsWith("/api/calendar/") ? "/api/calendar/[redacted].ics" : stripQuery(req.originalUrl);
+        console.log(`${req.method} ${target} ${res.statusCode} ${Date.now() - start}ms`);
       }
     });
     next();
@@ -253,6 +257,8 @@ app.use("/api/houses", insightRoutes);
 app.use("/api/notifications", globalNotificationRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/tokens", apiTokenRoutes);
+app.use("/api/calendar-feed", calendarFeedRoutes);
+app.use("/api/calendar", calendarRoutes);
 app.use("/api/catalog", catalogRoutes);
 app.use("/api/off", offRoutes);
 app.use("/api/items", itemRoutes);

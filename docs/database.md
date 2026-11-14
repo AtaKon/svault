@@ -103,5 +103,6 @@ TEST_DATABASE_URL=postgres://postgres@localhost:5432/svault_test npm run test:po
 ```
 
 
+Calendar subscriptions are stored in `calendar_feeds` on both backends. Only SHA-256 token hashes are stored; `house_ids` is JSON or null for all current memberships. Migration and backup include this table.
 Household diet profiles are stored in `member_diet_profiles`, keyed by household and member. The membership foreign key cascades on removal or account deletion. SQLite-to-PostgreSQL migration copies this table after its parent membership rows.
 Items may define `opened_shelf_life_days` (nullable integer); stock lots may record `opened_at` (nullable ISO date). These fields are included in generic backups and SQLite-to-PostgreSQL migration.

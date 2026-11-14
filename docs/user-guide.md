@@ -738,6 +738,9 @@ warns while unsynced changes exist; reads are still network-only.
 More deployment-specific fixes are in [deployment.md](deployment.md) and the
 [TrueNAS guide](../deploy/dockge/README.md#troubleshooting).
 
+### Calendar feed
+
+In **Profile → Calendar feed**, create a private subscription link and choose houses, meal plans and bill due dates. Copy the link when it appears: it is shown only on creation or rotation. In iOS, add a subscribed calendar under Settings → Calendar → Accounts; in Google Calendar use Other calendars → From URL; in Outlook use Add calendar → Subscribe from web. Calendar services refresh on their own schedules. Meal slots use local floating times (breakfast 08:00, lunch 13:00, dinner 19:30, snack 16:00), lasting 30 minutes. Bills appear all day. Anyone with the link can view the feed; rotate or revoke it if shared accidentally. Rotation invalidates existing subscriptions.
 ### Allergy and diet privacy
 
 In Your profile, you can opt in to an allergy and diet profile for each household. Household members, including viewers, can see it; only you can edit or delete your own profile. It is removed when you leave or are removed from the household, or when your account is deleted. Profiles are health-related special-category data. They are stored in the vault and included in backups, so protect backup files accordingly. SVault does not send profiles to AI providers or Open Food Facts and does not log them.
