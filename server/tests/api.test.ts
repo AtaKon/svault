@@ -11384,7 +11384,8 @@ describe("item warranty and documents", () => {
     const updated = await request(`/api/items/${id}`, { method: "PATCH", body: { warrantyNote: "Updated" } });
     assert.equal(updated.data.warrantyNote, "Updated");
     const { syncHouseWarranties } = await import("../services/notifications.js");
-    await syncHouseWarranties(houseId); await syncHouseWarranties(houseId);
+    await syncHouseWarranties(houseId);
+    assert.equal((await request(`/api/houses/${houseId}/notifications/scan`, { method: "POST", body: {} })).status, 200);
     assert.equal((await all<any>("SELECT id FROM notifications WHERE dedupe_key = ?", [`warranty:${id}:${date}`])).length, 1);
     await request(`/api/items/${id}`, { method: "DELETE" });
   });
@@ -11402,6 +11403,7 @@ describe("item warranty and documents", () => {
     const uploaded = await request(url, { auth: owner.cookie!, body: form("%PDF-1.4 test", "application/pdf") });
     assert.equal(uploaded.status, 201);
     assert.equal((await request(url, { auth: viewer.cookie! })).data.length, 1);
+    assert.equal((await request(`${url}/not-a-document`, { auth: viewer.cookie! })).status, 404);
     const response = await fetch(base + `${url}/${uploaded.data.id}`, { headers: { cookie: viewer.cookie! } });
     assert.equal(response.status, 200); assert.equal(response.headers.get("x-content-type-options"), "nosniff");
     assert.equal(await response.text(), "%PDF-1.4 test");
