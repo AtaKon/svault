@@ -2291,6 +2291,7 @@ const EL: Record<string, string> = {
   "Category does not exist in this house": "Η κατηγορία δεν υπάρχει σε αυτό το σπίτι.",
   "Invalid household reference": "Μη έγκυρη αναφορά νοικοκυριού.",
   "Invalid item image": "Μη έγκυρη εικόνα αντικειμένου.",
+  "API tokens cannot read diet profiles": "Τα API tokens δεν μπορούν να διαβάσουν προφίλ διατροφής",
   "An ingredient is linked to an item that is not in this house": "Ένα υλικό είναι συνδεδεμένο με αντικείμενο που δεν ανήκει σε αυτό το σπίτι",
   "Invalid recipe image": "Μη έγκυρη εικόνα συνταγής.",
   "That upload was not found in this house. Upload the photo again.": "Το αρχείο δεν βρέθηκε σε αυτό το σπίτι. Ανέβασε ξανά τη φωτογραφία.",

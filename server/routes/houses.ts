@@ -270,8 +270,11 @@ houseRoutes.get(
   }),
 );
 
-houseRoutes.use("/:houseId/diet-profiles", (_req, res, next) => {
+houseRoutes.use("/:houseId/diet-profiles", (req, res, next) => {
   res.set("Cache-Control", "no-store");
+  // Health data stays with signed-in people; automation tokens (dashboards,
+  // Home Assistant) never need it.
+  if (req.apiTokenReadOnly) return next(new ApiError(403, "API tokens cannot read diet profiles"));
   next();
 });
 

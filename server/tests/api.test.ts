@@ -5940,6 +5940,10 @@ describe("household diet profiles", () => {
     const profiles = await request(path, { auth: secondUserCookie });
     assert.deepEqual(profiles.data[0].allergens, ["milk"]);
     assert.equal(profiles.data[0].note, "note");
+    const token = await request("/api/tokens", { method: "POST", body: { name: "Diet dashboard" } });
+    const viaToken = await request(path, { auth: "", headers: { authorization: `Bearer ${token.data.token}` } });
+    assert.equal(viaToken.status, 403, "read-only automation tokens never see health data");
+    await request(`/api/tokens/${token.data.id}`, { method: "DELETE" });
     assert.notEqual((await request(`${path}/${profiles.data[0].userId}`, { method: "PUT", auth: secondUserCookie, body: { allergens: [], diets: [] } })).status, 200);
     assert.equal((await request(`${path}/me`, { method: "PUT", auth: secondUserCookie, body: { allergens: ["unknown"], diets: [] } })).status, 400);
     assert.equal((await request(`${path}/me`, { method: "PUT", auth: secondUserCookie, body: { allergens: [], diets: [] } })).status, 200);
