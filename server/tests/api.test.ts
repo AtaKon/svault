@@ -11373,3 +11373,46 @@ describe("trust proxy setting", () => {
     assert.equal(trustProxySetting("loopback, 10.0.0.0/8"), "loopback, 10.0.0.0/8");
   });
 });
+
+describe("opened shelf life", () => {
+  it("calculates the earliest calendar expiry", async () => {
+    const { effectiveExpiry } = await import("../services/effective-expiry.js");
+    assert.equal(effectiveExpiry({ opened_at: "2024-02-28", expires_at: "2024-03-10" }, { opened_shelf_life_days: 3 }), "2024-03-02");
+    assert.equal(effectiveExpiry({ opened_at: "2024-02-28", expires_at: "2024-02-29" }, { opened_shelf_life_days: 3 }), "2024-02-29");
+    assert.equal(effectiveExpiry({ opened_at: "2024-02-28" }, { opened_shelf_life_days: null }), null);
+    assert.equal(effectiveExpiry({ expires_at: "2024-03-10" }, { opened_shelf_life_days: 3 }), "2024-03-10");
+  });
+
+  it("marks and clears batches, updates reminders and expiry views, and rejects viewers and foreign batches", async () => {
+    const house = await request("/api/houses", { method: "POST", body: { name: "Opened expiry test" } });
+    const hid = house.data.id;
+    const created = await request(`/api/houses/${hid}/items`, { method: "POST", body: { name: "Opened milk", openedShelfLifeDays: 3, initialStock: { quantity: 1, expiresAt: "2099-01-01" } } });
+    assert.equal(created.status, 201);
+    const id = created.data.id;
+    const lot = created.data.lots[0];
+    const today = new Date().toISOString().slice(0, 10);
+    const expected = new Date(Date.now() + 3 * 864e5).toISOString().slice(0, 10);
+    const endpoint = `/api/items/${id}/lots/${lot.id}/opened`;
+    const marked = await request(endpoint, { method: "PUT", body: { openedAt: today } });
+    assert.equal(marked.status, 200);
+    assert.equal(marked.data.lots[0].openedAt, today);
+    assert.equal(marked.data.lots[0].effectiveExpiresAt, expected);
+    const reminders = await request(`/api/houses/${hid}/notifications`);
+    assert.equal(reminders.data.notifications.find((n: any) => n.data.lotId === lot.id).data.expiresAt, expected);
+    assert.ok((await request(`/api/houses/${hid}/dashboard`)).data.expiring.some((l: any) => l.id === lot.id && l.effectiveExpiresAt === expected));
+    assert.ok((await request(`/api/houses/${hid}/items?expiring=1`)).data.items.some((i: any) => i.id === id));
+    assert.ok((await request(`/api/houses/${hid}/insights/use-it-up?days=7`)).data.items.some((i: any) => i.itemId === id && i.expiresAt === expected));
+    const other = await request(`/api/houses/${hid}/items`, { method: "POST", body: { name: "Other batch", initialStock: { quantity: 1 } } });
+    assert.equal((await request(`/api/items/${id}/lots/${other.data.lots[0].id}/opened`, { method: "PUT", body: {} })).status, 404);
+    const viewer = await request("/api/auth/register", { method: "POST", body: { name: "Expiry viewer", email: "expiry-viewer@example.com", password: "test password" } });
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [hid, viewer.data.user.id, "viewer", new Date().toISOString()]);
+    assert.equal((await request(endpoint, { method: "PUT", auth: viewer.cookie!, body: {} })).status, 403);
+    assert.equal((await request(endpoint, { method: "DELETE", auth: viewer.cookie! })).status, 403);
+    const cleared = await request(endpoint, { method: "DELETE" });
+    assert.equal(cleared.status, 200);
+    assert.equal(cleared.data.lots[0].openedAt, null);
+    assert.equal(cleared.data.lots[0].effectiveExpiresAt, "2099-01-01");
+    assert.ok(!(await request(`/api/houses/${hid}/notifications`)).data.notifications.some((n: any) => n.data.lotId === lot.id));
+    assert.equal((await request(endpoint, { method: "PUT", body: {} })).data.lots[0].openedAt, today);
+  });
+});
