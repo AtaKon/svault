@@ -1092,7 +1092,9 @@ itemRoutes.delete(
   "/:itemId",
   handler(async (req, res) => {
     const { item } = await itemAccess(req, "member");
+    const documents = await all<{ filename: string }>("SELECT filename FROM item_documents WHERE item_id = ?", [item.id]);
     await run("DELETE FROM items WHERE id = ?", [item.id]);
+    await removeUnreferencedUploads(documents.map(doc => `/uploads/item-documents/${doc.filename}`));
     await clearItemNotifications(item.id);
     await removeUnreferencedUploads([item.image]);
     res.json({ ok: true });

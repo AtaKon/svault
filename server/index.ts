@@ -12,6 +12,7 @@ import { passkeyRoutes } from "./routes/passkeys.js";
 import { twoFactorRoutes } from "./routes/twofactor.js";
 import { oidcRoutes } from "./routes/oidc.js";
 import { houseRoutes } from "./routes/houses.js";
+import { itemDocumentRoutes } from "./routes/item-documents.js";
 import { inventoryRoutes, itemRoutes } from "./routes/inventory.js";
 import { receiptRoutes, singleReceiptRoutes } from "./routes/receipts.js";
 import { billRoutes, singleBillRoutes } from "./routes/bills.js";
@@ -255,6 +256,7 @@ app.use("/api/admin", adminRoutes);
 app.use("/api/tokens", apiTokenRoutes);
 app.use("/api/catalog", catalogRoutes);
 app.use("/api/off", offRoutes);
+app.use("/api/items", itemDocumentRoutes);
 app.use("/api/items", itemRoutes);
 app.use("/api/recipes", singleRecipeRoutes);
 app.use("/api/receipts", singleReceiptRoutes);
@@ -272,6 +274,7 @@ app.get("/api/health", (_req, res) => {
    that is not a known image extension is forced to download. */
 // Keep this before express.static below: bill PDFs are served by authenticated
 // API routes, never by their storage paths.
+app.use("/uploads/item-documents", (_req, _res, next) => next(new ApiError(404, "Not found")));
 app.use("/uploads/bills", (_req, _res, next) => next(new ApiError(404, "Not found")));
 // Receipt photos and other uploads hold household data. Their names are random,
 // but a leaked link must not be enough on its own: require a signed-in session.
