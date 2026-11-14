@@ -180,6 +180,16 @@ export function DashboardPage() {
           </section>
 
           <section>
+            <h2 className="mb-2.5 font-display text-xl">{t("Running out soon")}</h2>
+            {data?.runningOutSoon.length ? <div className="space-y-2">{data.runningOutSoon.map((item) => (
+              <Link key={item.id} to={`/items/${item.id}`} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-line bg-surface p-3">
+                <span className="min-w-0 break-words font-medium">{item.name}</span>
+                <span className="text-sm text-muted">{t("Runs out in about {count} days", { count: Math.max(1, Math.round(item.forecast!.daysLeft)) })}</span>
+              </Link>
+            ))}</div> : <Card className="p-4 text-sm text-muted">{t("No items are forecast to run out soon.")}</Card>}
+          </section>
+
+          <section>
             <div className="mb-2.5 flex items-center justify-between">
               <h2 className="font-display text-xl">{t("Rooms & places")}</h2>
               <Link to="/settings?tab=places" className="text-xs font-medium text-brand hover:underline">
@@ -224,7 +234,7 @@ export function DashboardPage() {
             ) : (
               <Card className="divide-y divide-line">
                 {data.expiring.slice(0, 4).map((lot) => {
-                  const days = daysUntil(lot.expiresAt);
+                  const days = daysUntil(lot.effectiveExpiresAt);
                   return (
                     <button
                       key={lot.id}
@@ -237,7 +247,7 @@ export function DashboardPage() {
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-[13px] font-medium">{lot.itemName}</span>
                         <span className="block text-[11px] text-muted">
-                          {qty(lot.quantity)} {lot.unit} · {shortDate(lot.expiresAt)}
+                          {qty(lot.quantity)} {lot.unit} · {shortDate(lot.effectiveExpiresAt)}
                         </span>
                       </span>
                       <Badge tone={days != null && days < 0 ? "danger" : "warn"}>

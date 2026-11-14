@@ -255,6 +255,10 @@ Open an item and use the stock dialog. There are five actions:
 Removing more than is available is rejected. Wasting or removing with a `locationId` restricts FIFO to
 that place.
 
+### Shelf life after opening
+
+Set **Keeps for N days after opening** on an item, then use **Mark opened** on a batch and select its opening date. SVault shows the opening date and use-by date. **Not opened** clears the date. The use-by date is the earlier of the printed expiry and the opening date plus the shelf life; it drives expiry reminders, the dashboard, expiring filter and Use it up. Moving stock preserves its opening date. Consuming stock does not automatically mark a batch opened.
+
 ### Barcodes and scanning
 
 - Each item can hold several barcodes, unique per house.
@@ -441,7 +445,7 @@ Open a recipe and press **Cook mode**. Everything is scaled to the number of por
 - Tap ingredients and steps to tick them off while you cook. The screen stays awake where the browser
   allows it.
 
-Cook mode only changes what you see; the saved recipe is untouched.
+When you finish, press **Finish cooking** to review the scaled quantities for linked ingredients. Edit or untick any line; unlinked ingredients are marked as not tracked. Optionally save leftover portions with a location and use-by date (three days ahead by default). Confirm to deduct available stock, earliest expiry first. If stock is short, the confirmation shows the amount missing. Leftovers appear in inventory and expiry reminders. The saved recipe stays untouched.
 
 ### Cook from what you have
 
@@ -737,3 +741,22 @@ More deployment-specific fixes are in [deployment.md](deployment.md) and the
 ### Warranties and documents
 
 Set a warranty end date and optional note when creating or editing an item. Add manuals, receipts and warranty documents on the item page; household viewers can download them, while members can upload or delete them. Set the advance warning in house notification settings (30 days by default).
+### Calendar feed
+
+In **Profile → Calendar feed**, create a private subscription link and choose houses, meal plans and bill due dates. Copy the link when it appears: it is shown only on creation or rotation. In iOS, add a subscribed calendar under Settings → Calendar → Accounts; in Google Calendar use Other calendars → From URL; in Outlook use Add calendar → Subscribe from web. Calendar services refresh on their own schedules. Meal slots use local floating times (breakfast 08:00, lunch 13:00, dinner 19:30, snack 16:00), lasting 30 minutes. Bills appear all day. Anyone with the link can view the feed; rotate or revoke it if shared accidentally. Rotation invalidates existing subscriptions.
+### Allergy and diet privacy
+
+In Your profile, you can opt in to an allergy and diet profile for each household. Household members, including viewers, can see it; only you can edit or delete your own profile. It is removed when you leave or are removed from the household, or when your account is deleted. Profiles are health-related special-category data. They are stored in the vault and included in backups, so protect backup files accordingly. SVault does not send profiles to AI providers or Open Food Facts and does not log them.
+
+Recipe, cook mode, food idea and meal plan warnings use linked inventory items and locally cached Open Food Facts information. Missing or incomplete product information can hide allergens, and unknown diet compatibility is not a safety confirmation. Check ingredient labels and suitability yourself.
+### Category budgets and reminders
+
+In Insights, house admins can set monthly budgets for individual categories and choose whether bills count toward household spending. Bills are excluded by default. Included bills count in their due month, or creation month if no due date is set; they do not count toward a category. Avoid entering the same expense as both a bill and a receipt. The projected month-end total assumes the current daily rate continues. The six-month history compares past totals with the current budget. Household and category reminders appear at 80% and 100% once per month and are delivered to enabled reminder channels.
+### Run-out forecasts
+
+Item details estimate when stock will run out based on consumption over the last 60 days (or the
+item's shorter history, at least seven days). The
+dashboard lists items expected to run out within seven days. Forecasts need at least two consumption
+events seven days apart and a positive stock balance. Waste, stock corrections and moves do not count.
+In the shopping list, turn on **Include items running out soon** and choose a horizon before using
+**Add low stock** to include forecast items as well. Existing compatible shopping lines are merged.

@@ -1,3 +1,4 @@
+import { DietWarnings } from "@/components/diet-profile";
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/api";
@@ -225,6 +226,7 @@ export function PlanPage() {
                             {entries.map((entry) => (
                               <div key={entry.id} className="rounded-lg border border-line bg-bg px-2 py-1.5">
                                 <div className="text-[12px] font-medium leading-snug">{entry.title}</div>
+      <DietWarnings warnings={entry.warnings} dietCompatibility={entry.dietCompatibility} />
                                 <div className="mt-0.5 flex items-center gap-1 text-[10px] text-muted">
                                   {entry.servings != null && <span>{t("{count} servings", { count: qty(entry.servings) })}</span>}
                                   <div className="ml-auto flex items-center">

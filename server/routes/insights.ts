@@ -73,6 +73,8 @@ export function createShoppingOffersHandler(
 
 const settingsBody = z.object({
   monthlyBudget: z.number().min(0).max(1e9).optional(),
+  categoryBudgets: z.record(z.string(), z.number().finite().min(0).max(1e9)).optional(),
+  includeBills: z.boolean().optional(),
   priceAlertPercent: z.number().min(1).max(500).optional(),
   useItUpDays: z.number().int().min(1).max(60).optional(),
 });
@@ -238,6 +240,12 @@ insightRoutes.patch(
   handler(async (req, res) => {
     const { houseId } = await requireHouse(req, "admin");
     const body = parseBody(settingsBody, req.body ?? {});
+    if (body.categoryBudgets) {
+      for (const id of Object.keys(body.categoryBudgets)) {
+        if (!await get("SELECT id FROM categories WHERE id = ? AND house_id = ?", [id, houseId]))
+          throw new ApiError(400, "Category must belong to this house");
+      }
+    }
     res.json(await saveInsightSettings(houseId, body));
   }),
 );

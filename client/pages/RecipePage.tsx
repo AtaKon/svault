@@ -1,3 +1,4 @@
+import { DietWarnings } from "@/components/diet-profile";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api } from "@/api";
@@ -122,6 +123,7 @@ export function RecipePage() {
 
   return (
     <div className="space-y-4">
+      <DietWarnings warnings={recipe.warnings} dietCompatibility={recipe.dietCompatibility} />
       <PageHeader
         back={() => navigate(-1)}
         eyebrow={

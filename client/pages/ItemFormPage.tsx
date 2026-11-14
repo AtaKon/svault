@@ -50,6 +50,7 @@ export function ItemFormPage() {
   const [unit, setUnit] = useState(params.get("unit") ?? "pcs");
   const [reorderPoint, setReorderPoint] = useState("");
   const [targetStock, setTargetStock] = useState("");
+  const [openedShelfLifeDays, setOpenedShelfLifeDays] = useState("");
   const [tags, setTags] = useState("");
   const [espresso, setEspresso] = useState(params.get("espresso") === "1");
   const [values, setValues] = useState<Record<string, unknown>>({});
@@ -102,6 +103,7 @@ export function ItemFormPage() {
           setUnit(item.unit);
           setReorderPoint(item.reorderPoint ? String(item.reorderPoint) : "");
           setTargetStock(item.targetStock != null ? String(item.targetStock) : "");
+          setOpenedShelfLifeDays(item.openedShelfLifeDays != null ? String(item.openedShelfLifeDays) : "");
           setTags(item.tags.join(", "));
           setEspresso(item.espresso);
           setValues(item.attributes ?? {});
@@ -156,6 +158,7 @@ export function ItemFormPage() {
         unit: unit.trim() || "pcs",
         reorderPoint: reorderPoint ? Number(reorderPoint) : 0,
         targetStock: targetStock ? Number(targetStock) : null,
+        openedShelfLifeDays: openedShelfLifeDays === "" ? null : Number(openedShelfLifeDays),
         attributes: values,
         tags,
         espresso,
@@ -261,6 +264,9 @@ export function ItemFormPage() {
             </div>
             <Field label={t("Warranty end date")} hint={t("optional")}><Input type="date" value={warrantyUntil} onChange={(e) => setWarrantyUntil(e.target.value)} /></Field>
             <Field label={t("Warranty note")} hint={t("optional")}><Input value={warrantyNote} maxLength={200} onChange={(e) => setWarrantyNote(e.target.value)} /></Field>
+            <Field label={t("Keeps for N days after opening")} hint={t("optional")} >
+              <Input type="number" min="0" max="36500" step="1" inputMode="numeric" value={openedShelfLifeDays} onChange={(e) => setOpenedShelfLifeDays(e.target.value)} />
+            </Field>
             <Field label={t("Description")} hint={t("optional")}>
               <Textarea rows={3} value={description} onChange={(e) => setDescription(e.target.value)} placeholder={t("Notes, size, flavour, where it lives…")} maxLength={2000} />
             </Field>

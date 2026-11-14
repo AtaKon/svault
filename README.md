@@ -73,6 +73,7 @@ dataset — all from one PWA that runs in a single Docker container.
 | [User guide](docs/user-guide.md) | Houses, roles, inventory, stock actions, recipes, datasets, reminders, AI and troubleshooting |
 | [Architecture](docs/architecture.md) | Runtime, data model, auth, stock engine, reminders, AI fallbacks, uploads and PWA |
 | [API reference](docs/api.md) | Conventions, roles, every endpoint, payloads and status codes |
+| [Home Assistant](docs/home-assistant.md) | Read-only API token, REST sensor YAML, a low-stock automation and HTTPS/secrets guidance |
 | [Deployment](docs/deployment.md) | Docker, environment variables, HTTPS, TrueNAS, backups, upgrades and hardening |
 | [Bring your own database](docs/database.md) | Run on PostgreSQL, migrate an existing SQLite vault and back it up |
 | [Self-hosted CI/CD](deploy/woodpecker/README.md) | Woodpecker CI, private registry, automatic deploys and the AI review bot |
@@ -325,6 +326,7 @@ POST /api/auth/register|login|logout         GET/PATCH /api/auth/me
 GET  /api/houses                             POST /api/houses
 GET  /api/houses/:id                         PATCH/DELETE /api/houses/:id
 GET  /api/houses/:id/dashboard
+GET  /api/houses/:id/summary               (read-only API tokens welcome)
 GET  /api/houses/:id/items?q=&categoryId=&locationId=&low=1&expiring=1
 POST /api/houses/:id/items                   POST /api/houses/:id/scan?code=
 GET  /api/items/:id                          PATCH/DELETE /api/items/:id

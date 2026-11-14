@@ -1,3 +1,4 @@
+import { forecastsForHouse } from "./forecast.js";
 import { all, get, newId, now, run, tx } from "../db.js";
 import { convert, round } from "../units.js";
 import type { ShoppingItem, ShoppingSource } from "../../shared/types.js";
@@ -177,4 +178,15 @@ export async function addShoppingLine(opts: AddShoppingOpts): Promise<{ status: 
 
 export async function deleteShoppingLine(houseId: string, id: string) {
   await run("DELETE FROM shopping_list_items WHERE id = ? AND house_id = ?", [id, houseId]);
+}
+
+/** Select each item once, even when it meets both fill criteria. */
+export async function shoppingFillCandidates(houseId: string, includeForecast: boolean, forecastDays: number) {
+  const forecasts = includeForecast ? await forecastsForHouse(houseId) : new Map();
+  const rows = await all<any>(
+    `SELECT i.*, COALESCE((SELECT SUM(l.quantity) FROM stock_lots l WHERE l.item_id = i.id), 0) AS quantity
+     FROM items i WHERE i.house_id = ? AND i.archived = 0 ORDER BY lower(i.name)`, [houseId],
+  );
+  return rows.filter((item) => (Number(item.reorder_point) > 0 && Number(item.quantity) <= Number(item.reorder_point)) ||
+    (forecasts.get(item.id)?.daysLeft ?? Infinity) <= forecastDays);
 }

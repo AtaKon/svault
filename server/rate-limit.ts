@@ -134,6 +134,7 @@ export function limitRequests(
 /* The limiters SVault uses. Defaults are generous for a household and tight
    enough to make password, TOTP and invite-code guessing impractical. */
 export const limiters = {
+  calendar: new RateLimiter("CALENDAR", { max: 120, windowMs: 10 * 60_000 }),
   /** Every login attempt, per client IP. */
   login: new RateLimiter("LOGIN", { max: 30, windowMs: 10 * 60_000 }),
   /** Failed logins per account identifier, so one account cannot be brute-forced from many IPs. */

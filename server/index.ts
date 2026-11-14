@@ -33,6 +33,8 @@ import { datasetRoutes } from "./routes/dataset.js";
 import { aiLogRoutes } from "./routes/ai-logs.js";
 import { insightRoutes } from "./routes/insights.js";
 import { adminRoutes } from "./routes/admin.js";
+import { calendarRoutes } from "./routes/calendar.js";
+import { calendarFeedRoutes } from "./routes/calendar-feed.js";
 import { apiTokenRoutes } from "./routes/api-tokens.js";
 import { inMaintenance } from "./maintenance.js";
 import { stripQuery } from "./lib/redact.js";
@@ -195,8 +197,10 @@ if (!IS_PROD) {
   app.use((req, res, next) => {
     const start = Date.now();
     res.on("finish", () => {
-      if (req.path.startsWith("/api")) {
-        console.log(`${req.method} ${stripQuery(req.originalUrl)} ${res.statusCode} ${Date.now() - start}ms`);
+      // Diet profiles are health data and are not logged; calendar feed paths carry a secret token.
+      if (req.path.startsWith("/api") && !req.path.includes("/diet-profiles")) {
+        const target = req.path.startsWith("/api/calendar/") ? "/api/calendar/[redacted].ics" : stripQuery(req.originalUrl);
+        console.log(`${req.method} ${target} ${res.statusCode} ${Date.now() - start}ms`);
       }
     });
     next();
@@ -254,6 +258,8 @@ app.use("/api/houses", insightRoutes);
 app.use("/api/notifications", globalNotificationRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/tokens", apiTokenRoutes);
+app.use("/api/calendar-feed", calendarFeedRoutes);
+app.use("/api/calendar", calendarRoutes);
 app.use("/api/catalog", catalogRoutes);
 app.use("/api/off", offRoutes);
 app.use("/api/items", itemDocumentRoutes);
@@ -292,8 +298,9 @@ app.use(
     dotfiles: "deny",
     setHeaders: (res, filePath) => {
       res.setHeader("X-Content-Type-Options", "nosniff");
-      // Signed-in content: browsers may cache it, shared proxies may not.
-      res.setHeader("Cache-Control", "private, max-age=2592000");
+      // Signed-in content: browsers revalidate on every view (a cheap 304), so a
+      // signed-out or removed member does not keep reading it from the cache.
+      res.setHeader("Cache-Control", "private, no-cache");
       res.setHeader("Content-Security-Policy", "default-src 'none'; img-src 'self'; sandbox");
       if (!IMAGE_EXTENSIONS.has(path.extname(filePath).toLowerCase())) {
         res.setHeader("Content-Type", "application/octet-stream");
@@ -332,7 +339,8 @@ export function apiErrorHandler(err: any, _req: express.Request, res: express.Re
     res.status(400).json({ error: "Invalid JSON body" });
     return;
   }
-  console.error("Unhandled error:", err);
+  if (/diet-profiles/.test(_req.path)) console.error("Unhandled diet profile error");
+  else console.error("Unhandled error:", err);
   res.status(500).json({ error: "Something went wrong on the server" });
 }
 

@@ -1,3 +1,4 @@
+import { ideaDietWarnings } from "../services/diet-warnings.js";
 import { Router } from "express";
 import { z } from "zod";
 import { all, get, newId, now, parseJson, run } from "../db.js";
@@ -52,18 +53,22 @@ async function ideaRecipes(houseId: string) {
   })));
 }
 
+async function decorateIdeas(houseId: string, result: IdeaResponse): Promise<IdeaResponse> {
+  return { ...result, ideas: await Promise.all(result.ideas.map(async idea => ({ ...idea, ...await ideaDietWarnings(houseId, idea) }))) };
+}
+
 ideaRoutes.get(
   "/:houseId/ideas",
   handler(async (req, res) => {
     const { houseId } = await requireHouse(req);
     const rows = await all<any>("SELECT * FROM food_ideas WHERE house_id = ? ORDER BY created_at DESC LIMIT 12", [houseId]);
     res.json(
-      rows.map((r) => ({
+      await Promise.all(rows.map(async (r) => ({
         id: r.id,
         prompt: r.prompt,
         createdAt: r.created_at,
-        ...parseJson<IdeaResponse>(r.result, { provider: "local", summary: "", ideas: [] }),
-      })),
+        ...await decorateIdeas(houseId, parseJson<IdeaResponse>(r.result, { provider: "local", summary: "", ideas: [] })),
+      }))),
     );
   }),
 );
@@ -129,7 +134,7 @@ ideaRoutes.post(
       JSON.stringify(result),
       now(),
     ]);
-    res.json({ id, prompt, createdAt: now(), ...result, warning });
+    res.json({ id, prompt, createdAt: now(), ...await decorateIdeas(houseId, result), warning });
   }),
 );
 
