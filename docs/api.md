@@ -928,7 +928,7 @@ See the [user guide](user-guide.md#export-a-dataset) for the archive layout.
 
 | Method | Path | Min role | Purpose |
 | --- | --- | --- | --- |
-| `GET` | `/api/houses/:houseId/dashboard` | viewer+ | Counts, value, low stock, expiring lots, recent movements, recipe and counts. |
+| `GET` | `/api/houses/:houseId/dashboard` | viewer+ | Counts, value, low stock, `runningOutSoon`, expiring lots, recent movements, recipe and counts. |
 | `GET` | `/api/houses/:houseId/notifications` | viewer+ | Active reminders. `unread=1`, `limit` up to 200. |
 | `POST` | `/api/houses/:houseId/notifications/read` | viewer+ | Mark all or `{ "ids": [...] }` as read for the current user. |
 | `POST` | `/api/houses/:houseId/notifications/scan` | member+ | Recompute low-stock and expiry reminders for the house. |
@@ -1067,7 +1067,7 @@ Mounted at `/api/admin`. Every route requires the instance administrator (`403` 
 | `DELETE` | `/api/houses/:houseId/shopping/:entryId` | member+ | Remove a line. |
 | `DELETE` | `/api/houses/:houseId/shopping?checked=1` | member+ | Clear checked lines (omit the query to clear all). |
 | `POST` | `/api/houses/:houseId/shopping/from-recipe` | member+ | Add missing (default) or all ingredients. Body: `{ recipeId, includeOptional?, missingOnly? }`. |
-| `POST` | `/api/houses/:houseId/shopping/from-low-stock` | member+ | Add every item at or below its reorder point, up to `targetStock` (or twice the reorder point). |
+| `POST` | `/api/houses/:houseId/shopping/from-low-stock` | member+ | Add items at or below their reorder point, up to `targetStock` (or twice the reorder point). Optional JSON `includeForecast: true` also includes items forecast to run out within `forecastDays` (whole days, 1–365, default 7). |
 | `POST` | `/api/houses/:houseId/shopping/:entryId/check` | member+ | Check a line and optionally record a normal `in` movement. |
 
 Lines merge by linked `itemId` first, then by normalised name. Compatible units are summed; incompatible
@@ -1335,3 +1335,12 @@ If you add an endpoint:
 5. Add a test in `server/tests/api.test.ts` and update this page.
 
 See [development.md](development.md) for the workflow.
+
+### Run-out forecasts
+
+Item list and detail responses include `forecast: { dailyRate, daysLeft, windowDays } | null`.
+The rate is the total quantity in outgoing consumption movements over the last 60 days divided by
+`windowDays`: the days since the first counted movement, clamped to 7–60;
+`daysLeft` is current stock divided by that rate. Waste, adjustments and transfers do not count.
+At least two consumption events spanning seven days and positive stock are required. The dashboard's
+`runningOutSoon` contains active items with at most seven days left, ordered by days left.

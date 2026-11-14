@@ -6,6 +6,10 @@ All notable changes to SVault are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Consumption-based run-out forecasts on items and the dashboard, with an optional shopping-list fill.
+
 ### Security
 
 - Writing an Open Food Facts folksonomy property now needs accepted OFF consent and member access to

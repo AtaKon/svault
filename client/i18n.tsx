@@ -7,6 +7,14 @@ import { buildDynamicMatcher, matchDynamicTranslation } from "@shared/i18n";
 export type Language = "en" | "el";
 
 const EL: Record<string, string> = {
+  "Runs out in about {count} days": "Τελειώνει σε περίπου {count} ημέρες",
+  "Based on the last {count} days": "Με βάση τις τελευταίες {count} ημέρες",
+  "Running out soon": "Τελειώνουν σύντομα",
+  "No items are forecast to run out soon.": "Δεν προβλέπεται να τελειώσει κάποιο προϊόν σύντομα.",
+  "Include items running out soon": "Συμπερίληψη προϊόντων που τελειώνουν σύντομα",
+  "Forecast horizon (days)": "Ορίζοντας πρόβλεψης (ημέρες)",
+  "Added {count} shopping line": "Προστέθηκε {count} γραμμή αγορών",
+  "Added {count} shopping lines": "Προστέθηκαν {count} γραμμές αγορών",
   "Espresso log": "Ημερολόγιο espresso",
   "Espresso coffee": "Καφές espresso",
   "Track espresso shots": "Καταγραφή shots espresso",

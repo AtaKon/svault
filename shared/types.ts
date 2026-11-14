@@ -481,6 +481,8 @@ export interface PriceStats {
   unit: string;
 }
 
+export interface Forecast { dailyRate: number; daysLeft: number; windowDays: number }
+
 export interface Item {
   id: string;
   houseId: string;
@@ -500,6 +502,7 @@ export interface Item {
   /** Coffee item that keeps an espresso shot log. */
   espresso: boolean;
   quantity: number;
+  forecast: Forecast | null;
   value: number;
   latestPrice?: number | null;
   isLow: boolean;
@@ -1019,6 +1022,7 @@ export interface Dashboard {
   batchCount: number;
   totalValue: number;
   lowStock: Item[];
+  runningOutSoon: Item[];
   expiring: (StockLot & { itemName: string; itemId: string })[];
   recent: Movement[];
   recentRecipe: Recipe | null;
