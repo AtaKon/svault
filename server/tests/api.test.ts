@@ -5945,12 +5945,17 @@ describe("household diet profiles", () => {
     assert.equal((await request(`${path}/me`, { method: "PUT", auth: secondUserCookie, body: { allergens: [], diets: [] } })).status, 200);
     await request(`/api/houses/${id}/leave`, { method: "POST", auth: secondUserCookie });
     assert.equal((await request(path)).data.length, 1);
+    assert.equal((await request(`${path}/me`, { method: "DELETE" })).status, 200);
+    assert.equal((await request(path)).data.length, 0);
     await request(`/api/houses/${id}`, { method: "DELETE" });
   });
   it("warns only the allergic member and leaves missing diet analysis unknown", async () => {
     const house = await request("/api/houses", { body: { name: "Warning test" } });
     const id = house.data.id;
     await request(`/api/houses/${id}/diet-profiles/me`, { method: "PUT", body: { allergens: ["milk"], diets: ["vegan"] } });
+    const invite = await request(`/api/houses/${id}/members`, { body: { email: "stranger@example.com", role: "viewer" } });
+    await request(`/api/auth/invites/${invite.data.invite.code}/accept`, { method: "POST", auth: secondUserCookie });
+    await request(`/api/houses/${id}/diet-profiles/me`, { method: "PUT", auth: secondUserCookie, body: { allergens: ["eggs"], diets: [] } });
     const item = await request(`/api/houses/${id}/items`, { body: { name: "Milk" } });
     const stamp = new Date().toISOString();
     await run("INSERT INTO catalog_products (project, code, summary, payload, fetched_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)", ["off", "diet-test", JSON.stringify({ allergens: ["milk"] }), "{}", stamp, stamp]);

@@ -6,10 +6,6 @@ All notable changes to SVault are documented here. The format follows
 
 ## [Unreleased]
 
-### Added
-
-- Optional household member allergy and diet profiles with local recipe and meal warnings.
-
 ### Security
 
 - The development request log and the AI provider label no longer print query strings, which can
@@ -57,6 +53,7 @@ All notable changes to SVault are documented here. The format follows
 
 ### Added
 
+- Optional household member allergy and diet profiles with local recipe and meal warnings.
 - **Recipe portion, weight and calorie estimates.** Recipes now estimate the total prepared weight and
   the weight of one portion in grams alongside the existing calorie and macro panel. Volume uses a
   typical density per ingredient and countable units a typical piece weight, with coverage reported so
