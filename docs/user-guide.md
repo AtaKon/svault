@@ -441,7 +441,7 @@ Open a recipe and press **Cook mode**. Everything is scaled to the number of por
 - Tap ingredients and steps to tick them off while you cook. The screen stays awake where the browser
   allows it.
 
-Cook mode only changes what you see; the saved recipe is untouched.
+When you finish, press **Finish cooking** to review the scaled quantities for linked ingredients. Edit or untick any line; unlinked ingredients are marked as not tracked. Optionally save leftover portions with a location and use-by date (three days ahead by default). Confirm to deduct available stock, earliest expiry first. If stock is short, the confirmation shows the amount missing. Leftovers appear in inventory and expiry reminders. The saved recipe stays untouched.
 
 ### Cook from what you have
 

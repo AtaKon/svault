@@ -760,8 +760,11 @@ matched item's category; unlinked lines are reported as `Uncategorised`.
 | `GET` | `/api/recipes/:recipeId` | viewer+ | Recipe detail with `match` (available/total/missing) and `nutrition`. |
 | `PATCH` | `/api/recipes/:recipeId` | member+ | Partial update. |
 | `DELETE` | `/api/recipes/:recipeId` | member+ | Delete a recipe. |
+| `POST` | `/api/recipes/:recipeId/cook` | member+ | Consume linked stock and optionally record leftovers. |
 | `POST` | `/api/recipes/:recipeId/favorite` | member+ | Toggle or set `{ "favorite": true }`. |
 | `POST` | `/api/recipes/:recipeId/ai` | member+ | Improve a recipe. Returns the updated recipe. |
+
+Cooking accepts `{ "portions": 4, "idempotencyKey": "unique-key", "lines": [{ "ingredientId": "...", "itemId": "...", "quantity": 0.5, "unit": "kg" }], "leftovers": { "portions": 2, "locationId": null, "useBy": "2030-01-31" } }`. Lines must reference ingredients linked to items in the recipe's house; units must convert to the item unit. `leftovers` is optional; its location may be null, and `useBy` defaults to three days from today. The response contains `portions`, `lines` (each with `requested`, `consumed`, `shortfall`, and the item unit), and `leftovers` or null. Amounts above available stock are clamped. Repeating the same household idempotency key returns the original response without another deduction; use a new key for each cooking operation.
 
 Recipe body:
 
