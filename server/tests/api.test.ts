@@ -11106,6 +11106,81 @@ describe("insights, household split and admin console", () => {
     assert.equal(revoked.status, 200);
     assert.equal((await request("/api/houses", { auth: "", headers: bearer })).status, 401);
   });
+
+  it("serves the compact house summary to sessions and read-only API tokens", async () => {
+    const created = await request("/api/houses", { method: "POST", body: { name: "Summary House", currency: "EUR" } });
+    assert.equal(created.status, 201, JSON.stringify(created.data));
+    const summaryHouse = created.data.id;
+    const inDays = (days: number) => new Date(Date.now() + days * 864e5).toISOString().slice(0, 10);
+
+    const low = await request(`/api/houses/${summaryHouse}/items`, {
+      method: "POST",
+      body: { name: "Coffee beans", unit: "pcs", reorderPoint: 2, initialStock: { quantity: 1, expiresAt: inDays(3) } },
+    });
+    assert.equal(low.status, 201, JSON.stringify(low.data));
+    const expiring = await request(`/api/houses/${summaryHouse}/items`, {
+      method: "POST",
+      body: { name: "Yoghurt", unit: "pcs", initialStock: { quantity: 1, expiresAt: inDays(-1) } },
+    });
+    assert.equal(expiring.status, 201, JSON.stringify(expiring.data));
+    const plain = await request(`/api/houses/${summaryHouse}/items`, {
+      method: "POST",
+      body: { name: "Rice", unit: "pcs" },
+    });
+    assert.equal(plain.status, 201, JSON.stringify(plain.data));
+    const line = await request(`/api/houses/${summaryHouse}/shopping`, {
+      method: "POST",
+      body: { name: "Bread" },
+    });
+    assert.equal(line.status, 201, JSON.stringify(line.data));
+    // Adding the coffee below its reorder point already created one low-stock
+    // reminder, so the summary has something real to count.
+
+    const summary = await request(`/api/houses/${summaryHouse}/summary`);
+    assert.equal(summary.status, 200, JSON.stringify(summary.data));
+    assert.deepEqual(Object.keys(summary.data).sort(), [
+      "expiredCount",
+      "expiringSoonCount",
+      "houseId",
+      "houseName",
+      "itemCount",
+      "lowStockCount",
+      "shoppingListOpenCount",
+      "unreadReminders",
+      "updatedAt",
+    ]);
+    assert.equal(summary.data.houseId, summaryHouse);
+    assert.equal(summary.data.houseName, "Summary House");
+    assert.equal(summary.data.itemCount, 3);
+    assert.equal(summary.data.lowStockCount, 1);
+    assert.equal(summary.data.expiringSoonCount, 1);
+    assert.equal(summary.data.expiredCount, 1);
+    assert.equal(summary.data.shoppingListOpenCount, 1);
+    assert.equal(summary.data.unreadReminders, 1);
+    for (const key of [
+      "itemCount",
+      "lowStockCount",
+      "expiringSoonCount",
+      "expiredCount",
+      "shoppingListOpenCount",
+      "unreadReminders",
+    ]) {
+      assert.equal(typeof summary.data[key], "number", `${key} is a number`);
+    }
+    assert.equal(typeof summary.data.updatedAt, "string");
+
+    const token = await request("/api/tokens", { method: "POST", body: { name: "Summary sensor" } });
+    assert.equal(token.status, 201, JSON.stringify(token.data));
+    const bearer = { authorization: `Bearer ${token.data.token}` };
+    const tokenSummary = await request(`/api/houses/${summaryHouse}/summary`, { auth: "", headers: bearer });
+    assert.equal(tokenSummary.status, 200, JSON.stringify(tokenSummary.data));
+    assert.deepEqual(tokenSummary.data, summary.data, "an API token sees the same summary as a session");
+
+    const outsider = await request(`/api/houses/${summaryHouse}/summary`, { auth: secondUserCookie });
+    assert.equal(outsider.status, 404, "a non-member cannot read another house's summary");
+
+    assert.equal((await request(`/api/tokens/${token.data.id}`, { method: "DELETE" })).status, 200);
+  });
 });
 
 describe("rate limiter refunds", () => {
