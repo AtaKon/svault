@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
-import { memberRole, requireAuth, roleAtLeast } from "../auth.js";
+import { memberRole, requireAuth, roleAtLeast, userHouses } from "../auth.js";
+import { get } from "../db.js";
 import { ApiError, handler, intParam, parseBody, requireInstanceAdmin } from "../http.js";
 import { fetchOffProduct, getCachedOffPayload } from "../services/openfoodfacts.js";
 import {
@@ -66,6 +67,34 @@ async function houseAccess(req: any, houseId: string, min: Role = "member") {
   if (!role) throw new ApiError(404, "House not found");
   if (!roleAtLeast(role, min)) throw new ApiError(403, `Requires ${min} access`);
   return role;
+}
+
+/**
+ * Folksonomy and Robotoff writes are household data leaving the server even
+ * though their payload has no house id, so the caller must still be a member+
+ * of at least one household. A person who left every house cannot contribute.
+ */
+async function requireContributingMember(req: any) {
+  const houses = await userHouses(req.user!.id);
+  if (!houses.some((house) => roleAtLeast(house.role as Role, "member"))) {
+    throw new ApiError(403, "Requires member access");
+  }
+}
+
+/** Scope a house-less OFF write to an item/house named by the request, when present. */
+async function requireNamedHouse(req: any, houseId?: string, itemId?: string) {
+  if (houseId) {
+    await houseAccess(req, houseId, "member");
+    if (itemId && !(await get("SELECT id FROM items WHERE id = ? AND house_id = ?", [itemId, houseId]))) {
+      throw new ApiError(404, "Item not found");
+    }
+    return;
+  }
+  if (itemId) {
+    const item = await get<{ house_id: string }>("SELECT house_id FROM items WHERE id = ?", [itemId]);
+    if (!item) throw new ApiError(404, "Item not found");
+    await houseAccess(req, item.house_id, "member");
+  }
 }
 
 offRoutes.get(
@@ -375,6 +404,10 @@ offRoutes.post(
       }),
       req.body,
     );
+    if (!(await offConsent(req.user!.id))) {
+      throw new ApiError(403, "Accept the Open Food Facts license before contributing");
+    }
+    await requireContributingMember(req);
     if (offDryRun()) {
       res.json({ ok: true, dryRun: true });
       return;
@@ -392,12 +425,16 @@ offRoutes.post(
         code: z.string().trim().min(1).max(80),
         key: z.string().trim().min(1).max(120),
         value: z.string().trim().min(1).max(1000),
+        houseId: z.string().trim().min(1).max(60).optional(),
+        itemId: z.string().trim().min(1).max(60).optional(),
       }),
       req.body,
     );
     if (!(await offConsent(req.user!.id))) {
-      throw new ApiError(403, "Accept the Open Food Facts license before writing a property");
+      throw new ApiError(403, "Accept the Open Food Facts license before contributing");
     }
+    await requireContributingMember(req);
+    await requireNamedHouse(req, body.houseId, body.itemId);
     if (!offWritesEnabled() && !offDryRun()) {
       throw new ApiError(403, "Contributions are disabled on this server");
     }

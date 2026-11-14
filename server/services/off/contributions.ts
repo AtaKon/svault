@@ -128,16 +128,22 @@ export async function listContributions(
 ): Promise<OffContribution[]> {
   const limit = Math.min(Math.max(Number(filters.limit ?? 50), 1), 200);
   const status = String(filters.status ?? "").trim();
+  // The item name is joined live, so it follows the contributor's current
+  // access: after leaving the house the row stays but its item name is hidden.
   const rows = status
     ? await all<ContributionRow & { item_name: string | null }>(
-        `SELECT c.*, i.name AS item_name FROM off_contributions c
+        `SELECT c.*, CASE WHEN m.user_id IS NULL THEN NULL ELSE i.name END AS item_name
+         FROM off_contributions c
          LEFT JOIN items i ON i.id = c.item_id AND i.house_id = c.house_id
+         LEFT JOIN house_members m ON m.house_id = c.house_id AND m.user_id = c.user_id
          WHERE c.user_id = ? AND c.status = ? ORDER BY c.created_at DESC LIMIT ?`,
         [userId, status, limit],
       )
     : await all<ContributionRow & { item_name: string | null }>(
-        `SELECT c.*, i.name AS item_name FROM off_contributions c
+        `SELECT c.*, CASE WHEN m.user_id IS NULL THEN NULL ELSE i.name END AS item_name
+         FROM off_contributions c
          LEFT JOIN items i ON i.id = c.item_id AND i.house_id = c.house_id
+         LEFT JOIN house_members m ON m.house_id = c.house_id AND m.user_id = c.user_id
          WHERE c.user_id = ? ORDER BY c.created_at DESC LIMIT ?`,
         [userId, limit],
       );
@@ -146,8 +152,10 @@ export async function listContributions(
 
 export async function getContribution(id: string, userId: string): Promise<OffContribution | null> {
   const row = await get<ContributionRow & { item_name: string | null }>(
-    `SELECT c.*, i.name AS item_name FROM off_contributions c
+    `SELECT c.*, CASE WHEN m.user_id IS NULL THEN NULL ELSE i.name END AS item_name
+     FROM off_contributions c
      LEFT JOIN items i ON i.id = c.item_id AND i.house_id = c.house_id
+     LEFT JOIN house_members m ON m.house_id = c.house_id AND m.user_id = c.user_id
      WHERE c.id = ? AND c.user_id = ?`,
     [id, userId],
   );
