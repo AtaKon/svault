@@ -7,6 +7,15 @@ import { buildDynamicMatcher, matchDynamicTranslation } from "@shared/i18n";
 export type Language = "en" | "el";
 
 const EL: Record<string, string> = {
+  "Keeps for N days after opening": "Διατηρείται για N ημέρες μετά το άνοιγμα",
+  "Mark opened": "Σήμανση ως ανοιγμένο",
+  "Not opened": "Δεν έχει ανοιχτεί",
+  "Opened date": "Ημερομηνία ανοίγματος",
+  "opened {date}": "ανοίχτηκε {date}",
+  " · use by {date}": " · χρήση έως {date}",
+  "Could not update batch": "Δεν ήταν δυνατή η ενημέρωση της παρτίδας",
+  "Batch not found": "Η παρτίδα δεν βρέθηκε",
+
   "Espresso log": "Ημερολόγιο espresso",
   "Espresso coffee": "Καφές espresso",
   "Track espresso shots": "Καταγραφή shots espresso",

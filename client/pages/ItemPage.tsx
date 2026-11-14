@@ -28,7 +28,7 @@ import { StockDialog } from "@/components/ItemCard";
 import { PriceChart } from "@/components/PriceChart";
 import { EspressoLogCard } from "@/components/Espresso";
 import { useToast } from "@/components/toast";
-import { daysUntil, money, qty, relativeTime, shortDate, unitPriceLabel } from "@/format";
+import { daysUntil, money, qty, relativeTime, shortDate, todayInput, unitPriceLabel } from "@/format";
 import { offProjectLabel } from "@/off";
 import type {
   AttributeDef,
@@ -68,6 +68,8 @@ export function ItemPage() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [quickBusy, setQuickBusy] = useState(false);
+  const [openingDates, setOpeningDates] = useState<Record<string, string>>({});
+  const [openingBusy, setOpeningBusy] = useState<string | null>(null);
   const [barcodeInput, setBarcodeInput] = useState("");
   const [barcodeBusy, setBarcodeBusy] = useState(false);
   const [scanOpen, setScanOpen] = useState(false);
@@ -110,6 +112,21 @@ export function ItemPage() {
   useEffect(() => {
     setPriceVendor("");
   }, [itemId]);
+
+  const setOpened = async (lotId: string, opened: boolean) => {
+    setOpeningBusy(lotId);
+    try {
+      const detail = await api<ItemDetail>(`/api/items/${itemId}/lots/${lotId}/opened`, {
+        method: opened ? "PUT" : "DELETE",
+        ...(opened ? { body: { openedAt: openingDates[lotId] || todayInput() } } : {}),
+      });
+      setItem(detail);
+    } catch (err) {
+      toast.error(err instanceof Error ? t(err.message) : t("Could not update batch"));
+    } finally {
+      setOpeningBusy(null);
+    }
+  };
 
   const quick = async (action: "add" | "remove") => {
     if (!item) return;
@@ -480,9 +497,9 @@ export function ItemPage() {
                 {item.lots
                   .filter((lot) => lot.quantity > 0)
                   .map((lot) => {
-                    const days = daysUntil(lot.expiresAt);
+                    const days = daysUntil(lot.effectiveExpiresAt);
                     return (
-                      <div key={lot.id} className="flex items-center gap-3 py-2.5 text-sm">
+                      <div key={lot.id} className="flex flex-wrap items-start gap-3 py-2.5 text-sm">
                         <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-raised text-muted">
                           <Icon name="box" size={15} />
                         </span>
@@ -496,10 +513,20 @@ export function ItemPage() {
                             {lot.purchasedAt ? t(" · bought {date}", { date: shortDate(lot.purchasedAt) }) : ""}
                             {lot.vendorName ? ` · ${lot.vendorName}` : ""}
                           </div>
+                          <div className="mt-1 text-xs text-muted">
+                            {lot.openedAt ? t("opened {date}", { date: shortDate(lot.openedAt) }) : t("Not opened")}
+                            {lot.openedAt && lot.effectiveExpiresAt ? t(" · use by {date}", { date: shortDate(lot.effectiveExpiresAt) }) : ""}
+                          </div>
+                          {can("member") && <div className="mt-2 flex flex-wrap items-center gap-2">
+                            {!lot.openedAt && <Input aria-label={t("Opened date")} className="w-auto max-w-full" type="date" value={openingDates[lot.id] || todayInput()} onChange={(e) => setOpeningDates((dates) => ({ ...dates, [lot.id]: e.target.value }))} />}
+                            <button type="button" disabled={openingBusy === lot.id} onClick={() => void setOpened(lot.id, !lot.openedAt)} className="rounded-md px-2 py-1 text-xs font-medium text-brand hover:bg-raised disabled:opacity-50">
+                              {lot.openedAt ? t("Not opened") : t("Mark opened")}
+                            </button>
+                          </div>}
                         </div>
-                        {lot.expiresAt && (
+                        {lot.effectiveExpiresAt && (
                           <Badge tone={days != null && days < 0 ? "danger" : days != null && days <= 7 ? "warn" : "outline"}>
-                            {days != null && days < 0 ? t("expired") : t("exp {date}", { date: shortDate(lot.expiresAt) })}
+                            {days != null && days < 0 ? t("expired") : t("exp {date}", { date: shortDate(lot.effectiveExpiresAt) })}
                           </Badge>
                         )}
                       </div>
