@@ -102,3 +102,5 @@ createdb svault_test
 TEST_DATABASE_URL=postgres://postgres@localhost:5432/svault_test npm run test:postgres
 ```
 
+
+Items may store `warranty_until` and `warranty_note`. `item_documents` stores private item document metadata; the files reside in the uploads directory, which is included in instance backups and remains in DATA_DIR during PostgreSQL migration.

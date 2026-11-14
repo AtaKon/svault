@@ -486,6 +486,8 @@ export interface Item {
   houseId: string;
   name: string;
   description: string | null;
+  warrantyUntil?: string | null;
+  warrantyNote?: string | null;
   brand: string | null;
   categoryId: string | null;
   categoryName?: string | null;

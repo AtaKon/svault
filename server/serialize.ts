@@ -104,6 +104,8 @@ export function serializeItem(row: any, barcodes: { id: string; code: string; fo
     houseId: row.house_id,
     name: row.name,
     description: row.description ?? null,
+    warrantyUntil: row.warranty_until ?? null,
+    warrantyNote: row.warranty_note ?? null,
     brand: row.brand ?? null,
     categoryId: row.category_id ?? null,
     categoryName: row.category_name ?? null,
