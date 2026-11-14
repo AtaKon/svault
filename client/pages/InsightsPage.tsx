@@ -70,7 +70,7 @@ export function InsightsPage() {
       if (!editingBudgetRef.current) {
         setBudget(String(spendData.budget || ""));
         setThreshold(String(spendData.settings.priceAlertPercent));
-        setCategoryBudgets(Object.fromEntries(Object.entries(spendData.settings.categoryBudgets).map(([id, value]) => [id, String(value)])));
+        setCategoryBudgets(Object.fromEntries(spendData.categoryBudgets.map((entry) => [entry.categoryId, String(entry.budget || "")])));
         setIncludeBills(spendData.settings.includeBills);
       }
     } catch (err) {

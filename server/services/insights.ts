@@ -181,7 +181,7 @@ export async function spendInsight(houseId: string, months = 6): Promise<SpendIn
   });
   const monthTotal = money(byMonthMap.get(currentMonth)?.total ?? 0);
   const budget = settings.monthlyBudget;
-  const activeMonths = [...byMonthMap.values()].filter((entry) => entry.receipts > 0);
+  const activeMonths = keys.slice(-count).map((key) => byMonthMap.get(key)!).filter((entry) => entry.receipts > 0 || entry.total !== 0);
 
   return {
     currency,

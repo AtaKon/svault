@@ -7,6 +7,7 @@ import { buildDynamicMatcher, matchDynamicTranslation } from "@shared/i18n";
 export type Language = "en" | "el";
 
 const EL: Record<string, string> = {
+  "Category must belong to this house": "Η κατηγορία πρέπει να ανήκει σε αυτό το σπίτι.",
   "Enter valid category budgets.": "Εισαγάγετε έγκυρους προϋπολογισμούς κατηγοριών.",
   "Projected month-end spending: {amount}": "Εκτιμώμενη δαπάνη τέλους μήνα: {amount}",
   "Over budget": "Υπέρβαση προϋπολογισμού",

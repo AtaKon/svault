@@ -9738,10 +9738,12 @@ describe("insights, household split and admin console", () => {
     assert.equal(spend.monthTotal, 4.5);
     const { scanBudgetAlerts } = await import("../services/insights.js");
     await scanBudgetAlerts(insightHouse);
+    await request(settingsPath, { method: "PATCH", body: { categoryBudgets: { [category.id]: 3.5 } } });
     await scanBudgetAlerts(insightHouse);
-    let notifications = (await request(`/api/houses/${insightHouse}/notifications`)).data.notifications.filter((n: any) => n.type === "budget_alert");
+    await scanBudgetAlerts(insightHouse);
+    const notifications = (await request(`/api/houses/${insightHouse}/notifications`)).data.notifications.filter((n: any) => n.type === "budget_alert");
     assert.equal(notifications.filter((n: any) => n.data.categoryId === null).length, 2);
-    assert.equal(notifications.filter((n: any) => n.data.categoryId === category.id).length, 1);
+    assert.equal(notifications.filter((n: any) => n.data.categoryId === category.id).length, 2);
     await request(settingsPath, { method: "PATCH", body: { monthlyBudget: 10, categoryBudgets: {}, includeBills: false } });
   });
 
