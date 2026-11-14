@@ -102,3 +102,5 @@ createdb svault_test
 TEST_DATABASE_URL=postgres://postgres@localhost:5432/svault_test npm run test:postgres
 ```
 
+
+Items may define `opened_shelf_life_days` (nullable integer); stock lots may record `opened_at` (nullable ISO date). These fields are included in generic backups and SQLite-to-PostgreSQL migration.
