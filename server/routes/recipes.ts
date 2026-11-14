@@ -1,7 +1,7 @@
 import { Router } from "express";
 import fs from "node:fs/promises";
 import { z } from "zod";
-import { all, get, newId, now, parseJson, run, tx } from "../db.js";
+import { all, get, lockHouseholdLedger, newId, now, parseJson, run, tx } from "../db.js";
 import { memberRole, requireAuth, roleAtLeast } from "../auth.js";
 import { ApiError, handler, parseBody, requireHouse } from "../http.js";
 import { recipeMatch, serializeRecipe, stockQuantity } from "../serialize.js";
@@ -15,6 +15,8 @@ import { removeUnreferencedUploads } from "../services/upload-cleanup.js";
 import { uploader, uploadPath } from "../upload.js";
 import { assertImageReference, assertUploadsOwned, rememberUpload, uploadOwnedBy, UploadOwnershipError } from "../services/receipt-scans.js";
 import type { OffProduct, Role, Recipe } from "../../shared/types.js";
+import { addStock, afterStockChange, itemQuantity, removeStock } from "../services/stock.js";
+import { convert, round } from "../units.js";
 import { readableWordRatio } from "../../shared/notebook-scan.js";
 
 export const recipeRoutes = Router();
@@ -834,6 +836,67 @@ recipeRoutes.post(
 );
 
 /* ------------------------------------------------------------ single recipe */
+
+singleRecipeRoutes.post(
+  "/:recipeId/cook",
+  handler(async (req, res) => {
+    const { recipe, houseId } = await recipeAccess(req, "member");
+    const body = parseBody(z.object({
+      portions: z.number().positive().max(1000),
+      idempotencyKey: z.string().min(8).max(120),
+      lines: z.array(z.object({ ingredientId: z.string().min(1), itemId: z.string().min(1), quantity: z.number().positive().max(1e9), unit: z.string().trim().min(1).max(20) })).max(150),
+      leftovers: z.object({ portions: z.number().positive().max(1000), locationId: z.string().min(1).max(60).nullable(), useBy: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }).optional(),
+    }), req.body);
+    const result = await tx(async (session) => {
+      // Serialise cooks per house, including the idempotency check and stock reads.
+      await lockHouseholdLedger(session, houseId);
+      const previous = await get<{ response: string }>("SELECT response FROM stock_mutations WHERE house_id = ? AND idempotency_key = ?", [houseId, body.idempotencyKey]);
+      if (previous) return { response: parseJson(previous.response, {}), changed: [] as string[] };
+      if (body.leftovers?.locationId && !await get("SELECT id FROM locations WHERE id = ? AND house_id = ?", [body.leftovers.locationId, houseId])) {
+        throw new ApiError(400, "Location does not exist in this house");
+      }
+      const lines = [];
+      const changed = new Set<string>();
+      for (const line of body.lines) {
+        const item = await get<any>("SELECT id, name, unit FROM items WHERE id = ? AND house_id = ?", [line.itemId, houseId]);
+        if (!item) throw new ApiError(400, "Item does not exist in this house");
+        if (!await get("SELECT id FROM recipe_ingredients WHERE id = ? AND recipe_id = ? AND item_id = ?", [line.ingredientId, recipe.id, line.itemId])) {
+          throw new ApiError(400, "Ingredient is not linked to this item in the recipe");
+        }
+        const converted = convert(line.quantity, line.unit, item.unit);
+        if (converted == null) throw new ApiError(400, `Cannot convert ${line.unit} to ${item.unit} for ${item.name}`);
+        const requested = round(converted);
+        if (requested <= 0) throw new ApiError(400, `Quantity for ${item.name} is too small`);
+        const consumed = Math.min(requested, await itemQuantity(item.id));
+        if (consumed > 0) {
+          await removeStock({ itemId: item.id, houseId, userId: req.user!.id, quantity: consumed, unit: item.unit, reason: `Cooked: ${recipe.title}`, note: `Cooked: ${recipe.title}` });
+          changed.add(item.id);
+        }
+        lines.push({ ingredientId: line.ingredientId, itemId: item.id, name: item.name, unit: item.unit, requested, consumed, shortfall: round(requested - consumed) });
+      }
+      let leftovers = null;
+      if (body.leftovers) {
+        const name = `Leftovers: ${recipe.title}`;
+        let item = await get<any>("SELECT id FROM items WHERE house_id = ? AND name = ? AND unit = 'pcs' AND archived = 0 ORDER BY created_at, id LIMIT 1", [houseId, name]);
+        if (!item) {
+          item = { id: newId("itm") };
+          await run("INSERT INTO items (id, house_id, name, unit, created_by, created_at, updated_at) VALUES (?, ?, ?, 'pcs', ?, ?, ?)", [item.id, houseId, name, req.user!.id, now(), now()]);
+        }
+        const defaultDate = new Date();
+        defaultDate.setUTCDate(defaultDate.getUTCDate() + 3);
+        const useBy = body.leftovers.useBy ?? defaultDate.toISOString().slice(0, 10);
+        await addStock({ itemId: item.id, houseId, userId: req.user!.id, quantity: body.leftovers.portions, unit: "pcs", locationId: body.leftovers.locationId, expiresAt: useBy, reason: `Cooked: ${recipe.title}`, note: `Cooked: ${recipe.title}` });
+        changed.add(item.id);
+        leftovers = { itemId: item.id, portions: body.leftovers.portions, locationId: body.leftovers.locationId, useBy };
+      }
+      const response = { portions: body.portions, lines, leftovers };
+      await run("INSERT INTO stock_mutations (id, house_id, idempotency_key, user_id, response, created_at) VALUES (?, ?, ?, ?, ?, ?)", [newId("mut"), houseId, body.idempotencyKey, req.user!.id, JSON.stringify(response), now()]);
+      return { response, changed: [...changed] };
+    });
+    for (const itemId of result.changed) await afterStockChange(itemId);
+    res.json(result.response);
+  }),
+);
 
 singleRecipeRoutes.get(
   "/:recipeId",

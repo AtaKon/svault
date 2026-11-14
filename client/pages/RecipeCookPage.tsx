@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api } from "@/api";
-import { Badge, Button, Card, EmptyState, LoadingBlock, cn } from "@/components/ui";
+import { Badge, Button, Card, EmptyState, LoadingBlock, Sheet, cn } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { useToast } from "@/components/toast";
 import { minutesLabel, plural, qty } from "@/format";
@@ -12,8 +12,10 @@ import {
   scaledQuantity,
 } from "@shared/recipe-grams";
 import { scaledCalories } from "@shared/recipe-calories";
-import type { Recipe } from "@shared/types";
+import type { Location, Recipe } from "@shared/types";
+import { useHouse } from "@/state";
 import { useI18n } from "@/i18n";
+import { newQueueId } from "@/offline-queue";
 
 /** Scale an ingredient line and keep a readable quantity. */
 function scaled(quantity: number | null, base: number | null, portions: number): number | null {
@@ -23,9 +25,20 @@ function scaled(quantity: number | null, base: number | null, portions: number):
 
 export function RecipeCookPage() {
   const { t } = useI18n();
+  const { house, can } = useHouse();
   const { recipeId = "" } = useParams();
   const navigate = useNavigate();
   const toast = useToast();
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [locations, setLocations] = useState<Location[]>([]);
+  const [reviewLines, setReviewLines] = useState<{ ingredientId: string; itemId: string; name: string; quantity: string; unit: string; enabled: boolean }[]>([]);
+  const [saveLeftovers, setSaveLeftovers] = useState(false);
+  const [leftoverPortions, setLeftoverPortions] = useState("1");
+  const [locationId, setLocationId] = useState("");
+  const [useBy, setUseBy] = useState(() => { const d = new Date(); d.setDate(d.getDate() + 3); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; });
+  const [cookKey, setCookKey] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [result, setResult] = useState<{ lines: { name: string; shortfall: number; unit: string }[] } | null>(null);
   const [recipe, setRecipe] = useState<Recipe | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [portions, setPortions] = useState(1);
@@ -49,6 +62,10 @@ export function RecipeCookPage() {
     // language changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recipeId]);
+
+  useEffect(() => {
+    api<Location[]>(`/api/houses/${house.id}/locations`).then(setLocations).catch(() => toast.error(t("Could not load locations")));
+  }, [house.id]);
 
   // Keep the screen on while cooking, when the browser supports it. The browser
   // drops the lock when the tab is hidden, so it is requested again on return.
@@ -124,6 +141,35 @@ export function RecipeCookPage() {
     if (next.has(index)) next.delete(index);
     else next.add(index);
     setter(next);
+  };
+
+  const openReview = () => {
+    setReviewLines(visibleIngredients.filter(({ ingredient }) => ingredient.itemId && ingredient.id).map(({ ingredient, quantity }) => ({
+      ingredientId: ingredient.id!, itemId: ingredient.itemId!, name: ingredient.name,
+      quantity: quantity == null ? "" : String(quantity), unit: ingredient.unit ?? "", enabled: true,
+    })));
+    // newQueueId falls back when crypto.randomUUID is missing (plain-HTTP LAN installs).
+    setCookKey(newQueueId());
+    setResult(null);
+    setReviewOpen(true);
+  };
+  const confirmCook = async () => {
+    const selected = reviewLines.filter((line) => line.enabled);
+    if (selected.some((line) => !line.unit.trim() || !Number.isFinite(Number(line.quantity)) || Number(line.quantity) <= 0) ||
+        (saveLeftovers && (!Number.isFinite(Number(leftoverPortions)) || Number(leftoverPortions) <= 0 || !useBy))) {
+      toast.error(t("Enter a positive quantity and unit for each selected ingredient."));
+      return;
+    }
+    setSaving(true);
+    try {
+      const response = await api<{ lines: { name: string; shortfall: number; unit: string }[] }>(`/api/recipes/${recipe.id}/cook`, { body: {
+        portions, idempotencyKey: cookKey,
+        lines: selected.map(({ ingredientId, itemId, quantity, unit }) => ({ ingredientId, itemId, quantity: Number(quantity), unit })),
+        ...(saveLeftovers ? { leftovers: { portions: Number(leftoverPortions), locationId: locationId || null, useBy } } : {}),
+      } });
+      setResult(response);
+    } catch (err) { toast.error(err instanceof Error ? t(err.message) : t("Could not finish cooking")); }
+    finally { setSaving(false); }
   };
 
   // Keep the two figures consistent: whatever the whole scaled recipe holds,
@@ -353,11 +399,19 @@ export function RecipeCookPage() {
             </div>
             {recipe.servings && portions !== base && <div>{t("Scaled from {count} portions", { count: base })}</div>}
           </div>
-          <Button variant="secondary" icon="check" onClick={() => navigate(`/recipes/${recipe.id}`)}>
+          <Button variant="secondary" icon="check" onClick={openReview} disabled={!can("member")}>
             {t("Finish cooking")}
           </Button>
         </div>
       </div>
+      <Sheet open={reviewOpen} onClose={() => { if (!saving) { if (result) navigate(`/recipes/${recipe.id}`); else setReviewOpen(false); } }} title={result ? t("Cooking saved") : t("Review cooking")} footer={result ? <Button className="w-full" onClick={() => navigate(`/recipes/${recipe.id}`)}>{t("Back to recipe")}</Button> : <Button className="w-full" disabled={saving} onClick={confirmCook}>{saving ? t("Saving…") : t("Confirm cooking")}</Button>}>
+        {result ? <div className="space-y-2"><p>{t("Cooking has been saved.")}</p>{result.lines.some((line) => line.shortfall > 0) ? <><p className="font-semibold">{t("Stock shortfall")}</p>{result.lines.filter((line) => line.shortfall > 0).map((line, index) => <p key={index}>{line.name}: {qty(line.shortfall)} {line.unit}</p>)}</> : <p>{t("No stock shortfalls.")}</p>}</div> : <div className="space-y-4">
+          <p className="text-sm text-muted">{t("Review the amounts used for {count} portions.", { count: portions })}</p>
+          {reviewLines.map((line, index) => <div key={line.ingredientId} className="rounded-xl border border-line p-3"><label className="flex items-center gap-2"><input type="checkbox" checked={line.enabled} onChange={(e) => setReviewLines((lines) => lines.map((entry, i) => i === index ? { ...entry, enabled: e.target.checked } : entry))} /><span className="min-w-0 break-words font-medium">{line.name}</span></label><div className="mt-2 flex gap-2"><input aria-label={t("Quantity")} type="number" min="0" step="any" disabled={!line.enabled} value={line.quantity} onChange={(e) => setReviewLines((lines) => lines.map((entry, i) => i === index ? { ...entry, quantity: e.target.value } : entry))} className="w-1/2 min-w-0 rounded-xl border border-line bg-bg p-2" /><input aria-label={t("Unit")} disabled={!line.enabled} value={line.unit} onChange={(e) => setReviewLines((lines) => lines.map((entry, i) => i === index ? { ...entry, unit: e.target.value } : entry))} className="w-1/2 min-w-0 rounded-xl border border-line bg-bg p-2" /></div></div>)}
+          {recipe.ingredients.filter((ingredient) => !ingredient.itemId).map((ingredient, index) => <p key={index} className="text-sm text-muted">{ingredient.name} · {t("Not tracked")}</p>)}
+          <div className="space-y-3 rounded-xl border border-line p-3"><label className="flex items-center gap-2 font-medium"><input type="checkbox" checked={saveLeftovers} onChange={(e) => setSaveLeftovers(e.target.checked)} />{t("Save leftovers")}</label>{saveLeftovers && <><label className="block text-sm">{t("Portions")}<input type="number" min="0.001" step="any" value={leftoverPortions} onChange={(e) => setLeftoverPortions(e.target.value)} className="mt-1 w-full rounded-xl border border-line bg-bg p-2" /></label><label className="block text-sm">{t("Location")}<select value={locationId} onChange={(e) => setLocationId(e.target.value)} className="mt-1 w-full rounded-xl border border-line bg-bg p-2"><option value="">{t("No location")}</option>{locations.map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}</select></label><label className="block text-sm">{t("Use by")}<input type="date" value={useBy} onChange={(e) => setUseBy(e.target.value)} className="mt-1 w-full rounded-xl border border-line bg-bg p-2" /></label></>}</div>
+        </div>}
+      </Sheet>
     </div>
   );
 }

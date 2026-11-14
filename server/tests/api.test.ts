@@ -5424,6 +5424,47 @@ describe("receipts and shops", () => {
   });
 });
 
+describe("recipe cooking", () => {
+  it("converts scaled quantities, consumes earliest expiry, clamps shortfalls, saves leftovers and replays a key", async () => {
+    const item = await request(`/api/houses/${houseId}/items`, { body: { name: "Cook flour", unit: "g" } });
+    assert.equal(item.status, 201);
+    for (const [quantity, expiresAt] of [[400, "2030-01-01"], [600, "2031-01-01"]] as const) {
+      assert.equal((await request(`/api/items/${item.data.id}/stock`, { body: { action: "add", quantity, expiresAt } })).status, 200);
+    }
+    const recipe = await request(`/api/houses/${houseId}/recipes`, { body: { title: "Cook test", servings: 2, ingredients: [{ name: "Flour", itemId: item.data.id, quantity: 0.3, unit: "kg" }] } });
+    const line = { ingredientId: recipe.data.ingredients[0].id, itemId: item.data.id, quantity: 0.6, unit: "kg" };
+    const key = randomUUID();
+    const locations = await request(`/api/houses/${houseId}/locations`);
+    const body = { portions: 4, idempotencyKey: key, lines: [line], leftovers: { portions: 2, locationId: locations.data[0].id, useBy: "2030-02-01" } };
+    const cooked = await request(`/api/recipes/${recipe.data.id}/cook`, { body });
+    assert.equal(cooked.status, 200);
+    assert.equal(cooked.data.lines[0].consumed, 600);
+    const lots = await all<any>("SELECT quantity FROM stock_lots WHERE item_id = ? ORDER BY expires_at", [item.data.id]);
+    assert.deepEqual(lots.map((lot) => Number(lot.quantity)), [0, 400]);
+    const leftover = await get<any>("SELECT i.name, l.quantity, l.expires_at, l.location_id FROM items i JOIN stock_lots l ON l.item_id = i.id WHERE i.id = ?", [cooked.data.leftovers.itemId]);
+    assert.deepEqual([leftover.name, Number(leftover.quantity), leftover.expires_at, leftover.location_id], ["Leftovers: Cook test", 2, "2030-02-01", locations.data[0].id]);
+    assert.deepEqual((await request(`/api/recipes/${recipe.data.id}/cook`, { body })).data, cooked.data);
+    const short = await request(`/api/recipes/${recipe.data.id}/cook`, { body: { ...body, idempotencyKey: randomUUID(), leftovers: undefined } });
+    assert.equal(short.data.lines[0].consumed, 400);
+    assert.equal(short.data.lines[0].shortfall, 200);
+  });
+
+  it("refuses viewers, foreign items and foreign locations", async () => {
+    const viewer = await request("/api/auth/register", { body: { name: "Cook viewer", email: "cook-viewer@example.com", password: "test password" } });
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, 'viewer', ?)", [houseId, viewer.data.user.id, new Date().toISOString()]);
+    const recipe = await request(`/api/houses/${houseId}/recipes`, { body: { title: "Access cook" } });
+    const url = `/api/recipes/${recipe.data.id}/cook`;
+    const body = { portions: 1, idempotencyKey: randomUUID(), lines: [] };
+    assert.equal((await request(url, { auth: viewer.cookie!, body })).status, 403);
+    const foreignHouse = await request("/api/houses", { body: { name: "Foreign cook house" } });
+    const foreignItem = await request(`/api/houses/${foreignHouse.data.id}/items`, { body: { name: "Foreign ingredient", unit: "pcs" } });
+    const foreignLocations = await request(`/api/houses/${foreignHouse.data.id}/locations`);
+    assert.equal((await request(url, { body: { ...body, lines: [{ ingredientId: "foreign", itemId: foreignItem.data.id, quantity: 1, unit: "pcs" }] } })).status, 400);
+    assert.equal((await request(url, { body: { ...body, leftovers: { portions: 1, locationId: foreignLocations.data[0].id } } })).status, 400);
+    await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [houseId, viewer.data.user.id]);
+  });
+});
+
 describe("recipes", () => {
   it("preserves ingredient links, notes and timers through the edit form", async () => {
     const created = await request(`/api/houses/${houseId}/recipes`, { body: {

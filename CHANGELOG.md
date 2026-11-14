@@ -67,6 +67,8 @@ All notable changes to SVault are documented here. The format follows
 
 ### Added
 
+- **Cooking stock and leftovers.** Review scaled linked ingredients when finishing a recipe, deduct available stock, see shortfalls, and save leftover portions with a use-by date.
+
 - **Recipe portion, weight and calorie estimates.** Recipes now estimate the total prepared weight and
   the weight of one portion in grams alongside the existing calorie and macro panel. Volume uses a
   typical density per ingredient and countable units a typical piece weight, with coverage reported so
