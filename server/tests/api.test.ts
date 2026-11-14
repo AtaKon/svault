@@ -4185,6 +4185,53 @@ describe("OpenFoodFacts links and shared catalogue", () => {
     }
   });
 
+  it("hides a contribution's item name after the contributor leaves the house", async () => {
+    const strangerMe = await request("/api/auth/me", { auth: secondUserCookie });
+    const strangerId = strangerMe.data.user.id;
+    const stamp = new Date().toISOString();
+    await run(
+      "INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, 'member', ?) ON CONFLICT DO NOTHING",
+      [houseId, strangerId, stamp],
+    );
+    const item = await request(`/api/houses/${houseId}/items`, {
+      method: "POST",
+      body: { name: "Name leak feta", unit: "pcs" },
+    });
+    assert.equal(item.status, 201);
+    const contributionId = `offc_name_${randomUUID().slice(0, 8)}`;
+    await run(
+      `INSERT INTO off_contributions
+         (id, idempotency_key, user_id, house_id, item_id, project, code, kind, payload, field_keys, status, attempts, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'off', ?, 'missing_fields', '{}', '["brand"]', 'sent', 1, ?, ?)`,
+      [contributionId, `name-${contributionId}`, strangerId, houseId, item.data.id, fetaCode, stamp, stamp],
+    );
+    try {
+      const list = await request("/api/off/contributions", { auth: secondUserCookie });
+      const listed = list.data.contributions.find((row: any) => row.id === contributionId);
+      assert.equal(listed.itemName, "Name leak feta");
+      const one = await request(`/api/off/contributions/${contributionId}`, { auth: secondUserCookie });
+      assert.equal(one.data.contribution.itemName, "Name leak feta");
+
+      await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [houseId, strangerId]);
+
+      const afterList = await request("/api/off/contributions", { auth: secondUserCookie });
+      const hidden = afterList.data.contributions.find((row: any) => row.id === contributionId);
+      assert.ok(hidden);
+      assert.equal(hidden.itemName, null);
+      // The rest of the row is unchanged, only the live item name is withheld.
+      assert.equal(hidden.code, fetaCode);
+      assert.equal(hidden.itemId, item.data.id);
+      const afterOne = await request(`/api/off/contributions/${contributionId}`, { auth: secondUserCookie });
+      assert.equal(afterOne.status, 200);
+      assert.equal(afterOne.data.contribution.itemName, null);
+      assert.equal(afterOne.data.contribution.itemId, item.data.id);
+    } finally {
+      await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [houseId, strangerId]);
+      await run("DELETE FROM off_contribution_events WHERE contribution_id = ?", [contributionId]);
+      await run("DELETE FROM off_contributions WHERE id = ?", [contributionId]);
+    }
+  });
+
   it("offers and files a wrong-project report", async () => {
     const beautyCode = "3560070791460";
     const timestamp = new Date().toISOString();
