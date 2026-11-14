@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api, ApiError } from "./api";
 import type { House, Role, User } from "@shared/types";
 
@@ -71,17 +71,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [houseId]);
 
+  // Only the most recent session check may apply its result: the start-up check
+  // and an "online" re-check can overlap on a flaky connection.
+  const refreshGeneration = useRef(0);
+
   const refresh = useCallback(async () => {
+    const generation = ++refreshGeneration.current;
     try {
       const data = await api<{ user: User; houses: House[] }>("/api/auth/me");
+      if (generation !== refreshGeneration.current) return;
       setUser(data.user);
       applyHouses(data.houses);
       writeSessionSnapshot(data);
     } catch (error) {
-      // Only the server saying "not signed in" signs the user out. A network
-      // failure or a restore in progress falls back to the last known session.
-      const signedOut = error instanceof ApiError && error.status === 401;
-      const snapshot = signedOut ? null : readSessionSnapshot();
+      if (generation !== refreshGeneration.current) return;
+      // Fall back to the last known session only when the server could not be
+      // reached (status 0) or is restoring a backup (503); any other answer
+      // from a reachable server is trusted as before.
+      const status = error instanceof ApiError ? error.status : 0;
+      const signedOut = status === 401;
+      const snapshot = status === 0 || status === 503 ? readSessionSnapshot() : null;
       if (snapshot) {
         setUser(snapshot.user);
         applyHouses(snapshot.houses);
@@ -91,7 +100,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (signedOut) writeSessionSnapshot(null);
       }
     } finally {
-      setLoading(false);
+      if (generation === refreshGeneration.current) setLoading(false);
     }
   }, [applyHouses]);
 
@@ -133,8 +142,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const signOut = useCallback(async () => {
-    await api("/api/auth/logout", { method: "POST" }).catch(() => undefined);
+    // Forget the device copy first, so signing out works even while offline.
     writeSessionSnapshot(null);
+    refreshGeneration.current++;
+    await api("/api/auth/logout", { method: "POST" }).catch(() => undefined);
     setUser(null);
     setHouses([]);
     try {
