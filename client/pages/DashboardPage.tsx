@@ -180,6 +180,16 @@ export function DashboardPage() {
           </section>
 
           <section>
+            <h2 className="mb-2.5 font-display text-xl">{t("Running out soon")}</h2>
+            {data?.runningOutSoon.length ? <div className="space-y-2">{data.runningOutSoon.map((item) => (
+              <Link key={item.id} to={`/items/${item.id}`} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-line bg-surface p-3">
+                <span className="min-w-0 break-words font-medium">{item.name}</span>
+                <span className="text-sm text-muted">{t("Runs out in about {count} days", { count: Math.max(1, Math.round(item.forecast!.daysLeft)) })}</span>
+              </Link>
+            ))}</div> : <Card className="p-4 text-sm text-muted">{t("No items are forecast to run out soon.")}</Card>}
+          </section>
+
+          <section>
             <div className="mb-2.5 flex items-center justify-between">
               <h2 className="font-display text-xl">{t("Rooms & places")}</h2>
               <Link to="/settings?tab=places" className="text-xs font-medium text-brand hover:underline">

@@ -376,6 +376,12 @@ export function ItemPage() {
                 </div>
               </div>
 
+              {item.forecast && (
+                <div className="mt-3 rounded-xl bg-raised p-3 text-sm">
+                  <div>{t("Runs out in about {count} days", { count: Math.max(1, Math.round(item.forecast.daysLeft)) })}</div>
+                  <div className="text-xs text-muted">{t("Based on the last 60 days")}</div>
+                </div>
+              )}
               {item.isLow && (
                 <div className="mt-3 flex items-center gap-2 rounded-xl border border-warn/25 bg-warn-soft px-3 py-2 text-xs text-warn">
                   <Icon name="alert" size={14} />
