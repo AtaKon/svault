@@ -289,8 +289,9 @@ app.use(
     dotfiles: "deny",
     setHeaders: (res, filePath) => {
       res.setHeader("X-Content-Type-Options", "nosniff");
-      // Signed-in content: browsers may cache it, shared proxies may not.
-      res.setHeader("Cache-Control", "private, max-age=2592000");
+      // Signed-in content: browsers revalidate on every view (a cheap 304), so a
+      // signed-out or removed member does not keep reading it from the cache.
+      res.setHeader("Cache-Control", "private, no-cache");
       res.setHeader("Content-Security-Policy", "default-src 'none'; img-src 'self'; sandbox");
       if (!IMAGE_EXTENSIONS.has(path.extname(filePath).toLowerCase())) {
         res.setHeader("Content-Type", "application/octet-stream");

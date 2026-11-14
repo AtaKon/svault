@@ -2047,6 +2047,13 @@ describe("inventory and stock", () => {
       for (const parentId of [foreignIdValue, localId]) {
         assert.equal((await request(`/api/houses/${houseId}/${type}/${localId}`, { method: "PATCH", body: { parentId } })).status, 400);
       }
+      // A -> B -> C is fine; then making A a child of C would close a loop.
+      const a = await request(`/api/houses/${houseId}/${type}`, { method: "POST", body: { name: `Loop A ${type}` } });
+      const b = await request(`/api/houses/${houseId}/${type}`, { method: "POST", body: { name: `Loop B ${type}`, parentId: a.data.id } });
+      const c = await request(`/api/houses/${houseId}/${type}`, { method: "POST", body: { name: `Loop C ${type}`, parentId: b.data.id } });
+      assert.ok(c.status < 300, JSON.stringify(c.data));
+      assert.equal((await request(`/api/houses/${houseId}/${type}/${a.data.id}`, { method: "PATCH", body: { parentId: c.data.id } })).status, 400);
+      assert.equal((await request(`/api/houses/${houseId}/${type}/${c.data.id}`, { method: "PATCH", body: { parentId: a.data.id } })).status, 200);
     }
     const foreignCategories = await request(`/api/houses/${foreignId}/categories`);
     const categoryId = foreignCategories.data[0].id;
@@ -4185,6 +4192,53 @@ describe("OpenFoodFacts links and shared catalogue", () => {
     }
   });
 
+  it("hides a contribution's item name after the contributor leaves the house", async () => {
+    const strangerMe = await request("/api/auth/me", { auth: secondUserCookie });
+    const strangerId = strangerMe.data.user.id;
+    const stamp = new Date().toISOString();
+    await run(
+      "INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, 'member', ?) ON CONFLICT DO NOTHING",
+      [houseId, strangerId, stamp],
+    );
+    const item = await request(`/api/houses/${houseId}/items`, {
+      method: "POST",
+      body: { name: "Name leak feta", unit: "pcs" },
+    });
+    assert.equal(item.status, 201);
+    const contributionId = `offc_name_${randomUUID().slice(0, 8)}`;
+    await run(
+      `INSERT INTO off_contributions
+         (id, idempotency_key, user_id, house_id, item_id, project, code, kind, payload, field_keys, status, attempts, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'off', ?, 'missing_fields', '{}', '["brand"]', 'sent', 1, ?, ?)`,
+      [contributionId, `name-${contributionId}`, strangerId, houseId, item.data.id, fetaCode, stamp, stamp],
+    );
+    try {
+      const list = await request("/api/off/contributions", { auth: secondUserCookie });
+      const listed = list.data.contributions.find((row: any) => row.id === contributionId);
+      assert.equal(listed.itemName, "Name leak feta");
+      const one = await request(`/api/off/contributions/${contributionId}`, { auth: secondUserCookie });
+      assert.equal(one.data.contribution.itemName, "Name leak feta");
+
+      await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [houseId, strangerId]);
+
+      const afterList = await request("/api/off/contributions", { auth: secondUserCookie });
+      const hidden = afterList.data.contributions.find((row: any) => row.id === contributionId);
+      assert.ok(hidden);
+      assert.equal(hidden.itemName, null);
+      // The rest of the row is unchanged, only the live item name is withheld.
+      assert.equal(hidden.code, fetaCode);
+      assert.equal(hidden.itemId, item.data.id);
+      const afterOne = await request(`/api/off/contributions/${contributionId}`, { auth: secondUserCookie });
+      assert.equal(afterOne.status, 200);
+      assert.equal(afterOne.data.contribution.itemName, null);
+      assert.equal(afterOne.data.contribution.itemId, item.data.id);
+    } finally {
+      await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [houseId, strangerId]);
+      await run("DELETE FROM off_contribution_events WHERE contribution_id = ?", [contributionId]);
+      await run("DELETE FROM off_contributions WHERE id = ?", [contributionId]);
+    }
+  });
+
   it("offers and files a wrong-project report", async () => {
     const beautyCode = "3560070791460";
     const timestamp = new Date().toISOString();
@@ -4323,6 +4377,146 @@ describe("OpenFoodFacts links and shared catalogue", () => {
       assert.ok(answerBody.includes("annotation=-1"));
     } finally {
       globalThis.fetch = originalFetch;
+      if (savedWrites === undefined) delete process.env.SV_OFF_WRITE_ENABLED;
+      else process.env.SV_OFF_WRITE_ENABLED = savedWrites;
+      if (savedDryRun === undefined) delete process.env.SV_OFF_DRY_RUN;
+      else process.env.SV_OFF_DRY_RUN = savedDryRun;
+    }
+  });
+
+  it("requires consent and a household membership to answer Robotoff questions", async () => {
+    const savedWrites = process.env.SV_OFF_WRITE_ENABLED;
+    const savedDryRun = process.env.SV_OFF_DRY_RUN;
+    process.env.SV_OFF_WRITE_ENABLED = "true";
+    process.env.SV_OFF_DRY_RUN = "true";
+    const registered = await request("/api/auth/register", {
+      method: "POST",
+      auth: "",
+      body: { name: "Robotoff Outsider", email: "robotoff-outsider@example.com", password: "test password" },
+    });
+    assert.equal(registered.status, 201);
+    const outsiderCookie = registered.cookie!;
+    const me = await request("/api/auth/me", { auth: outsiderCookie });
+    const userId = me.data.user.id;
+    const ownHouse = me.data.houses[0].id;
+    const answer = () =>
+      request("/api/off/robotoff/answers", {
+        method: "POST",
+        auth: outsiderCookie,
+        body: { insightId: "insight-outsider", annotation: 1 },
+      });
+    try {
+      const noConsent = await answer();
+      assert.equal(noConsent.status, 403);
+      assert.match(String(noConsent.data.error), /license/i);
+
+      const accepted = await request("/api/off/consent", {
+        method: "POST",
+        auth: outsiderCookie,
+        body: { accept: true },
+      });
+      assert.equal(accepted.status, 200);
+
+      await run("DELETE FROM house_members WHERE user_id = ?", [userId]);
+      const noHouse = await answer();
+      assert.equal(noHouse.status, 403);
+      assert.match(String(noHouse.data.error), /member access/i);
+
+      await run(
+        "INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, 'owner', ?) ON CONFLICT DO NOTHING",
+        [ownHouse, userId, new Date().toISOString()],
+      );
+      const allowed = await answer();
+      assert.equal(allowed.status, 200);
+      assert.equal(allowed.data.dryRun, true);
+    } finally {
+      await run("DELETE FROM off_consents WHERE user_id = ?", [userId]);
+      await run(
+        "INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, 'owner', ?) ON CONFLICT DO NOTHING",
+        [ownHouse, userId, new Date().toISOString()],
+      );
+      if (savedWrites === undefined) delete process.env.SV_OFF_WRITE_ENABLED;
+      else process.env.SV_OFF_WRITE_ENABLED = savedWrites;
+      if (savedDryRun === undefined) delete process.env.SV_OFF_DRY_RUN;
+      else process.env.SV_OFF_DRY_RUN = savedDryRun;
+    }
+  });
+
+  it("requires consent and a household membership to write folksonomy properties", async () => {
+    const savedWrites = process.env.SV_OFF_WRITE_ENABLED;
+    const savedDryRun = process.env.SV_OFF_DRY_RUN;
+    process.env.SV_OFF_WRITE_ENABLED = "true";
+    process.env.SV_OFF_DRY_RUN = "true";
+    const registered = await request("/api/auth/register", {
+      method: "POST",
+      auth: "",
+      body: { name: "Folksonomy Outsider", email: "folksonomy-outsider@example.com", password: "test password" },
+    });
+    assert.equal(registered.status, 201);
+    const outsiderCookie = registered.cookie!;
+    const me = await request("/api/auth/me", { auth: outsiderCookie });
+    const userId = me.data.user.id;
+    const ownHouse = me.data.houses[0].id;
+    const property = (extra: Record<string, unknown> = {}) =>
+      request("/api/off/folksonomy", {
+        method: "POST",
+        auth: outsiderCookie,
+        body: { project: "off", code: fetaCode, key: "svault-test", value: "yes", ...extra },
+      });
+    try {
+      const noConsent = await property();
+      assert.equal(noConsent.status, 403);
+      assert.match(String(noConsent.data.error), /license/i);
+
+      const accepted = await request("/api/off/consent", {
+        method: "POST",
+        auth: outsiderCookie,
+        body: { accept: true },
+      });
+      assert.equal(accepted.status, 200);
+
+      await run("DELETE FROM house_members WHERE user_id = ?", [userId]);
+      const noHouse = await property();
+      assert.equal(noHouse.status, 403);
+      assert.match(String(noHouse.data.error), /member access/i);
+
+      await run(
+        "INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, 'owner', ?) ON CONFLICT DO NOTHING",
+        [ownHouse, userId, new Date().toISOString()],
+      );
+      const ownItem = await request(`/api/houses/${ownHouse}/items`, {
+        method: "POST",
+        auth: outsiderCookie,
+        body: { name: "Folksonomy item", unit: "pcs" },
+      });
+      assert.equal(ownItem.status, 201);
+
+      // A named house needs member+ access, and its item must live there.
+      const foreignHouse = await property({ houseId });
+      assert.equal(foreignHouse.status, 404);
+      await run(
+        "INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, 'viewer', ?) ON CONFLICT DO NOTHING",
+        [houseId, userId, new Date().toISOString()],
+      );
+      const viewerHouse = await property({ houseId });
+      assert.equal(viewerHouse.status, 403);
+      assert.match(String(viewerHouse.data.error), /member access/i);
+      await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [houseId, userId]);
+      const foreignItem = await property({ houseId: ownHouse, itemId });
+      assert.equal(foreignItem.status, 404);
+
+      const withItem = await property({ itemId: ownItem.data.id });
+      assert.equal(withItem.status, 200);
+      assert.equal(withItem.data.dryRun, true);
+      const withHouse = await property({ houseId: ownHouse, itemId: ownItem.data.id });
+      assert.equal(withHouse.status, 200);
+      assert.equal(withHouse.data.dryRun, true);
+    } finally {
+      await run("DELETE FROM off_consents WHERE user_id = ?", [userId]);
+      await run(
+        "INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, 'owner', ?) ON CONFLICT DO NOTHING",
+        [ownHouse, userId, new Date().toISOString()],
+      );
       if (savedWrites === undefined) delete process.env.SV_OFF_WRITE_ENABLED;
       else process.env.SV_OFF_WRITE_ENABLED = savedWrites;
       if (savedDryRun === undefined) delete process.env.SV_OFF_DRY_RUN;
@@ -6058,7 +6252,7 @@ describe("security hardening", () => {
     assert.equal((await fetch(`${base}${receiptPath}`)).status, 404);
     const own = await fetch(`${base}${receiptPath}`, { headers: { cookie } });
     assert.equal(own.status, 200);
-    assert.match(own.headers.get("cache-control") ?? "", /private/);
+    assert.equal(own.headers.get("cache-control"), "private, no-cache");
 
     // Another household cannot read, attach or delete them by naming the path.
     const as = (pathname: string, method: string, body: unknown) =>
@@ -6250,7 +6444,12 @@ describe("security hardening", () => {
           res.end();
           return;
         }
-        res.writeHead(201, { "content-type": "application/json", "x-echo": String(req.headers["x-test"] ?? "") });
+        res.writeHead(201, {
+          "content-type": "application/json",
+          "x-echo": String(req.headers["x-test"] ?? ""),
+          "x-length": String(req.headers["content-length"] ?? ""),
+          "x-chunked": String(req.headers["transfer-encoding"] ?? ""),
+        });
         res.end(JSON.stringify({ method: req.method, body }));
       });
     });
@@ -6267,6 +6466,8 @@ describe("security hardening", () => {
       });
       assert.equal(response.status, 201);
       assert.equal(response.headers.get("x-echo"), "yes");
+      assert.equal(response.headers.get("x-length"), "7", "string bodies go out with a fixed length");
+      assert.equal(response.headers.get("x-chunked"), "");
       assert.deepEqual(await response.json(), { method: "POST", body: "{\"a\":1}" });
 
       await assert.rejects(() => outboundFetch(`http://pinned.example:${port}/moved`, { redirect: "error" }), /redirect/);
@@ -6420,6 +6621,43 @@ describe("security hardening", () => {
     assert.equal(existsSync(orphan), false);
     assert.ok(existsSync(fresh));
     assert.ok(existsSync(fileOf(kept.data.image)));
+  });
+
+  it("leaves another household's upload alone when an old recipe points at it", async () => {
+    const { existsSync } = await import("node:fs");
+    const fileOf = (url: string) => path.join(dataDir, url.replace(/^\//, ""));
+    const png = new Uint8Array(encodePng(4, 4, Buffer.alloc(4 * 4 * 4, 180)));
+    const foreign = await uploadImage(
+      `/api/houses/${strangerHouseId}/recipes/upload`,
+      png,
+      "image/png",
+      "foreign.png",
+      secondUserCookie,
+    );
+    assert.equal(foreign.status, 201);
+    assert.ok(existsSync(fileOf(foreign.data.path)));
+
+    // Recipe create refuses a foreign image, so plant the stale link directly.
+    const id = `rcp_stale_${randomUUID().slice(0, 8)}`;
+    const stamp = new Date().toISOString();
+    await run(
+      `INSERT INTO recipes (id, house_id, title, steps, tags, image, source, created_at, updated_at)
+       VALUES (?, ?, 'Stale pointer', '[]', '[]', ?, 'manual', ?, ?)`,
+      [id, houseId, foreign.data.path, stamp, stamp],
+    );
+    assert.equal((await request(`/api/recipes/${id}`, { method: "DELETE" })).status, 200);
+    assert.ok(existsSync(fileOf(foreign.data.path)), "another household's upload must survive");
+
+    // The house's own upload is still cleaned up with its recipe.
+    const own = await uploadImage(`/api/houses/${houseId}/recipes/upload`, png, "image/png", "own.png");
+    assert.equal(own.status, 201);
+    const ownRecipe = await request(`/api/houses/${houseId}/recipes`, {
+      method: "POST",
+      body: { title: "Own pointer", image: own.data.path, ingredients: [], steps: [] },
+    });
+    assert.equal(ownRecipe.status, 201);
+    assert.equal((await request(`/api/recipes/${ownRecipe.data.id}`, { method: "DELETE" })).status, 200);
+    assert.equal(existsSync(fileOf(own.data.path)), false);
   });
 
   it("closes registration to invite-only or entirely", async () => {
