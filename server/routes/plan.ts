@@ -1,3 +1,4 @@
+import { recipeDietWarnings, ideaDietWarnings } from "../services/diet-warnings.js";
 import { Router } from "express";
 import { z } from "zod";
 import { all, get, newId, now, parseJson, run } from "../db.js";
@@ -46,6 +47,8 @@ async function serializeEntry(row: any): Promise<MealPlanEntry> {
   // servings serialize as null. Only DB failures reject.
   let recipe: MealPlanEntry["recipe"] = null;
   let idea: MealPlanEntry["idea"] = null;
+  let diet = { warnings: [] as import("../../shared/types.js").DietWarning[], dietCompatibility: [] as import("../../shared/types.js").DietCompatibility[] };
+  if (row.recipe_id) diet = await recipeDietWarnings(row.house_id, row.recipe_id);
   if (row.recipe_id) {
     const recipeRow = await get<any>("SELECT id, title, servings, image FROM recipes WHERE id = ?", [row.recipe_id]);
     if (recipeRow) {
@@ -62,6 +65,7 @@ async function serializeEntry(row: any): Promise<MealPlanEntry> {
     const index = row.idea_index == null ? 0 : Number(row.idea_index);
     const result = parseJson<IdeaResponse>(ideaRow?.result, { provider: "local", summary: "", ideas: [] });
     const pick = result.ideas[index];
+    if (!row.recipe_id && pick) diet = await ideaDietWarnings(row.house_id, pick);
     idea = {
       id: row.idea_id,
       title: pick?.title ?? row.title ?? "Food idea",
@@ -70,6 +74,7 @@ async function serializeEntry(row: any): Promise<MealPlanEntry> {
   }
   const title = recipe?.title ?? idea?.title ?? row.title ?? "Planned meal";
   return {
+    ...diet,
     id: row.id,
     houseId: row.house_id,
     day: row.day,
