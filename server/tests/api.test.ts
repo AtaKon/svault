@@ -4330,6 +4330,88 @@ describe("OpenFoodFacts links and shared catalogue", () => {
     }
   });
 
+  it("requires consent and a household membership to write folksonomy properties", async () => {
+    const savedWrites = process.env.SV_OFF_WRITE_ENABLED;
+    const savedDryRun = process.env.SV_OFF_DRY_RUN;
+    process.env.SV_OFF_WRITE_ENABLED = "true";
+    process.env.SV_OFF_DRY_RUN = "true";
+    const registered = await request("/api/auth/register", {
+      method: "POST",
+      auth: "",
+      body: { name: "Folksonomy Outsider", email: "folksonomy-outsider@example.com", password: "test password" },
+    });
+    assert.equal(registered.status, 201);
+    const outsiderCookie = registered.cookie!;
+    const me = await request("/api/auth/me", { auth: outsiderCookie });
+    const userId = me.data.user.id;
+    const ownHouse = me.data.houses[0].id;
+    const property = (extra: Record<string, unknown> = {}) =>
+      request("/api/off/folksonomy", {
+        method: "POST",
+        auth: outsiderCookie,
+        body: { project: "off", code: fetaCode, key: "svault-test", value: "yes", ...extra },
+      });
+    try {
+      const noConsent = await property();
+      assert.equal(noConsent.status, 403);
+      assert.match(String(noConsent.data.error), /license/i);
+
+      const accepted = await request("/api/off/consent", {
+        method: "POST",
+        auth: outsiderCookie,
+        body: { accept: true },
+      });
+      assert.equal(accepted.status, 200);
+
+      await run("DELETE FROM house_members WHERE user_id = ?", [userId]);
+      const noHouse = await property();
+      assert.equal(noHouse.status, 403);
+      assert.match(String(noHouse.data.error), /member access/i);
+
+      await run(
+        "INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, 'owner', ?) ON CONFLICT DO NOTHING",
+        [ownHouse, userId, new Date().toISOString()],
+      );
+      const ownItem = await request(`/api/houses/${ownHouse}/items`, {
+        method: "POST",
+        auth: outsiderCookie,
+        body: { name: "Folksonomy item", unit: "pcs" },
+      });
+      assert.equal(ownItem.status, 201);
+
+      // A named house needs member+ access, and its item must live there.
+      const foreignHouse = await property({ houseId });
+      assert.equal(foreignHouse.status, 404);
+      await run(
+        "INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, 'viewer', ?) ON CONFLICT DO NOTHING",
+        [houseId, userId, new Date().toISOString()],
+      );
+      const viewerHouse = await property({ houseId });
+      assert.equal(viewerHouse.status, 403);
+      assert.match(String(viewerHouse.data.error), /member access/i);
+      await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [houseId, userId]);
+      const foreignItem = await property({ houseId: ownHouse, itemId });
+      assert.equal(foreignItem.status, 404);
+
+      const withItem = await property({ itemId: ownItem.data.id });
+      assert.equal(withItem.status, 200);
+      assert.equal(withItem.data.dryRun, true);
+      const withHouse = await property({ houseId: ownHouse, itemId: ownItem.data.id });
+      assert.equal(withHouse.status, 200);
+      assert.equal(withHouse.data.dryRun, true);
+    } finally {
+      await run("DELETE FROM off_consents WHERE user_id = ?", [userId]);
+      await run(
+        "INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, 'owner', ?) ON CONFLICT DO NOTHING",
+        [ownHouse, userId, new Date().toISOString()],
+      );
+      if (savedWrites === undefined) delete process.env.SV_OFF_WRITE_ENABLED;
+      else process.env.SV_OFF_WRITE_ENABLED = savedWrites;
+      if (savedDryRun === undefined) delete process.env.SV_OFF_DRY_RUN;
+      else process.env.SV_OFF_DRY_RUN = savedDryRun;
+    }
+  });
+
   it("rejects a failure status instead of caching a stub product", async () => {
     const code = "9990000000099";
     const originalFetch = globalThis.fetch;

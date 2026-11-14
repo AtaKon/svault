@@ -8,6 +8,9 @@ All notable changes to SVault are documented here. The format follows
 
 ### Security
 
+- Writing an Open Food Facts folksonomy property now needs accepted OFF consent and member access to
+  at least one household. A named `houseId`/`itemId` must belong to a house the caller is a member of,
+  so a signed-in user can no longer write through the instance token or name another house's item.
 - The development request log and the AI provider label no longer print query strings, which can
   carry OIDC `code`/`state`, invite codes or search terms.
 - Recipe ingredients can link only to items of the recipe's household, and the meal-plan shopping
