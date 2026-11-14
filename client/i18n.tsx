@@ -2193,6 +2193,11 @@ const EL: Record<string, string> = {
   "{previous} transferred ownership to you. You can manage members and settings.": "Ο/Η {previous} σου μεταβίβασε την ιδιοκτησία. Μπορείς να διαχειριστείς τα μέλη και τις ρυθμίσεις.",
   "Ownership of this house was transferred to you.": "Η ιδιοκτησία αυτού του σπιτιού μεταβιβάστηκε σε εσένα.",
   "{item} is running low": "Το απόθεμα του «{item}» είναι χαμηλό",
+  // Budget alerts: the household pattern must come before the category one.
+  "Monthly budget at {percent}%": "Ο μηνιαίος προϋπολογισμός έφτασε στο {percent}%",
+  "Spending reached {percent}% of the monthly budget.": "Οι δαπάνες έφτασαν στο {percent}% του μηνιαίου προϋπολογισμού.",
+  "{category} budget at {percent}%": "Ο προϋπολογισμός «{category}» έφτασε στο {percent}%",
+  "{category} spending reached {percent}% of its monthly budget.": "Οι δαπάνες «{category}» έφτασαν στο {percent}% του μηνιαίου προϋπολογισμού τους.",
   "You are out of {item}. Tap to review the item.": "Το «{item}» εξαντλήθηκε. Πάτησε για να ελέγξεις το αντικείμενο.",
   "Only {quantity} {unit} left (threshold {threshold} {unit}).": "Απομένουν μόνο {quantity} {unit} (όριο {threshold} {unit}).",
   "{item} has expired": "Το «{item}» έχει λήξει",

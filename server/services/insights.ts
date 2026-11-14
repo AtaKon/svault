@@ -218,8 +218,13 @@ export async function scanBudgetAlerts(houseId: string): Promise<void> {
       const dedupeKey = `budget:${spend.month}:${target.id}:${threshold}`;
       // A resolved alert must not be revived during the same month.
       if (await get("SELECT id FROM notifications WHERE house_id = ? AND dedupe_key = ?", [houseId, dedupeKey])) continue;
-      await createNotification({ houseId, type: "budget_alert", title: `${target.name} budget at ${threshold}%`,
-        body: `${target.name} spending reached ${threshold}% of its monthly budget.`,
+      // English text with fixed shapes; the client translates them (see the budget keys in client/i18n.tsx).
+      const house = target.id === "house";
+      await createNotification({ houseId, type: "budget_alert",
+        title: house ? `Monthly budget at ${threshold}%` : `${target.name} budget at ${threshold}%`,
+        body: house
+          ? `Spending reached ${threshold}% of the monthly budget.`
+          : `${target.name} spending reached ${threshold}% of its monthly budget.`,
         data: { month: spend.month, categoryId: target.id === "house" ? null : target.id, threshold, spent: target.spent, budget: target.budget }, dedupeKey });
     }
   }
