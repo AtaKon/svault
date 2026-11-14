@@ -1,3 +1,4 @@
+import { CalendarFeedCard } from "@/components/CalendarFeedCard";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { startRegistration } from "@simplewebauthn/browser";
@@ -216,6 +217,8 @@ export function ProfilePage() {
           </div>
         </div>
       </Card>
+
+      <CalendarFeedCard houses={houses} />
 
       <Card className="p-4">
         <h2 className="mb-3 font-display text-lg">{t("Details")}</h2>

@@ -1335,3 +1335,9 @@ If you add an endpoint:
 5. Add a test in `server/tests/api.test.ts` and update this page.
 
 See [development.md](development.md) for the workflow.
+
+### Calendar subscriptions
+
+Session authentication is required for `GET`, `POST`, `PATCH` and `DELETE /api/calendar-feed`; API tokens cannot manage feeds. GET returns `{ feed }` (null when absent). POST creates one feed per user and returns `{ feed, token }` once. PATCH accepts `houseIds` (array or null for all current and future memberships), `includePlan`, `includeBills`, and `rotate: true` to replace the token and return it once. DELETE revokes it. Tokens are stored only as SHA-256 hashes.
+
+`GET /api/calendar/:token.ics` is a bearer-link subscription, without session authentication. Unknown or revoked tokens return 404. The feed always checks current house membership. Meal events use floating local times: breakfast 08:00, lunch 13:00, dinner 19:30, snack 16:00; each lasts 30 minutes. Bills are all-day events. Treat the URL as a secret.

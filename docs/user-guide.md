@@ -733,3 +733,7 @@ warns while unsynced changes exist; reads are still network-only.
 
 More deployment-specific fixes are in [deployment.md](deployment.md) and the
 [TrueNAS guide](../deploy/dockge/README.md#troubleshooting).
+
+### Calendar feed
+
+In **Profile → Calendar feed**, create a private subscription link and choose houses, meal plans and bill due dates. Copy the link when it appears: it is shown only on creation or rotation. In iOS, add a subscribed calendar under Settings → Calendar → Accounts; in Google Calendar use Other calendars → From URL; in Outlook use Add calendar → Subscribe from web. Calendar services refresh on their own schedules. Meal slots use local floating times (breakfast 08:00, lunch 13:00, dinner 19:30, snack 16:00), lasting 30 minutes. Bills appear all day. Anyone with the link can view the feed; rotate or revoke it if shared accidentally. Rotation invalidates existing subscriptions.
