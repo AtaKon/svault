@@ -7540,6 +7540,8 @@ describe("reminder delivery channels", () => {
     });
     assert.equal(saved.status, 200);
     assert.equal(saved.data.settings.notifications.channels[0].secret, "***");
+    // Channels saved before budget alerts existed keep receiving them until switched off.
+    assert.equal(saved.data.settings.notifications.channels[0].events.budget, true);
 
     const resent = await request(`/api/houses/${houseId}`, {
       method: "PATCH",
@@ -7554,7 +7556,7 @@ describe("reminder delivery channels", () => {
                 url: channelBase,
                 enabled: true,
                 secret: "***",
-                events: { lowStock: true, expiring: true, weeklySummary: false },
+                events: { lowStock: true, expiring: true, weeklySummary: false, budget: false },
               },
             ],
           },
@@ -7562,6 +7564,7 @@ describe("reminder delivery channels", () => {
       },
     });
     assert.equal(resent.status, 200);
+    assert.equal(resent.data.settings.notifications.channels[0].events.budget, false);
 
     const test = await request(`/api/houses/${houseId}/notifications/test`, {
       method: "POST",
@@ -11918,7 +11921,8 @@ describe("opened shelf life", () => {
     const id = created.data.id;
     const lot = created.data.lots[0];
     const today = new Date().toISOString().slice(0, 10);
-    const expected = new Date(Date.now() + 3 * 864e5).toISOString().slice(0, 10);
+    // Derive the expected date from the same "today" so the test holds across midnight.
+    const expected = new Date(Date.parse(`${today}T00:00:00Z`) + 3 * 864e5).toISOString().slice(0, 10);
     const endpoint = `/api/items/${id}/lots/${lot.id}/opened`;
     const marked = await request(endpoint, { method: "PUT", body: { openedAt: today } });
     assert.equal(marked.status, 200);
@@ -11928,6 +11932,8 @@ describe("opened shelf life", () => {
     assert.equal(reminders.data.notifications.find((n: any) => n.data.lotId === lot.id).data.expiresAt, expected);
     assert.ok((await request(`/api/houses/${hid}/dashboard`)).data.expiring.some((l: any) => l.id === lot.id && l.effectiveExpiresAt === expected));
     assert.ok((await request(`/api/houses/${hid}/items?expiring=1`)).data.items.some((i: any) => i.id === id));
+    // The Home Assistant summary agrees with the dashboard about the opened batch.
+    assert.equal((await request(`/api/houses/${hid}/summary`)).data.expiringSoonCount, 1);
     assert.ok((await request(`/api/houses/${hid}/insights/use-it-up?days=7`)).data.items.some((i: any) => i.itemId === id && i.expiresAt === expected));
     const other = await request(`/api/houses/${hid}/items`, { method: "POST", body: { name: "Other batch", initialStock: { quantity: 1 } } });
     assert.equal((await request(`/api/items/${id}/lots/${other.data.lots[0].id}/opened`, { method: "PUT", body: {} })).status, 404);
