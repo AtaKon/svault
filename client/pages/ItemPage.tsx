@@ -624,9 +624,9 @@ export function ItemPage() {
           {(item.warrantyUntil || item.warrantyNote) && (
             <Card className="space-y-1 p-4">
               <h2 className="mb-1 font-display text-lg">{t("Warranty")}</h2>
-              {item.warrantyUntil && (
+              {item.warrantyUntil && daysUntil(item.warrantyUntil) != null && (
                 <p className="text-sm text-muted">
-                  {warrantyLabel(daysUntil(item.warrantyUntil) ?? 0)} · {shortDate(item.warrantyUntil)}
+                  {warrantyLabel(daysUntil(item.warrantyUntil)!)} · {shortDate(item.warrantyUntil)}
                 </p>
               )}
               {item.warrantyNote && <p className="break-words text-sm">{item.warrantyNote}</p>}

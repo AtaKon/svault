@@ -940,7 +940,6 @@ See the [user guide](user-guide.md#export-a-dataset) for the archive layout.
 | Method | Path | Min role | Purpose |
 | --- | --- | --- | --- |
 | `GET` | `/api/houses/:houseId/summary` | viewer+ | Compact counts for dashboards and home automation; works with read-only API tokens. |
-| `GET` | `/api/houses/:houseId/dashboard` | viewer+ | Counts, value, low stock, expiring lots, recent movements, recipe and counts. |
 | `GET` | `/api/houses/:houseId/dashboard` | viewer+ | Counts, value, low stock, `runningOutSoon`, expiring lots, recent movements, recipe and counts. |
 | `GET` | `/api/houses/:houseId/notifications` | viewer+ | Active reminders. `unread=1`, `limit` up to 200. |
 | `POST` | `/api/houses/:houseId/notifications/read` | viewer+ | Mark all or `{ "ids": [...] }` as read for the current user. |
@@ -1371,6 +1370,35 @@ and drives the client dictionary and `Intl` date/number/currency formatting.
 | `500` | Unexpected server error (details are logged, not returned) |
 | `502` | Upstream AI provider or reminder channel test failed |
 
+## Feature notes
+
+### Item warranty and documents
+
+Item create and update accept `warrantyUntil` (YYYY-MM-DD or null) and `warrantyNote` (up to 200 characters or null). House notification settings accept `warrantyDays` (default 30). Warranty reminders use the expiring event channel preference.
+
+### Calendar subscriptions
+
+Session authentication is required for `GET`, `POST`, `PATCH` and `DELETE /api/calendar-feed`; API tokens cannot manage feeds. GET returns `{ feed }` (null when absent). POST creates one feed per user and returns `{ feed, token }` once. PATCH accepts `houseIds` (array or null for all current and future memberships), `includePlan`, `includeBills`, and `rotate: true` to replace the token and return it once. DELETE revokes it. Tokens are stored only as SHA-256 hashes.
+
+`GET /api/calendar/:token.ics` is a bearer-link subscription, without session authentication. Unknown or revoked tokens return 404. The feed always checks current house membership. Meal events use floating local times: breakfast 08:00, lunch 13:00, dinner 19:30, snack 16:00; each lasts 30 minutes. Bills are all-day events. Treat the URL as a secret.
+
+### Household diet profiles
+
+`GET /api/houses/:houseId/diet-profiles` returns opted-in profiles to household members, including viewers. `PUT /api/houses/:houseId/diet-profiles/me` creates or replaces the caller's profile with `{ allergens: string[], diets: string[], note?: string }`; `DELETE` at the same path removes it. Allergens use the 14 EU OFF identifiers and diets are `vegetarian` or `vegan`. Notes are limited to 200 characters. Recipe details, food ideas and meal plan entries include `warnings` and `dietCompatibility` where data is available; unknown compatibility is not evidence of safety.
+
+### Insights budget settings and spend
+
+`PATCH /api/houses/:houseId/insights/settings` requires a house admin. In addition to `monthlyBudget`, it accepts `categoryBudgets` (an object mapping category IDs belonging to the house to non-negative amounts) and `includeBills` (boolean, default `false`). Zero disables a budget. Viewers can read `GET /api/houses/:houseId/insights/spend`, which includes `projection`, `categoryBudgets` (category ID, name, spent, budget and percent), and `history` (the preceding six months, total and current budget). Historical budgets are not stored: history compares each total with the current budget. Projection is current spending divided by elapsed UTC calendar days times days in the month. Receipt spending uses purchase date or upload date. When enabled, bills count by due date or creation date and are included in household totals, not category totals. Avoid recording the same expense as both a bill and a receipt. Budget reminders fire at 80% and 100% once per month for the household and each category.
+
+### Run-out forecasts
+
+Item list and detail responses include `forecast: { dailyRate, daysLeft, windowDays } | null`.
+The rate is the total quantity in outgoing consumption movements over the last 60 days divided by
+`windowDays`: the days since the first counted movement, clamped to 7–60;
+`daysLeft` is current stock divided by that rate. Waste, adjustments and transfers do not count.
+At least two consumption events spanning seven days and positive stock are required. The dashboard's
+`runningOutSoon` contains active items with at most seven days left, ordered by days left.
+
 ## Extending the API
 
 If you add an endpoint:
@@ -1382,24 +1410,3 @@ If you add an endpoint:
 5. Add a test in `server/tests/api.test.ts` and update this page.
 
 See [development.md](development.md) for the workflow.
-
-Item create and update accept `warrantyUntil` (YYYY-MM-DD or null) and `warrantyNote` (up to 200 characters or null). House notification settings accept `warrantyDays` (default 30). Warranty reminders use the expiring event channel preference.
-### Calendar subscriptions
-
-Session authentication is required for `GET`, `POST`, `PATCH` and `DELETE /api/calendar-feed`; API tokens cannot manage feeds. GET returns `{ feed }` (null when absent). POST creates one feed per user and returns `{ feed, token }` once. PATCH accepts `houseIds` (array or null for all current and future memberships), `includePlan`, `includeBills`, and `rotate: true` to replace the token and return it once. DELETE revokes it. Tokens are stored only as SHA-256 hashes.
-
-`GET /api/calendar/:token.ics` is a bearer-link subscription, without session authentication. Unknown or revoked tokens return 404. The feed always checks current house membership. Meal events use floating local times: breakfast 08:00, lunch 13:00, dinner 19:30, snack 16:00; each lasts 30 minutes. Bills are all-day events. Treat the URL as a secret.
-### Household diet profiles
-
-`GET /api/houses/:houseId/diet-profiles` returns opted-in profiles to household members, including viewers. `PUT /api/houses/:houseId/diet-profiles/me` creates or replaces the caller's profile with `{ allergens: string[], diets: string[], note?: string }`; `DELETE` at the same path removes it. Allergens use the 14 EU OFF identifiers and diets are `vegetarian` or `vegan`. Notes are limited to 200 characters. Recipe details, food ideas and meal plan entries include `warnings` and `dietCompatibility` where data is available; unknown compatibility is not evidence of safety.
-### Insights budget settings and spend
-
-`PATCH /api/houses/:houseId/insights/settings` requires a house admin. In addition to `monthlyBudget`, it accepts `categoryBudgets` (an object mapping category IDs belonging to the house to non-negative amounts) and `includeBills` (boolean, default `false`). Zero disables a budget. Viewers can read `GET /api/houses/:houseId/insights/spend`, which includes `projection`, `categoryBudgets` (category ID, name, spent, budget and percent), and `history` (the preceding six months, total and current budget). Historical budgets are not stored: history compares each total with the current budget. Projection is current spending divided by elapsed UTC calendar days times days in the month. Receipt spending uses purchase date or upload date. When enabled, bills count by due date or creation date and are included in household totals, not category totals. Avoid recording the same expense as both a bill and a receipt. Budget reminders fire at 80% and 100% once per month for the household and each category.
-### Run-out forecasts
-
-Item list and detail responses include `forecast: { dailyRate, daysLeft, windowDays } | null`.
-The rate is the total quantity in outgoing consumption movements over the last 60 days divided by
-`windowDays`: the days since the first counted movement, clamped to 7–60;
-`daysLeft` is current stock divided by that rate. Waste, adjustments and transfers do not count.
-At least two consumption events spanning seven days and positive stock are required. The dashboard's
-`runningOutSoon` contains active items with at most seven days left, ordered by days left.
