@@ -13,7 +13,7 @@ import { OutboundBlockedError, assertOutboundUrl } from "../lib/outbound.js";
 import { recipePortion } from "../../shared/recipe-grams.js";
 import { removeUnreferencedUploads } from "../services/upload-cleanup.js";
 import { uploader, uploadPath } from "../upload.js";
-import { assertImageReference, assertUploadsOwned, rememberUpload, uploadOwnedBy } from "../services/receipt-scans.js";
+import { assertImageReference, assertUploadsOwned, rememberUpload, uploadOwnedBy, UploadOwnershipError } from "../services/receipt-scans.js";
 import type { OffProduct, Role, Recipe } from "../../shared/types.js";
 import { readableWordRatio } from "../../shared/notebook-scan.js";
 
@@ -66,7 +66,8 @@ async function assertRecipeImages(body: { image?: string | null; sourceImage?: s
     await assertImageReference(body.image, houseId, "recipes", true);
     await assertImageReference(body.sourceImage, houseId, "recipes", false);
   } catch (error) {
-    throw new ApiError(400, error instanceof Error ? error.message : "Invalid recipe image");
+    if (error instanceof UploadOwnershipError) throw new ApiError(400, error.message);
+    throw error;
   }
 }
 
@@ -497,7 +498,7 @@ recipeRoutes.post(
     if (!rawText && !visionPaths.length) throw new ApiError(400, "Provide recipe text or a scan image");
     // The loader reads these files and sends them to this house's AI provider.
     await assertUploadsOwned([...(body.images ?? []), body.image], houseId).catch((error: Error) => {
-      throw new ApiError(400, error.message);
+      throw error instanceof UploadOwnershipError ? new ApiError(400, error.message) : error;
     });
 
     const house = (await get<any>("SELECT * FROM houses WHERE id = ?", [houseId]))!;

@@ -2047,6 +2047,13 @@ describe("inventory and stock", () => {
       for (const parentId of [foreignIdValue, localId]) {
         assert.equal((await request(`/api/houses/${houseId}/${type}/${localId}`, { method: "PATCH", body: { parentId } })).status, 400);
       }
+      // A -> B -> C is fine; then making A a child of C would close a loop.
+      const a = await request(`/api/houses/${houseId}/${type}`, { method: "POST", body: { name: `Loop A ${type}` } });
+      const b = await request(`/api/houses/${houseId}/${type}`, { method: "POST", body: { name: `Loop B ${type}`, parentId: a.data.id } });
+      const c = await request(`/api/houses/${houseId}/${type}`, { method: "POST", body: { name: `Loop C ${type}`, parentId: b.data.id } });
+      assert.ok(c.status < 300, JSON.stringify(c.data));
+      assert.equal((await request(`/api/houses/${houseId}/${type}/${a.data.id}`, { method: "PATCH", body: { parentId: c.data.id } })).status, 400);
+      assert.equal((await request(`/api/houses/${houseId}/${type}/${c.data.id}`, { method: "PATCH", body: { parentId: a.data.id } })).status, 200);
     }
     const foreignCategories = await request(`/api/houses/${foreignId}/categories`);
     const categoryId = foreignCategories.data[0].id;
@@ -6245,7 +6252,7 @@ describe("security hardening", () => {
     assert.equal((await fetch(`${base}${receiptPath}`)).status, 404);
     const own = await fetch(`${base}${receiptPath}`, { headers: { cookie } });
     assert.equal(own.status, 200);
-    assert.match(own.headers.get("cache-control") ?? "", /private/);
+    assert.equal(own.headers.get("cache-control"), "private, no-cache");
 
     // Another household cannot read, attach or delete them by naming the path.
     const as = (pathname: string, method: string, body: unknown) =>
@@ -6437,7 +6444,12 @@ describe("security hardening", () => {
           res.end();
           return;
         }
-        res.writeHead(201, { "content-type": "application/json", "x-echo": String(req.headers["x-test"] ?? "") });
+        res.writeHead(201, {
+          "content-type": "application/json",
+          "x-echo": String(req.headers["x-test"] ?? ""),
+          "x-length": String(req.headers["content-length"] ?? ""),
+          "x-chunked": String(req.headers["transfer-encoding"] ?? ""),
+        });
         res.end(JSON.stringify({ method: req.method, body }));
       });
     });
@@ -6454,6 +6466,8 @@ describe("security hardening", () => {
       });
       assert.equal(response.status, 201);
       assert.equal(response.headers.get("x-echo"), "yes");
+      assert.equal(response.headers.get("x-length"), "7", "string bodies go out with a fixed length");
+      assert.equal(response.headers.get("x-chunked"), "");
       assert.deepEqual(await response.json(), { method: "POST", body: "{\"a\":1}" });
 
       await assert.rejects(() => outboundFetch(`http://pinned.example:${port}/moved`, { redirect: "error" }), /redirect/);
