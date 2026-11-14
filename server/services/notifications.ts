@@ -48,7 +48,7 @@ export async function createNotification(opts: {
     ],
   );
   const event: DeliveryEvent | null =
-    opts.type === "low_stock" ? "low_stock" : opts.type === "expiring" ? "expiring" : null;
+    opts.type === "low_stock" ? "low_stock" : opts.type === "expiring" ? "expiring" : opts.type === "budget_alert" ? "budget_alert" : null;
   if (event && !opts.userId) {
     await queueDeliveries(
       {
@@ -259,6 +259,8 @@ export async function scanAllHouses() {
     const items = await all<{ id: string }>("SELECT id FROM items WHERE house_id = ? AND archived = 0", [house.id]);
     for (const item of items) await syncItemLowStock(item.id);
     await syncHouseExpiry(house.id, expiryDays);
+    const { scanBudgetAlerts } = await import("./insights.js");
+    await scanBudgetAlerts(house.id);
   }
   await maybeSendWeeklySummaries();
 }

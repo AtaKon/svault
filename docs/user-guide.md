@@ -445,7 +445,7 @@ Open a recipe and press **Cook mode**. Everything is scaled to the number of por
 - Tap ingredients and steps to tick them off while you cook. The screen stays awake where the browser
   allows it.
 
-Cook mode only changes what you see; the saved recipe is untouched.
+When you finish, press **Finish cooking** to review the scaled quantities for linked ingredients. Edit or untick any line; unlinked ingredients are marked as not tracked. Optionally save leftover portions with a location and use-by date (three days ahead by default). Confirm to deduct available stock, earliest expiry first. If stock is short, the confirmation shows the amount missing. Leftovers appear in inventory and expiry reminders. The saved recipe stays untouched.
 
 ### Cook from what you have
 
@@ -737,3 +737,15 @@ warns while unsynced changes exist; reads are still network-only.
 
 More deployment-specific fixes are in [deployment.md](deployment.md) and the
 [TrueNAS guide](../deploy/dockge/README.md#troubleshooting).
+
+### Category budgets and reminders
+
+In Insights, house admins can set monthly budgets for individual categories and choose whether bills count toward household spending. Bills are excluded by default. Included bills count in their due month, or creation month if no due date is set; they do not count toward a category. Avoid entering the same expense as both a bill and a receipt. The projected month-end total assumes the current daily rate continues. The six-month history compares past totals with the current budget. Household and category reminders appear at 80% and 100% once per month and are delivered to enabled reminder channels.
+### Run-out forecasts
+
+Item details estimate when stock will run out based on consumption over the last 60 days (or the
+item's shorter history, at least seven days). The
+dashboard lists items expected to run out within seven days. Forecasts need at least two consumption
+events seven days apart and a positive stock balance. Waste, stock corrections and moves do not count.
+In the shopping list, turn on **Include items running out soon** and choose a horizon before using
+**Add low stock** to include forecast items as well. Existing compatible shopping lines are merged.

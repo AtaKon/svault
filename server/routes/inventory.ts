@@ -1,4 +1,5 @@
 import { effectiveExpiry } from "../services/effective-expiry.js";
+import { forecastsForHouse } from "../services/forecast.js";
 import { Router } from "express";
 import { z } from "zod";
 import { all, get, newId, now, parseJson, run, tx } from "../db.js";
@@ -32,7 +33,7 @@ import {
 } from "../services/openfoodfacts.js";
 import { uploader } from "../upload.js";
 import { removeUnreferencedUploads } from "../services/upload-cleanup.js";
-import { assertImageReference } from "../services/receipt-scans.js";
+import { assertImageReference, UploadOwnershipError } from "../services/receipt-scans.js";
 import { RESERVED_ATTRIBUTE_KEYS, type Role } from "../../shared/types.js";
 
 export const inventoryRoutes = Router();
@@ -305,6 +306,7 @@ async function itemDetail(itemId: string, userId: string) {
   if (!row) throw new ApiError(404, "Item not found");
   void userId;
   const item = serializeItem(row, await barcodesForItem(itemId));
+  item.forecast = (await forecastsForHouse(row.house_id)).get(itemId) ?? null;
   const lots = (await all<any>(
     `SELECT l.*, i.opened_shelf_life_days, loc.name AS location_name, v.name AS vendor_name FROM stock_lots l
      JOIN items i ON i.id = l.item_id
@@ -355,13 +357,25 @@ async function assertItemImage(image: string | null | undefined, houseId: string
   try {
     await assertImageReference(image, houseId, "items", true);
   } catch (error) {
-    throw new ApiError(400, error instanceof Error ? error.message : "Invalid item image");
+    if (error instanceof UploadOwnershipError) throw new ApiError(400, error.message);
+    throw error;
   }
 }
 
 async function validateHouseReference(table: "locations" | "categories", id: string | null | undefined, houseId: string, selfId?: string) {
   if (id != null && (id === selfId || !await get(`SELECT id FROM ${table} WHERE id = ? AND house_id = ?`, [id, houseId]))) {
     throw new ApiError(400, "Invalid household reference");
+  }
+  // A parent may not be one of the row's own descendants: that would make a
+  // loop (A under B under A) that tree views and exports never finish walking.
+  if (id != null && selfId) {
+    const seen = new Set<string>();
+    for (let current: string | null = id; current && !seen.has(current); ) {
+      if (current === selfId) throw new ApiError(400, "Invalid household reference");
+      seen.add(current);
+      const row: { parent_id: string | null } | undefined = await get(`SELECT parent_id FROM ${table} WHERE id = ? AND house_id = ?`, [current, houseId]);
+      current = row?.parent_id ?? null;
+    }
   }
 }
 
@@ -694,7 +708,8 @@ inventoryRoutes.get(
       (await get<{ n: number }>(`SELECT COUNT(*) AS n FROM items i WHERE ${where.join(" AND ")}`, params))?.n ?? 0,
     );
     const barcodeMap = await barcodesForHouse(houseId);
-    res.json({ items: rows.map((r) => serializeItem(r, barcodeMap.get(r.id) ?? [])), total });
+    const forecasts = await forecastsForHouse(houseId);
+    res.json({ items: rows.map((r) => ({ ...serializeItem(r, barcodeMap.get(r.id) ?? []), forecast: forecasts.get(r.id) ?? null })), total });
   }),
 );
 

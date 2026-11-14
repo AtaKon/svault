@@ -78,6 +78,8 @@ export async function readInsightSettings(houseId: string): Promise<HouseBudgetS
   return {
     monthlyBudget:
       insights.monthlyBudget == null ? DEFAULT_MONTHLY_BUDGET : money(clamp(Number(insights.monthlyBudget), 0, 1e9)),
+    categoryBudgets: insights.categoryBudgets && typeof insights.categoryBudgets === "object" ? insights.categoryBudgets : {},
+    includeBills: insights.includeBills === true,
     priceAlertPercent:
       insights.priceAlertPercent == null
         ? DEFAULT_PRICE_ALERT_PERCENT
@@ -97,6 +99,8 @@ export async function saveInsightSettings(
   settings.insights = {
     ...(settings.insights ?? {}),
     ...(patch.monthlyBudget === undefined ? {} : { monthlyBudget: clamp(Number(patch.monthlyBudget), 0, 1e9) }),
+    ...(patch.categoryBudgets === undefined ? {} : { categoryBudgets: patch.categoryBudgets }),
+    ...(patch.includeBills === undefined ? {} : { includeBills: patch.includeBills }),
     ...(patch.priceAlertPercent === undefined
       ? {}
       : { priceAlertPercent: clamp(Number(patch.priceAlertPercent), 1, 500) }),
@@ -110,7 +114,7 @@ export async function saveInsightSettings(
 
 export async function spendInsight(houseId: string, months = 6): Promise<SpendInsight> {
   const count = clamp(Math.round(months), 1, 24);
-  const keys = monthKeys(count);
+  const keys = monthKeys(Math.max(count, 7));
   const since = `${keys[0]}-01`;
   const settings = await readInsightSettings(houseId);
   const house = await get<{ currency: string }>("SELECT currency FROM houses WHERE id = ?", [houseId]);
@@ -133,6 +137,13 @@ export async function spendInsight(houseId: string, months = 6): Promise<SpendIn
     bucket.receipts += 1;
   }
 
+  if (settings.includeBills) {
+    const bills = await all<any>(`SELECT amount, due_date, created_at FROM bills WHERE house_id = ? AND COALESCE(due_date, substr(created_at, 1, 10)) >= ?`, [houseId, since]);
+    for (const bill of bills) {
+      const bucket = byMonthMap.get(monthOf(bill.due_date ?? bill.created_at));
+      if (bucket) bucket.total += money(bill.amount);
+    }
+  }
   const currentMonth = keys[keys.length - 1];
   const current = receipts.filter((receipt) => monthOf(receipt.purchased_at ?? receipt.created_at) === currentMonth);
 
@@ -159,9 +170,19 @@ export async function spendInsight(houseId: string, months = 6): Promise<SpendIn
     [houseId, currentMonth],
   )).map((row) => ({ name: String(row.name), total: money(row.total), lines: Number(row.lines ?? 0) }));
 
+  const budgetCategories = await all<any>(`SELECT c.id, c.name, COALESCE(SUM(rl.line_total), 0) AS spent
+    FROM categories c LEFT JOIN items i ON i.category_id = c.id AND i.house_id = c.house_id
+    LEFT JOIN receipt_lines rl ON rl.item_id = i.id AND rl.receipt_id IN
+      (SELECT id FROM receipts WHERE house_id = ? AND substr(COALESCE(purchased_at, created_at), 1, 7) = ?)
+    WHERE c.house_id = ? GROUP BY c.id, c.name ORDER BY c.name`, [houseId, currentMonth, houseId]);
+  const categoryBudgets = budgetCategories.map((row) => {
+    const spent = money(row.spent);
+    const budget = money(settings.categoryBudgets[row.id] ?? 0);
+    return { categoryId: String(row.id), name: String(row.name), spent, budget, percent: budget > 0 ? Math.round(spent / budget * 1000) / 10 : null };
+  });
   const monthTotal = money(byMonthMap.get(currentMonth)?.total ?? 0);
   const budget = settings.monthlyBudget;
-  const activeMonths = [...byMonthMap.values()].filter((entry) => entry.receipts > 0);
+  const activeMonths = keys.slice(-count).map((key) => byMonthMap.get(key)!).filter((entry) => entry.receipts > 0 || entry.total !== 0);
 
   return {
     currency,
@@ -171,14 +192,43 @@ export async function spendInsight(houseId: string, months = 6): Promise<SpendIn
     budget,
     budgetRemaining: budget > 0 ? money(Math.max(0, budget - monthTotal)) : null,
     budgetPercent: budget > 0 ? Math.round((monthTotal / budget) * 1000) / 10 : null,
+    projection: money(monthTotal / new Date().getUTCDate() * new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth() + 1, 0)).getUTCDate()),
+    categoryBudgets,
+    history: keys.slice(-7, -1).map((month) => ({ month, total: money(byMonthMap.get(month)?.total ?? 0), budget })),
     averagePerMonth: activeMonths.length
       ? money(activeMonths.reduce((sum, entry) => sum + entry.total, 0) / activeMonths.length)
       : 0,
-    byMonth: keys.map((key) => ({ month: key, total: money(byMonthMap.get(key)?.total ?? 0), receipts: byMonthMap.get(key)?.receipts ?? 0 })),
+    byMonth: keys.slice(-count).map((key) => ({ month: key, total: money(byMonthMap.get(key)?.total ?? 0), receipts: byMonthMap.get(key)?.receipts ?? 0 })),
     byShop: [...shops.values()].sort((a, b) => b.total - a.total).slice(0, 8),
     byCategory: categories.slice(0, 8),
     settings,
   };
+}
+
+/** Check each threshold independently so a single large purchase can cross both. */
+export async function scanBudgetAlerts(houseId: string): Promise<void> {
+  const spend = await spendInsight(houseId, 1);
+  const targets = [
+    { id: "house", name: "Household", spent: spend.monthTotal, budget: spend.budget },
+    ...spend.categoryBudgets.map((entry) => ({ id: entry.categoryId, name: entry.name, spent: entry.spent, budget: entry.budget })),
+  ];
+  for (const target of targets) {
+    if (target.budget <= 0) continue;
+    for (const threshold of [80, 100]) {
+      if (target.spent / target.budget * 100 < threshold) continue;
+      const dedupeKey = `budget:${spend.month}:${target.id}:${threshold}`;
+      // A resolved alert must not be revived during the same month.
+      if (await get("SELECT id FROM notifications WHERE house_id = ? AND dedupe_key = ?", [houseId, dedupeKey])) continue;
+      // English text with fixed shapes; the client translates them (see the budget keys in client/i18n.tsx).
+      const house = target.id === "house";
+      await createNotification({ houseId, type: "budget_alert",
+        title: house ? `Monthly budget at ${threshold}%` : `${target.name} budget at ${threshold}%`,
+        body: house
+          ? `Spending reached ${threshold}% of the monthly budget.`
+          : `${target.name} spending reached ${threshold}% of its monthly budget.`,
+        data: { month: spend.month, categoryId: target.id === "house" ? null : target.id, threshold, spent: target.spent, budget: target.budget }, dedupeKey });
+    }
+  }
 }
 
 /* ----------------------------------------------------------------- waste */

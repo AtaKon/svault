@@ -1,3 +1,4 @@
+import { scanBudgetAlerts } from "../services/insights.js";
 import { Router, type Request, type RequestHandler } from "express";
 import multer from "multer";
 import fs from "node:fs";
@@ -445,6 +446,7 @@ billRoutes.post("/:houseId/bills", requireHouseBillMember, billUpload.single("do
   }
   // Return the validated insert values directly; a post-insert read is both
   // unnecessary and unsafe to compensate-delete after an ambiguous DB error.
+  try { await scanBudgetAlerts(created.house_id); } catch { /* best effort */ }
   res.status(201).json(serialize(created));
 }));
 
@@ -508,6 +510,7 @@ singleBillRoutes.patch("/:billId", handler(async (req, res) => {
       current.id,
     ]);
   }, { writeLock: true });
+  try { await scanBudgetAlerts(houseId); } catch { /* best effort */ }
   res.json(serialize(await requireBillRow(current.id, houseId)));
 }));
 

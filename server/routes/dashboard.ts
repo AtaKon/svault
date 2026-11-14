@@ -1,4 +1,5 @@
 import { effectiveExpiry } from "../services/effective-expiry.js";
+import { forecastsForHouse } from "../services/forecast.js";
 import { Router } from "express";
 import { all, get } from "../db.js";
 import { requireAuth } from "../auth.js";
@@ -16,6 +17,69 @@ import {
 
 export const dashboardRoutes = Router();
 dashboardRoutes.use(requireAuth);
+
+/**
+ * A compact, sensor-friendly snapshot of the house. The full dashboard is far
+ * too large for a five-minute Home Assistant poll; this endpoint answers with
+ * one query for the counters and one for the caller's unread reminders.
+ */
+dashboardRoutes.get(
+  "/:houseId/summary",
+  handler(async (req, res) => {
+    const { houseId } = await requireHouse(req);
+    const today = new Date().toISOString().slice(0, 10);
+    const soon = new Date(Date.now() + 7 * 864e5).toISOString().slice(0, 10);
+
+    const row = await get<any>(
+      `SELECT
+        (SELECT name FROM houses WHERE id = ?) AS house_name,
+        (SELECT created_at FROM houses WHERE id = ?) AS house_created_at,
+        (SELECT COUNT(*) FROM items WHERE house_id = ? AND archived = 0) AS item_count,
+        (SELECT COUNT(*) FROM items i WHERE i.house_id = ? AND i.archived = 0 AND i.reorder_point > 0
+           AND (SELECT COALESCE(SUM(l.quantity), 0) FROM stock_lots l WHERE l.item_id = i.id) <= i.reorder_point
+        ) AS low_stock_count,
+        (SELECT COUNT(*) FROM stock_lots l WHERE l.house_id = ? AND l.quantity > 0
+           AND l.expires_at IS NOT NULL AND l.expires_at >= ? AND l.expires_at <= ?
+        ) AS expiring_soon_count,
+        (SELECT COUNT(*) FROM stock_lots l WHERE l.house_id = ? AND l.quantity > 0
+           AND l.expires_at IS NOT NULL AND l.expires_at < ?
+        ) AS expired_count,
+        (SELECT COUNT(*) FROM shopping_list_items s WHERE s.house_id = ? AND s.checked = 0) AS shopping_open_count,
+        (SELECT MAX(t) FROM (
+           SELECT MAX(updated_at) AS t FROM items WHERE house_id = ?
+           UNION ALL SELECT MAX(updated_at) FROM shopping_list_items WHERE house_id = ?
+           UNION ALL SELECT MAX(created_at) FROM stock_lots WHERE house_id = ?
+           UNION ALL SELECT MAX(created_at) FROM notifications WHERE house_id = ?
+        ) AS stamps) AS updated_at`,
+      [houseId, houseId, houseId, houseId, houseId, today, soon, houseId, today, houseId, houseId, houseId, houseId, houseId],
+    );
+
+    const reminders = await all<{ read_by: string }>(
+      `SELECT read_by FROM notifications WHERE house_id = ? AND resolved_at IS NULL
+         AND (user_id IS NULL OR user_id = ?)`,
+      [houseId, req.user!.id],
+    );
+    const unreadReminders = reminders.filter((reminder) => {
+      try {
+        return !(JSON.parse(reminder.read_by) as string[]).includes(req.user!.id);
+      } catch {
+        return true;
+      }
+    }).length;
+
+    res.json({
+      houseId,
+      houseName: String(row?.house_name ?? ""),
+      itemCount: Number(row?.item_count ?? 0),
+      lowStockCount: Number(row?.low_stock_count ?? 0),
+      expiringSoonCount: Number(row?.expiring_soon_count ?? 0),
+      expiredCount: Number(row?.expired_count ?? 0),
+      shoppingListOpenCount: Number(row?.shopping_open_count ?? 0),
+      unreadReminders,
+      updatedAt: row?.updated_at ?? row?.house_created_at ?? null,
+    });
+  }),
+);
 
 dashboardRoutes.get(
   "/:houseId/dashboard",
@@ -104,7 +168,13 @@ dashboardRoutes.get(
       }).length,
     };
 
+    const forecasts = await forecastsForHouse(houseId);
+    const forecastRows = forecasts.size ? await all<any>(`${ITEM_SELECT} WHERE i.house_id = ? AND i.archived = 0`, [houseId]) : [];
+    const runningOutSoon = forecastRows.map((row) => ({ ...serializeItem(row, barcodeMap.get(row.id) ?? []), forecast: forecasts.get(row.id) ?? null }))
+      .filter((item) => item.forecast && item.forecast.daysLeft <= 7)
+      .sort((a, b) => a.forecast!.daysLeft - b.forecast!.daysLeft);
     res.json({
+      runningOutSoon,
       itemCount: Number(stats?.item_count ?? 0),
       unitCount: Number(stats?.unit_count ?? 0),
       batchCount: Number(stats?.batch_count ?? 0),

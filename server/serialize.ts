@@ -101,6 +101,7 @@ export function serializeItem(row: any, barcodes: { id: string; code: string; fo
       }
     : null;
   return {
+    forecast: null,
     id: row.id,
     houseId: row.house_id,
     openedShelfLifeDays: row.opened_shelf_life_days == null ? null : Number(row.opened_shelf_life_days),
