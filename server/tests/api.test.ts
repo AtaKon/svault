@@ -11381,8 +11381,11 @@ describe("run-out forecasts", () => {
     await request(`/api/items/${id}/stock`, { method: "POST", body: { action: "remove", quantity: 3 } });
     let detail = await request(`/api/items/${id}`);
     assert.equal(detail.data.forecast, null);
+    await request(`/api/items/${id}/stock`, { method: "POST", body: { action: "remove", quantity: 1 } });
+    detail = await request(`/api/items/${id}`);
+    assert.equal(detail.data.forecast, null);
     await run("UPDATE stock_movements SET created_at = ? WHERE item_id = ? AND type = 'out'", [new Date(Date.now() - 10 * 864e5).toISOString(), id]);
-    await request(`/api/items/${id}/stock`, { method: "POST", body: { action: "remove", quantity: 3 } });
+    await request(`/api/items/${id}/stock`, { method: "POST", body: { action: "remove", quantity: 2 } });
     detail = await request(`/api/items/${id}`);
     assert.deepEqual(detail.data.forecast, { dailyRate: 0.1, daysLeft: 60, windowDays: 60 });
     const list = await request(`/api/houses/${houseId}/items?limit=1000`);
