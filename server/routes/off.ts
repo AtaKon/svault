@@ -404,6 +404,10 @@ offRoutes.post(
       }),
       req.body,
     );
+    if (!(await offConsent(req.user!.id))) {
+      throw new ApiError(403, "Accept the Open Food Facts license before contributing");
+    }
+    await requireContributingMember(req);
     if (offDryRun()) {
       res.json({ ok: true, dryRun: true });
       return;
