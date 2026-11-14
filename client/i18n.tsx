@@ -10,6 +10,7 @@ const EL: Record<string, string> = {
   "Keeps for N days after opening": "Διατηρείται για N ημέρες μετά το άνοιγμα",
   "Mark opened": "Σήμανση ως ανοιγμένο",
   "Not opened": "Δεν έχει ανοιχτεί",
+  "Mark as not opened": "Σήμανση ως μη ανοιγμένο",
   "Opened date": "Ημερομηνία ανοίγματος",
   "opened {date}": "ανοίχτηκε {date}",
   " · use by {date}": " · χρήση έως {date}",

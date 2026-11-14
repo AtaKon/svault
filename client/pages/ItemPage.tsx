@@ -520,7 +520,7 @@ export function ItemPage() {
                           {can("member") && <div className="mt-2 flex flex-wrap items-center gap-2">
                             {!lot.openedAt && <Input aria-label={t("Opened date")} className="w-auto max-w-full" type="date" value={openingDates[lot.id] || todayInput()} onChange={(e) => setOpeningDates((dates) => ({ ...dates, [lot.id]: e.target.value }))} />}
                             <button type="button" disabled={openingBusy === lot.id} onClick={() => void setOpened(lot.id, !lot.openedAt)} className="rounded-md px-2 py-1 text-xs font-medium text-brand hover:bg-raised disabled:opacity-50">
-                              {lot.openedAt ? t("Not opened") : t("Mark opened")}
+                              {lot.openedAt ? t("Mark as not opened") : t("Mark opened")}
                             </button>
                           </div>}
                         </div>
