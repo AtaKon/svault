@@ -198,6 +198,8 @@ Attribute types: `text`, `number`, `select`, `date`, `boolean`, `url`. Built-in 
 
 ## Inventory
 
+Item create and update accept `openedShelfLifeDays`, a nullable integer from 0 to 36500. Lot responses include `openedAt` and `effectiveExpiresAt`: the earlier of the printed `expiresAt` and the opening date plus shelf life, when available. Both batch endpoints require that the lot belongs to the item and its household; consumption does not mark batches opened.
+
 ### Items
 
 | Method | Path | Min role | Purpose |
@@ -208,6 +210,8 @@ Attribute types: `text`, `number`, `select`, `date`, `boolean`, `url`. Built-in 
 | `GET` | `/api/items/:itemId` | viewer+ | Item detail: lots, movements, price history, linked recipes, OpenFoodFacts link. |
 | `PATCH` | `/api/items/:itemId` | member+ | Update fields or `archived`. Pass `offCode` to link, or `null` to unlink. |
 | `DELETE` | `/api/items/:itemId` | member+ | Delete the item, its batches and barcodes. Recipes stay. |
+| `PUT` | `/api/items/:itemId/lots/:lotId/opened` | member+ | Mark a batch opened; optional `{ "openedAt": "YYYY-MM-DD" }` defaults to today. |
+| `DELETE` | `/api/items/:itemId/lots/:lotId/opened` | member+ | Clear the opening date. |
 | `POST` | `/api/items/:itemId/stock` | member+ | Add, remove, waste, set or move stock. |
 | `GET` | `/api/items/:itemId/movements` | viewer+ | Movement ledger (`limit` 1-300, default 50). |
 | `POST` | `/api/items/:itemId/image` | member+ | `multipart/form-data` field `image`. |

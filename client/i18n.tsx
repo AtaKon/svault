@@ -7,6 +7,16 @@ import { buildDynamicMatcher, matchDynamicTranslation } from "@shared/i18n";
 export type Language = "en" | "el";
 
 const EL: Record<string, string> = {
+  "Keeps for N days after opening": "Διατηρείται για N ημέρες μετά το άνοιγμα",
+  "Mark opened": "Σήμανση ως ανοιγμένο",
+  "Not opened": "Δεν έχει ανοιχτεί",
+  "Mark as not opened": "Σήμανση ως μη ανοιγμένο",
+  "Opened date": "Ημερομηνία ανοίγματος",
+  "opened {date}": "ανοίχτηκε {date}",
+  " · use by {date}": " · χρήση έως {date}",
+  "Could not update batch": "Δεν ήταν δυνατή η ενημέρωση της παρτίδας",
+  "Batch not found": "Η παρτίδα δεν βρέθηκε",
+
   "Category must belong to this house": "Η κατηγορία πρέπει να ανήκει σε αυτό το σπίτι.",
   "Enter valid category budgets.": "Εισαγάγετε έγκυρους προϋπολογισμούς κατηγοριών.",
   "Projected month-end spending: {amount}": "Εκτιμώμενη δαπάνη τέλους μήνα: {amount}",

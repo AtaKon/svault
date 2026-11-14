@@ -1,3 +1,4 @@
+import { effectiveExpiry } from "./services/effective-expiry.js";
 import { all, parseJson, bool } from "./db.js";
 import { round } from "./units.js";
 import { normaliseNutrition } from "./services/nutrition.js";
@@ -103,6 +104,7 @@ export function serializeItem(row: any, barcodes: { id: string; code: string; fo
     forecast: null,
     id: row.id,
     houseId: row.house_id,
+    openedShelfLifeDays: row.opened_shelf_life_days == null ? null : Number(row.opened_shelf_life_days),
     name: row.name,
     description: row.description ?? null,
     brand: row.brand ?? null,
@@ -167,6 +169,8 @@ export function serializeLot(row: any): StockLot {
     currency: row.currency ?? null,
     purchasedAt: row.purchased_at ?? null,
     expiresAt: row.expires_at ?? null,
+    openedAt: row.opened_at ?? null,
+    effectiveExpiresAt: effectiveExpiry(row, row),
     note: row.note ?? null,
     vendorId: row.vendor_id ?? null,
     vendorName: row.vendor_name ?? null,

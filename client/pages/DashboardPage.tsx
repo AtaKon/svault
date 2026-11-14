@@ -234,7 +234,7 @@ export function DashboardPage() {
             ) : (
               <Card className="divide-y divide-line">
                 {data.expiring.slice(0, 4).map((lot) => {
-                  const days = daysUntil(lot.expiresAt);
+                  const days = daysUntil(lot.effectiveExpiresAt);
                   return (
                     <button
                       key={lot.id}
@@ -247,7 +247,7 @@ export function DashboardPage() {
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-[13px] font-medium">{lot.itemName}</span>
                         <span className="block text-[11px] text-muted">
-                          {qty(lot.quantity)} {lot.unit} · {shortDate(lot.expiresAt)}
+                          {qty(lot.quantity)} {lot.unit} · {shortDate(lot.effectiveExpiresAt)}
                         </span>
                       </span>
                       <Badge tone={days != null && days < 0 ? "danger" : "warn"}>

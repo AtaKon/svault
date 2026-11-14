@@ -255,6 +255,10 @@ Open an item and use the stock dialog. There are five actions:
 Removing more than is available is rejected. Wasting or removing with a `locationId` restricts FIFO to
 that place.
 
+### Shelf life after opening
+
+Set **Keeps for N days after opening** on an item, then use **Mark opened** on a batch and select its opening date. SVault shows the opening date and use-by date. **Not opened** clears the date. The use-by date is the earlier of the printed expiry and the opening date plus the shelf life; it drives expiry reminders, the dashboard, expiring filter and Use it up. Moving stock preserves its opening date. Consuming stock does not automatically mark a batch opened.
+
 ### Barcodes and scanning
 
 - Each item can hold several barcodes, unique per house.

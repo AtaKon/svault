@@ -68,6 +68,7 @@ All notable changes to SVault are documented here. The format follows
 
 ### Added
 
+- Track when a batch was opened and an item’s shelf life after opening, with effective expiry dates in reminders and inventory views.
 - **Home Assistant integration.** `GET /api/houses/:houseId/summary` returns a compact snapshot for
   sensors — item, low-stock, expiring-soon, expired, open shopping-list and unread-reminder counts plus
   the house name and last change — in two small queries. It accepts a read-only API token, so Home

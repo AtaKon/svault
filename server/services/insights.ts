@@ -1,3 +1,4 @@
+import { effectiveExpiry } from "./effective-expiry.js";
 import { all, get, parseJson, run } from "../db.js";
 import type { DatabaseSession } from "../database/types.js";
 import { convert, round } from "../units.js";
@@ -612,25 +613,25 @@ export async function useItUp(houseId: string, days?: number): Promise<{
   const earliest = new Date(Date.now() - 3 * DAY).toISOString().slice(0, 10);
 
   const lots = await all<any>(
-    `SELECT l.*, i.name AS item_name, i.unit AS item_unit, i.category_id, loc.name AS location_name
+    `SELECT l.*, i.name AS item_name, i.unit AS item_unit, i.category_id, i.opened_shelf_life_days, loc.name AS location_name
      FROM stock_lots l
      JOIN items i ON i.id = l.item_id
      LEFT JOIN locations loc ON loc.id = l.location_id AND loc.house_id = ?
-     WHERE l.house_id = ? AND l.quantity > 0 AND l.expires_at IS NOT NULL
-       AND l.expires_at >= ? AND l.expires_at <= ?
-     ORDER BY l.expires_at ASC`,
-    [houseId, houseId, earliest, until],
+     WHERE l.house_id = ? AND l.quantity > 0`,
+    [houseId, houseId],
   );
 
   const grouped = new Map<string, UseItUpItem>();
   for (const lot of lots) {
+    const expiry = effectiveExpiry(lot, lot);
+    if (!expiry || expiry < earliest || expiry > until) continue;
     const key = lot.item_id;
     const existing = grouped.get(key);
-    const daysLeft = Math.round((new Date(`${lot.expires_at}T00:00:00Z`).getTime() - new Date(`${today}T00:00:00Z`).getTime()) / DAY);
+    const daysLeft = Math.round((new Date(`${expiry}T00:00:00Z`).getTime() - new Date(`${today}T00:00:00Z`).getTime()) / DAY);
     if (existing) {
       existing.quantity = round(existing.quantity + Number(lot.quantity), 3);
-      existing.lots.push({ id: lot.id, quantity: round(Number(lot.quantity), 3), expiresAt: lot.expires_at, locationName: lot.location_name ?? null });
-      existing.expiresAt = existing.expiresAt < lot.expires_at ? existing.expiresAt : lot.expires_at;
+      existing.lots.push({ id: lot.id, quantity: round(Number(lot.quantity), 3), expiresAt: expiry, locationName: lot.location_name ?? null });
+      existing.expiresAt = existing.expiresAt < expiry ? existing.expiresAt : expiry;
       existing.daysLeft = Math.min(existing.daysLeft, daysLeft);
       continue;
     }
@@ -639,10 +640,10 @@ export async function useItUp(houseId: string, days?: number): Promise<{
       name: lot.item_name,
       unit: lot.item_unit ?? lot.unit ?? null,
       quantity: round(Number(lot.quantity), 3),
-      expiresAt: lot.expires_at,
+      expiresAt: expiry,
       daysLeft,
       locationName: lot.location_name ?? null,
-      lots: [{ id: lot.id, quantity: round(Number(lot.quantity), 3), expiresAt: lot.expires_at, locationName: lot.location_name ?? null }],
+      lots: [{ id: lot.id, quantity: round(Number(lot.quantity), 3), expiresAt: expiry, locationName: lot.location_name ?? null }],
     });
   }
 

@@ -1,3 +1,4 @@
+import { effectiveExpiry } from "../services/effective-expiry.js";
 import { forecastsForHouse } from "../services/forecast.js";
 import { Router } from "express";
 import { z } from "zod";
@@ -21,7 +22,7 @@ import {
   serializeMovement,
 } from "../serialize.js";
 import { addStock, afterStockChange, itemQuantity, moveStock, removeStock, setStock } from "../services/stock.js";
-import { clearItemNotifications } from "../services/notifications.js";
+import { clearItemNotifications, syncHouseExpiry } from "../services/notifications.js";
 import { normaliseNutrition } from "../services/nutrition.js";
 import { learnProductAlias } from "../services/product-aliases.js";
 import {
@@ -308,7 +309,8 @@ async function itemDetail(itemId: string, userId: string) {
   // Only this item's movements, not the whole house.
   item.forecast = (await forecastsForHouse(row.house_id, itemId)).get(itemId) ?? null;
   const lots = (await all<any>(
-    `SELECT l.*, loc.name AS location_name, v.name AS vendor_name FROM stock_lots l
+    `SELECT l.*, i.opened_shelf_life_days, loc.name AS location_name, v.name AS vendor_name FROM stock_lots l
+     JOIN items i ON i.id = l.item_id
      LEFT JOIN locations loc ON loc.id = l.location_id AND loc.house_id = ?
      LEFT JOIN vendors v ON v.id = l.vendor_id
      WHERE l.item_id = ?
@@ -677,10 +679,10 @@ inventoryRoutes.get(
     }
     if (expiring) {
       const horizon = new Date(Date.now() + 14 * 864e5).toISOString().slice(0, 10);
-      where.push(
-        `EXISTS (SELECT 1 FROM stock_lots l WHERE l.item_id = i.id AND l.quantity > 0 AND l.expires_at IS NOT NULL AND l.expires_at <= ?)`,
-      );
-      params.push(horizon);
+      const lots = await all<any>(`SELECT l.*, i.opened_shelf_life_days FROM stock_lots l JOIN items i ON i.id = l.item_id WHERE l.house_id = ? AND l.quantity > 0`, [houseId]);
+      const ids = [...new Set(lots.filter((lot) => { const expiry = effectiveExpiry(lot, lot); return expiry && expiry <= horizon; }).map((lot) => String(lot.item_id)))];
+      if (ids.length) { where.push(`i.id IN (${ids.map(() => "?").join(", ")})`); params.push(...ids); }
+      else where.push("1 = 0");
     }
     if (q) {
       const like = `%${q}%`;
@@ -725,6 +727,7 @@ inventoryRoutes.post(
         unit: z.string().trim().min(1).max(10).default("pcs"),
         reorderPoint: z.number().min(0).max(1e9).optional(),
         targetStock: z.number().min(0).max(1e9).nullish(),
+        openedShelfLifeDays: z.number().int().min(0).max(36500).nullish(),
         attributes: z.record(z.string(), z.any()).optional(),
         tags: z.union([z.array(z.string()), z.string()]).optional(),
         image: z.string().max(300).nullish(),
@@ -766,9 +769,9 @@ inventoryRoutes.post(
     const id = newId("itm");
     await tx(async () => {
       await run(
-        `INSERT INTO items (id, house_id, name, description, brand, category_id, unit, reorder_point, target_stock,
+        `INSERT INTO items (id, house_id, name, description, brand, category_id, unit, reorder_point, target_stock, opened_shelf_life_days,
            attributes, tags, image, nutrition, espresso, archived, created_by, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
         [
           id,
           houseId,
@@ -779,6 +782,7 @@ inventoryRoutes.post(
           body.unit.toLowerCase(),
           body.reorderPoint ?? 0,
           body.targetStock ?? null,
+          body.openedShelfLifeDays ?? null,
           JSON.stringify(normalized.attributes),
           JSON.stringify(parseTags(body.tags)),
           body.image ?? null,
@@ -1031,6 +1035,7 @@ itemRoutes.patch(
         unit: z.string().trim().min(1).max(10).optional(),
         reorderPoint: z.number().min(0).max(1e9).optional(),
         targetStock: z.number().min(0).max(1e9).nullish(),
+        openedShelfLifeDays: z.number().int().min(0).max(36500).nullish(),
         attributes: z.record(z.string(), z.any()).optional(),
         tags: z.union([z.array(z.string()), z.string()]).optional(),
         image: z.string().max(300).nullish(),
@@ -1061,7 +1066,7 @@ itemRoutes.patch(
             })();
     await run(
       `UPDATE items SET name = ?, description = ?, brand = ?, category_id = ?, unit = ?, reorder_point = ?,
-         target_stock = ?, attributes = ?, tags = ?, image = ?, nutrition = ?, espresso = ?, archived = ?, updated_at = ? WHERE id = ?`,
+         target_stock = ?, opened_shelf_life_days = ?, attributes = ?, tags = ?, image = ?, nutrition = ?, espresso = ?, archived = ?, updated_at = ? WHERE id = ?`,
       [
         body.name ?? item.name,
         body.description === undefined ? item.description : body.description,
@@ -1070,6 +1075,7 @@ itemRoutes.patch(
         (body.unit ?? item.unit).toLowerCase(),
         body.reorderPoint ?? item.reorder_point,
         body.targetStock === undefined ? item.target_stock : body.targetStock,
+        body.openedShelfLifeDays === undefined ? item.opened_shelf_life_days : body.openedShelfLifeDays,
         JSON.stringify(normalized.attributes),
         JSON.stringify(body.tags === undefined ? parseJson(item.tags, []) : parseTags(body.tags)),
         body.image === undefined ? item.image : body.image,
@@ -1081,6 +1087,7 @@ itemRoutes.patch(
       ],
     );
     await afterStockChange(item.id);
+    if (body.openedShelfLifeDays !== undefined) await syncHouseExpiry(item.house_id);
     if (body.offCode !== undefined) {
       if (body.offCode === null || body.offCode === "") {
         await unlinkItemFromOff(item.id);
@@ -1104,6 +1111,33 @@ itemRoutes.delete(
     await clearItemNotifications(item.id);
     await removeUnreferencedUploads([item.image]);
     res.json({ ok: true });
+  }),
+);
+
+itemRoutes.put(
+  "/:itemId/lots/:lotId/opened",
+  handler(async (req, res) => {
+    const { item } = await itemAccess(req, "member");
+    const body = parseBody(z.object({ openedAt: z.iso.date().optional() }), req.body ?? {});
+    const lot = await get<any>("SELECT id FROM stock_lots WHERE id = ? AND item_id = ? AND house_id = ?", [req.params.lotId, item.id, item.house_id]);
+    if (!lot) throw new ApiError(404, "Batch not found");
+    await run("UPDATE stock_lots SET opened_at = ? WHERE id = ? AND item_id = ? AND house_id = ?", [body.openedAt ?? new Date().toISOString().slice(0, 10), lot.id, item.id, item.house_id]);
+    await afterStockChange(item.id);
+    await syncHouseExpiry(item.house_id);
+    res.json(await itemDetail(item.id, req.user!.id));
+  }),
+);
+
+itemRoutes.delete(
+  "/:itemId/lots/:lotId/opened",
+  handler(async (req, res) => {
+    const { item } = await itemAccess(req, "member");
+    const lot = await get<any>("SELECT id FROM stock_lots WHERE id = ? AND item_id = ? AND house_id = ?", [req.params.lotId, item.id, item.house_id]);
+    if (!lot) throw new ApiError(404, "Batch not found");
+    await run("UPDATE stock_lots SET opened_at = NULL WHERE id = ? AND item_id = ? AND house_id = ?", [lot.id, item.id, item.house_id]);
+    await afterStockChange(item.id);
+    await syncHouseExpiry(item.house_id);
+    res.json(await itemDetail(item.id, req.user!.id));
   }),
 );
 

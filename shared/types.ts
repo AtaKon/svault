@@ -424,6 +424,8 @@ export interface CatalogImportResult {
 }
 
 export interface StockLot {
+  openedAt: string | null;
+  effectiveExpiresAt: string | null;
   id: string;
   itemId: string;
   locationId: string | null;
@@ -486,6 +488,7 @@ export interface PriceStats {
 export interface Forecast { dailyRate: number; daysLeft: number; windowDays: number }
 
 export interface Item {
+  openedShelfLifeDays: number | null;
   id: string;
   houseId: string;
   name: string;
