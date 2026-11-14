@@ -733,3 +733,7 @@ warns while unsynced changes exist; reads are still network-only.
 
 More deployment-specific fixes are in [deployment.md](deployment.md) and the
 [TrueNAS guide](../deploy/dockge/README.md#troubleshooting).
+
+### Category budgets and reminders
+
+In Insights, house admins can set monthly budgets for individual categories and choose whether bills count toward household spending. Bills are excluded by default. Included bills count in their due month, or creation month if no due date is set; they do not count toward a category. Avoid entering the same expense as both a bill and a receipt. The projected month-end total assumes the current daily rate continues. The six-month history compares past totals with the current budget. Household and category reminders appear at 80% and 100% once per month and are delivered to enabled reminder channels.

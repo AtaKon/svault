@@ -6,6 +6,10 @@ All notable changes to SVault are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Category budgets, optional bill spending, month-end projections, budget history and threshold reminders.
+
 ### Security
 
 - The development request log and the AI provider label no longer print query strings, which can

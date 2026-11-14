@@ -46,6 +46,8 @@ export function InsightsPage() {
   const editingBudgetRef = useRef(false);
   const [budget, setBudget] = useState("0");
   const [threshold, setThreshold] = useState("20");
+  const [categoryBudgets, setCategoryBudgets] = useState<Record<string, string>>({});
+  const [includeBills, setIncludeBills] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -68,6 +70,8 @@ export function InsightsPage() {
       if (!editingBudgetRef.current) {
         setBudget(String(spendData.budget || ""));
         setThreshold(String(spendData.settings.priceAlertPercent));
+        setCategoryBudgets(Object.fromEntries(Object.entries(spendData.settings.categoryBudgets).map(([id, value]) => [id, String(value)])));
+        setIncludeBills(spendData.settings.includeBills);
       }
     } catch (err) {
       const message = err instanceof Error ? t(err.message) : t("Could not load insights");
@@ -94,11 +98,16 @@ export function InsightsPage() {
       toast.error(t("The price-alert threshold must be between 1 and 500%."));
       return;
     }
+    const parsedCategories = Object.fromEntries(Object.entries(categoryBudgets).map(([id, value]) => [id, value.trim() ? Number(value) : 0]));
+    if (Object.values(parsedCategories).some((value) => !Number.isFinite(value) || value < 0 || value > 1e9)) {
+      toast.error(t("Enter valid category budgets."));
+      return;
+    }
     setBusy(true);
     try {
       const settings = await api<HouseBudgetSettings>(`/api/houses/${house.id}/insights/settings`, {
         method: "PATCH",
-        body: { monthlyBudget: budgetValue, priceAlertPercent: thresholdValue },
+        body: { monthlyBudget: budgetValue, priceAlertPercent: thresholdValue, categoryBudgets: parsedCategories, includeBills },
       });
       setSpend((current) => (current ? { ...current, budget: settings.monthlyBudget, settings } : current));
       editingBudgetRef.current = false;
@@ -339,6 +348,12 @@ export function InsightsPage() {
           </div>
         )}
 
+        <p className="mt-3 text-sm text-muted">{t("Projected month-end spending: {amount}", { amount: money(spend.projection, spend.currency) })}</p>
+        {spend.categoryBudgets.filter((entry) => entry.budget > 0).map((entry) => (
+          <p key={entry.categoryId} className={cn("mt-1 text-sm", entry.spent > entry.budget ? "text-danger" : "text-muted")}>
+            {entry.name}: {money(entry.spent, spend.currency)} / {money(entry.budget, spend.currency)} {entry.spent > entry.budget && t("Over budget")}
+          </p>
+        ))}
         {editingBudget && (
           <div className="mt-3 grid gap-2 sm:grid-cols-3">
             <Field label={t("Monthly budget ({currency})", { currency: spend.currency })}>
@@ -347,6 +362,12 @@ export function InsightsPage() {
             <Field label={t("Price alert threshold (%)")}>
               <Input value={threshold} inputMode="numeric" onChange={(event) => setThreshold(event.target.value)} placeholder="20" />
             </Field>
+            <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={includeBills} onChange={(event) => setIncludeBills(event.target.checked)} />{t("Include bills in budget spending")}</label>
+            {spend.categoryBudgets.map((entry) => (
+              <Field key={entry.categoryId} label={entry.name}>
+                <Input value={categoryBudgets[entry.categoryId] ?? ""} inputMode="decimal" onChange={(event) => setCategoryBudgets((current) => ({ ...current, [entry.categoryId]: event.target.value }))} placeholder="0" />
+              </Field>
+            ))}
             <div className="flex items-end">
               <Button block loading={busy} onClick={() => void saveSettings()}>
                 {t("Save ")}</Button>
@@ -358,6 +379,8 @@ export function InsightsPage() {
       <div className="grid gap-3 lg:grid-cols-2">
         <Card className="p-4">
           <h2 className="font-display text-lg">{t("Spending by month")}</h2>
+          <p className="mt-2 text-xs text-muted">{t("Previous 6 months vs current budget")}</p>
+          <div className="mt-2 space-y-1">{spend.history.map((entry) => <div key={entry.month} className="flex flex-wrap justify-between gap-1 text-xs text-muted"><span>{entry.month}</span><span>{money(entry.total, spend.currency)} / {money(entry.budget, spend.currency)}</span></div>)}</div>
           <div className="mt-3 space-y-2">
             {spend.byMonth.map((entry) => (
               <div key={entry.month} className="flex items-center gap-2">

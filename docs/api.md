@@ -1335,3 +1335,7 @@ If you add an endpoint:
 5. Add a test in `server/tests/api.test.ts` and update this page.
 
 See [development.md](development.md) for the workflow.
+
+### Insights budget settings and spend
+
+`PATCH /api/houses/:houseId/insights/settings` requires a house admin. In addition to `monthlyBudget`, it accepts `categoryBudgets` (an object mapping category IDs belonging to the house to non-negative amounts) and `includeBills` (boolean, default `false`). Zero disables a budget. Viewers can read `GET /api/houses/:houseId/insights/spend`, which includes `projection`, `categoryBudgets` (category ID, name, spent, budget and percent), and `history` (the preceding six months, total and current budget). Historical budgets are not stored: history compares each total with the current budget. Projection is current spending divided by elapsed UTC calendar days times days in the month. Receipt spending uses purchase date or upload date. When enabled, bills count by due date or creation date and are included in household totals, not category totals. Avoid recording the same expense as both a bill and a receipt. Budget reminders fire at 80% and 100% once per month for the household and each category.

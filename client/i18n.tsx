@@ -7,6 +7,12 @@ import { buildDynamicMatcher, matchDynamicTranslation } from "@shared/i18n";
 export type Language = "en" | "el";
 
 const EL: Record<string, string> = {
+  "Enter valid category budgets.": "Εισαγάγετε έγκυρους προϋπολογισμούς κατηγοριών.",
+  "Projected month-end spending: {amount}": "Εκτιμώμενη δαπάνη τέλους μήνα: {amount}",
+  "Over budget": "Υπέρβαση προϋπολογισμού",
+  "Include bills in budget spending": "Συμπερίληψη λογαριασμών στις δαπάνες",
+  "Previous 6 months vs current budget": "Προηγούμενοι 6 μήνες σε σχέση με τον τρέχοντα προϋπολογισμό",
+
   "Espresso log": "Ημερολόγιο espresso",
   "Espresso coffee": "Καφές espresso",
   "Track espresso shots": "Καταγραφή shots espresso",
