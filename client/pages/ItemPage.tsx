@@ -51,13 +51,30 @@ const MOVEMENT_LABELS: Record<Movement["type"], { label: string; icon: IconName;
   move: { label: "Moved", icon: "mapPin", tone: "bg-raised text-muted" },
 };
 
+
+/** Document kinds as stored by the API, with their display labels. */
+const DOCUMENT_KIND_LABELS: Record<string, string> = { other: "Other", manual: "Manual", receipt: "Purchase receipt", warranty: "Warranty card" };
+
 export function ItemPage() {
   const { t } = useI18n();
+  const warrantyLabel = (days: number) =>
+    days < 0
+      ? t("Warranty expired")
+      : days === 0
+        ? t("Warranty ends today")
+        : days === 1
+          ? t("Warranty ends tomorrow")
+          : days < 60
+            ? t("Warranty ends in {count} days", { count: days })
+            : t("Warranty ends in {count} months", { count: Math.round(days / 30) });
   const { itemId = "" } = useParams();
   const { house, can } = useHouse();
   const { user } = useAuth();
   const navigate = useNavigate();
   const toast = useToast();
+  const [documents, setDocuments] = useState<{ id: string; originalName: string; kind: string }[]>([]);
+  const [documentKind, setDocumentKind] = useState("other");
+  const [documentBusy, setDocumentBusy] = useState(false);
   const [item, setItem] = useState<ItemDetail | null>(null);
   const [locations, setLocations] = useState<Location[]>([]);
   const [vendors, setVendors] = useState<Vendor[]>([]);
@@ -94,6 +111,7 @@ export function ItemPage() {
 
   useEffect(() => {
     void load();
+    api<typeof documents>(`/api/items/${itemId}/documents`).then(setDocuments).catch(() => undefined);
     Promise.all([
       api<Location[]>(`/api/houses/${house.id}/locations`),
       api<AttributeDef[]>(`/api/houses/${house.id}/attributes`),
@@ -600,6 +618,41 @@ export function ItemPage() {
             ) : (
               <p className="mt-3 border-t border-line pt-3 text-[11px] text-muted">
                 {t("No custom attributes set. Attributes are defined per house in Settings → Attributes. ")}</p>
+            )}
+          </Card>
+
+          {(item.warrantyUntil || item.warrantyNote) && (
+            <Card className="space-y-1 p-4">
+              <h2 className="mb-1 font-display text-lg">{t("Warranty")}</h2>
+              {item.warrantyUntil && daysUntil(item.warrantyUntil) != null && (
+                <p className="text-sm text-muted">
+                  {warrantyLabel(daysUntil(item.warrantyUntil)!)} · {shortDate(item.warrantyUntil)}
+                </p>
+              )}
+              {item.warrantyNote && <p className="break-words text-sm">{item.warrantyNote}</p>}
+            </Card>
+          )}
+
+          <Card className="space-y-3 p-4">
+            <h2 className="font-display text-lg">{t("Documents")}</h2>
+            {documents.length === 0 && <p className="text-sm text-muted">{t("No documents yet")}</p>}
+            {documents.map((doc) => (
+              <div key={doc.id} className="flex flex-wrap items-center gap-2 text-sm">
+                <a className="min-w-0 flex-1 break-all text-brand underline" href={`/api/items/${itemId}/documents/${doc.id}`} target="_blank" rel="noreferrer">{doc.originalName}</a>
+                <span className="text-muted">{t(DOCUMENT_KIND_LABELS[doc.kind] ?? "Other")}</span>
+                {can("member") && <Button size="sm" variant="ghost" onClick={async () => { try { await api(`/api/items/${itemId}/documents/${doc.id}`, { method: "DELETE" }); setDocuments(d => d.filter(x => x.id !== doc.id)); } catch (err) { toast.error(err instanceof Error ? err.message : t("Could not delete document")); } }}>{t("Delete")}</Button>}
+              </div>
+            ))}
+            {can("member") && (
+              <div className="flex flex-wrap items-center gap-2">
+                <Select className="min-w-0" value={documentKind} onChange={(e) => setDocumentKind(e.target.value)} aria-label={t("Document kind")}>
+                  {Object.entries(DOCUMENT_KIND_LABELS).map(([value, label]) => <option key={value} value={value}>{t(label)}</option>)}
+                </Select>
+                <label className="cursor-pointer self-center text-sm text-brand underline">
+                  {documentBusy ? t("Uploading…") : t("Upload document")}
+                  <input className="sr-only" type="file" accept="application/pdf,image/*" disabled={documentBusy} onChange={async e => { const file = e.target.files?.[0]; e.target.value = ""; if (!file) return; setDocumentBusy(true); try { const form = new FormData(); form.set("document", file); form.set("kind", documentKind); const doc = await api<typeof documents[number]>(`/api/items/${itemId}/documents`, { body: form }); setDocuments(d => [doc, ...d]); } catch (err) { toast.error(err instanceof Error ? err.message : t("Could not upload document")); } finally { setDocumentBusy(false); } }} />
+                </label>
+              </div>
             )}
           </Card>
 

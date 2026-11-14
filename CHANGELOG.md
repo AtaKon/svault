@@ -68,6 +68,7 @@ All notable changes to SVault are documented here. The format follows
 
 ### Added
 
+- Item warranty dates and notes, reminders, and private PDF or image documents.
 - Private subscribable calendar feeds for meal plans and bill due dates.
 - Optional household member allergy and diet profiles with local recipe and meal warnings.
 - Track when a batch was opened and an item’s shelf life after opening, with effective expiry dates in reminders and inventory views.

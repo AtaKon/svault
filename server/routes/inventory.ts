@@ -732,6 +732,8 @@ inventoryRoutes.post(
         tags: z.union([z.array(z.string()), z.string()]).optional(),
         image: z.string().max(300).nullish(),
         nutrition: nutritionBody,
+        warrantyUntil: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(v => !Number.isNaN(Date.parse(v)) && new Date(v).toISOString().slice(0, 10) === v).nullish(),
+        warrantyNote: z.string().trim().max(200).nullish(),
         /** Coffee item that keeps an espresso shot log. */
         espresso: z.boolean().optional(),
         barcodes: z.array(z.string().trim().min(1).max(80)).max(10).optional(),
@@ -770,8 +772,8 @@ inventoryRoutes.post(
     await tx(async () => {
       await run(
         `INSERT INTO items (id, house_id, name, description, brand, category_id, unit, reorder_point, target_stock, opened_shelf_life_days,
-           attributes, tags, image, nutrition, espresso, archived, created_by, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
+           attributes, tags, image, nutrition, espresso, warranty_until, warranty_note, archived, created_by, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
         [
           id,
           houseId,
@@ -788,6 +790,8 @@ inventoryRoutes.post(
           body.image ?? null,
           nutrition ? JSON.stringify(nutrition) : null,
           body.espresso ? 1 : 0,
+          body.warrantyUntil ?? null,
+          body.warrantyNote ?? null,
           req.user!.id,
           now(),
           now(),
@@ -1040,6 +1044,8 @@ itemRoutes.patch(
         tags: z.union([z.array(z.string()), z.string()]).optional(),
         image: z.string().max(300).nullish(),
         nutrition: nutritionBody,
+        warrantyUntil: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(v => !Number.isNaN(Date.parse(v)) && new Date(v).toISOString().slice(0, 10) === v).nullish(),
+        warrantyNote: z.string().trim().max(200).nullish(),
         archived: z.boolean().optional(),
         espresso: z.boolean().optional(),
         offCode: z.string().trim().max(80).nullish(),
@@ -1066,7 +1072,7 @@ itemRoutes.patch(
             })();
     await run(
       `UPDATE items SET name = ?, description = ?, brand = ?, category_id = ?, unit = ?, reorder_point = ?,
-         target_stock = ?, opened_shelf_life_days = ?, attributes = ?, tags = ?, image = ?, nutrition = ?, espresso = ?, archived = ?, updated_at = ? WHERE id = ?`,
+         target_stock = ?, opened_shelf_life_days = ?, attributes = ?, tags = ?, image = ?, nutrition = ?, espresso = ?, warranty_until = ?, warranty_note = ?, archived = ?, updated_at = ? WHERE id = ?`,
       [
         body.name ?? item.name,
         body.description === undefined ? item.description : body.description,
@@ -1081,6 +1087,8 @@ itemRoutes.patch(
         body.image === undefined ? item.image : body.image,
         nutrition,
         body.espresso === undefined ? item.espresso : body.espresso ? 1 : 0,
+        body.warrantyUntil === undefined ? item.warranty_until : body.warrantyUntil,
+        body.warrantyNote === undefined ? item.warranty_note : body.warrantyNote,
         body.archived === undefined ? item.archived : body.archived ? 1 : 0,
         now(),
         item.id,
@@ -1107,7 +1115,9 @@ itemRoutes.delete(
   "/:itemId",
   handler(async (req, res) => {
     const { item } = await itemAccess(req, "member");
+    const documents = await all<{ filename: string }>("SELECT filename FROM item_documents WHERE item_id = ?", [item.id]);
     await run("DELETE FROM items WHERE id = ?", [item.id]);
+    await removeUnreferencedUploads(documents.map(doc => `/uploads/item-documents/${doc.filename}`));
     await clearItemNotifications(item.id);
     await removeUnreferencedUploads([item.image]);
     res.json({ ok: true });

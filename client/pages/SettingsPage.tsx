@@ -1410,6 +1410,7 @@ function RemindersTab({ house, onSave }: { house: House; onSave: (patch: Record<
   const settings = house.settings?.notifications ?? {};
   const [lowStock, setLowStock] = useState(settings.lowStock !== false);
   const [expiryDays, setExpiryDays] = useState(String(settings.expiryDays ?? 7));
+  const [warrantyDays, setWarrantyDays] = useState(String(settings.warrantyDays ?? 30));
   const [channels, setChannels] = useState<NotificationChannel[]>(settings.channels ?? []);
   const [busy, setBusy] = useState(false);
   const [testing, setTesting] = useState<string | null>(null);
@@ -1435,13 +1436,14 @@ function RemindersTab({ house, onSave }: { house: House; onSave: (patch: Record<
   useEffect(() => {
     setLowStock(settings.lowStock !== false);
     setExpiryDays(String(settings.expiryDays ?? 7));
+    setWarrantyDays(String(settings.warrantyDays ?? 30));
     setChannels(settings.channels ?? []);
-  }, [settings.lowStock, settings.expiryDays, settings.channels]);
+  }, [settings.lowStock, settings.expiryDays, settings.warrantyDays, settings.channels]);
 
   const save = async () => {
     setBusy(true);
     try {
-      await onSave({ notifications: { lowStock, expiryDays: Math.max(0, Number(expiryDays) || 0), channels } });
+      await onSave({ notifications: { lowStock, expiryDays: Math.max(0, Number(expiryDays) || 0), warrantyDays: Math.max(0, Number(warrantyDays) || 0), channels } });
       toast.success(t("Reminder settings saved"));
     } catch (err) {
       toast.error(err instanceof Error ? t(err.message) : t("Could not save"));
@@ -1509,6 +1511,7 @@ function RemindersTab({ house, onSave }: { house: House; onSave: (patch: Record<
             description={t("Notify when an item falls to or below its reorder point.")}
           />
         </div>
+        <Field label={t("Warn about warranties")} hint={t("days in advance")}><Input type="number" min="0" max="3650" value={warrantyDays} onChange={(event) => setWarrantyDays(event.target.value)} disabled={!can("admin")} /></Field>
         <Field label={t("Warn about expiring stock")} hint={t("days in advance")}>
           <Input type="number" min="0" max="365" value={expiryDays} onChange={(event) => setExpiryDays(event.target.value)} disabled={!can("admin")} />
         </Field>

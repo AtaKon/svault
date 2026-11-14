@@ -220,6 +220,8 @@ CREATE TABLE IF NOT EXISTS items (
   tags TEXT NOT NULL DEFAULT '[]',
   image TEXT,
   nutrition TEXT,
+  warranty_until TEXT,
+  warranty_note TEXT,
   espresso INTEGER NOT NULL DEFAULT 0,
   off_code TEXT,
   off_linked_at TEXT,
@@ -233,6 +235,20 @@ CREATE TABLE IF NOT EXISTS items (
 );
 CREATE INDEX IF NOT EXISTS items_house ON items(house_id);
 CREATE INDEX IF NOT EXISTS items_off ON items(off_code);
+
+CREATE TABLE IF NOT EXISTS item_documents (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  filename TEXT NOT NULL,
+  original_name TEXT NOT NULL,
+  mime TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('manual', 'receipt', 'warranty', 'other')),
+  uploaded_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS item_documents_item ON item_documents(item_id);
 
 CREATE TABLE IF NOT EXISTS item_barcodes (
   id TEXT PRIMARY KEY,
@@ -809,6 +825,8 @@ CREATE TABLE IF NOT EXISTS schema_meta (
  * the first PostgreSQL release is listed here. Each statement is idempotent.
  */
 export const POSTGRES_MIGRATIONS: string[] = [
+  "ALTER TABLE items ADD COLUMN IF NOT EXISTS warranty_until TEXT",
+  "ALTER TABLE items ADD COLUMN IF NOT EXISTS warranty_note TEXT",
   `CREATE TABLE IF NOT EXISTS calendar_feeds (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
@@ -948,6 +966,7 @@ export const POSTGRES_TABLE_ORDER = [
   "attribute_defs",
   "vendors",
   "items",
+  "item_documents",
   "item_barcodes",
   "espresso_equipment",
   "espresso_shots",

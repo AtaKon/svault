@@ -3,7 +3,7 @@ import { all, get, newId, now, parseJson, run } from "../db.js";
 import { assertOutboundUrl, outboundFetch, outboundRedirectMode } from "../lib/outbound.js";
 import type { NotificationChannel, NotificationChannelEvents, NotificationChannelType } from "../../shared/types.js";
 
-export type DeliveryEvent = "low_stock" | "expiring" | "budget_alert" | "weekly_summary" | "test";
+export type DeliveryEvent = "low_stock" | "expiring" | "budget_alert" | "warranty" | "weekly_summary" | "test";
 
 export const CHANNEL_SECRET_FIELDS = ["token", "key", "secret"] as const;
 
@@ -73,7 +73,7 @@ function eventEnabled(channel: NotificationChannel, event: DeliveryEvent): boole
   if (event === "test") return true;
   if (!channel.enabled || !channel.url) return false;
   if (event === "low_stock") return channel.events.lowStock;
-  if (event === "expiring") return channel.events.expiring;
+  if (event === "expiring" || event === "warranty") return channel.events.expiring;
   if (event === "budget_alert") return channel.events.budget;
   return channel.events.weeklySummary;
 }

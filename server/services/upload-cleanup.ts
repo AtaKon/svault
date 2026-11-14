@@ -12,7 +12,7 @@ import { UPLOAD_DIR } from "../config.js";
  * elsewhere).
  */
 
-export const UPLOAD_FOLDERS = ["items", "recipes", "photos", "receipts", "bills"] as const;
+export const UPLOAD_FOLDERS = ["items", "recipes", "photos", "receipts", "bills", "item-documents"] as const;
 
 /**
  * Every column that stores an `/uploads/...` URL. Keep this in sync when a new
@@ -31,7 +31,7 @@ const ORPHAN_AGE_MS = 24 * 60 * 60 * 1000;
 /** Map `/uploads/<folder>/<file>` to `<folder>/<file>`, or null for anything else. */
 function uploadKey(url: unknown): string | null {
   if (typeof url !== "string") return null;
-  const match = url.match(/^\/uploads\/(items|recipes|photos|receipts|bills)\/([^/?#]+)$/);
+  const match = url.match(/^\/uploads\/(items|recipes|photos|receipts|bills|item-documents)\/([^/?#]+)$/);
   if (!match || match[2] === "." || match[2] === "..") return null;
   return `${match[1]}/${match[2]}`;
 }
@@ -40,6 +40,7 @@ async function isReferenced(key: string): Promise<boolean> {
   const [folder, file] = key.split("/");
   if (folder === "photos" && await get("SELECT id FROM photos WHERE filename = ? LIMIT 1", [file])) return true;
   if (folder === "bills" && await get("SELECT id FROM bills WHERE document = ? LIMIT 1", [file])) return true;
+  if (folder === "item-documents" && await get("SELECT id FROM item_documents WHERE filename = ? LIMIT 1", [file])) return true;
   const url = `/uploads/${key}`;
   for (const { table, column } of UPLOAD_URL_COLUMNS) {
     if (await get(`SELECT 1 AS hit FROM ${table} WHERE ${column} = ? LIMIT 1`, [url])) return true;
@@ -85,6 +86,7 @@ export async function houseUploadUrls(houseId: string): Promise<string[]> {
   for (const row of await all<{ filename: string }>("SELECT document AS filename FROM bills WHERE house_id = ? AND document IS NOT NULL", [houseId])) {
     urls.push(`/uploads/bills/${row.filename}`);
   }
+  for (const row of await all<{ filename: string }>("SELECT filename FROM item_documents WHERE house_id = ?", [houseId])) urls.push(`/uploads/item-documents/${row.filename}`);
   return urls;
 }
 
@@ -108,6 +110,8 @@ export async function orphanCandidates(
   for (const row of await all<{ filename: string }>("SELECT document AS filename FROM bills WHERE document IS NOT NULL")) {
     referenced.add(`bills/${row.filename}`);
   }
+
+  for (const row of await all<{ filename: string }>("SELECT filename FROM item_documents")) referenced.add(`item-documents/${row.filename}`);
 
   const cutoff = Date.now() - maxAgeMs;
   const found: { key: string; path: string; size: number; modifiedAt: string }[] = [];

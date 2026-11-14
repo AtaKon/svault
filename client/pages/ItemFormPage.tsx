@@ -42,6 +42,8 @@ export function ItemFormPage() {
   const [vendors, setVendors] = useState<Vendor[]>([]);
 
   const [name, setName] = useState(params.get("name") ?? "");
+  const [warrantyUntil, setWarrantyUntil] = useState("");
+  const [warrantyNote, setWarrantyNote] = useState("");
   const [description, setDescription] = useState(params.get("description") ?? "");
   const [brand, setBrand] = useState(params.get("brand") ?? "");
   const [categoryId, setCategoryId] = useState("");
@@ -94,6 +96,8 @@ export function ItemFormPage() {
         .then((item) => {
           setName(item.name);
           setDescription(item.description ?? "");
+          setWarrantyUntil(item.warrantyUntil ?? "");
+          setWarrantyNote(item.warrantyNote ?? "");
           setBrand(item.brand ?? "");
           setCategoryId(item.categoryId ?? "");
           setUnit(item.unit);
@@ -147,6 +151,8 @@ export function ItemFormPage() {
       const payload: Record<string, unknown> = {
         name: name.trim(),
         description: description.trim() || null,
+        warrantyUntil: warrantyUntil || null,
+        warrantyNote: warrantyNote.trim() || null,
         brand: brand.trim() || null,
         categoryId: categoryId || null,
         unit: unit.trim() || "pcs",
@@ -256,6 +262,8 @@ export function ItemFormPage() {
                 <Input type="number" min="0" step="any" inputMode="decimal" value={reorderPoint} onChange={(e) => setReorderPoint(e.target.value)} placeholder="0" />
               </Field>
             </div>
+            <Field label={t("Warranty end date")} hint={t("optional")}><Input type="date" value={warrantyUntil} onChange={(e) => setWarrantyUntil(e.target.value)} /></Field>
+            <Field label={t("Warranty note")} hint={t("optional")}><Input value={warrantyNote} maxLength={200} onChange={(e) => setWarrantyNote(e.target.value)} /></Field>
             <Field label={t("Keeps for N days after opening")} hint={t("optional")} >
               <Input type="number" min="0" max="36500" step="1" inputMode="numeric" value={openedShelfLifeDays} onChange={(e) => setOpenedShelfLifeDays(e.target.value)} />
             </Field>

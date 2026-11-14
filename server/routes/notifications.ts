@@ -4,7 +4,7 @@ import { all, get, parseJson, run, now } from "../db.js";
 import { requireAuth } from "../auth.js";
 import { handler, parseBody, requireHouse } from "../http.js";
 import { serializeNotification } from "../serialize.js";
-import { scanAllHouses, cleanupOrphanNotifications, syncHouseExpiry, syncItemLowStock } from "../services/notifications.js";
+import { scanAllHouses, cleanupOrphanNotifications, syncHouseExpiry, syncHouseWarranties, syncItemLowStock } from "../services/notifications.js";
 
 export const notificationRoutes = Router();
 notificationRoutes.use(requireAuth);
@@ -58,6 +58,7 @@ notificationRoutes.post(
       await syncItemLowStock(item.id);
     }
     await syncHouseExpiry(houseId, expiryDays);
+    await syncHouseWarranties(houseId, Number(settings?.notifications?.warrantyDays ?? 30));
     const rows = await Promise.all((await all<any>(
       `SELECT * FROM notifications WHERE house_id = ? AND resolved_at IS NULL
          AND (user_id IS NULL OR user_id = ?) ORDER BY created_at DESC LIMIT 100`,
