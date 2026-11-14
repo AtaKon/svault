@@ -205,7 +205,12 @@ export async function syncItemLowStock(itemId: string) {
   }
 }
 
-export async function syncHouseExpiry(houseId: string, expiryDays = 7) {
+export async function syncHouseExpiry(houseId: string, expiryDays?: number) {
+  if (expiryDays === undefined) {
+    const house = await get<{ settings: string }>("SELECT settings FROM houses WHERE id = ?", [houseId]);
+    const settings = parseJson<any>(house?.settings, {});
+    expiryDays = Number(settings?.notifications?.expiryDays ?? 7);
+  }
   const horizon = new Date(Date.now() + expiryDays * DAY).toISOString().slice(0, 10);
   const lots = await all<any>(
     `SELECT l.*, i.name AS item_name, i.house_id, i.opened_shelf_life_days FROM stock_lots l
