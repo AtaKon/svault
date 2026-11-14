@@ -1,3 +1,4 @@
+import { effectiveExpiry } from "../services/effective-expiry.js";
 import { Router } from "express";
 import { all, get } from "../db.js";
 import { requireAuth } from "../auth.js";
@@ -40,13 +41,12 @@ dashboardRoutes.get(
 
     const horizon = new Date(Date.now() + 14 * 864e5).toISOString().slice(0, 10);
     const expiring = (await all<any>(
-      `SELECT l.*, i.name AS item_name, loc.name AS location_name FROM stock_lots l
+      `SELECT l.*, i.name AS item_name, i.opened_shelf_life_days, loc.name AS location_name FROM stock_lots l
        JOIN items i ON i.id = l.item_id
        LEFT JOIN locations loc ON loc.id = l.location_id AND loc.house_id = ?
-       WHERE l.house_id = ? AND l.quantity > 0 AND l.expires_at IS NOT NULL AND l.expires_at <= ?
-       ORDER BY l.expires_at ASC LIMIT 12`,
-      [houseId, houseId, horizon],
-    )).map((row) => ({ ...serializeLot(row), itemName: row.item_name, itemId: row.item_id }));
+       WHERE l.house_id = ? AND l.quantity > 0`,
+      [houseId, houseId],
+    )).filter((row) => { const expiry = effectiveExpiry(row, row); return expiry && expiry <= horizon; }).sort((a, b) => effectiveExpiry(a, a)!.localeCompare(effectiveExpiry(b, b)!)).slice(0, 12).map((row) => ({ ...serializeLot(row), itemName: row.item_name, itemId: row.item_id }));
 
     const recent = (await all<any>(
       `SELECT m.*, i.name AS item_name, i.unit AS item_unit, loc.name AS location_name, u.name AS user_name
