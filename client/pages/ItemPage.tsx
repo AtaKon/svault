@@ -379,7 +379,7 @@ export function ItemPage() {
               {item.forecast && (
                 <div className="mt-3 rounded-xl bg-raised p-3 text-sm">
                   <div>{t("Runs out in about {count} days", { count: Math.max(1, Math.round(item.forecast.daysLeft)) })}</div>
-                  <div className="text-xs text-muted">{t("Based on the last 60 days")}</div>
+                  <div className="text-xs text-muted">{t("Based on the last {count} days", { count: item.forecast.windowDays })}</div>
                 </div>
               )}
               {item.isLow && (

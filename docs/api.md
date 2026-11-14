@@ -1339,7 +1339,8 @@ See [development.md](development.md) for the workflow.
 ### Run-out forecasts
 
 Item list and detail responses include `forecast: { dailyRate, daysLeft, windowDays } | null`.
-The rate is the total quantity in outgoing consumption movements over the last 60 days divided by 60;
+The rate is the total quantity in outgoing consumption movements over the last 60 days divided by
+`windowDays`: the days since the first counted movement, clamped to 7–60;
 `daysLeft` is current stock divided by that rate. Waste, adjustments and transfers do not count.
 At least two consumption events spanning seven days and positive stock are required. The dashboard's
 `runningOutSoon` contains active items with at most seven days left, ordered by days left.

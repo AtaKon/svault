@@ -8,7 +8,7 @@ export type Language = "en" | "el";
 
 const EL: Record<string, string> = {
   "Runs out in about {count} days": "Τελειώνει σε περίπου {count} ημέρες",
-  "Based on the last 60 days": "Με βάση τις τελευταίες 60 ημέρες",
+  "Based on the last {count} days": "Με βάση τις τελευταίες {count} ημέρες",
   "Running out soon": "Τελειώνουν σύντομα",
   "No items are forecast to run out soon.": "Δεν προβλέπεται να τελειώσει κάποιο προϊόν σύντομα.",
   "Include items running out soon": "Συμπερίληψη προϊόντων που τελειώνουν σύντομα",

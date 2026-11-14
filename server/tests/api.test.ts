@@ -11387,7 +11387,8 @@ describe("run-out forecasts", () => {
     await run("UPDATE stock_movements SET created_at = ? WHERE item_id = ? AND type = 'out'", [new Date(Date.now() - 10 * 864e5).toISOString(), id]);
     await request(`/api/items/${id}/stock`, { method: "POST", body: { action: "remove", quantity: 2 } });
     detail = await request(`/api/items/${id}`);
-    assert.deepEqual(detail.data.forecast, { dailyRate: 0.1, daysLeft: 60, windowDays: 60 });
+    // 6 l used over the 10 days of history, not spread across the full 60-day window.
+    assert.deepEqual(detail.data.forecast, { dailyRate: 0.6, daysLeft: 10, windowDays: 10 });
     const list = await request(`/api/houses/${houseId}/items?limit=1000`);
     assert.deepEqual(list.data.items.find((item: any) => item.id === id).forecast, detail.data.forecast);
     await request(`/api/items/${id}/stock`, { method: "POST", body: { action: "remove", quantity: 6 } });

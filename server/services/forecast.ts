@@ -19,9 +19,12 @@ export async function forecastsForHouse(houseId: string): Promise<Map<string, Fo
   const forecasts = new Map<string, Forecast>();
   for (const row of rows) {
     const span = Date.parse(row.last_at) - Date.parse(row.first_at);
-    const rate = Number(row.consumed) / WINDOW_DAYS;
+    // Measure over the history the item actually has: dividing a fortnight of use
+    // by 60 days would understate the rate and push the run-out date far out.
+    const windowDays = Math.max(7, Math.min(WINDOW_DAYS, Math.round((end.getTime() - Date.parse(row.first_at)) / DAY_MS)));
+    const rate = Number(row.consumed) / windowDays;
     if (Number(row.events) < 2 || span < 7 * DAY_MS || !Number.isFinite(span) || Number(row.quantity) <= 0 || rate <= 0) continue;
-    forecasts.set(row.item_id, { dailyRate: rate, daysLeft: Number(row.quantity) / rate, windowDays: WINDOW_DAYS });
+    forecasts.set(row.item_id, { dailyRate: rate, daysLeft: Number(row.quantity) / rate, windowDays });
   }
   return forecasts;
 }

@@ -736,7 +736,8 @@ More deployment-specific fixes are in [deployment.md](deployment.md) and the
 
 ### Run-out forecasts
 
-Item details estimate when stock will run out based on consumption over the last 60 days. The
+Item details estimate when stock will run out based on consumption over the last 60 days (or the
+item's shorter history, at least seven days). The
 dashboard lists items expected to run out within seven days. Forecasts need at least two consumption
 events seven days apart and a positive stock balance. Waste, stock corrections and moves do not count.
 In the shopping list, turn on **Include items running out soon** and choose a horizon before using
