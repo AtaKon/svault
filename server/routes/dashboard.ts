@@ -38,12 +38,6 @@ dashboardRoutes.get(
         (SELECT COUNT(*) FROM items i WHERE i.house_id = ? AND i.archived = 0 AND i.reorder_point > 0
            AND (SELECT COALESCE(SUM(l.quantity), 0) FROM stock_lots l WHERE l.item_id = i.id) <= i.reorder_point
         ) AS low_stock_count,
-        (SELECT COUNT(*) FROM stock_lots l WHERE l.house_id = ? AND l.quantity > 0
-           AND l.expires_at IS NOT NULL AND l.expires_at >= ? AND l.expires_at <= ?
-        ) AS expiring_soon_count,
-        (SELECT COUNT(*) FROM stock_lots l WHERE l.house_id = ? AND l.quantity > 0
-           AND l.expires_at IS NOT NULL AND l.expires_at < ?
-        ) AS expired_count,
         (SELECT COUNT(*) FROM shopping_list_items s WHERE s.house_id = ? AND s.checked = 0) AS shopping_open_count,
         (SELECT MAX(t) FROM (
            SELECT MAX(updated_at) AS t FROM items WHERE house_id = ?
@@ -51,8 +45,24 @@ dashboardRoutes.get(
            UNION ALL SELECT MAX(created_at) FROM stock_lots WHERE house_id = ?
            UNION ALL SELECT MAX(created_at) FROM notifications WHERE house_id = ?
         ) AS stamps) AS updated_at`,
-      [houseId, houseId, houseId, houseId, houseId, today, soon, houseId, today, houseId, houseId, houseId, houseId, houseId],
+      [houseId, houseId, houseId, houseId, houseId, houseId, houseId, houseId, houseId],
     );
+
+    // Count expiry the way the dashboard and reminders do: an opened batch with a
+    // shelf life can expire before its printed date.
+    const datedLots = await all<any>(
+      `SELECT l.expires_at, l.opened_at, i.opened_shelf_life_days FROM stock_lots l JOIN items i ON i.id = l.item_id
+       WHERE l.house_id = ? AND l.quantity > 0 AND (l.expires_at IS NOT NULL OR l.opened_at IS NOT NULL)`,
+      [houseId],
+    );
+    let expiringSoonCount = 0;
+    let expiredCount = 0;
+    for (const lot of datedLots) {
+      const expires = effectiveExpiry(lot, lot);
+      if (!expires) continue;
+      if (expires < today) expiredCount++;
+      else if (expires <= soon) expiringSoonCount++;
+    }
 
     const reminders = await all<{ read_by: string }>(
       `SELECT read_by FROM notifications WHERE house_id = ? AND resolved_at IS NULL
@@ -72,8 +82,8 @@ dashboardRoutes.get(
       houseName: String(row?.house_name ?? ""),
       itemCount: Number(row?.item_count ?? 0),
       lowStockCount: Number(row?.low_stock_count ?? 0),
-      expiringSoonCount: Number(row?.expiring_soon_count ?? 0),
-      expiredCount: Number(row?.expired_count ?? 0),
+      expiringSoonCount,
+      expiredCount,
       shoppingListOpenCount: Number(row?.shopping_open_count ?? 0),
       unreadReminders,
       updatedAt: row?.updated_at ?? row?.house_created_at ?? null,
