@@ -5928,6 +5928,42 @@ describe("web shell", () => {
   });
 });
 
+describe("household diet profiles", () => {
+  it("enforces opt-in, household visibility, own editing, validation and leaving cleanup", async () => {
+    const house = await request("/api/houses", { body: { name: "Diet test" } });
+    const id = house.data.id;
+    const path = `/api/houses/${id}/diet-profiles`;
+    assert.equal((await request(path, { auth: secondUserCookie })).status, 404);
+    const invite = await request(`/api/houses/${id}/members`, { body: { email: "stranger@example.com", role: "viewer" } });
+    await request(`/api/auth/invites/${invite.data.invite.code}/accept`, { method: "POST", auth: secondUserCookie });
+    assert.equal((await request(`${path}/me`, { method: "PUT", body: { allergens: ["milk"], diets: ["vegan"], note: "note" } })).status, 200);
+    const profiles = await request(path, { auth: secondUserCookie });
+    assert.deepEqual(profiles.data[0].allergens, ["milk"]);
+    assert.equal(profiles.data[0].note, "note");
+    assert.notEqual((await request(`${path}/${profiles.data[0].userId}`, { method: "PUT", auth: secondUserCookie, body: { allergens: [], diets: [] } })).status, 200);
+    assert.equal((await request(`${path}/me`, { method: "PUT", auth: secondUserCookie, body: { allergens: ["unknown"], diets: [] } })).status, 400);
+    assert.equal((await request(`${path}/me`, { method: "PUT", auth: secondUserCookie, body: { allergens: [], diets: [] } })).status, 200);
+    await request(`/api/houses/${id}/leave`, { method: "POST", auth: secondUserCookie });
+    assert.equal((await request(path)).data.length, 1);
+    await request(`/api/houses/${id}`, { method: "DELETE" });
+  });
+  it("warns only the allergic member and leaves missing diet analysis unknown", async () => {
+    const house = await request("/api/houses", { body: { name: "Warning test" } });
+    const id = house.data.id;
+    await request(`/api/houses/${id}/diet-profiles/me`, { method: "PUT", body: { allergens: ["milk"], diets: ["vegan"] } });
+    const item = await request(`/api/houses/${id}/items`, { body: { name: "Milk" } });
+    const stamp = new Date().toISOString();
+    await run("INSERT INTO catalog_products (project, code, summary, payload, fetched_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)", ["off", "diet-test", JSON.stringify({ allergens: ["milk"] }), "{}", stamp, stamp]);
+    await run("UPDATE items SET off_code = ? WHERE id = ?", ["diet-test", item.data.id]);
+    const recipe = await request(`/api/houses/${id}/recipes`, { body: { title: "Milk recipe", ingredients: [{ name: "Milk", itemId: item.data.id }] } });
+    const detail = await request(`/api/recipes/${recipe.data.id}`);
+    assert.deepEqual(detail.data.warnings.map((w: any) => [w.allergen, w.members]), [["milk", ["Test Owner"]]]);
+    assert.equal(detail.data.dietCompatibility[0].status, "unknown");
+    await request(`/api/houses/${id}`, { method: "DELETE" });
+    await run("DELETE FROM catalog_products WHERE code = ?", ["diet-test"]);
+  });
+});
+
 describe("multi-user membership", () => {
   it("invites and joins a house by link", async () => {
     const invite = await request(`/api/houses/${houseId}/members`, {
