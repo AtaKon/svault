@@ -182,11 +182,15 @@ export async function deleteShoppingLine(houseId: string, id: string) {
 
 /** Select each item once, even when it meets both fill criteria. */
 export async function shoppingFillCandidates(houseId: string, includeForecast: boolean, forecastDays: number) {
-  const forecasts = includeForecast ? await forecastsForHouse(houseId) : new Map();
-  const rows = await all<any>(
-    `SELECT i.*, COALESCE((SELECT SUM(l.quantity) FROM stock_lots l WHERE l.item_id = i.id), 0) AS quantity
-     FROM items i WHERE i.house_id = ? AND i.archived = 0 ORDER BY lower(i.name)`, [houseId],
+  const forecasts = includeForecast ? await forecastsForHouse(houseId) : new Map<string, { daysLeft: number }>();
+  const soonIds = [...forecasts].filter(([, forecast]) => forecast.daysLeft <= forecastDays).map(([id]) => id);
+  // Low stock is filtered in SQL as before; forecast items are added by id.
+  const quantity = "COALESCE((SELECT SUM(l.quantity) FROM stock_lots l WHERE l.item_id = i.id), 0)";
+  const forecastClause = soonIds.length ? ` OR i.id IN (${soonIds.map(() => "?").join(", ")})` : "";
+  return await all<any>(
+    `SELECT i.*, ${quantity} AS quantity FROM items i
+     WHERE i.house_id = ? AND i.archived = 0 AND ((i.reorder_point > 0 AND ${quantity} <= i.reorder_point)${forecastClause})
+     ORDER BY lower(i.name)`,
+    [houseId, ...soonIds],
   );
-  return rows.filter((item) => (Number(item.reorder_point) > 0 && Number(item.quantity) <= Number(item.reorder_point)) ||
-    (forecasts.get(item.id)?.daysLeft ?? Infinity) <= forecastDays);
 }
