@@ -7248,7 +7248,8 @@ describe("weekly meal planner", () => {
     assert.equal(entry.status, 201);
     await run("UPDATE meal_plan_entries SET slot = ?, servings = ? WHERE id = ?", [
       "brunch",
-      "not-a-number",
+      // PostgreSQL's typed column rejects text, but accepts NaN, which is just as unusable.
+      databaseKind() === "sqlite" ? "not-a-number" : "NaN",
       entry.data.id,
     ]);
 
@@ -8982,6 +8983,8 @@ describe("insights, household split and admin console", () => {
     assert.equal(badBreakdown.status, 400, "malformed multipart breakdown JSON is rejected, not filtered");
     assert.deepEqual(files(), before, "a rejected breakdown does not leave its upload behind");
 
+    // SQLite trigger syntax.
+    if (databaseKind() === "sqlite") {
     const beforeFailedInsert = files();
     await run(`CREATE TRIGGER reject_bill_insert BEFORE INSERT ON bills
       WHEN NEW.name = 'Rejected insert cleanup fixture'
@@ -8995,6 +8998,7 @@ describe("insights, household split and admin console", () => {
       assert.deepEqual(files(), beforeFailedInsert, "files are removed when the bill insert fails");
     } finally {
       await run("DROP TRIGGER reject_bill_insert");
+    }
     }
 
     const invalidAmount = await request(`/api/houses/${billHouse}/bills`, {
@@ -9544,6 +9548,8 @@ describe("insights, household split and admin console", () => {
     assert.equal(fakeJpegBill.status, 400, "SVG bytes under a JPEG name are rejected by the sniffer");
     assert.deepEqual(files(), beforeFakeJpeg, "the fake JPEG leaves no file behind");
 
+    // SQLite trigger syntax.
+    if (databaseKind() === "sqlite") {
     const beforeImageFailure = files();
     await run(`CREATE TRIGGER reject_bill_insert BEFORE INSERT ON bills
       WHEN NEW.name = 'Rejected image insert'
@@ -9556,6 +9562,7 @@ describe("insights, household split and admin console", () => {
       assert.deepEqual(files(), beforeImageFailure, "a renamed image is removed when the insert fails");
     } finally {
       await run("DROP TRIGGER reject_bill_insert");
+    }
     }
 
     const beforeInvalidImageBody = files();
@@ -9839,6 +9846,8 @@ describe("insights, household split and admin console", () => {
       body: { name: "Concurrent deletion fixture", amount: 1, billType: "water", category: "personal" },
     });
     assert.equal(transientBill.status, 201);
+    // The two race fixtures below use SQLite trigger syntax.
+    if (databaseKind() === "sqlite") {
     const beforeConcurrentDelete = files();
     await run(`CREATE TRIGGER delete_bill_after_document_update AFTER UPDATE OF document ON bills
       BEGIN DELETE FROM bills WHERE id = NEW.id; END`);
@@ -9870,6 +9879,7 @@ describe("insights, household split and admin console", () => {
       assert.ok(files().includes(oldDocument), "a failed replacement keeps the old PDF on disk");
     } finally {
       await run("DROP TRIGGER restore_old_document_after_update");
+    }
     }
 
     const nullPayerBill = await request(`/api/houses/${otherHouse.data.id}/bills`, {
@@ -11034,7 +11044,7 @@ describe("insights, household split and admin console", () => {
     const overview = await request("/api/admin/overview");
     assert.equal(overview.status, 200);
     assert.ok(overview.data.users >= 2);
-    assert.equal(overview.data.database, "sqlite");
+    assert.equal(overview.data.database, databaseKind());
     assert.equal((await request("/api/admin/files/sweep", { auth: secondUserCookie, method: "POST", body: {} })).status, 403);
     const sweep = await request("/api/admin/files/sweep", { method: "POST", body: {} });
     assert.equal(sweep.status, 200);
@@ -11741,6 +11751,8 @@ describe("PosoKanei price lookup client", () => {
 });
 describe("bill ledger confirmation migration", () => {
   it("uses a false default and preserves existing shared bills when adding the column", async () => {
+    // Reads SQLite's PRAGMA table_info; the PostgreSQL schema is covered by the migration tests.
+    if (databaseKind() !== "sqlite") return;
     const columnsBefore = await all<{ name: string; dflt_value: string | null }>("PRAGMA table_info(bills)");
     assert.equal(columnsBefore.find((column) => column.name === "ledger_confirmed")?.dflt_value, "0");
     assert.equal(columnsBefore.find((column) => column.name === "breakdown")?.dflt_value, "'[]'");
