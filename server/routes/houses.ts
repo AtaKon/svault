@@ -270,6 +270,36 @@ houseRoutes.get(
   }),
 );
 
+const dietProfileSchema = z.object({
+  allergens: z.array(z.enum(["gluten", "crustaceans", "eggs", "fish", "peanuts", "soybeans", "milk", "nuts", "celery", "mustard", "sesame-seeds", "sulphur-dioxide-and-sulphites", "lupin", "molluscs"])).max(14),
+  diets: z.array(z.enum(["vegetarian", "vegan"])).max(2),
+  note: z.string().max(200).default(""),
+}).strict();
+
+houseRoutes.get("/:houseId/diet-profiles", handler(async (req, res) => {
+  const { houseId } = await requireHouse(req);
+  const rows = await all<any>(`SELECT p.*, u.name FROM member_diet_profiles p
+    JOIN house_members m ON m.house_id = p.house_id AND m.user_id = p.user_id
+    JOIN users u ON u.id = p.user_id WHERE p.house_id = ? ORDER BY u.name`, [houseId]);
+  res.json(rows.map(p => ({ userId: p.user_id, name: p.name, allergens: parseJson(p.allergens, []), diets: parseJson(p.diets, []), note: p.note, updatedAt: p.updated_at })));
+}));
+
+houseRoutes.put("/:houseId/diet-profiles/me", handler(async (req, res) => {
+  const { houseId } = await requireHouse(req);
+  const body = parseBody(dietProfileSchema, req.body);
+  await run(`INSERT INTO member_diet_profiles (house_id, user_id, allergens, diets, note, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (house_id, user_id) DO UPDATE SET
+    allergens = excluded.allergens, diets = excluded.diets, note = excluded.note, updated_at = excluded.updated_at`,
+    [houseId, req.user!.id, JSON.stringify([...new Set(body.allergens)]), JSON.stringify([...new Set(body.diets)]), body.note, now()]);
+  res.json({ ok: true });
+}));
+
+houseRoutes.delete("/:houseId/diet-profiles/me", handler(async (req, res) => {
+  const { houseId } = await requireHouse(req);
+  await run("DELETE FROM member_diet_profiles WHERE house_id = ? AND user_id = ?", [houseId, req.user!.id]);
+  res.json({ ok: true });
+}));
+
 houseRoutes.get(
   "/:houseId/members",
   handler(async (req, res) => {
