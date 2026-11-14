@@ -53,6 +53,12 @@ All notable changes to SVault are documented here. The format follows
 
 ### Added
 
+- **Home Assistant integration.** `GET /api/houses/:houseId/summary` returns a compact snapshot for
+  sensors — item, low-stock, expiring-soon, expired, open shopping-list and unread-reminder counts plus
+  the house name and last change — in two small queries. It accepts a read-only API token, so Home
+  Assistant can poll it without a session. The new [Home Assistant guide](docs/home-assistant.md)
+  covers token creation, one REST sensor with several `value_template` sensors at `scan_interval: 300`,
+  a low-stock notification and HTTPS/secret handling.
 - **Recipe portion, weight and calorie estimates.** Recipes now estimate the total prepared weight and
   the weight of one portion in grams alongside the existing calorie and macro panel. Volume uses a
   typical density per ingredient and countable units a typical piece weight, with coverage reported so

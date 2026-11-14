@@ -928,6 +928,7 @@ See the [user guide](user-guide.md#export-a-dataset) for the archive layout.
 
 | Method | Path | Min role | Purpose |
 | --- | --- | --- | --- |
+| `GET` | `/api/houses/:houseId/summary` | viewer+ | Compact counts for dashboards and home automation; works with read-only API tokens. |
 | `GET` | `/api/houses/:houseId/dashboard` | viewer+ | Counts, value, low stock, expiring lots, recent movements, recipe and counts. |
 | `GET` | `/api/houses/:houseId/notifications` | viewer+ | Active reminders. `unread=1`, `limit` up to 200. |
 | `POST` | `/api/houses/:houseId/notifications/read` | viewer+ | Mark all or `{ "ids": [...] }` as read for the current user. |
@@ -937,6 +938,38 @@ See the [user guide](user-guide.md#export-a-dataset) for the archive layout.
 
 Joining a house — by accepting an invite or being added by an admin — creates a `house` notification
 addressed to that user only. Other members do not see it.
+
+### House summary
+
+`GET /api/houses/:houseId/summary` is a small, stable snapshot meant for a five-minute poll from Home
+Assistant or another dashboard. It accepts a session cookie or a read-only API token and returns:
+
+```json
+{
+  "houseId": "hse_xxx",
+  "houseName": "Alex's Home",
+  "itemCount": 42,
+  "lowStockCount": 3,
+  "expiringSoonCount": 2,
+  "expiredCount": 1,
+  "shoppingListOpenCount": 7,
+  "unreadReminders": 4,
+  "updatedAt": "2026-11-14T09:30:00.000Z"
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `itemCount` | Active (not archived) items. |
+| `lowStockCount` | Items with a reorder point whose total stock is at or below it. |
+| `expiringSoonCount` | Lots with stock that expire today or in the next 7 days. |
+| `expiredCount` | Lots with stock whose expiry date has passed. |
+| `shoppingListOpenCount` | Shopping-list lines that are not checked off. |
+| `unreadReminders` | Active reminders the caller has not read. House-wide reminders count for every member until each person reads them. |
+| `updatedAt` | The latest change to an item, stock lot, shopping line or reminder, or the house's creation time when it has no data yet. |
+
+`lowStockCount`, `expiringSoonCount` and `expiredCount` count rows (items or lots), not units. See
+[Home Assistant](home-assistant.md) for a ready-made sensor configuration.
 
 ## Household bills
 
@@ -1031,6 +1064,8 @@ Mounted at `/api/tokens`, session-authenticated.
 | `DELETE` | `/:id` | Revoke one token. |
 
 Tokens are stored as SHA-256 hashes, authenticate as `Authorization: Bearer svt_...`, and are read-only.
+They can call the read-only house routes, including the [house summary](#house-summary) used by Home
+Assistant, but not session-only endpoints such as instance backups, the admin console or `/uploads`.
 
 ## Admin console
 
