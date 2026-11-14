@@ -13,7 +13,7 @@ import { OutboundBlockedError, assertOutboundUrl } from "../lib/outbound.js";
 import { recipePortion } from "../../shared/recipe-grams.js";
 import { removeUnreferencedUploads } from "../services/upload-cleanup.js";
 import { uploader, uploadPath } from "../upload.js";
-import { assertImageReference, assertUploadsOwned, rememberUpload } from "../services/receipt-scans.js";
+import { assertImageReference, assertUploadsOwned, rememberUpload, uploadOwnedBy } from "../services/receipt-scans.js";
 import type { OffProduct, Role, Recipe } from "../../shared/types.js";
 import { readableWordRatio } from "../../shared/notebook-scan.js";
 
@@ -874,9 +874,17 @@ singleRecipeRoutes.patch(
 singleRecipeRoutes.delete(
   "/:recipeId",
   handler(async (req, res) => {
-    const { recipe } = await recipeAccess(req, "member");
+    const { recipe, houseId } = await recipeAccess(req, "member");
+    const images: unknown[] = [recipe.image, recipe.source_image];
     await run("DELETE FROM recipes WHERE id = ?", [recipe.id]);
-    await removeUnreferencedUploads([recipe.image, recipe.source_image]);
+    // An old recipe may point at another household's upload. Only files this
+    // house owns may enter the cleanup, so a stale link cannot delete someone
+    // else's photo now that the row that named it is gone.
+    const owned: string[] = [];
+    for (const image of images) {
+      if (typeof image === "string" && image && (await uploadOwnedBy(image, houseId))) owned.push(image);
+    }
+    await removeUnreferencedUploads(owned);
     res.json({ ok: true });
   }),
 );

@@ -6609,6 +6609,43 @@ describe("security hardening", () => {
     assert.ok(existsSync(fileOf(kept.data.image)));
   });
 
+  it("leaves another household's upload alone when an old recipe points at it", async () => {
+    const { existsSync } = await import("node:fs");
+    const fileOf = (url: string) => path.join(dataDir, url.replace(/^\//, ""));
+    const png = new Uint8Array(encodePng(4, 4, Buffer.alloc(4 * 4 * 4, 180)));
+    const foreign = await uploadImage(
+      `/api/houses/${strangerHouseId}/recipes/upload`,
+      png,
+      "image/png",
+      "foreign.png",
+      secondUserCookie,
+    );
+    assert.equal(foreign.status, 201);
+    assert.ok(existsSync(fileOf(foreign.data.path)));
+
+    // Recipe create refuses a foreign image, so plant the stale link directly.
+    const id = `rcp_stale_${randomUUID().slice(0, 8)}`;
+    const stamp = new Date().toISOString();
+    await run(
+      `INSERT INTO recipes (id, house_id, title, steps, tags, image, source, created_at, updated_at)
+       VALUES (?, ?, 'Stale pointer', '[]', '[]', ?, 'manual', ?, ?)`,
+      [id, houseId, foreign.data.path, stamp, stamp],
+    );
+    assert.equal((await request(`/api/recipes/${id}`, { method: "DELETE" })).status, 200);
+    assert.ok(existsSync(fileOf(foreign.data.path)), "another household's upload must survive");
+
+    // The house's own upload is still cleaned up with its recipe.
+    const own = await uploadImage(`/api/houses/${houseId}/recipes/upload`, png, "image/png", "own.png");
+    assert.equal(own.status, 201);
+    const ownRecipe = await request(`/api/houses/${houseId}/recipes`, {
+      method: "POST",
+      body: { title: "Own pointer", image: own.data.path, ingredients: [], steps: [] },
+    });
+    assert.equal(ownRecipe.status, 201);
+    assert.equal((await request(`/api/recipes/${ownRecipe.data.id}`, { method: "DELETE" })).status, 200);
+    assert.equal(existsSync(fileOf(own.data.path)), false);
+  });
+
   it("closes registration to invite-only or entirely", async () => {
     const signUp = (email: string, inviteCode?: string) =>
       request("/api/auth/register", {

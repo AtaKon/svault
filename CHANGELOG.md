@@ -16,6 +16,8 @@ All notable changes to SVault are documented here. The format follows
 - Open Food Facts contribution lists return an item's name only while the contributor is still a member
   of that contribution's household. The rest of the row is unchanged, but leaving the house no longer
   keeps showing what it contained.
+- Deleting a recipe removes only upload files its own household owns. An old recipe that points at
+  another household's upload no longer deletes that file.
 - The development request log and the AI provider label no longer print query strings, which can
   carry OIDC `code`/`state`, invite codes or search terms.
 - Recipe ingredients can link only to items of the recipe's household, and the meal-plan shopping
