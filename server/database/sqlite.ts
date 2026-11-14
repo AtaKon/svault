@@ -87,6 +87,8 @@ export class SqliteDriver implements DatabaseDriver {
     ensureColumn("user_totp", "last_used_step", "INTEGER");
     ensureColumn("login_challenges", "attempts", "INTEGER NOT NULL DEFAULT 0");
     ensureColumn("notifications", "user_id", "TEXT REFERENCES users(id) ON DELETE CASCADE");
+    ensureColumn("items", "opened_shelf_life_days", "INTEGER");
+    ensureColumn("stock_lots", "opened_at", "TEXT");
     ensureColumn("stock_lots", "vendor_id", "TEXT REFERENCES vendors(id) ON DELETE SET NULL");
     ensureColumn("stock_lots", "receipt_id", "TEXT REFERENCES receipts(id) ON DELETE SET NULL");
     ensureColumn("stock_movements", "vendor_id", "TEXT REFERENCES vendors(id) ON DELETE SET NULL");
@@ -587,6 +589,7 @@ CREATE TABLE IF NOT EXISTS items (
   unit TEXT NOT NULL DEFAULT 'pcs',
   reorder_point REAL NOT NULL DEFAULT 0,
   target_stock REAL,
+  opened_shelf_life_days INTEGER,
   attributes TEXT NOT NULL DEFAULT '{}',
   tags TEXT NOT NULL DEFAULT '[]',
   image TEXT,
@@ -671,6 +674,7 @@ CREATE TABLE IF NOT EXISTS stock_lots (
   currency TEXT,
   purchased_at TEXT,
   expires_at TEXT,
+  opened_at TEXT,
   note TEXT,
   created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL

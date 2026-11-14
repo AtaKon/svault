@@ -1,3 +1,4 @@
+import { effectiveExpiry } from "./effective-expiry.js";
 import { all, get, now, newId, parseJson, run } from "../db.js";
 import { maybeSendWeeklySummaries, queueDeliveries, type DeliveryEvent } from "./channels.js";
 
@@ -18,7 +19,10 @@ export async function createNotification(opts: {
     [opts.houseId, opts.dedupeKey, opts.userId ?? null],
   );
   if (existing) {
-    if (!existing.resolved_at) return { created: false, id: existing.id }; // still active, keep read state
+    if (!existing.resolved_at) {
+      await run("UPDATE notifications SET title = ?, body = ?, data = ? WHERE id = ?", [opts.title, opts.body, JSON.stringify(opts.data ?? {}), existing.id]);
+      return { created: false, id: existing.id };
+    }
     await run(
       "UPDATE notifications SET title = ?, body = ?, data = ?, read_by = '[]', resolved_at = NULL, created_at = ? WHERE id = ?",
       [opts.title, opts.body, JSON.stringify(opts.data ?? {}), now(), existing.id],
@@ -44,7 +48,7 @@ export async function createNotification(opts: {
     ],
   );
   const event: DeliveryEvent | null =
-    opts.type === "low_stock" ? "low_stock" : opts.type === "expiring" ? "expiring" : null;
+    opts.type === "low_stock" ? "low_stock" : opts.type === "expiring" ? "expiring" : opts.type === "budget_alert" ? "budget_alert" : null;
   if (event && !opts.userId) {
     await queueDeliveries(
       {
@@ -201,27 +205,33 @@ export async function syncItemLowStock(itemId: string) {
   }
 }
 
-export async function syncHouseExpiry(houseId: string, expiryDays = 7) {
+export async function syncHouseExpiry(houseId: string, expiryDays?: number) {
+  if (expiryDays === undefined) {
+    const house = await get<{ settings: string }>("SELECT settings FROM houses WHERE id = ?", [houseId]);
+    const settings = parseJson<any>(house?.settings, {});
+    expiryDays = Number(settings?.notifications?.expiryDays ?? 7);
+  }
   const horizon = new Date(Date.now() + expiryDays * DAY).toISOString().slice(0, 10);
   const lots = await all<any>(
-    `SELECT l.*, i.name AS item_name, i.house_id FROM stock_lots l
+    `SELECT l.*, i.name AS item_name, i.house_id, i.opened_shelf_life_days FROM stock_lots l
      JOIN items i ON i.id = l.item_id
-     WHERE l.house_id = ? AND l.quantity > 0 AND l.expires_at IS NOT NULL AND l.expires_at <= ?
-       AND i.archived = 0`,
-    [houseId, horizon],
+     WHERE l.house_id = ? AND l.quantity > 0 AND i.archived = 0`,
+    [houseId],
   );
   const seen = new Set<string>();
   for (const lot of lots) {
+    const expiry = effectiveExpiry(lot, lot);
+    if (!expiry || expiry > horizon) continue;
     seen.add(`exp:${lot.id}`);
-    const expired = lot.expires_at < new Date().toISOString().slice(0, 10);
+    const expired = expiry < new Date().toISOString().slice(0, 10);
     await createNotification({
       houseId,
       type: "expiring",
       title: expired ? `${lot.item_name} has expired` : `${lot.item_name} expires soon`,
-      body: `${Math.round(lot.quantity * 1000) / 1000} ${lot.unit} with expiry ${lot.expires_at}${
+      body: `${Math.round(lot.quantity * 1000) / 1000} ${lot.unit} with expiry ${expiry}${
         lot.location_id ? "" : ""
       }.`,
-      data: { itemId: lot.item_id, lotId: lot.id, expiresAt: lot.expires_at, expired },
+      data: { itemId: lot.item_id, lotId: lot.id, expiresAt: expiry, expired },
       dedupeKey: `exp:${lot.id}`,
     });
   }
@@ -249,6 +259,8 @@ export async function scanAllHouses() {
     const items = await all<{ id: string }>("SELECT id FROM items WHERE house_id = ? AND archived = 0", [house.id]);
     for (const item of items) await syncItemLowStock(item.id);
     await syncHouseExpiry(house.id, expiryDays);
+    const { scanBudgetAlerts } = await import("./insights.js");
+    await scanBudgetAlerts(house.id);
   }
   await maybeSendWeeklySummaries();
 }

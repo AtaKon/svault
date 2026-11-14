@@ -34,6 +34,8 @@ export function ShoppingPage() {
   const [catalog, setCatalog] = useState<Item[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
   const [loading, setLoading] = useState(true);
+  const [includeForecast, setIncludeForecast] = useState(false);
+  const [forecastDays, setForecastDays] = useState(7);
   const [showChecked, setShowChecked] = useState(true);
   const [adding, setAdding] = useState(false);
   const [editTarget, setEditTarget] = useState<ShoppingItem | null>(null);
@@ -87,11 +89,11 @@ export function ShoppingPage() {
     try {
       const result = await api<{ added: number; merged: number; skipped: number }>(
         `/api/houses/${house.id}/shopping/from-low-stock`,
-        { method: "POST", body: {} },
+        { method: "POST", body: { includeForecast, forecastDays } },
       );
       toast.success(
         result.added + result.merged
-          ? t((result.added + result.merged) === 1 ? "Added {count} low-stock line" : "Added {count} low-stock lines", { count: result.added + result.merged })
+          ? t((result.added + result.merged) === 1 ? "Added {count} shopping line" : "Added {count} shopping lines", { count: result.added + result.merged })
           : t("Nothing new to add"),
       );
       await load();
@@ -189,6 +191,10 @@ export function ShoppingPage() {
         }
       />
 
+      {can("member") && <Card className="flex flex-wrap items-center gap-3 p-3">
+        <div className="min-w-0 flex-1"><Switch checked={includeForecast} onChange={setIncludeForecast} label={t("Include items running out soon")} /></div>
+        {includeForecast && <Field label={t("Forecast horizon (days)")}><Input type="number" min={1} max={365} value={forecastDays} onChange={(event) => setForecastDays(Math.min(365, Math.max(1, Number(event.target.value) || 1)))} /></Field>}
+      </Card>}
       <Card className="flex flex-wrap items-center gap-3 p-3">
         <Badge tone={uncheckedCount ? "brand" : "neutral"}>{t("{count} to buy", { count: uncheckedCount })}</Badge>
         <div className="min-w-[180px] flex-1">

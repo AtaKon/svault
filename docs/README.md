@@ -12,6 +12,7 @@ guides below go deeper.
 | [User guide](user-guide.md) | Houses, roles, inventory, stock actions, recipes, photo datasets, reminders and settings |
 | [Architecture](architecture.md) | Runtime, data model, auth, stock engine, AI fallbacks, uploads, PWA and design trade-offs |
 | [API reference](api.md) | Conventions, roles, every endpoint, request/response examples and errors |
+| [Home Assistant](home-assistant.md) | Read-only token setup, a polling REST sensor and a low-stock notification automation |
 | [Deployment](deployment.md) | Docker Compose, environment variables, HTTPS, TrueNAS, backups and upgrades |
 | [Bring your own database](database.md) | PostgreSQL configuration, migrating from SQLite, backups and restore |
 | [Self-hosted CI/CD](../deploy/woodpecker/README.md) | Woodpecker CI, private image registry, automatic deploys and the AI review bot |
