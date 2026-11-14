@@ -1335,3 +1335,7 @@ If you add an endpoint:
 5. Add a test in `server/tests/api.test.ts` and update this page.
 
 See [development.md](development.md) for the workflow.
+
+### Household diet profiles
+
+`GET /api/houses/:houseId/diet-profiles` returns opted-in profiles to household members, including viewers. `PUT /api/houses/:houseId/diet-profiles/me` creates or replaces the caller's profile with `{ allergens: string[], diets: string[], note?: string }`; `DELETE` at the same path removes it. Allergens use the 14 EU OFF identifiers and diets are `vegetarian` or `vegan`. Notes are limited to 200 characters. Recipe details, food ideas and meal plan entries include `warnings` and `dietCompatibility` where data is available; unknown compatibility is not evidence of safety.

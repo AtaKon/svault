@@ -1,4 +1,4 @@
-import { recipeDietWarnings, ideaDietWarnings } from "../services/diet-warnings.js";
+import { recipeDietWarnings, ideaDietWarnings, unknownDietWarnings } from "../services/diet-warnings.js";
 import { Router } from "express";
 import { z } from "zod";
 import { all, get, newId, now, parseJson, run } from "../db.js";
@@ -47,7 +47,7 @@ async function serializeEntry(row: any): Promise<MealPlanEntry> {
   // servings serialize as null. Only DB failures reject.
   let recipe: MealPlanEntry["recipe"] = null;
   let idea: MealPlanEntry["idea"] = null;
-  let diet = { warnings: [] as import("../../shared/types.js").DietWarning[], dietCompatibility: [] as import("../../shared/types.js").DietCompatibility[] };
+  let diet = await unknownDietWarnings(row.house_id);
   if (row.recipe_id) diet = await recipeDietWarnings(row.house_id, row.recipe_id);
   if (row.recipe_id) {
     const recipeRow = await get<any>("SELECT id, title, servings, image FROM recipes WHERE id = ?", [row.recipe_id]);

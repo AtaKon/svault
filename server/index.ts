@@ -329,7 +329,8 @@ export function apiErrorHandler(err: any, _req: express.Request, res: express.Re
     res.status(400).json({ error: "Invalid JSON body" });
     return;
   }
-  console.error("Unhandled error:", err);
+  if (/diet-profiles/.test(req.path)) console.error("Unhandled diet profile error");
+  else console.error("Unhandled error:", err);
   res.status(500).json({ error: "Something went wrong on the server" });
 }
 

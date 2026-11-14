@@ -33,6 +33,13 @@ export async function recipeDietWarnings(houseId: string, recipeId: string): Pro
   return { warnings, dietCompatibility };
 }
 
+export async function unknownDietWarnings(houseId: string) {
+  const profiles = await all<any>(`SELECT p.diets, u.name FROM member_diet_profiles p JOIN house_members m
+    ON m.house_id = p.house_id AND m.user_id = p.user_id JOIN users u ON u.id = p.user_id WHERE p.house_id = ?`, [houseId]);
+  return { warnings: [] as DietWarning[], dietCompatibility: profiles.flatMap(p =>
+    parseJson<string[]>(p.diets, []).map(diet => ({ member: String(p.name), diet, status: "unknown" as const }))) };
+}
+
 export async function ideaDietWarnings(houseId: string, idea: FoodIdea) {
-  return idea.recipeId ? recipeDietWarnings(houseId, idea.recipeId) : { warnings: [], dietCompatibility: [] };
+  return idea.recipeId ? recipeDietWarnings(houseId, idea.recipeId) : unknownDietWarnings(houseId);
 }

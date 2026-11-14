@@ -6,6 +6,10 @@ All notable changes to SVault are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Optional household member allergy and diet profiles with local recipe and meal warnings.
+
 ### Security
 
 - The development request log and the AI provider label no longer print query strings, which can
