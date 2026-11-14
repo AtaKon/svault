@@ -451,8 +451,18 @@ export function Sheet({
             <IconButton icon="close" label={t("Close")} onClick={onClose} className="-mr-1.5 -mt-0.5" />
           </div>
         )}
-        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">{children}</div>
-        {footer && <div className="border-t border-line bg-surface px-5 py-3 safe-bottom">{footer}</div>}
+        <div
+          className={cn(
+            "min-h-0 flex-1 overflow-y-auto px-5 pt-4",
+            // Without a footer the body is the last strip above the home indicator.
+            footer ? "pb-4" : "pb-[max(1rem,env(safe-area-inset-bottom))]",
+          )}
+        >
+          {children}
+        </div>
+        {footer && (
+          <div className="border-t border-line bg-surface px-5 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">{footer}</div>
+        )}
       </div>
     </div>,
     document.body,
