@@ -270,6 +270,11 @@ houseRoutes.get(
   }),
 );
 
+houseRoutes.use("/:houseId/diet-profiles", (_req, res, next) => {
+  res.set("Cache-Control", "no-store");
+  next();
+});
+
 const dietProfileSchema = z.object({
   allergens: z.array(z.enum(["gluten", "crustaceans", "eggs", "fish", "peanuts", "soybeans", "milk", "nuts", "celery", "mustard", "sesame-seeds", "sulphur-dioxide-and-sulphites", "lupin", "molluscs"])).max(14),
   diets: z.array(z.enum(["vegetarian", "vegan"])).max(2),

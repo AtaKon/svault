@@ -194,7 +194,7 @@ if (!IS_PROD) {
   app.use((req, res, next) => {
     const start = Date.now();
     res.on("finish", () => {
-      if (req.path.startsWith("/api")) {
+      if (req.path.startsWith("/api") && !req.path.includes("/diet-profiles")) {
         console.log(`${req.method} ${stripQuery(req.originalUrl)} ${res.statusCode} ${Date.now() - start}ms`);
       }
     });
