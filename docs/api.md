@@ -760,8 +760,11 @@ matched item's category; unlinked lines are reported as `Uncategorised`.
 | `GET` | `/api/recipes/:recipeId` | viewer+ | Recipe detail with `match` (available/total/missing) and `nutrition`. |
 | `PATCH` | `/api/recipes/:recipeId` | member+ | Partial update. |
 | `DELETE` | `/api/recipes/:recipeId` | member+ | Delete a recipe. |
+| `POST` | `/api/recipes/:recipeId/cook` | member+ | Consume linked stock and optionally record leftovers. |
 | `POST` | `/api/recipes/:recipeId/favorite` | member+ | Toggle or set `{ "favorite": true }`. |
 | `POST` | `/api/recipes/:recipeId/ai` | member+ | Improve a recipe. Returns the updated recipe. |
+
+Cooking accepts `{ "portions": 4, "idempotencyKey": "unique-key", "lines": [{ "ingredientId": "...", "itemId": "...", "quantity": 0.5, "unit": "kg" }], "leftovers": { "portions": 2, "locationId": null, "useBy": "2030-01-31" } }`. Lines must reference ingredients linked to items in the recipe's house; units must convert to the item unit. `leftovers` is optional; its location may be null, and `useBy` defaults to three days from today. The response contains `portions`, `lines` (each with `requested`, `consumed`, `shortfall`, and the item unit), and `leftovers` or null. Amounts above available stock are clamped. Repeating the same household idempotency key returns the original response without another deduction; use a new key for each cooking operation.
 
 Recipe body:
 
@@ -928,7 +931,7 @@ See the [user guide](user-guide.md#export-a-dataset) for the archive layout.
 
 | Method | Path | Min role | Purpose |
 | --- | --- | --- | --- |
-| `GET` | `/api/houses/:houseId/dashboard` | viewer+ | Counts, value, low stock, expiring lots, recent movements, recipe and counts. |
+| `GET` | `/api/houses/:houseId/dashboard` | viewer+ | Counts, value, low stock, `runningOutSoon`, expiring lots, recent movements, recipe and counts. |
 | `GET` | `/api/houses/:houseId/notifications` | viewer+ | Active reminders. `unread=1`, `limit` up to 200. |
 | `POST` | `/api/houses/:houseId/notifications/read` | viewer+ | Mark all or `{ "ids": [...] }` as read for the current user. |
 | `POST` | `/api/houses/:houseId/notifications/scan` | member+ | Recompute low-stock and expiry reminders for the house. |
@@ -1067,7 +1070,7 @@ Mounted at `/api/admin`. Every route requires the instance administrator (`403` 
 | `DELETE` | `/api/houses/:houseId/shopping/:entryId` | member+ | Remove a line. |
 | `DELETE` | `/api/houses/:houseId/shopping?checked=1` | member+ | Clear checked lines (omit the query to clear all). |
 | `POST` | `/api/houses/:houseId/shopping/from-recipe` | member+ | Add missing (default) or all ingredients. Body: `{ recipeId, includeOptional?, missingOnly? }`. |
-| `POST` | `/api/houses/:houseId/shopping/from-low-stock` | member+ | Add every item at or below its reorder point, up to `targetStock` (or twice the reorder point). |
+| `POST` | `/api/houses/:houseId/shopping/from-low-stock` | member+ | Add items at or below their reorder point, up to `targetStock` (or twice the reorder point). Optional JSON `includeForecast: true` also includes items forecast to run out within `forecastDays` (default 7, maximum 365). |
 | `POST` | `/api/houses/:houseId/shopping/:entryId/check` | member+ | Check a line and optionally record a normal `in` movement. |
 
 Lines merge by linked `itemId` first, then by normalised name. Compatible units are summed; incompatible
@@ -1339,3 +1342,11 @@ See [development.md](development.md) for the workflow.
 ### Insights budget settings and spend
 
 `PATCH /api/houses/:houseId/insights/settings` requires a house admin. In addition to `monthlyBudget`, it accepts `categoryBudgets` (an object mapping category IDs belonging to the house to non-negative amounts) and `includeBills` (boolean, default `false`). Zero disables a budget. Viewers can read `GET /api/houses/:houseId/insights/spend`, which includes `projection`, `categoryBudgets` (category ID, name, spent, budget and percent), and `history` (the preceding six months, total and current budget). Historical budgets are not stored: history compares each total with the current budget. Projection is current spending divided by elapsed UTC calendar days times days in the month. Receipt spending uses purchase date or upload date. When enabled, bills count by due date or creation date and are included in household totals, not category totals. Avoid recording the same expense as both a bill and a receipt. Budget reminders fire at 80% and 100% once per month for the household and each category.
+### Run-out forecasts
+
+Item list and detail responses include `forecast: { dailyRate, daysLeft, windowDays } | null`.
+The rate is the total quantity in outgoing consumption movements over the last 60 days divided by
+`windowDays`: the days since the first counted movement, clamped to 7–60;
+`daysLeft` is current stock divided by that rate. Waste, adjustments and transfers do not count.
+At least two consumption events spanning seven days and positive stock are required. The dashboard's
+`runningOutSoon` contains active items with at most seven days left, ordered by days left.

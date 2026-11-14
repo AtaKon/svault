@@ -9,9 +9,20 @@ All notable changes to SVault are documented here. The format follows
 ### Added
 
 - Category budgets, optional bill spending, month-end projections, budget history and threshold reminders.
+- Consumption-based run-out forecasts on items and the dashboard, with an optional shopping-list fill.
 
 ### Security
 
+- Writing an Open Food Facts folksonomy property now needs accepted OFF consent and member access to
+  at least one household. A named `houseId`/`itemId` must belong to a house the caller is a member of,
+  so a signed-in user can no longer write through the instance token or name another house's item.
+- Answering Robotoff questions now needs accepted OFF consent and member access to at least one
+  household, instead of any signed-in session.
+- Open Food Facts contribution lists return an item's name only while the contributor is still a member
+  of that contribution's household. The rest of the row is unchanged, but leaving the house no longer
+  keeps showing what it contained.
+- Deleting a recipe removes only upload files its own household owns. An old recipe that points at
+  another household's upload no longer deletes that file.
 - The development request log and the AI provider label no longer print query strings, which can
   carry OIDC `code`/`state`, invite codes or search terms.
 - Recipe ingredients can link only to items of the recipe's household, and the meal-plan shopping
@@ -56,6 +67,8 @@ All notable changes to SVault are documented here. The format follows
   id, instead of `403`, which confirmed that the idea id existed.
 
 ### Added
+
+- **Cooking stock and leftovers.** Review scaled linked ingredients when finishing a recipe, deduct available stock, see shortfalls, and save leftover portions with a use-by date.
 
 - **Recipe portion, weight and calorie estimates.** Recipes now estimate the total prepared weight and
   the weight of one portion in grams alongside the existing calorie and macro panel. Volume uses a

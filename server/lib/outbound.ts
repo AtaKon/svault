@@ -173,7 +173,7 @@ const NULL_BODY_STATUS = new Set([101, 204, 205, 304]);
  */
 function guardedLookup(
   hostname: string,
-  options: { all?: boolean } | number | undefined,
+  options: { all?: boolean; family?: number | string } | number | undefined,
   callback: (error: Error | null, address?: string | ResolvedAddress[], family?: number) => void,
 ): void {
   resolveHost(hostname).then(
@@ -182,8 +182,15 @@ function guardedLookup(
         callback(new OutboundBlockedError("The address resolved to a private or local network address, which this server does not allow"));
         return;
       }
-      if (typeof options === "object" && options?.all) callback(null, entries);
-      else callback(null, entries[0].address, entries[0].family);
+      // Honour a requested address family (4 or 6) like dns.lookup does.
+      const wanted = typeof options === "number" ? options : Number(typeof options === "object" ? options?.family ?? 0 : 0);
+      const usable = wanted === 4 || wanted === 6 ? entries.filter((entry) => entry.family === wanted) : entries;
+      if (!usable.length) {
+        callback(Object.assign(new Error(`No IPv${wanted} address for ${hostname}`), { code: "ENOTFOUND" }));
+        return;
+      }
+      if (typeof options === "object" && options?.all) callback(null, usable);
+      else callback(null, usable[0].address, usable[0].family);
     },
     (error) => callback(error instanceof Error ? error : new Error(String(error))),
   );
@@ -197,6 +204,9 @@ function pinnedRequest(url: URL, init: RequestInit): Promise<Response> {
   if (body !== undefined && body !== null && typeof body !== "string") {
     return Promise.reject(new TypeError("outboundFetch only sends string bodies"));
   }
+  // Send a fixed length rather than chunked encoding, which some endpoints refuse.
+  if (typeof body === "string") headers["content-length"] = String(Buffer.byteLength(body));
+  if (init.signal?.aborted) return Promise.reject(init.signal.reason ?? new DOMException("Aborted", "AbortError"));
   return new Promise((resolve, reject) => {
     const request = client.request(
       url,

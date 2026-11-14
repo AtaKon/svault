@@ -41,6 +41,7 @@ import {
   skippedImagesWarning,
   uploadOwnedBy,
   assertUploadsOwned,
+  UploadOwnershipError,
 } from "../services/receipt-scans.js";
 import { reconcileReceipt } from "../../shared/receipt-reconcile.js";
 import { parseEReceipt, receiptHouseCurrency, scanBudgetAlerts, scanPriceAlerts } from "../services/insights.js";
@@ -715,7 +716,8 @@ async function ownedOr400(paths: Iterable<string | null | undefined>, houseId: s
   try {
     await assertUploadsOwned(paths, houseId);
   } catch (error) {
-    throw new ApiError(400, error instanceof Error ? error.message : "Upload not found");
+    if (error instanceof UploadOwnershipError) throw new ApiError(400, error.message);
+    throw error;
   }
 }
 

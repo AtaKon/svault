@@ -11,6 +11,7 @@ import {
   normalizeName,
   serializeShoppingItem,
   shoppingRow,
+  shoppingFillCandidates,
 } from "../services/shopping.js";
 import { convert } from "../units.js";
 
@@ -215,13 +216,11 @@ shoppingRoutes.post(
   "/:houseId/shopping/from-low-stock",
   handler(async (req, res) => {
     const { houseId } = await requireHouse(req, "member");
-    const rows = await all<any>(
-      `SELECT i.*, COALESCE((SELECT SUM(l.quantity) FROM stock_lots l WHERE l.item_id = i.id), 0) AS quantity
-       FROM items i WHERE i.house_id = ? AND i.archived = 0 AND i.reorder_point > 0
-         AND (SELECT COALESCE(SUM(l.quantity), 0) FROM stock_lots l WHERE l.item_id = i.id) <= i.reorder_point
-       ORDER BY lower(i.name)`,
-      [houseId],
-    );
+    const body = parseBody(z.object({
+      includeForecast: z.boolean().optional().default(false),
+      forecastDays: z.number().positive().max(365).optional().default(7),
+    }), req.body ?? {});
+    const rows = await shoppingFillCandidates(houseId, body.includeForecast, body.forecastDays);
     let added = 0;
     let merged = 0;
     let skipped = 0;

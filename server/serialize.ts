@@ -100,6 +100,7 @@ export function serializeItem(row: any, barcodes: { id: string; code: string; fo
       }
     : null;
   return {
+    forecast: null,
     id: row.id,
     houseId: row.house_id,
     name: row.name,
