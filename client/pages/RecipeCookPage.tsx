@@ -1,3 +1,4 @@
+import { DietWarnings } from "@/components/diet-profile";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api } from "@/api";
@@ -185,6 +186,7 @@ export function RecipeCookPage() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-4 pb-24">
+      <DietWarnings warnings={recipe.warnings} dietCompatibility={recipe.dietCompatibility} />
       <div className="sticky top-0 z-20 -mx-3 flex flex-wrap items-center gap-2 border-b border-line bg-bg/95 px-3 py-2 backdrop-blur sm:-mx-4 sm:px-4">
         <button
           onClick={() => navigate(`/recipes/${recipe.id}`)}

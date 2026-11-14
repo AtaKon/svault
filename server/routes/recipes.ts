@@ -1,3 +1,4 @@
+import { recipeDietWarnings } from "../services/diet-warnings.js";
 import { Router } from "express";
 import fs from "node:fs/promises";
 import { z } from "zod";
@@ -903,7 +904,7 @@ singleRecipeRoutes.get(
   handler(async (req, res) => {
     const { recipe, houseId } = await recipeAccess(req);
     const serialized = serializeRecipe(recipe, await ingredientsFor(recipe.id));
-    res.json(decorateRecipe(serialized, await stockMaps(houseId), await nutritionItems(houseId)));
+    res.json({ ...decorateRecipe(serialized, await stockMaps(houseId), await nutritionItems(houseId)), ...await recipeDietWarnings(houseId, recipe.id) });
   }),
 );
 

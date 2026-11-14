@@ -1379,6 +1379,9 @@ If you add an endpoint:
 
 See [development.md](development.md) for the workflow.
 
+### Household diet profiles
+
+`GET /api/houses/:houseId/diet-profiles` returns opted-in profiles to household members, including viewers. `PUT /api/houses/:houseId/diet-profiles/me` creates or replaces the caller's profile with `{ allergens: string[], diets: string[], note?: string }`; `DELETE` at the same path removes it. Allergens use the 14 EU OFF identifiers and diets are `vegetarian` or `vegan`. Notes are limited to 200 characters. Recipe details, food ideas and meal plan entries include `warnings` and `dietCompatibility` where data is available; unknown compatibility is not evidence of safety.
 ### Insights budget settings and spend
 
 `PATCH /api/houses/:houseId/insights/settings` requires a house admin. In addition to `monthlyBudget`, it accepts `categoryBudgets` (an object mapping category IDs belonging to the house to non-negative amounts) and `includeBills` (boolean, default `false`). Zero disables a budget. Viewers can read `GET /api/houses/:houseId/insights/spend`, which includes `projection`, `categoryBudgets` (category ID, name, spent, budget and percent), and `history` (the preceding six months, total and current budget). Historical budgets are not stored: history compares each total with the current budget. Projection is current spending divided by elapsed UTC calendar days times days in the month. Receipt spending uses purchase date or upload date. When enabled, bills count by due date or creation date and are included in household totals, not category totals. Avoid recording the same expense as both a bill and a receipt. Budget reminders fire at 80% and 100% once per month for the household and each category.

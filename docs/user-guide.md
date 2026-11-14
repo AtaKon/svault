@@ -738,6 +738,11 @@ warns while unsynced changes exist; reads are still network-only.
 More deployment-specific fixes are in [deployment.md](deployment.md) and the
 [TrueNAS guide](../deploy/dockge/README.md#troubleshooting).
 
+### Allergy and diet privacy
+
+In Your profile, you can opt in to an allergy and diet profile for each household. Household members, including viewers, can see it; only you can edit or delete your own profile. It is removed when you leave or are removed from the household, or when your account is deleted. Profiles are health-related special-category data. They are stored in the vault and included in backups, so protect backup files accordingly. SVault does not send profiles to AI providers or Open Food Facts and does not log them.
+
+Recipe, cook mode, food idea and meal plan warnings use linked inventory items and locally cached Open Food Facts information. Missing or incomplete product information can hide allergens, and unknown diet compatibility is not a safety confirmation. Check ingredient labels and suitability yourself.
 ### Category budgets and reminders
 
 In Insights, house admins can set monthly budgets for individual categories and choose whether bills count toward household spending. Bills are excluded by default. Included bills count in their due month, or creation month if no due date is set; they do not count toward a category. Avoid entering the same expense as both a bill and a receipt. The projected month-end total assumes the current daily rate continues. The six-month history compares past totals with the current budget. Household and category reminders appear at 80% and 100% once per month and are delivered to enabled reminder channels.

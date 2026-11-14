@@ -1,3 +1,4 @@
+import { DietWarnings } from "@/components/diet-profile";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/api";
@@ -162,6 +163,7 @@ export function IdeasPage() {
                     <Badge tone="outline">{idea.source === "recipe" ? t("saved recipe") : t("new idea")}</Badge>
                   </div>
                   <p className="mt-1 text-xs leading-relaxed text-muted">{idea.rationale}</p>
+      <DietWarnings warnings={idea.warnings} dietCompatibility={idea.dietCompatibility} />
                   <div className="mt-2 flex gap-2 text-[11px] text-muted">
                     {idea.timeMinutes ? <span>⏱ {minutesLabel(idea.timeMinutes)}</span> : null}
                     {idea.servings ? <span>· {plural(idea.servings, "serving")}</span> : null}

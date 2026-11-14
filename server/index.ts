@@ -194,7 +194,7 @@ if (!IS_PROD) {
   app.use((req, res, next) => {
     const start = Date.now();
     res.on("finish", () => {
-      if (req.path.startsWith("/api")) {
+      if (req.path.startsWith("/api") && !req.path.includes("/diet-profiles")) {
         console.log(`${req.method} ${stripQuery(req.originalUrl)} ${res.statusCode} ${Date.now() - start}ms`);
       }
     });
@@ -330,7 +330,8 @@ export function apiErrorHandler(err: any, _req: express.Request, res: express.Re
     res.status(400).json({ error: "Invalid JSON body" });
     return;
   }
-  console.error("Unhandled error:", err);
+  if (/diet-profiles/.test(_req.path)) console.error("Unhandled diet profile error");
+  else console.error("Unhandled error:", err);
   res.status(500).json({ error: "Something went wrong on the server" });
 }
 

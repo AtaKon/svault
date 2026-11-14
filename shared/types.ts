@@ -628,6 +628,9 @@ export interface ItemDetail extends Item {
   recipes: { id: string; title: string }[];
 }
 
+export interface DietWarning { ingredient: string; allergen: string; members: string[] }
+export interface DietCompatibility { member: string; diet: string; status: "compatible" | "incompatible" | "unknown" }
+
 export interface RecipeIngredient {
   id?: string;
   name: string;
@@ -646,6 +649,8 @@ export interface RecipeStep {
 }
 
 export interface Recipe {
+  warnings?: DietWarning[];
+  dietCompatibility?: DietCompatibility[];
   id: string;
   houseId: string;
   title: string;
@@ -954,6 +959,8 @@ export interface PurchaseAnalytics {
 }
 
 export interface FoodIdea {
+  warnings?: DietWarning[];
+  dietCompatibility?: DietCompatibility[];
   title: string;
   rationale: string;
   timeMinutes: number | null;
@@ -1077,6 +1084,8 @@ export type MealSlot = "breakfast" | "lunch" | "dinner" | "snack";
 export const MEAL_SLOTS: MealSlot[] = ["breakfast", "lunch", "dinner", "snack"];
 
 export interface MealPlanEntry {
+  warnings?: DietWarning[];
+  dietCompatibility?: DietCompatibility[];
   id: string;
   houseId: string;
   day: string;
