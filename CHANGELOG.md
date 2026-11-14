@@ -53,6 +53,8 @@ All notable changes to SVault are documented here. The format follows
 
 ### Added
 
+- Track when a batch was opened and an item’s shelf life after opening, with effective expiry dates in reminders and inventory views.
+
 - **Recipe portion, weight and calorie estimates.** Recipes now estimate the total prepared weight and
   the weight of one portion in grams alongside the existing calorie and macro panel. Volume uses a
   typical density per ingredient and countable units a typical piece weight, with coverage reported so
