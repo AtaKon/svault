@@ -11,10 +11,11 @@ export async function forecastsForHouse(houseId: string, itemId?: string): Promi
   const rows = await all<{ item_id: string; consumed: number; events: number; first_at: string; last_at: string; quantity: number }>(
     `SELECT m.item_id, SUM(-m.delta) AS consumed, COUNT(*) AS events,
        MIN(m.created_at) AS first_at, MAX(m.created_at) AS last_at,
-       (SELECT COALESCE(SUM(l.quantity), 0) FROM stock_lots l WHERE l.item_id = m.item_id AND l.house_id = m.house_id) AS quantity
+       -- A parameter, not m.house_id: PostgreSQL rejects ungrouped outer columns here.
+       (SELECT COALESCE(SUM(l.quantity), 0) FROM stock_lots l WHERE l.item_id = m.item_id AND l.house_id = ?) AS quantity
      FROM stock_movements m
      WHERE m.house_id = ? AND m.type = 'out' AND m.delta < 0 AND m.created_at >= ? AND m.created_at <= ?${itemId ? " AND m.item_id = ?" : ""}
-     GROUP BY m.item_id`, itemId ? [houseId, cutoff, end.toISOString(), itemId] : [houseId, cutoff, end.toISOString()],
+     GROUP BY m.item_id`, itemId ? [houseId, houseId, cutoff, end.toISOString(), itemId] : [houseId, houseId, cutoff, end.toISOString()],
   );
   const forecasts = new Map<string, Forecast>();
   for (const row of rows) {
