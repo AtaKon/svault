@@ -733,3 +733,7 @@ warns while unsynced changes exist; reads are still network-only.
 
 More deployment-specific fixes are in [deployment.md](deployment.md) and the
 [TrueNAS guide](../deploy/dockge/README.md#troubleshooting).
+
+### Warranties and documents
+
+Set a warranty end date and optional note when creating or editing an item. Add manuals, receipts and warranty documents on the item page; household viewers can download them, while members can upload or delete them. Set the advance warning in house notification settings (30 days by default).

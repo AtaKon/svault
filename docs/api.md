@@ -208,6 +208,10 @@ Attribute types: `text`, `number`, `select`, `date`, `boolean`, `url`. Built-in 
 | `GET` | `/api/items/:itemId` | viewer+ | Item detail: lots, movements, price history, linked recipes, OpenFoodFacts link. |
 | `PATCH` | `/api/items/:itemId` | member+ | Update fields or `archived`. Pass `offCode` to link, or `null` to unlink. |
 | `DELETE` | `/api/items/:itemId` | member+ | Delete the item, its batches and barcodes. Recipes stay. |
+| `GET` | `/api/items/:itemId/documents` | viewer+ | List item documents. |
+| `POST` | `/api/items/:itemId/documents` | member+ | Multipart `document` (PDF or image) and `kind` (manual, receipt, warranty or other). |
+| `GET` | `/api/items/:itemId/documents/:documentId` | viewer+ | Download a private document. |
+| `DELETE` | `/api/items/:itemId/documents/:documentId` | member+ | Delete a document and its file. |
 | `POST` | `/api/items/:itemId/stock` | member+ | Add, remove, waste, set or move stock. |
 | `GET` | `/api/items/:itemId/movements` | viewer+ | Movement ledger (`limit` 1-300, default 50). |
 | `POST` | `/api/items/:itemId/image` | member+ | `multipart/form-data` field `image`. |
@@ -1335,3 +1339,5 @@ If you add an endpoint:
 5. Add a test in `server/tests/api.test.ts` and update this page.
 
 See [development.md](development.md) for the workflow.
+
+Item create and update accept `warrantyUntil` (YYYY-MM-DD or null) and `warrantyNote` (up to 200 characters or null). House notification settings accept `warrantyDays` (default 30). Warranty reminders use the expiring event channel preference.

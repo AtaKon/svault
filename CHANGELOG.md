@@ -6,6 +6,10 @@ All notable changes to SVault are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Item warranty dates and notes, reminders, and private PDF or image documents.
+
 ### Security
 
 - The development request log and the AI provider label no longer print query strings, which can
