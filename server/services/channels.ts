@@ -11,6 +11,7 @@ const DEFAULT_EVENTS: NotificationChannelEvents = {
   lowStock: true,
   expiring: true,
   weeklySummary: false,
+  budget: true,
 };
 
 export function channelsFromSettings(settings: Record<string, any> | null | undefined): NotificationChannel[] {
@@ -32,6 +33,7 @@ export function channelsFromSettings(settings: Record<string, any> | null | unde
         lowStock: entry.events?.lowStock !== false,
         expiring: entry.events?.expiring !== false,
         weeklySummary: entry.events?.weeklySummary === true,
+        budget: entry.events?.budget !== false,
       },
     }));
 }
@@ -72,7 +74,7 @@ function eventEnabled(channel: NotificationChannel, event: DeliveryEvent): boole
   if (!channel.enabled || !channel.url) return false;
   if (event === "low_stock") return channel.events.lowStock;
   if (event === "expiring") return channel.events.expiring;
-  if (event === "budget_alert") return true;
+  if (event === "budget_alert") return channel.events.budget;
   return channel.events.weeklySummary;
 }
 

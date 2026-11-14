@@ -7495,6 +7495,8 @@ describe("reminder delivery channels", () => {
     });
     assert.equal(saved.status, 200);
     assert.equal(saved.data.settings.notifications.channels[0].secret, "***");
+    // Channels saved before budget alerts existed keep receiving them until switched off.
+    assert.equal(saved.data.settings.notifications.channels[0].events.budget, true);
 
     const resent = await request(`/api/houses/${houseId}`, {
       method: "PATCH",
@@ -7509,7 +7511,7 @@ describe("reminder delivery channels", () => {
                 url: channelBase,
                 enabled: true,
                 secret: "***",
-                events: { lowStock: true, expiring: true, weeklySummary: false },
+                events: { lowStock: true, expiring: true, weeklySummary: false, budget: false },
               },
             ],
           },
@@ -7517,6 +7519,7 @@ describe("reminder delivery channels", () => {
       },
     });
     assert.equal(resent.status, 200);
+    assert.equal(resent.data.settings.notifications.channels[0].events.budget, false);
 
     const test = await request(`/api/houses/${houseId}/notifications/test`, {
       method: "POST",
