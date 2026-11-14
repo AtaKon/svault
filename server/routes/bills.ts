@@ -534,7 +534,7 @@ billRoutes.post("/:houseId/bills/:billId/document", requireBillDocumentMember, b
     // text cannot be shown next to the replacement until it is scanned again.
     const result = await run(`UPDATE bills SET document = ?, subtotal = NULL, tax_total = NULL,
       breakdown = '[]', ocr_text = NULL, source = 'manual'
-      WHERE id = ? AND house_id = ? AND (document = ? OR (document IS NULL AND ? IS NULL))`, [
+      WHERE id = ? AND house_id = ? AND (document = ? OR (document IS NULL AND CAST(? AS TEXT) IS NULL))`, [
       req.file.filename, current.id, houseId, current.document, current.document,
     ]);
     if (result.changes !== 1) throw new ApiError(409, "The bill document changed during upload. Try again.");
