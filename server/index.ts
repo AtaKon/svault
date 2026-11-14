@@ -197,7 +197,7 @@ if (!IS_PROD) {
     const start = Date.now();
     res.on("finish", () => {
       if (req.path.startsWith("/api")) {
-        console.log(`${req.method} ${stripQuery(req.originalUrl).replace(/^\/api\/calendar\/[^/]+\.ics$/, "/api/calendar/[redacted].ics")} ${res.statusCode} ${Date.now() - start}ms`);
+        console.log(`${req.method} ${(req.path.startsWith("/api/calendar/") ? "/api/calendar/[redacted].ics" : stripQuery(req.originalUrl))} ${res.statusCode} ${Date.now() - start}ms`);
       }
     });
     next();
