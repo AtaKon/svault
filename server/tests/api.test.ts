@@ -11373,3 +11373,37 @@ describe("trust proxy setting", () => {
     assert.equal(trustProxySetting("loopback, 10.0.0.0/8"), "loopback, 10.0.0.0/8");
   });
 });
+
+describe("run-out forecasts", () => {
+  it("calculates consumption rate and days left, requires sufficient history, and excludes zero stock", async () => {
+    const created = await request(`/api/houses/${houseId}/items`, { method: "POST", body: { name: "Forecast milk test", unit: "l", initialStock: { quantity: 12 } } });
+    const id = created.data.id;
+    await request(`/api/items/${id}/stock`, { method: "POST", body: { action: "remove", quantity: 3 } });
+    let detail = await request(`/api/items/${id}`);
+    assert.equal(detail.data.forecast, null);
+    await run("UPDATE stock_movements SET created_at = ? WHERE item_id = ? AND type = 'out'", [new Date(Date.now() - 10 * 864e5).toISOString(), id]);
+    await request(`/api/items/${id}/stock`, { method: "POST", body: { action: "remove", quantity: 3 } });
+    detail = await request(`/api/items/${id}`);
+    assert.deepEqual(detail.data.forecast, { dailyRate: 0.1, daysLeft: 60, windowDays: 60 });
+    const list = await request(`/api/houses/${houseId}/items?limit=1000`);
+    assert.deepEqual(list.data.items.find((item: any) => item.id === id).forecast, detail.data.forecast);
+    await request(`/api/items/${id}/stock`, { method: "POST", body: { action: "remove", quantity: 6 } });
+    detail = await request(`/api/items/${id}`);
+    assert.equal(detail.data.forecast, null);
+  });
+
+  it("optionally fills shopping from forecast and merges compatible units", async () => {
+    const created = await request(`/api/houses/${houseId}/items`, { method: "POST", body: { name: "Forecast oil test", unit: "l", targetStock: 2, initialStock: { quantity: 12 } } });
+    const id = created.data.id;
+    await request(`/api/items/${id}/stock`, { method: "POST", body: { action: "remove", quantity: 5 } });
+    await run("UPDATE stock_movements SET created_at = ? WHERE item_id = ? AND type = 'out'", [new Date(Date.now() - 10 * 864e5).toISOString(), id]);
+    await request(`/api/items/${id}/stock`, { method: "POST", body: { action: "remove", quantity: 6 } });
+    const dashboard = await request(`/api/houses/${houseId}/dashboard`);
+    assert.ok(dashboard.data.runningOutSoon.some((item: any) => item.id === id));
+    const normal = await request(`/api/houses/${houseId}/shopping/from-low-stock`, { method: "POST", body: {} });
+    assert.ok(!normal.data.items.some((item: any) => item.itemId === id));
+    await request(`/api/houses/${houseId}/shopping`, { method: "POST", body: { name: "Forecast oil test", quantity: 500, unit: "ml" } });
+    const result = await request(`/api/houses/${houseId}/shopping/from-low-stock`, { method: "POST", body: { includeForecast: true } });
+    assert.equal(result.data.items.find((item: any) => item.itemId === id).quantity, 1500);
+  });
+});
