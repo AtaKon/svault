@@ -1465,7 +1465,7 @@ function RemindersTab({ house, onSave }: { house: House; onSave: (patch: Record<
         url: "https://ntfy.sh",
         topic: "",
         token: "",
-        events: { lowStock: true, expiring: true, weeklySummary: false },
+        events: { lowStock: true, expiring: true, weeklySummary: false, budget: true },
       },
     ]);
   };
@@ -1622,7 +1622,7 @@ function RemindersTab({ house, onSave }: { house: House; onSave: (patch: Record<
               </Field>
             )}
 
-            <div className="grid gap-1 sm:grid-cols-3">
+            <div className="grid gap-1 sm:grid-cols-2">
               <Switch
                 checked={channel.events.lowStock}
                 onChange={(lowStock) => patchChannel(channel.id, { events: { ...channel.events, lowStock } })}
@@ -1637,6 +1637,11 @@ function RemindersTab({ house, onSave }: { house: House; onSave: (patch: Record<
                 checked={channel.events.weeklySummary}
                 onChange={(weeklySummary) => patchChannel(channel.id, { events: { ...channel.events, weeklySummary } })}
                 label={t("Weekly summary")}
+              />
+              <Switch
+                checked={channel.events.budget}
+                onChange={(budget) => patchChannel(channel.id, { events: { ...channel.events, budget } })}
+                label={t("Budget alerts")}
               />
             </div>
 
