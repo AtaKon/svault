@@ -11373,3 +11373,46 @@ describe("trust proxy setting", () => {
     assert.equal(trustProxySetting("loopback, 10.0.0.0/8"), "loopback, 10.0.0.0/8");
   });
 });
+
+describe("item warranty and documents", () => {
+  it("round-trips warranty fields and deduplicates reminders", async () => {
+    const date = new Date(Date.now() + 10 * 864e5).toISOString().slice(0, 10);
+    const created = await request(`/api/houses/${houseId}/items`, { body: { name: "Warranty test", warrantyUntil: date, warrantyNote: "Keep receipt" } });
+    assert.equal(created.status, 201);
+    const id = created.data.id;
+    assert.equal(created.data.warrantyUntil, date);
+    const updated = await request(`/api/items/${id}`, { method: "PATCH", body: { warrantyNote: "Updated" } });
+    assert.equal(updated.data.warrantyNote, "Updated");
+    const { syncHouseWarranties } = await import("../services/notifications.js");
+    await syncHouseWarranties(houseId); await syncHouseWarranties(houseId);
+    assert.equal((await all<any>("SELECT id FROM notifications WHERE dedupe_key = ?", [`warranty:${id}:${date}`])).length, 1);
+    await request(`/api/items/${id}`, { method: "DELETE" });
+  });
+  it("protects, validates and cleans up item documents", async () => {
+    const owner = await request("/api/auth/register", { body: { name: "Document owner", email: "document-owner@example.com", password: "test password" } });
+    const viewer = await request("/api/auth/register", { body: { name: "Document viewer", email: "document-viewer@example.com", password: "test password" } });
+    const house = owner.data.houses[0].id;
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [house, viewer.data.user.id, "viewer", new Date().toISOString()]);
+    const created = await request(`/api/houses/${house}/items`, { auth: owner.cookie!, body: { name: "Drill" } });
+    const url = `/api/items/${created.data.id}/documents`;
+    const form = (content: string, type: string) => { const data = new FormData(); data.set("document", new Blob([content], { type }), "test.pdf"); data.set("kind", "manual"); return data; };
+    assert.equal((await request(url, { auth: viewer.cookie!, body: form("%PDF-1.4 test", "application/pdf") })).status, 403);
+    assert.equal((await request(url, { auth: cookie })).status, 404);
+    assert.equal((await request(url, { auth: owner.cookie!, body: form("<html>unsafe</html>", "text/html") })).status, 400);
+    const uploaded = await request(url, { auth: owner.cookie!, body: form("%PDF-1.4 test", "application/pdf") });
+    assert.equal(uploaded.status, 201);
+    assert.equal((await request(url, { auth: viewer.cookie! })).data.length, 1);
+    const response = await fetch(base + `${url}/${uploaded.data.id}`, { headers: { cookie: viewer.cookie! } });
+    assert.equal(response.status, 200); assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+    assert.equal(await response.text(), "%PDF-1.4 test");
+    const row = await get<any>("SELECT filename FROM item_documents WHERE id = ?", [uploaded.data.id]);
+    const file = path.join(dataDir, "uploads", "item-documents", row.filename);
+    assert.ok(existsSync(file));
+    assert.equal((await request(`${url}/${uploaded.data.id}`, { method: "DELETE", auth: owner.cookie! })).status, 200);
+    assert.ok(!existsSync(file));
+    const again = await request(url, { auth: owner.cookie!, body: form("%PDF-1.4 test", "application/pdf") });
+    const row2 = await get<any>("SELECT filename FROM item_documents WHERE id = ?", [again.data.id]);
+    await request(`/api/items/${created.data.id}`, { method: "DELETE", auth: owner.cookie! });
+    assert.ok(!existsSync(path.join(dataDir, "uploads", "item-documents", row2.filename)));
+  });
+});
