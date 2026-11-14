@@ -305,7 +305,8 @@ async function itemDetail(itemId: string, userId: string) {
   if (!row) throw new ApiError(404, "Item not found");
   void userId;
   const item = serializeItem(row, await barcodesForItem(itemId));
-  item.forecast = (await forecastsForHouse(row.house_id)).get(itemId) ?? null;
+  // Only this item's movements, not the whole house.
+  item.forecast = (await forecastsForHouse(row.house_id, itemId)).get(itemId) ?? null;
   const lots = (await all<any>(
     `SELECT l.*, loc.name AS location_name, v.name AS vendor_name FROM stock_lots l
      LEFT JOIN locations loc ON loc.id = l.location_id AND loc.house_id = ?

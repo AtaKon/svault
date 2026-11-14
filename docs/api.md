@@ -1106,7 +1106,7 @@ Mounted at `/api/admin`. Every route requires the instance administrator (`403` 
 | `DELETE` | `/api/houses/:houseId/shopping/:entryId` | member+ | Remove a line. |
 | `DELETE` | `/api/houses/:houseId/shopping?checked=1` | member+ | Clear checked lines (omit the query to clear all). |
 | `POST` | `/api/houses/:houseId/shopping/from-recipe` | member+ | Add missing (default) or all ingredients. Body: `{ recipeId, includeOptional?, missingOnly? }`. |
-| `POST` | `/api/houses/:houseId/shopping/from-low-stock` | member+ | Add items at or below their reorder point, up to `targetStock` (or twice the reorder point). Optional JSON `includeForecast: true` also includes items forecast to run out within `forecastDays` (default 7, maximum 365). |
+| `POST` | `/api/houses/:houseId/shopping/from-low-stock` | member+ | Add items at or below their reorder point, up to `targetStock` (or twice the reorder point). Optional JSON `includeForecast: true` also includes items forecast to run out within `forecastDays` (whole days, 1–365, default 7). |
 | `POST` | `/api/houses/:houseId/shopping/:entryId/check` | member+ | Check a line and optionally record a normal `in` movement. |
 
 Lines merge by linked `itemId` first, then by normalised name. Compatible units are summed; incompatible
