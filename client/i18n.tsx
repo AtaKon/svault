@@ -2220,6 +2220,7 @@ const EL: Record<string, string> = {
   "Ownership of this house was transferred to you.": "Η ιδιοκτησία αυτού του σπιτιού μεταβιβάστηκε σε εσένα.",
   "{item} is running low": "Το απόθεμα του «{item}» είναι χαμηλό",
   // Budget alerts: the household pattern must come before the category one.
+  "Budget alerts": "Ειδοποιήσεις προϋπολογισμού",
   "Monthly budget at {percent}%": "Ο μηνιαίος προϋπολογισμός έφτασε στο {percent}%",
   "Spending reached {percent}% of the monthly budget.": "Οι δαπάνες έφτασαν στο {percent}% του μηνιαίου προϋπολογισμού.",
   "{category} budget at {percent}%": "Ο προϋπολογισμός «{category}» έφτασε στο {percent}%",
