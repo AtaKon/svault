@@ -662,6 +662,7 @@ const EL: Record<string, string> = {
   "Synced {count} queued changes": "Συγχρονίστηκαν {count} αλλαγές από την ουρά",
   "Could not sync the offline queue": "Δεν ήταν δυνατός ο συγχρονισμός της ουράς εκτός σύνδεσης",
   "You are offline. Stock changes will be queued.": "Δεν υπάρχει σύνδεση. Οι αλλαγές αποθέματος θα μπουν στην ουρά.",
+  "You are offline. This will load when the connection is back.": "Δεν υπάρχει σύνδεση. Θα φορτώσει μόλις επανέλθει η σύνδεση.",
   "{count} stock change pending sync": "{count} αλλαγή αποθέματος σε αναμονή συγχρονισμού",
   "{count} stock changes pending sync": "{count} αλλαγές αποθέματος σε αναμονή συγχρονισμού",
   "offline": "εκτός σύνδεσης",

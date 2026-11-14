@@ -6,6 +6,12 @@ All notable changes to SVault are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Offline reload.** Reloading SVault without a network no longer lands on the sign-in page. The last signed-in session is kept on the device and used until the server can be reached again; a 401 or signing out clears it. Requests that cannot reach the server now say "You are offline" instead of "Failed to fetch".
+- **PostgreSQL: replacing a bill document.** Uploading a new PDF for an existing bill failed with 500 on PostgreSQL ("could not determine data type of parameter").
+- **PostgreSQL test suite.** `npm run test:postgres` passes in full. Four tests used SQLite-only SQL (`PRAGMA`, trigger syntax, text in a numeric column, a hard-coded database name) and now run, or skip only the SQLite-specific part, on PostgreSQL. CI runs the PostgreSQL suite on every pull request.
+
 ### Added
 
 - Category budgets, optional bill spending, month-end projections, budget history and threshold reminders.

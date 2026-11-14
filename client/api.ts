@@ -1,3 +1,6 @@
+/** Status 0: the request never reached the server (offline or unreachable). */
+export const OFFLINE_MESSAGE = "You are offline. This will load when the connection is back.";
+
 export class ApiError extends Error {
   status: number;
   details?: unknown;
@@ -28,13 +31,21 @@ export async function api<T = any>(path: string, options: RequestOptions = {}): 
     body = JSON.stringify(options.body);
   }
 
-  const res = await fetch(path, {
-    method,
-    credentials: "include",
-    headers,
-    body,
-    signal: options.signal,
-  });
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      method,
+      credentials: "include",
+      headers,
+      body,
+      signal: options.signal,
+    });
+  } catch (error) {
+    // Cancelled requests keep their AbortError; a network failure becomes a
+    // readable message instead of the browser's "Failed to fetch".
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    throw new ApiError(0, OFFLINE_MESSAGE);
+  }
 
   if (res.status === 401 && !path.startsWith("/api/auth/login") && !path.startsWith("/api/auth/register")) {
     window.dispatchEvent(new CustomEvent("sv:unauthorized"));

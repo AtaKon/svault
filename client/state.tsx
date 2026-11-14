@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { api } from "./api";
+import { api, ApiError } from "./api";
 import type { House, Role, User } from "@shared/types";
 
 interface AuthContextValue {
@@ -16,6 +16,32 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 const HOUSE_KEY = "sv-house";
+/**
+ * The last signed-in session, kept on this device so a reload without a
+ * network (basement, garage, cabin) keeps the user in the app and the offline
+ * queue reachable instead of showing the sign-in page. The server still
+ * decides: a 401 or signing out clears it.
+ */
+const SESSION_KEY = "sv-session";
+
+function readSessionSnapshot(): { user: User; houses: House[] } | null {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return parsed?.user && Array.isArray(parsed.houses) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeSessionSnapshot(data: { user: User; houses: House[] } | null) {
+  try {
+    if (data) localStorage.setItem(SESSION_KEY, JSON.stringify({ user: data.user, houses: data.houses }));
+    else localStorage.removeItem(SESSION_KEY);
+  } catch {
+    /* storage may be unavailable (private mode); the app still works online */
+  }
+}
 const ROLE_RANK: Record<Role, number> = { viewer: 1, member: 2, admin: 3, owner: 4 };
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -50,9 +76,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const data = await api<{ user: User; houses: House[] }>("/api/auth/me");
       setUser(data.user);
       applyHouses(data.houses);
-    } catch {
-      setUser(null);
-      setHouses([]);
+      writeSessionSnapshot(data);
+    } catch (error) {
+      // Only the server saying "not signed in" signs the user out. A network
+      // failure or a restore in progress falls back to the last known session.
+      const signedOut = error instanceof ApiError && error.status === 401;
+      const snapshot = signedOut ? null : readSessionSnapshot();
+      if (snapshot) {
+        setUser(snapshot.user);
+        applyHouses(snapshot.houses);
+      } else {
+        setUser(null);
+        setHouses([]);
+        if (signedOut) writeSessionSnapshot(null);
+      }
     } finally {
       setLoading(false);
     }
@@ -61,12 +98,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void refresh();
     const onUnauthorized = () => {
+      writeSessionSnapshot(null);
       setUser(null);
       setHouses([]);
       setLoading(false);
     };
+    // Back online after an offline start: confirm the session with the server.
+    const onOnline = () => void refresh();
     window.addEventListener("sv:unauthorized", onUnauthorized);
-    return () => window.removeEventListener("sv:unauthorized", onUnauthorized);
+    window.addEventListener("online", onOnline);
+    return () => {
+      window.removeEventListener("sv:unauthorized", onUnauthorized);
+      window.removeEventListener("online", onOnline);
+    };
   }, [refresh]);
 
   const selectHouse = useCallback((id: string) => {
@@ -82,6 +126,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     (data: { user: User; houses: House[] }) => {
       setUser(data.user);
       applyHouses(data.houses, data.houses[0]?.id);
+      writeSessionSnapshot(data);
       setLoading(false);
     },
     [applyHouses],
@@ -89,6 +134,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = useCallback(async () => {
     await api("/api/auth/logout", { method: "POST" }).catch(() => undefined);
+    writeSessionSnapshot(null);
     setUser(null);
     setHouses([]);
     try {
