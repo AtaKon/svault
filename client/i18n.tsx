@@ -7,6 +7,10 @@ import { buildDynamicMatcher, matchDynamicTranslation } from "@shared/i18n";
 export type Language = "en" | "el";
 
 const EL: Record<string, string> = {
+  "Session required": "Απαιτείται σύνδεση",
+  "Invalid house selection": "Μη έγκυρη επιλογή σπιτιού",
+  "Calendar feed already exists": "Η ροή ημερολογίου υπάρχει ήδη",
+  "Calendar feed not found": "Η ροή ημερολογίου δεν βρέθηκε",
   "Calendar feed": "Ροή ημερολογίου",
   "Could not load calendar feed": "Δεν ήταν δυνατή η φόρτωση της ροής ημερολογίου",
   "Could not update calendar feed": "Δεν ήταν δυνατή η ενημέρωση της ροής ημερολογίου",
