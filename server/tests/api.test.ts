@@ -5267,6 +5267,7 @@ describe("recipe cooking", () => {
     const foreignLocations = await request(`/api/houses/${foreignHouse.data.id}/locations`);
     assert.equal((await request(url, { body: { ...body, lines: [{ ingredientId: "foreign", itemId: foreignItem.data.id, quantity: 1, unit: "pcs" }] } })).status, 400);
     assert.equal((await request(url, { body: { ...body, leftovers: { portions: 1, locationId: foreignLocations.data[0].id } } })).status, 400);
+    await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [houseId, viewer.data.user.id]);
   });
 });
 
