@@ -11373,3 +11373,55 @@ describe("trust proxy setting", () => {
     assert.equal(trustProxySetting("loopback, 10.0.0.0/8"), "loopback, 10.0.0.0/8");
   });
 });
+
+describe("calendar subscriptions", () => {
+  it("creates, filters, rotates and revokes a hashed feed and rejects API tokens", async () => {
+    const house = await request("/api/houses", { method: "POST", body: { name: "Calendar test", currency: "EUR" } });
+    assert.equal(house.status, 201);
+    const hid = house.data.id;
+    const member = await get<{ user_id: string }>("SELECT user_id FROM house_members WHERE house_id = ?", [hid]);
+    assert.ok(member);
+    const title = `Dinner, soup; \\ ${"é".repeat(60)}\nnext`;
+    await run("INSERT INTO meal_plan_entries (id, house_id, day, slot, title, created_at) VALUES (?, ?, ?, ?, ?, ?)", ["calendar-plan-test", hid, "2026-12-01", "dinner", title, "2026-01-01T00:00:00.000Z"]);
+    await run("INSERT INTO bills (id, house_id, name, amount, currency, due_date, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", ["calendar-bill-test", hid, "Power, Inc; Ltd", 42.5, "EUR", "2026-12-02", "2026-01-01T00:00:00.000Z"]);
+    const created = await request("/api/calendar-feed", { method: "POST", body: { houseIds: [hid] } });
+    assert.equal(created.status, 201, JSON.stringify(created.data));
+    const token = created.data.token;
+    assert.equal(Buffer.from(token, "base64url").length, 32);
+    const stored = await get<{ token_hash: string }>("SELECT token_hash FROM calendar_feeds WHERE id = ?", [created.data.feed.id]);
+    assert.equal(stored?.token_hash, createHash("sha256").update(token).digest("hex"));
+    const fetchFeed = (t: string) => fetch(`${base}/api/calendar/${t}.ics`);
+    const response = await fetchFeed(token);
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("content-type")!, /^text\/calendar; charset=utf-8/i);
+    assert.equal(response.headers.get("cache-control"), "private, max-age=300");
+    const text = await response.text();
+    assert.ok(!/(?<!\r)\n/.test(text));
+    assert.ok(text.split("\r\n").every((line) => Buffer.byteLength(line) <= 75));
+    assert.match(text, /\r\n /);
+    const unfolded = text.replace(/\r\n /g, "");
+    assert.ok(unfolded.includes("SUMMARY:Dinner\\, soup\\; \\\\"));
+    assert.ok(unfolded.includes("\\nnext"));
+    assert.ok(unfolded.includes("DTSTART:20261201T193000"));
+    assert.ok(unfolded.includes("DTSTART;VALUE=DATE:20261202"));
+    assert.ok(unfolded.includes("SUMMARY:Power\\, Inc\\; Ltd - 42.50 EUR"));
+    await request("/api/calendar-feed", { method: "PATCH", body: { houseIds: [] } });
+    assert.ok(!(await (await fetchFeed(token)).text()).includes("calendar-plan-test"));
+    await request("/api/calendar-feed", { method: "PATCH", body: { houseIds: [hid] } });
+    await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [hid, member.user_id]);
+    assert.ok(!(await (await fetchFeed(token)).text()).includes("calendar-plan-test"));
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [hid, member.user_id, "owner", new Date().toISOString()]);
+    const apiToken = await request("/api/tokens", { method: "POST", body: { name: "calendar test" } });
+    for (const method of ["GET", "POST", "PATCH", "DELETE"]) {
+      const denied = await request("/api/calendar-feed", { method, auth: "", headers: { authorization: `Bearer ${apiToken.data.token}` } });
+      assert.equal(denied.status, 403);
+    }
+    await request(`/api/tokens/${apiToken.data.id}`, { method: "DELETE" });
+    const rotated = await request("/api/calendar-feed", { method: "PATCH", body: { rotate: true } });
+    assert.notEqual(rotated.data.token, token);
+    assert.equal((await fetchFeed(token)).status, 404);
+    assert.equal((await fetchFeed(rotated.data.token)).status, 200);
+    assert.equal((await request("/api/calendar-feed", { method: "DELETE" })).status, 200);
+    assert.equal((await fetchFeed(rotated.data.token)).status, 404);
+  });
+});
