@@ -16,6 +16,7 @@ All notable changes to SVault are documented here. The format follows
 
 - Category budgets, optional bill spending, month-end projections, budget history and threshold reminders.
 - Consumption-based run-out forecasts on items and the dashboard, with an optional shopping-list fill.
+- House activity feed: a read-only, newest-first timeline at **More → Activity** (`GET /api/houses/:houseId/activity`) that merges stock movements, saved receipts, new items, shopping checkoffs and bills, with cursor pagination and member, kind, item, place and date filters.
 
 ### Security
 
