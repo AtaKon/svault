@@ -11999,3 +11999,317 @@ describe("run-out forecasts", () => {
     assert.equal(result.data.items.find((item: any) => item.itemId === id).quantity, 1500);
   });
 });
+
+describe("freezer batches", () => {
+  it("derives eat-by dates for frozen, thawed and opened batches", async () => {
+    const { effectiveExpiry } = await import("../services/effective-expiry.js");
+    // A frozen batch ignores the short fridge use-by and uses the default 90 days.
+    assert.equal(effectiveExpiry({ frozen_on: "2026-01-01", expires_at: "2026-01-04" }, {}), "2026-04-01");
+    // Per-item overrides and the short thaw window take over.
+    assert.equal(effectiveExpiry({ frozen_on: "2026-01-01" }, { freezer_shelf_life_days: 30 }), "2026-01-31");
+    assert.equal(
+      effectiveExpiry({ frozen_on: "2026-01-01", thawed_on: "2026-02-01" }, { freezer_shelf_life_days: 30 }),
+      "2026-02-03",
+    );
+    assert.equal(
+      effectiveExpiry({ frozen_on: "2026-01-01", thawed_on: "2026-02-01" }, { thaw_shelf_life_days: 5 }),
+      "2026-02-06",
+    );
+    // Opening a frozen batch still shortens the date, and the earliest wins.
+    assert.equal(
+      effectiveExpiry({ frozen_on: "2026-01-01", opened_at: "2026-01-20" }, { opened_shelf_life_days: 3 }),
+      "2026-01-23",
+    );
+    assert.equal(
+      effectiveExpiry({ frozen_on: "2026-01-01", thawed_on: "2026-01-10", opened_at: "2026-01-12" }, { opened_shelf_life_days: 5, thaw_shelf_life_days: 2 }),
+      "2026-01-12",
+    );
+    // Unfrozen batches keep the original printed/opened behaviour.
+    assert.equal(effectiveExpiry({ expires_at: "2026-03-10", opened_at: "2026-02-28" }, { opened_shelf_life_days: 3 }), "2026-03-03");
+  });
+
+  it("freezes part of a batch, thaws it, takes portions out and warns before the eat-by date", async () => {
+    const { addDays } = await import("../services/effective-expiry.js");
+    const house = await request("/api/houses", { method: "POST", body: { name: "Freezer test house" } });
+    const hid = house.data.id;
+    const places = await request(`/api/houses/${hid}/locations`);
+    const freezer = places.data.find((place: any) => place.isFreezer);
+    assert.ok(freezer, "houses start with a freezer place");
+    const today = new Date().toISOString().slice(0, 10);
+    const created = await request(`/api/houses/${hid}/items`, {
+      method: "POST",
+      body: { name: "Freezer soup", unit: "pcs", initialStock: { quantity: 5, expiresAt: addDays(today, 3) } },
+    });
+    const id = created.data.id;
+    const lot = created.data.lots[0];
+
+    const frozen = await request(`/api/houses/${hid}/freezer/freeze`, {
+      method: "POST",
+      body: { itemId: id, lotId: lot.id, portions: 2, locationId: freezer.id, frozenOn: "2030-01-01" },
+    });
+    assert.equal(frozen.status, 200, JSON.stringify(frozen.data));
+    let detail = await request(`/api/items/${id}`);
+    const frozenLot = detail.data.lots.find((entry: any) => entry.id === frozen.data.lotId);
+    assert.equal(frozenLot.frozenOn, "2030-01-01");
+    assert.equal(frozenLot.portions, 2);
+    assert.equal(frozenLot.locationId, freezer.id);
+    assert.equal(frozenLot.effectiveExpiresAt, "2030-04-01");
+    assert.equal(Number(detail.data.lots.find((entry: any) => entry.id === lot.id).quantity), 3);
+
+    // Per-item shelf life changes feed straight into reminders and the view.
+    assert.equal((await request(`/api/items/${id}`, { method: "PATCH", body: { freezerShelfLifeDays: 10, thawShelfLifeDays: 1 } })).status, 200);
+    detail = await request(`/api/items/${id}`);
+    assert.equal(detail.data.lots.find((entry: any) => entry.id === frozen.data.lotId).effectiveExpiresAt, "2030-01-11");
+
+    // A second batch lands inside the expiry reminder window.
+    const near = await request(`/api/houses/${hid}/items`, {
+      method: "POST",
+      body: { name: "Freezer near", unit: "pcs", initialStock: { quantity: 1 } },
+    });
+    const nearFrozen = await request(`/api/houses/${hid}/freezer/freeze`, {
+      method: "POST",
+      body: { itemId: near.data.id, lotId: near.data.lots[0].id, portions: 1, frozenOn: addDays(today, -85) },
+    });
+    assert.equal(nearFrozen.status, 200);
+    const nearExpiry = addDays(today, 5);
+    const reminders = await request(`/api/houses/${hid}/notifications`);
+    const reminder = reminders.data.notifications.find((entry: any) => entry.data.lotId === nearFrozen.data.lotId);
+    assert.equal(reminder?.data.expiresAt, nearExpiry);
+    assert.match(reminder.body, /in the freezer/);
+
+    const view = await request(`/api/houses/${hid}/freezer`);
+    assert.equal(view.data.totals.batches, 2);
+    assert.equal(view.data.totals.portions, 3);
+    assert.equal(view.data.totals.useSoon, 1);
+    assert.equal(view.data.batches[0].id, nearFrozen.data.lotId);
+    assert.equal((await request(`/api/houses/${hid}/dashboard`)).data.freezer.useSoon, 1);
+
+    // Thawing switches to the item's one-day thaw window.
+    assert.equal((await request(`/api/houses/${hid}/freezer/thaw`, {
+      method: "POST",
+      body: { itemId: id, lotId: frozen.data.lotId, thawedOn: "2030-01-05" },
+    })).status, 200);
+    detail = await request(`/api/items/${id}`);
+    const thawed = detail.data.lots.find((entry: any) => entry.id === frozen.data.lotId);
+    assert.equal(thawed.thawedOn, "2030-01-05");
+    assert.equal(thawed.effectiveExpiresAt, "2030-01-06");
+    assert.equal((await request(`/api/houses/${hid}/freezer/thaw`, { method: "POST", body: { itemId: id, lotId: frozen.data.lotId } })).status, 400);
+
+    // Taking one portion consumes through the stock service and can thaw the rest.
+    assert.equal((await request(`/api/houses/${hid}/freezer/take-out`, {
+      method: "POST",
+      body: { itemId: id, lotId: frozen.data.lotId, portions: 1, thaw: true },
+    })).status, 200);
+    detail = await request(`/api/items/${id}`);
+    const taken = detail.data.lots.find((entry: any) => entry.id === frozen.data.lotId);
+    assert.equal(Number(taken.quantity), 1);
+    assert.equal(taken.portions, 1);
+    assert.ok(detail.data.movements.some((movement: any) => movement.reason === "Taken out of the freezer"));
+    await request(`/api/houses/${hid}/freezer/take-out`, { method: "POST", body: { itemId: id, lotId: frozen.data.lotId } });
+    assert.equal((await request(`/api/houses/${hid}/freezer`)).data.totals.portions, 1);
+
+    // Refreezing a thawed batch, thawing a fresh one, and touching an empty batch are refused.
+    assert.equal((await request(`/api/houses/${hid}/freezer/freeze`, {
+      method: "POST",
+      body: { itemId: id, lotId: frozen.data.lotId, portions: 1 },
+    })).status, 400);
+    assert.equal((await request(`/api/houses/${hid}/freezer/thaw`, { method: "POST", body: { itemId: id, lotId: lot.id } })).status, 400);
+    assert.equal((await request(`/api/houses/${hid}/freezer/take-out`, { method: "POST", body: { itemId: id, lotId: lot.id } })).status, 400);
+    assert.equal((await request(`/api/houses/${hid}/freezer/freeze`, {
+      method: "POST",
+      body: { itemId: id, lotId: lot.id, portions: 99 },
+    })).status, 400);
+
+    // A portion is an equal share of the batch, not one item unit.
+    const weighed = await request(`/api/houses/${hid}/items`, {
+      method: "POST",
+      body: { name: "Freezer mince", unit: "g", initialStock: { quantity: 500 } },
+    });
+    const weighedFreeze = await request(`/api/houses/${hid}/freezer/freeze`, {
+      method: "POST",
+      body: { itemId: weighed.data.id, lotId: weighed.data.lots[0].id, portions: 5 },
+    });
+    assert.equal(weighedFreeze.status, 200);
+    assert.equal((await request(`/api/houses/${hid}/freezer/take-out`, {
+      method: "POST",
+      body: { itemId: weighed.data.id, lotId: weighedFreeze.data.lotId },
+    })).status, 200);
+    const weighedLot = (await request(`/api/items/${weighed.data.id}`)).data.lots[0];
+    assert.equal(Number(weighedLot.quantity), 400);
+    assert.equal(weighedLot.portions, 4);
+
+    // Viewers cannot freeze, and a batch from another house is not found.
+    const viewer = await request("/api/auth/register", {
+      method: "POST",
+      body: { name: "Freezer viewer", email: "freezer-viewer@example.com", password: "test password" },
+    });
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, 'viewer', ?)", [hid, viewer.data.user.id, new Date().toISOString()]);
+    assert.equal((await request(`/api/houses/${hid}/freezer/freeze`, {
+      method: "POST",
+      auth: viewer.cookie!,
+      body: { itemId: near.data.id, lotId: near.data.lots[0].id, portions: 1 },
+    })).status, 403);
+    const foreign = await request("/api/houses", { method: "POST", body: { name: "Foreign freezer house" } });
+    const foreignItem = await request(`/api/houses/${foreign.data.id}/items`, { method: "POST", body: { name: "Foreign freezer item", initialStock: { quantity: 1 } } });
+    assert.equal((await request(`/api/houses/${hid}/freezer/freeze`, {
+      method: "POST",
+      body: { itemId: foreignItem.data.id, lotId: foreignItem.data.lots[0].id, portions: 1 },
+    })).status, 404);
+    await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [hid, viewer.data.user.id]);
+  });
+
+  it("freezes cook-mode leftovers with their recipe, cook date and portions", async () => {
+    const { addDays } = await import("../services/effective-expiry.js");
+    const house = await request("/api/houses", { method: "POST", body: { name: "Freezer cook house" } });
+    const hid = house.data.id;
+    const recipe = await request(`/api/houses/${hid}/recipes`, { method: "POST", body: { title: "Freezer cook test", servings: 2 } });
+    const cooked = await request(`/api/recipes/${recipe.data.id}/cook`, {
+      method: "POST",
+      body: {
+        portions: 1,
+        idempotencyKey: randomUUID(),
+        lines: [],
+        leftovers: { portions: 3, locationId: null, freeze: true, frozenOn: "2030-01-01" },
+      },
+    });
+    assert.equal(cooked.status, 200, JSON.stringify(cooked.data));
+    assert.equal(cooked.data.leftovers.frozenOn, "2030-01-01");
+    const lot = await get<any>(
+      "SELECT l.*, loc.is_freezer FROM stock_lots l LEFT JOIN locations loc ON loc.id = l.location_id WHERE l.item_id = ?",
+      [cooked.data.leftovers.itemId],
+    );
+    assert.equal(Number(lot.quantity), 3);
+    assert.equal(Number(lot.portions), 3);
+    assert.equal(lot.frozen_on, "2030-01-01");
+    assert.equal(lot.cooked_on, new Date().toISOString().slice(0, 10));
+    assert.equal(lot.source_recipe_id, recipe.data.id);
+    assert.equal(lot.expires_at, null);
+    assert.equal(Number(lot.is_freezer), 1);
+    const detail = await request(`/api/items/${cooked.data.leftovers.itemId}`);
+    assert.equal(detail.data.lots[0].effectiveExpiresAt, "2030-04-01");
+    assert.equal(detail.data.lots[0].sourceRecipeTitle, "Freezer cook test");
+    const view = await request(`/api/houses/${hid}/freezer`);
+    assert.equal(view.data.batches[0].sourceRecipeId, recipe.data.id);
+    assert.equal(view.data.batches[0].cookedOn, new Date().toISOString().slice(0, 10));
+    assert.equal(addDays("2030-01-01", 90), detail.data.lots[0].effectiveExpiresAt);
+  });
+
+  it("adds the freezer columns to an existing SQLite database and is safe to run twice", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "svault-freezer-migration-"));
+    try {
+      const script = `
+import fs from "node:fs";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+fs.mkdirSync(process.env.DATA_DIR, { recursive: true });
+const db = new DatabaseSync(path.join(process.env.DATA_DIR, "svault.db"));
+db.exec(\`
+  CREATE TABLE users (
+    id TEXT PRIMARY KEY,
+    email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    username TEXT,
+    name TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE items (
+    id TEXT PRIMARY KEY,
+    house_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    brand TEXT,
+    unit TEXT NOT NULL DEFAULT 'pcs',
+    reorder_point REAL NOT NULL DEFAULT 0,
+    target_stock REAL,
+    attributes TEXT NOT NULL DEFAULT '{}',
+    tags TEXT NOT NULL DEFAULT '[]',
+    archived INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE TABLE locations (
+    id TEXT PRIMARY KEY,
+    house_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'shelf',
+    icon TEXT,
+    parent_id TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE stock_lots (
+    id TEXT PRIMARY KEY,
+    item_id TEXT NOT NULL,
+    house_id TEXT NOT NULL,
+    location_id TEXT,
+    quantity REAL NOT NULL DEFAULT 0,
+    unit TEXT NOT NULL,
+    expires_at TEXT,
+    opened_at TEXT,
+    created_at TEXT NOT NULL
+  );
+  INSERT INTO items (id, house_id, name, created_at, updated_at)
+    VALUES ('itm_legacy', 'hse_legacy', 'Legacy soup', '2026-01-01', '2026-01-01');
+  INSERT INTO locations (id, house_id, name, kind, created_at)
+    VALUES ('loc_freezer', 'hse_legacy', 'Freezer', 'freezer', '2026-01-01');
+  INSERT INTO locations (id, house_id, name, kind, created_at)
+    VALUES ('loc_shelf', 'hse_legacy', 'Shelf', 'shelf', '2026-01-01');
+  INSERT INTO stock_lots (id, item_id, house_id, quantity, unit, created_at)
+    VALUES ('lot_legacy', 'itm_legacy', 'hse_legacy', 2, 'pcs', '2026-01-01');
+\`);
+db.close();
+const { initDb, get, closeDb } = await import("./server/db.ts");
+async function inspect() {
+  const column = async (table, name) => Number((await get("SELECT COUNT(*) AS n FROM pragma_table_info(?) WHERE name = ?", [table, name])).n);
+  const frozenPlace = await get("SELECT is_freezer FROM locations WHERE id = 'loc_freezer'");
+  const shelfPlace = await get("SELECT is_freezer FROM locations WHERE id = 'loc_shelf'");
+  const lot = await get("SELECT portions, frozen_on, thawed_on, cooked_on, source_recipe_id FROM stock_lots WHERE id = 'lot_legacy'");
+  return {
+    location: await column("locations", "is_freezer"),
+    freezer: await column("items", "freezer_shelf_life_days"),
+    thaw: await column("items", "thaw_shelf_life_days"),
+    portions: await column("stock_lots", "portions"),
+    frozenOn: await column("stock_lots", "frozen_on"),
+    index: (await get("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'lots_frozen'"))?.name ?? null,
+    frozenPlace: Number(frozenPlace.is_freezer),
+    shelfPlace: Number(shelfPlace.is_freezer),
+    legacyLot: [lot.portions, lot.frozen_on, lot.thawed_on, lot.cooked_on, lot.source_recipe_id],
+  };
+}
+await initDb();
+const first = await inspect();
+await closeDb();
+await initDb();
+const second = await inspect();
+console.log(JSON.stringify({ first, second }));
+await closeDb();
+`;
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
+        DATA_DIR: dir,
+        NODE_ENV: "test",
+        DATABASE_URL: "",
+        SV_DATABASE_KIND: "sqlite",
+      };
+      for (const key of ["PGHOST", "PGPORT", "PGUSER", "PGDATABASE", "PGPASSWORD", "SV_DATABASE_URL"]) delete env[key];
+      const output = execFileSync(
+        process.execPath,
+        ["--import", "tsx", "--disable-warning=ExperimentalWarning", "--input-type=module", "-e", script],
+        { cwd: path.resolve("."), env, encoding: "utf8" },
+      );
+      const result = JSON.parse(output.trim());
+      for (const snapshot of [result.first, result.second]) {
+        assert.equal(snapshot.location, 1);
+        assert.equal(snapshot.freezer, 1);
+        assert.equal(snapshot.thaw, 1);
+        assert.equal(snapshot.portions, 1);
+        assert.equal(snapshot.frozenOn, 1);
+        assert.equal(snapshot.index, "lots_frozen");
+        assert.equal(snapshot.frozenPlace, 1);
+        assert.equal(snapshot.shelfPlace, 0);
+        assert.deepEqual(snapshot.legacyLot, [null, null, null, null, null]);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
