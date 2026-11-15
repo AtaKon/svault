@@ -217,15 +217,15 @@ export async function subscribeUser(opts: {
         timestamp,
       ],
     );
-    // Keep only the newest devices; an abandoned browser must not be able to
-    // grow the table forever.
-    const rows = await all<{ id: string }>(
-      "SELECT id FROM push_subscriptions WHERE user_id = ? ORDER BY created_at DESC",
-      [opts.userId],
-    );
-    for (const row of rows.slice(MAX_SUBSCRIPTIONS_PER_USER)) {
-      await run("DELETE FROM push_subscriptions WHERE id = ?", [row.id]);
-    }
+  }
+  // Keep only the newest devices, on insert and on a move alike; an abandoned
+  // browser (or moved rows) must not grow a user's list without bound.
+  const owned = await all<{ id: string }>(
+    "SELECT id FROM push_subscriptions WHERE user_id = ? ORDER BY created_at DESC",
+    [opts.userId],
+  );
+  for (const stale of owned.slice(MAX_SUBSCRIPTIONS_PER_USER)) {
+    await run("DELETE FROM push_subscriptions WHERE id = ?", [stale.id]);
   }
   const row = await get<any>("SELECT * FROM push_subscriptions WHERE endpoint = ?", [endpoint]);
   return serializeSubscription(row!);
@@ -270,7 +270,7 @@ export async function sendPushToSubscriptions(
   const body = JSON.stringify({
     title: truncate(payload.title, 120),
     body: truncate(payload.body, 240),
-    url: payload.url.startsWith("/") ? truncate(payload.url, 300) : "/notifications",
+    url: /^\/(?![\/\\])/.test(payload.url) ? truncate(payload.url, 300) : "/notifications",
   });
   let sent = 0;
   let failed = 0;

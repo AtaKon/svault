@@ -60,6 +60,14 @@ self.addEventListener("fetch", (event) => {
 
 /* Web Push. The payload is deliberately small: a title, a short body and the
    in-app path to open. Nothing else is trusted or displayed. */
+/**
+ * A notification may only open a page of this app: one leading slash, never
+ * `//host` (which resolves to another origin) or `/\\host`.
+ */
+function inAppPath(value) {
+  return typeof value === "string" && value.startsWith("/") && !value.startsWith("//") && !value.startsWith("/\\");
+}
+
 self.addEventListener("push", (event) => {
   let payload = {};
   try {
@@ -69,7 +77,7 @@ self.addEventListener("push", (event) => {
   }
   const title = typeof payload.title === "string" && payload.title ? payload.title.slice(0, 120) : "SVault";
   const body = typeof payload.body === "string" ? payload.body.slice(0, 240) : "";
-  const url = typeof payload.url === "string" && payload.url.startsWith("/") ? payload.url : "/notifications";
+  const url = inAppPath(payload.url) ? payload.url : "/notifications";
   event.waitUntil(
     self.registration.showNotification(title, {
       body,
@@ -82,7 +90,7 @@ self.addEventListener("push", (event) => {
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const stored = event.notification.data && event.notification.data.url;
-  const target = new URL(typeof stored === "string" && stored.startsWith("/") ? stored : "/notifications", self.location.origin).href;
+  const target = new URL(inAppPath(stored) ? stored : "/notifications", self.location.origin).href;
   event.waitUntil(
     (async () => {
       const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });

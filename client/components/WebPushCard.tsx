@@ -111,13 +111,20 @@ export function WebPushCard({ channelEnabled }: { channelEnabled: boolean }) {
         applicationServerKey: urlBase64ToUint8Array(status.publicKey),
       });
       const json = subscription.toJSON();
-      await api("/api/push/subscribe", {
-        method: "POST",
-        body: {
-          endpoint: json.endpoint,
-          keys: { p256dh: json.keys?.p256dh, auth: json.keys?.auth },
-        },
-      });
+      try {
+        await api("/api/push/subscribe", {
+          method: "POST",
+          body: {
+            endpoint: json.endpoint,
+            keys: { p256dh: json.keys?.p256dh, auth: json.keys?.auth },
+          },
+        });
+      } catch (failure) {
+        // Do not leave a browser subscription the server does not know about:
+        // the card would read "On" while no push can ever arrive.
+        await subscription.unsubscribe().catch(() => undefined);
+        throw failure;
+      }
       setState("enabled");
       await load();
       toast.success(t("Push reminders are on for this device"));
@@ -135,8 +142,11 @@ export function WebPushCard({ channelEnabled }: { channelEnabled: boolean }) {
       const subscription = await registration.pushManager.getSubscription();
       if (subscription) {
         const endpoint = subscription.endpoint;
+        // Tell the server first. If that fails, keep the browser subscription so
+        // the user can try again instead of being told push is off while the
+        // server still holds the device.
+        await api("/api/push/unsubscribe", { method: "POST", body: { endpoint } });
         await subscription.unsubscribe().catch(() => undefined);
-        await api("/api/push/unsubscribe", { method: "POST", body: { endpoint } }).catch(() => undefined);
       }
       setState("disabled");
       await load();

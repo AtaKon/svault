@@ -12013,11 +12013,12 @@ describe("web push reminders", async () => {
   process.env.VAPID_PUBLIC_KEY = vapid.publicKey;
   process.env.VAPID_PRIVATE_KEY = vapid.privateKey;
   process.env.VAPID_SUBJECT = "mailto:push@example.com";
-  setPushSenderForTests(async (subscription, payload) => {
+  const defaultPushSender = async (subscription: { endpoint: string }, payload: string) => {
     calls.push({ endpoint: subscription.endpoint, payload: JSON.parse(payload) });
     if (senderMode === "expired") return { ok: false, statusCode: 410, expired: true, error: "Gone" };
     return { ok: true, statusCode: 201, expired: false, error: null };
-  });
+  };
+  setPushSenderForTests(defaultPushSender);
 
   let ownerCookie = "";
   let memberCookie = "";
@@ -12172,6 +12173,24 @@ describe("web push reminders", async () => {
       await unsubscribe(url, memberCookie);
       await unsubscribe(url, ownerCookie);
     }
+  });
+
+  it("only ever points a notification at a path inside the app", async () => {
+    const { sendPushToSubscriptions } = await import("../services/web-push.js");
+    const seen: string[] = [];
+    setPushSenderForTests(async (_subscription, payload) => {
+      seen.push(JSON.parse(payload).url);
+      return { ok: true, statusCode: 201, expired: false, error: null };
+    });
+    try {
+      const subscription = [{ id: "x", userId: "x", endpoint: "https://push.example.com/p", p256dh: "k", auth: "a", userAgent: null, createdAt: "" }];
+      for (const url of ["//evil.example/x", "/\\evil.example", "https://evil.example", "items/1", "/items/itm_1"]) {
+        await sendPushToSubscriptions(subscription, { title: "t", body: "b", url });
+      }
+    } finally {
+      setPushSenderForTests(defaultPushSender);
+    }
+    assert.deepEqual(seen, ["/notifications", "/notifications", "/notifications", "/notifications", "/items/itm_1"]);
   });
 
   it("refuses push endpoints that point at private or local addresses", async () => {
