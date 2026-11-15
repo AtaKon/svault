@@ -11999,3 +11999,130 @@ describe("run-out forecasts", () => {
     assert.equal(result.data.items.find((item: any) => item.itemId === id).quantity, 1500);
   });
 });
+
+describe("recipe cost per portion", () => {
+  it("costs a recipe from latest, average and in-stock prices with honest coverage", async () => {
+    const item = await request(`/api/houses/${houseId}/items`, {
+      method: "POST",
+      body: { name: "Cost test flour", unit: "kg" },
+    });
+    const itemId = item.data.id;
+    const addStock = (quantity: number, unitPrice: number) =>
+      request(`/api/items/${itemId}/stock`, { method: "POST", body: { action: "add", quantity, unitPrice } });
+    await addStock(1, 2);
+    await addStock(1, 3);
+    // Pin the purchase dates: two requests can land in the same millisecond, and
+    // the average window and the latest price both depend on the order.
+    const movements = await all<any>("SELECT id, normalized_price FROM stock_movements WHERE item_id = ? AND type = 'in'", [itemId]);
+    const older = movements.find((row) => Number(row.normalized_price) === 2);
+    const newer = movements.find((row) => Number(row.normalized_price) === 3);
+    await run("UPDATE stock_movements SET created_at = ? WHERE id = ?", [new Date(Date.now() - 30 * 864e5).toISOString(), older.id]);
+    await run("UPDATE stock_movements SET created_at = ? WHERE id = ?", [new Date(Date.now() - 10 * 864e5).toISOString(), newer.id]);
+
+    const recipe = await request(`/api/houses/${houseId}/recipes`, {
+      method: "POST",
+      body: {
+        title: "Cost test bread",
+        servings: 2,
+        ingredients: [
+          { name: "Cost test flour", itemId, quantity: 0.5, unit: "kg" },
+          { name: "Cost test salt", quantity: 5, unit: "g" },
+        ],
+      },
+    });
+    assert.equal(recipe.status, 201);
+    const url = `/api/recipes/${recipe.data.id}`;
+
+    const latest = await request(url);
+    assert.equal(latest.status, 200);
+    assert.equal(latest.data.cost.basis, "latest");
+    assert.equal(latest.data.cost.total, 1.5);
+    assert.equal(latest.data.cost.perPortion, 0.75);
+    assert.equal(latest.data.cost.priced, 1);
+    assert.equal(latest.data.cost.ingredients, 2);
+    assert.equal(latest.data.cost.coverage, 0.5);
+    assert.equal(latest.data.cost.partial, true, "an unpriced ingredient must not be presented as complete");
+    assert.deepEqual(latest.data.cost.unpriced, [{ name: "Cost test salt", reason: "unlinked" }]);
+    assert.equal(latest.data.cost.lines[0].itemUnit, "kg");
+    assert.equal(latest.data.cost.lines[0].unitPrice, 3);
+
+    const average = await request(`${url}?basis=average`);
+    assert.equal(average.data.cost.basis, "average");
+    assert.equal(average.data.cost.total, 1.25);
+    assert.equal(average.data.cost.perPortion, 0.625);
+
+    // Weighted cost of the two batches still on the shelf: 2 and 3 per kg.
+    const stock = await request(`${url}?basis=stock`);
+    assert.equal(stock.data.cost.basis, "stock");
+    assert.equal(stock.data.cost.total, 1.25);
+
+    // With no batch left, the stock basis falls back to the latest price.
+    await request(`/api/items/${itemId}/stock`, { method: "POST", body: { action: "remove", quantity: 2 } });
+    const fallback = await request(`${url}?basis=stock`);
+    assert.equal(fallback.data.cost.basis, "stock");
+    assert.equal(fallback.data.cost.lines[0].basis, "latest");
+    assert.equal(fallback.data.cost.total, 1.5);
+
+    const badBasis = await request(`${url}?basis=nope`);
+    assert.equal(badBasis.status, 400);
+  });
+
+  it("lists every recipe's cost without a query per recipe", async () => {
+    const { databaseQueryCount, resetQueryCount } = await import("../db.js");
+    const item = await request(`/api/houses/${houseId}/items`, {
+      method: "POST",
+      body: { name: "Cost list rice", unit: "kg" },
+    });
+    await request(`/api/items/${item.data.id}/stock`, { method: "POST", body: { action: "add", quantity: 2, unitPrice: 4 } });
+    const first = await request(`/api/houses/${houseId}/recipes`, {
+      method: "POST",
+      body: { title: "Cost list one", servings: 4, ingredients: [{ name: "Cost list rice", itemId: item.data.id, quantity: 0.4, unit: "kg" }] },
+    });
+    assert.equal(first.status, 201);
+
+    resetQueryCount();
+    const before = await request(`/api/houses/${houseId}/recipes/costs?basis=latest`);
+    const queriesWithOneRecipe = databaseQueryCount();
+    assert.equal(before.status, 200);
+    assert.equal(before.data.basis, "latest");
+    assert.ok(typeof before.data.currency === "string" && before.data.currency.length === 3);
+    const row = before.data.recipes.find((entry: any) => entry.recipeId === first.data.id);
+    assert.equal(row.total, 1.6);
+    assert.equal(row.perPortion, 0.4);
+    assert.equal(row.coverage, 1);
+    assert.equal(row.partial, false);
+    assert.equal(row.servings, 4);
+
+    // Two more recipes must not add a query each: the cost list is built from
+    // house-wide reads, not one lookup per row.
+    for (const title of ["Cost list two", "Cost list three"]) {
+      const created = await request(`/api/houses/${houseId}/recipes`, {
+        method: "POST",
+        body: { title, servings: 2, ingredients: [{ name: "Cost list rice", itemId: item.data.id, quantity: 0.2, unit: "kg" }] },
+      });
+      assert.equal(created.status, 201);
+    }
+    resetQueryCount();
+    const after = await request(`/api/houses/${houseId}/recipes/costs?basis=latest`);
+    assert.equal(databaseQueryCount(), queriesWithOneRecipe);
+    assert.equal(after.data.recipes.filter((entry: any) => entry.title.startsWith("Cost list ")).length, 3);
+
+    const viewer = await request("/api/auth/register", {
+      method: "POST",
+      body: { name: "Cost viewer", email: "cost-viewer@example.com", password: "test password" },
+    });
+    // A recipe viewer may read costs; a stranger must not learn the house exists.
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, 'viewer', ?)", [
+      houseId,
+      viewer.data.user.id,
+      new Date().toISOString(),
+    ]);
+    assert.equal((await request(`/api/houses/${houseId}/recipes/costs`, { auth: viewer.cookie! })).status, 200);
+    const stranger = await request("/api/auth/register", {
+      method: "POST",
+      body: { name: "Cost stranger", email: "cost-stranger@example.com", password: "test password" },
+    });
+    assert.equal((await request(`/api/houses/${houseId}/recipes/costs`, { auth: stranger.cookie! })).status, 404);
+    await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [houseId, viewer.data.user.id]);
+  });
+});
