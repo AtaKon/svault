@@ -49,6 +49,7 @@ const MOVEMENT_LABELS: Record<Movement["type"], { label: string; icon: IconName;
   adjust: { label: "Count", icon: "pencil", tone: "bg-raised text-muted" },
   waste: { label: "Wasted", icon: "trash", tone: "bg-danger-soft text-danger" },
   move: { label: "Moved", icon: "mapPin", tone: "bg-raised text-muted" },
+  count: { label: "Counted", icon: "check", tone: "bg-brand-soft text-brand" },
 };
 
 

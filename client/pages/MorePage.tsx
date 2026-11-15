@@ -22,6 +22,7 @@ const LINKS: { to: string; label: string; description: string; icon: IconName; t
   { to: "/recipes", label: "Recipes", description: "The family collection", icon: "book", tint: "bg-raised text-muted" },
   { to: "/notifications", label: "Reminders", description: "Low stock and expiry", icon: "bell", tint: "bg-raised text-muted" },
   { to: "/settings", label: "House settings", description: "Places, categories, attributes, members", icon: "settings", tint: "bg-raised text-muted" },
+  { to: "/stocktake", label: "Stocktake", description: "Count a place and record the differences", icon: "check", tint: "bg-brand-soft text-brand" },
 ];
 
 export function MorePage() {
