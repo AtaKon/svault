@@ -760,3 +760,22 @@ dashboard lists items expected to run out within seven days. Forecasts need at l
 events seven days apart and a positive stock balance. Waste, stock corrections and moves do not count.
 In the shopping list, turn on **Include items running out soon** and choose a horizon before using
 **Add low stock** to include forecast items as well. Existing compatible shopping lines are merged.
+### Lending tools, books and gear
+
+Lending is for things you expect back — tools, books, camping gear — not for food that gets used.
+Open an item and press **Lend** in the **On loan** card, or use the lend action there: pick a borrower
+(name suggestions come from past borrowers and household members, but any name works), the quantity, an
+optional due date and a note. Only the name is stored; SVault does not ask for a phone number or email.
+
+**Lending does not change your stock count.** The item is still yours and still on the shelf; the item
+page and inventory card show **x on loan**, and the available quantity is the shelf quantity minus what
+is lent out. Low-stock reminders and run-out forecasts keep using the shelf quantity, because lending
+is not consumption. Taking stock out (or counting it down) below the lent quantity is refused with a
+message, so you cannot quietly use something a borrower is holding.
+
+**Loans** in the More menu lists open, overdue and returned loans. **Mark returned** records an
+overdue or partial return; enter a smaller quantity to return part of it and keep the rest on loan.
+Returning a loan never adds stock back, because lending never removed it. An overdue loan appears in
+Reminders once a day and can also be delivered to your reminder channels through the "expiring and
+warranty" preference. Delete a loan only when it was recorded by mistake — the person who recorded it,
+or an admin, can do that. Loan due dates do not appear in the calendar feed.

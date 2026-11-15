@@ -16,6 +16,9 @@ All notable changes to SVault are documented here. The format follows
 
 - Category budgets, optional bill spending, month-end projections, budget history and threshold reminders.
 - Consumption-based run-out forecasts on items and the dashboard, with an optional shopping-list fill.
+- Lending tracker: record who borrowed a tool, book or piece of gear, see "x on loan" on items and the
+  dashboard, return loans fully or in parts, and get one overdue reminder per loan per day. Lending
+  never changes stock; consuming below the lent quantity is refused.
 
 ### Security
 
