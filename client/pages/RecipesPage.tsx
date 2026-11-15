@@ -3,11 +3,11 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, qs } from "@/api";
 import { useHouse } from "@/state";
 import { useI18n } from "@/i18n";
-import { Badge, Button, Card, EmptyState, Input, PageHeader, Skeleton, Tabs, useDebounced } from "@/components/ui";
+import { Badge, Button, Card, EmptyState, Input, PageHeader, Select, Skeleton, Tabs, useDebounced } from "@/components/ui";
 import { Icon } from "@/components/icons";
-import { minutesLabel, qty } from "@/format";
+import { minutesLabel, money, qty } from "@/format";
 import { gramsLabel } from "@shared/recipe-grams";
-import type { Recipe } from "@shared/types";
+import type { Recipe, RecipeCostSummary } from "@shared/types";
 
 export function RecipesPage() {
   const { house } = useHouse();
@@ -15,15 +15,24 @@ export function RecipesPage() {
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const [recipes, setRecipes] = useState<Recipe[] | null>(null);
+  const [costs, setCosts] = useState<Record<string, RecipeCostSummary>>({});
   const [search, setSearch] = useState(params.get("q") ?? "");
   const debounced = useDebounced(search, 250);
   const favorite = params.get("favorite") === "1";
   const tag = params.get("tag") ?? "";
+  const sort = params.get("sort") ?? "";
+  const pricedOnly = params.get("priced") === "1";
 
   const load = useCallback(async () => {
     try {
-      const data = await api<Recipe[]>(`/api/houses/${house.id}/recipes${qs({ q: params.get("q") ?? "", favorite: favorite ? 1 : undefined, tag: tag || undefined })}`);
+      // The cost list is a second, house-wide read; if it fails the kitchen list
+      // still works, just without the per-portion figures.
+      const [data, costData] = await Promise.all([
+        api<Recipe[]>(`/api/houses/${house.id}/recipes${qs({ q: params.get("q") ?? "", favorite: favorite ? 1 : undefined, tag: tag || undefined })}`),
+        api<{ recipes: RecipeCostSummary[] }>(`/api/houses/${house.id}/recipes/costs${qs({ basis: params.get("basis") ?? "" })}`).catch(() => null),
+      ]);
       setRecipes(data);
+      setCosts(Object.fromEntries((costData?.recipes ?? []).map((row) => [row.recipeId, row])));
     } catch {
       setRecipes([]);
     }
@@ -42,6 +51,25 @@ export function RecipesPage() {
   }, [debounced]);
 
   const tags = Array.from(new Set((recipes ?? []).flatMap((recipe) => recipe.tags))).slice(0, 10);
+
+  const costOf = (recipeId: string) => costs[recipeId] ?? null;
+  const costValue = (recipeId: string) => {
+    const cost = costOf(recipeId);
+    return cost?.perPortion ?? cost?.total ?? null;
+  };
+  // Sorting and filtering happen here because the list is already in memory for
+  // the tags and the search box; the cost rows arrive with it.
+  const visible = (recipes ?? [])
+    .filter((recipe) => !pricedOnly || costOf(recipe.id)?.total != null)
+    .sort((left, right) => {
+      if (!sort) return 0;
+      const a = costValue(left.id);
+      const b = costValue(right.id);
+      if (a == null && b == null) return 0;
+      if (a == null) return 1;
+      if (b == null) return -1;
+      return sort === "cost-desc" ? b - a : a - b;
+    });
 
   const setParam = (key: string, value: string | null) => {
     const next = new URLSearchParams(params);
@@ -108,6 +136,32 @@ export function RecipesPage() {
             className="min-w-0 flex-1"
           />
         </div>
+        <div className="flex items-center gap-2">
+          <div className="min-w-0 flex-1 sm:max-w-[15rem]">
+            <Select
+              value={sort}
+              onChange={(event) => setParam("sort", event.target.value || null)}
+              aria-label={t("Sort recipes")}
+              className="h-9 text-[13px]"
+            >
+              <option value="">{t("Recently updated")}</option>
+              <option value="cost-asc">{t("Cheapest portion first")}</option>
+              <option value="cost-desc">{t("Most expensive portion first")}</option>
+            </Select>
+          </div>
+          <button
+            onClick={() => setParam("priced", pricedOnly ? null : "1")}
+            aria-pressed={pricedOnly}
+            className={
+              pricedOnly
+                ? "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-brand/40 bg-brand-soft px-3 text-xs font-medium text-brand"
+                : "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-xs font-medium text-muted hover:text-ink"
+            }
+          >
+            <Icon name={pricedOnly ? "check" : "minus"} size={12} />
+            {t("Priced only")}
+          </button>
+        </div>
       </div>
 
       {!recipes ? (
@@ -134,8 +188,14 @@ export function RecipesPage() {
         />
       ) : (
         <div className="grid gap-3 sm:grid-cols-2">
-          {recipes.map((recipe) => {
+          {visible.length === 0 && (
+            <Card className="p-4 text-sm text-muted sm:col-span-2">
+              {t("No recipe matches the cost filter yet. Record a purchase price on the linked items, or clear the filter.")}
+            </Card>
+          )}
+          {visible.map((recipe) => {
             const coverage = recipe.match?.coverage ?? 0;
+            const cost = costOf(recipe.id);
             return (
               <Card key={recipe.id} className="group flex flex-col overflow-hidden transition-colors hover:border-brand/40">
                 <Link to={`/recipes/${recipe.id}`} className="flex flex-1 flex-col p-4">
@@ -171,6 +231,13 @@ export function RecipesPage() {
                     )}
                     {recipe.portion?.perServingGrams != null && (
                       <Badge tone="outline">{gramsLabel(recipe.portion.perServingGrams)} {' '}{t("/ portion")}</Badge>
+                    )}
+                    {cost && cost.total != null && (
+                      <Badge tone={cost.partial ? "outline" : "brand"}>
+                        {cost.partial ? "≥ " : ""}
+                        {money(cost.perPortion ?? cost.total, house.currency)}
+                        {cost.perPortion != null ? ` ${t("/ portion")}` : ""}
+                      </Badge>
                     )}
                     {recipe.tags.slice(0, 2).map((entry) => (
                       <Badge key={entry} tone="neutral">

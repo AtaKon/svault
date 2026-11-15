@@ -2,6 +2,7 @@
 
 import type { RecipeReasoningMode } from "./ai-reasoning.js";
 import type { BillType } from "./bill-types.js";
+import type { RecipeCost, RecipeCostBasis } from "./recipe-cost.js";
 
 export type Role = "owner" | "admin" | "member" | "viewer";
 
@@ -95,6 +96,8 @@ export interface HouseSettings {
   };
   units?: "metric" | "imperial";
   purchases?: { country?: string };
+  /** Default unit-price basis for recipe costs; a request may override it. */
+  recipeCostBasis?: RecipeCostBasis;
 }
 
 export interface Location {
@@ -681,6 +684,8 @@ export interface Recipe {
   portion?: RecipePortion | null;
   /** Nutrition estimated from the ingredients that link to tracked items. */
   nutrition?: RecipeNutrition | null;
+  /** Cost of the priced ingredients, with honest coverage. */
+  cost?: RecipeCost | null;
 }
 
 export interface RecipePortion {
@@ -715,6 +720,19 @@ export interface RecipeMatch {
   total: number;
   coverage: number;
   missing: { name: string; quantity: number | null; unit: string | null }[];
+}
+
+/** One row of `GET /api/houses/:houseId/recipes/costs`, without the breakdown. */
+export interface RecipeCostSummary {
+  recipeId: string;
+  title: string;
+  servings: number | null;
+  total: number | null;
+  perPortion: number | null;
+  priced: number;
+  ingredients: number;
+  coverage: number;
+  partial: boolean;
 }
 
 export interface Vendor {

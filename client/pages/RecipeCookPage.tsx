@@ -5,7 +5,7 @@ import { api } from "@/api";
 import { Badge, Button, Card, EmptyState, LoadingBlock, Sheet, cn } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { useToast } from "@/components/toast";
-import { minutesLabel, plural, qty } from "@/format";
+import { minutesLabel, money, plural, qty } from "@/format";
 import {
   estimateIngredientGrams,
   gramsLabel,
@@ -13,6 +13,7 @@ import {
   scaledQuantity,
 } from "@shared/recipe-grams";
 import { scaledCalories } from "@shared/recipe-calories";
+import { scaledRecipeCost } from "@shared/recipe-cost";
 import type { Location, Recipe } from "@shared/types";
 import { useHouse } from "@/state";
 import { useI18n } from "@/i18n";
@@ -184,6 +185,9 @@ export function RecipeCookPage() {
     portions,
   );
 
+  // Costs scale with the ingredients, so the same portion count drives them.
+  const scaledCost = scaledRecipeCost(recipe.cost ?? null, baseServings, portions);
+
   return (
     <div className="mx-auto max-w-3xl space-y-4 pb-24">
       <DietWarnings warnings={recipe.warnings} dietCompatibility={recipe.dietCompatibility} />
@@ -269,7 +273,7 @@ export function RecipeCookPage() {
           <span className="text-[11px] text-muted">{t("Weights are estimates; exact labels always win.")}</span>
         </div>
 
-        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
           <div className="rounded-xl bg-raised px-3 py-2">
             <div className="text-[10px] uppercase tracking-wide text-muted">{t("Portion weight")}</div>
             <div className="font-display text-lg">{gramsLabel(scaledPortion?.perServingGrams ?? null)}</div>
@@ -285,6 +289,16 @@ export function RecipeCookPage() {
           <div className="rounded-xl bg-raised px-3 py-2">
             <div className="text-[10px] uppercase tracking-wide text-muted">{t("kcal total")}</div>
             <div className="font-display text-lg">{totalKcal != null ? Math.round(totalKcal) : "—"}</div>
+          </div>
+          <div className="rounded-xl bg-raised px-3 py-2">
+            <div className="text-[10px] uppercase tracking-wide text-muted">{t("Cost per portion")}</div>
+            <div className="font-display text-lg">
+              {scaledCost.perPortion != null ? (recipe.cost?.partial ? "≥ " : "") + money(scaledCost.perPortion, house.currency) : "—"}
+            </div>
+          </div>
+          <div className="rounded-xl bg-raised px-3 py-2">
+            <div className="text-[10px] uppercase tracking-wide text-muted">{t("Cost total")}</div>
+            <div className="font-display text-lg">{scaledCost.total != null ? money(scaledCost.total, house.currency) : "—"}</div>
           </div>
         </div>
       </Card>
