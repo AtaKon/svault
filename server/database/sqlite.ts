@@ -1212,5 +1212,21 @@ CREATE TABLE IF NOT EXISTS ai_call_logs (
 CREATE INDEX IF NOT EXISTS ai_logs_house ON ai_call_logs(house_id, created_at);
 CREATE INDEX IF NOT EXISTS ai_logs_user ON ai_call_logs(user_id, created_at);
 CREATE INDEX IF NOT EXISTS ai_logs_operation ON ai_call_logs(operation);
+
+/* Web Push devices. A subscription belongs to a user, not a house, because a
+   phone can follow more than one house; delivery checks membership at send time.
+   endpoint is unique across the instance so re-subscribing the same browser
+   updates the existing row instead of adding a duplicate. */
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  endpoint TEXT NOT NULL UNIQUE,
+  p256dh TEXT NOT NULL,
+  auth TEXT NOT NULL,
+  user_agent TEXT,
+  created_at TEXT NOT NULL,
+  last_used_at TEXT
+);
+CREATE INDEX IF NOT EXISTS push_subs_user ON push_subscriptions(user_id);
 `;
 

@@ -30,7 +30,7 @@ export interface House {
   createdAt: string;
 }
 
-export type NotificationChannelType = "ntfy" | "apprise" | "webhook";
+export type NotificationChannelType = "ntfy" | "apprise" | "webhook" | "webpush";
 
 export interface NotificationChannelEvents {
   lowStock: boolean;
@@ -1514,4 +1514,21 @@ export interface OrphanFile {
   key: string;
   size: number;
   modifiedAt: string;
+}
+
+/* ------------------------------------------------------------------ web push */
+
+/** One browser/device subscribed to push reminders for the signed-in user. */
+export interface PushSubscriptionSummary {
+  id: string;
+  createdAt: string;
+  userAgent: string | null;
+}
+
+/** `GET /api/push`: whether the server has VAPID keys, and this user's devices. */
+export interface WebPushStatus {
+  enabled: boolean;
+  /** Only present when the server is configured; the browser needs it to subscribe. */
+  publicKey: string | null;
+  subscriptions: PushSubscriptionSummary[];
 }

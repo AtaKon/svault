@@ -813,6 +813,18 @@ CREATE INDEX IF NOT EXISTS ai_logs_house ON ai_call_logs(house_id, created_at);
 CREATE INDEX IF NOT EXISTS ai_logs_user ON ai_call_logs(user_id, created_at);
 CREATE INDEX IF NOT EXISTS ai_logs_operation ON ai_call_logs(operation);
 
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  endpoint TEXT NOT NULL UNIQUE,
+  p256dh TEXT NOT NULL,
+  auth TEXT NOT NULL,
+  user_agent TEXT,
+  created_at TEXT NOT NULL,
+  last_used_at TEXT
+);
+CREATE INDEX IF NOT EXISTS push_subs_user ON push_subscriptions(user_id);
+
 CREATE TABLE IF NOT EXISTS schema_meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -1001,5 +1013,6 @@ export const POSTGRES_TABLE_ORDER = [
   "photo_labels",
   "ai_cache",
   "ai_call_logs",
+  "push_subscriptions",
 ] as const;
 
