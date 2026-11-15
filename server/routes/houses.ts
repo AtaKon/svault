@@ -17,6 +17,7 @@ import {
   type ChannelMessage,
 } from "../services/channels.js";
 import { chat, resolveAi } from "../ai.js";
+import { DEFAULT_PUSH_URL, pushEnabled, sendPushToUser } from "../services/web-push.js";
 import { MAX_RECIPE_VISION_CHAIN, checkRecipeVisionModels } from "../../shared/recipe-vision.js";
 import { RECIPE_REASONING_MODES } from "../../shared/ai-reasoning.js";
 import type { NotificationChannel, Role } from "../../shared/types.js";
@@ -252,6 +253,24 @@ houseRoutes.post(
       body: `This is a test reminder from ${row.name}. Low-stock, expiry and weekly summaries will arrive here.`,
       data: { test: true },
     };
+    if (channel.type === "webpush") {
+      if (!pushEnabled()) throw new ApiError(400, "Web Push is not configured on this server");
+      // Web Push targets the caller's own devices: an admin testing the channel
+      // must not ring everyone else's phone.
+      const result = await sendPushToUser(req.user!.id, {
+        title: message.title,
+        body: message.body,
+        url: DEFAULT_PUSH_URL,
+      });
+      if (!result.total) throw new ApiError(400, "Enable push on this device first");
+      res.status(result.sent > 0 ? 200 : 502).json({
+        ok: result.sent > 0,
+        status: result.statusCode,
+        error: result.sent > 0 ? null : (result.error ?? "No device accepted the push"),
+        channel: { id: channel.id, name: channel.name, type: channel.type },
+      });
+      return;
+    }
     const result = await sendChannelMessage(channel, message);
     res.status(result.ok ? 200 : 502).json({
       ok: result.ok,
