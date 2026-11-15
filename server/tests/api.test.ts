@@ -12233,6 +12233,15 @@ describe("lending tracker", () => {
       body: { itemId: id, borrowerName: "Stranger", borrowerUserId: outsider.data.user.id },
     });
     assert.equal(foreign.status, 400);
+
+    // A named member is recorded under their own name, whatever name was typed.
+    const named = await request(`/api/houses/${hid}/loans`, {
+      method: "POST",
+      body: { itemId: id, borrowerName: "Somebody Else Entirely", borrowerUserId: member.data.user.id, quantity: 1 },
+    });
+    assert.equal(named.status, 201);
+    assert.equal(named.data.loan.borrowerName, "Loan member");
+    assert.equal(named.data.loan.borrowerUserId, member.data.user.id);
   });
 
   it("declares the loan table for SQLite, PostgreSQL and restore order", async () => {

@@ -93,7 +93,7 @@ export interface CreateLoanInput {
  * ledger lock so two concurrent requests cannot both pass the guard.
  */
 export async function createLoan(input: CreateLoanInput): Promise<string> {
-  const borrowerName = input.borrowerName.trim();
+  let borrowerName = input.borrowerName.trim();
   if (!borrowerName) throw new ApiError(400, "Borrower name is required");
   if (borrowerName.length > 80) throw new ApiError(400, "Borrower name is too long");
   const quantity = round(Number(input.quantity));
@@ -108,11 +108,15 @@ export async function createLoan(input: CreateLoanInput): Promise<string> {
     const item = await get<any>("SELECT * FROM items WHERE id = ? AND house_id = ?", [input.itemId, input.houseId]);
     if (!item) throw new ApiError(404, "Item not found");
     if (input.borrowerUserId) {
-      const member = await get(
-        "SELECT user_id FROM house_members WHERE house_id = ? AND user_id = ?",
+      const member = await get<{ name: string | null }>(
+        `SELECT u.name FROM house_members m JOIN users u ON u.id = m.user_id
+          WHERE m.house_id = ? AND m.user_id = ?`,
         [input.houseId, input.borrowerUserId],
       );
       if (!member) throw new ApiError(400, "Borrower is not a member of this house");
+      // A named member is recorded under their own name, so the name and the
+      // member link cannot disagree (the borrower suggestions key on both).
+      if (member.name?.trim()) borrowerName = member.name.trim().slice(0, 80);
     }
     const available = await itemAvailableToUse(item.id);
     if (quantity > available) {
