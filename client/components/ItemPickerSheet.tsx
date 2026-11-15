@@ -17,6 +17,9 @@ export function ItemPickerSheet({
   onClose,
   onSelect,
   autoLabel = "Auto (match or create)",
+  title = "Match to an item",
+  description = "Search your inventory by name, brand or barcode.",
+  excludeId,
 }: {
   open: boolean;
   houseId: string;
@@ -25,6 +28,10 @@ export function ItemPickerSheet({
   onClose: () => void;
   onSelect: (item: Pick<Item, "id" | "name" | "unit"> | null) => void;
   autoLabel?: string;
+  title?: string;
+  description?: string;
+  /** Hide one item, for actions like "merge into…" that cannot pick themselves. */
+  excludeId?: string;
 }) {
   const { t } = useI18n();
   const [query, setQuery] = useState(initialQuery);
@@ -54,7 +61,7 @@ export function ItemPickerSheet({
   }, [open, houseId, debounced]);
 
   return (
-    <Sheet open={open} onClose={onClose} title={t("Match to an item")} description={t("Search your inventory by name, brand or barcode.")}>
+    <Sheet open={open} onClose={onClose} title={t(title)} description={t(description)}>
       <div className="space-y-3">
         <div className="relative">
           <Input
@@ -77,10 +84,12 @@ export function ItemPickerSheet({
             !selectedId ? "border-brand bg-brand-soft text-brand" : "border-line hover:bg-raised",
           )}
         >
-          <Icon name="sparkles" size={14} /> {autoLabel}
+          <Icon name="sparkles" size={14} /> {t(autoLabel)}
         </button>
         <div className="space-y-1.5">
-          {items.map((item) => (
+          {items
+            .filter((item) => item.id !== excludeId)
+            .map((item) => (
             <button
               key={item.id}
               type="button"

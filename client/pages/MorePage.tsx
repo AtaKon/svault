@@ -22,6 +22,7 @@ const LINKS: { to: string; label: string; description: string; icon: IconName; t
   { to: "/photos", label: "Photo library", description: "Label photos and export datasets", icon: "image", tint: "bg-brand-soft text-brand" },
   { to: "/recipes", label: "Recipes", description: "The family collection", icon: "book", tint: "bg-raised text-muted" },
   { to: "/notifications", label: "Reminders", description: "Low stock and expiry", icon: "bell", tint: "bg-raised text-muted" },
+  { to: "/items/duplicates", label: "Find duplicates", description: "Merge items that were added twice", icon: "grid", tint: "bg-brand-soft text-brand" },
   { to: "/settings", label: "House settings", description: "Places, categories, attributes, members", icon: "settings", tint: "bg-raised text-muted" },
   { to: "/labels", label: "Print labels", description: "QR labels for items and places", icon: "printer", tint: "bg-brand-soft text-brand" },
   { to: "/reports/valuation", label: "Valuation report", description: "Insurance and moving checklist with totals", icon: "price", tint: "bg-brand-soft text-brand" },

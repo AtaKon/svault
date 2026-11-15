@@ -240,6 +240,25 @@ Receipt names are often shortened or shop-specific. SVault handles this in two w
   imported or synced by an instance admin under **Settings → Data → Product catalogue**. Local
   corrections always win over bundled or imported data.
 
+### Duplicate items
+
+Over time a receipt import, a CSV import or an OpenFoodFacts link can add the same product twice
+(“Milk 1L” and “Fresh milk 1 l”). **Find duplicates** (sidebar, or **More → Find duplicates**) lists
+likely pairs in groups, with chips that say why they match: shared barcode, same product link, same or
+similar name, same brand and compatible units.
+
+- Compare the items side by side and tap **Keep this one** on the item that should survive.
+- **Compare and merge** shows a dry run first: how many batches, movements, receipts, aliases,
+  barcodes, documents, photos, shopping lines, recipe links, espresso shots and reminders will move,
+  which fields will be filled and any conflict. Nothing is written until you confirm.
+- Units inside the same family are converted (1 kg becomes 1000 g). Incompatible units (pieces and
+  kilograms) refuse the merge with an explanation instead of guessing.
+- Items you do not keep are **archived**, not deleted. Their history moves to the kept item, and they
+  keep a link to it, so an old receipt name or a bookmarked page still points somewhere sensible.
+- Tap **Not a duplicate** to stop a pair from being suggested again.
+- You can also merge from an item page: **Merge into…** asks for the item to keep, then shows the same
+  dry run. Viewers can look at suggestions but cannot merge or dismiss.
+
 ### Change stock
 
 Open an item and use the stock dialog. There are five actions:

@@ -238,6 +238,9 @@ Item create and update accept `openedShelfLifeDays`, `freezerShelfLifeDays` and 
 | `POST` | `/api/houses/:houseId/espresso-equipment` | member+ | Save `{ "kind": "machine" \\| "grinder", "name": "...", "brand": "..." }`. Names are unique per kind. |
 | `PATCH` | `/api/houses/:houseId/espresso-equipment/:equipmentId` | member+ | Rename or edit `name`, `brand` or `notes`. Existing shot snapshots follow the new name. |
 | `DELETE` | `/api/houses/:houseId/espresso-equipment/:equipmentId` | member+ | Delete saved equipment. Shots keep the recorded name. |
+| `GET` | `/api/houses/:houseId/items/duplicates` | viewer+ | Candidate duplicate groups ranked by deterministic signals. Optional `limit` (1-200, default 60). |
+| `POST` | `/api/houses/:houseId/items/duplicates/dismiss` | member+ | Mark pairs as "not a duplicate" so they are not suggested again. Body `{ "pairs": [{ "a": "itm_...", "b": "itm_..." }] }` (1-50). |
+| `POST` | `/api/houses/:houseId/items/:targetId/merge` | member+ | Merge `{ "sourceIds": ["itm_..."], "dryRun": true }` into the target. `dryRun` returns the preview; without it the merge is applied. |
 
 ### Undo a stock change
 
@@ -337,6 +340,33 @@ Every successful stock action returns the complete item detail. Its `priceHistor
 per incoming purchase: `at`, normalized `price` per item unit, entered `unit`, `quantity`, `unitPrice`,
 `vendorId`, `vendorName`, `receiptId` and `note`. Clients can filter this list by shop for per-vendor
 price comparisons.
+
+### Duplicate items and merging
+
+Duplicate detection is deterministic and local; it never calls AI. Items are bucketed by shared
+barcode, OpenFoodFacts link, normalised name (case, diacritics including Greek accents, punctuation,
+unit tokens such as `1L`/`1 lt`), significant words and brand, then only pairs inside a bucket are
+compared. Each pair carries `reasons` (`shared_barcode`, `same_product_link`, `same_name`,
+`similar_name`, `same_brand`, `compatible_units`) and a 0-1 `confidence`.
+
+`POST …/items/:targetId/merge` requires the same role as editing an item (member+). It accepts 1-20
+`sourceIds` and refuses:
+
+- a source from another house (`409`, `source_not_found`),
+- an archived or already merged target (`409`, `target_archived` / `already_merged`),
+- units that cannot be converted while batches or history have to move (`409`, `incompatible_unit`).
+
+`dryRun: true` returns `{ mergeable, target, sources, conflicts, moves }` without writing. The real
+call runs in one transaction: batches are converted into the target's base unit, movements,
+receipt lines, purchase history, aliases, barcodes (deduplicated), tags (unioned), attributes (target
+wins, empty keys are filled), documents, photos, shopping-list lines, recipe links, espresso shots,
+Open Food Facts contributions and the Open Food Facts link move to the target; reminders are rebuilt
+from the new state. The target keeps its own values and only fills empty fields from the sources.
+Each source is then archived (not deleted) with `merged_into` pointing at the target, so old receipt
+names, catalogue entries and links still resolve to the item that kept the history.
+
+The duplicates list skips dismissed pairs. `POST …/duplicates/dismiss` stores the pair with the
+smaller item id first, so either ordering is remembered.
 
 ### Espresso log
 

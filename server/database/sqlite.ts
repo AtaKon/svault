@@ -169,11 +169,16 @@ export class SqliteDriver implements DatabaseDriver {
     ensureColumn("receipt_lines", "off_project", "TEXT NOT NULL DEFAULT 'off'");
     ensureColumn("catalog_mappings", "off_project", "TEXT NOT NULL DEFAULT 'off'");
     ensureColumn("items", "espresso", "INTEGER NOT NULL DEFAULT 0");
+    // A merged item is archived and points at the item that absorbed it, so
+    // receipts, aliases and history stay intelligible after a merge.
+    ensureColumn("items", "merged_into", "TEXT");
+    ensureColumn("items", "merged_at", "TEXT");
     // SCHEMA above has already created espresso_equipment, so the foreign key
     // target exists before these columns are added to an upgraded database.
     ensureColumn("espresso_shots", "grinder_id", "TEXT REFERENCES espresso_equipment(id) ON DELETE SET NULL");
     ensureColumn("espresso_shots", "machine_id", "TEXT REFERENCES espresso_equipment(id) ON DELETE SET NULL");
     conn.exec("CREATE INDEX IF NOT EXISTS items_off ON items(off_code)");
+    conn.exec("CREATE INDEX IF NOT EXISTS items_merged_into ON items(merged_into)");
     conn.exec("CREATE INDEX IF NOT EXISTS espresso_shots_grinder ON espresso_shots(grinder_id)");
     conn.exec("CREATE INDEX IF NOT EXISTS espresso_shots_machine ON espresso_shots(machine_id)");
 
@@ -1354,5 +1359,17 @@ CREATE TABLE IF NOT EXISTS stocktake_lines (
 );
 CREATE INDEX IF NOT EXISTS stocktake_lines_session ON stocktake_lines(stocktake_id);
 CREATE INDEX IF NOT EXISTS stocktake_lines_item ON stocktake_lines(item_id);
+/* A pair the user said is "not a duplicate". The pair is stored with the
+   smaller item id first so one dismissal covers either order. */
+CREATE TABLE IF NOT EXISTS item_duplicate_dismissals (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  item_a TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  item_b TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (house_id, item_a, item_b)
+);
+CREATE INDEX IF NOT EXISTS item_duplicate_dismissals_house ON item_duplicate_dismissals(house_id);
 `;
 

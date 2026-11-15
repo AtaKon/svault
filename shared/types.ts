@@ -531,6 +531,8 @@ export interface Item {
   tags: string[];
   image: string | null;
   archived: boolean;
+  /** When the item was merged away, the item that absorbed it. */
+  mergedInto?: string | null;
   /** Coffee item that keeps an espresso shot log. */
   espresso: boolean;
   quantity: number;
@@ -1911,4 +1913,111 @@ export interface StocktakeCommitResult {
   stocktake: Stocktake;
   appliedLines: number;
   appliedDelta: number;
+}
+
+/* ------------------------------------------------------- duplicate & merge */
+
+/** Why two items were suggested as duplicates. Values are stable keys the UI translates. */
+export type DuplicateReason =
+  | "shared_barcode"
+  | "same_product_link"
+  | "same_name"
+  | "similar_name"
+  | "same_brand"
+  | "compatible_units";
+
+/** The compact item shape used by duplicate suggestions and the merge preview. */
+export interface DuplicateItem {
+  id: string;
+  name: string;
+  brand: string | null;
+  unit: string;
+  quantity: number;
+  archived: boolean;
+  barcodes: string[];
+  offCode: string | null;
+  createdAt: string;
+}
+
+export interface DuplicatePair {
+  a: string;
+  b: string;
+  confidence: number;
+  reasons: DuplicateReason[];
+}
+
+export interface DuplicateGroup {
+  /** Stable key for the group, built from the lowest item id in it. */
+  key: string;
+  confidence: number;
+  reasons: DuplicateReason[];
+  items: DuplicateItem[];
+  pairs: DuplicatePair[];
+}
+
+export interface DuplicateSuggestions {
+  groups: DuplicateGroup[];
+  /** Number of active items that were compared, for an "all clear" message. */
+  scannedItems: number;
+}
+
+export type ItemMergeConflictKind =
+  | "incompatible_unit"
+  | "same_item"
+  | "source_not_found"
+  | "target_archived"
+  | "source_archived"
+  | "already_merged";
+
+export interface ItemMergeConflict {
+  kind: ItemMergeConflictKind;
+  message: string;
+  itemId?: string;
+  unit?: string;
+}
+
+/** What a merge moves, in target units, so the dry run can explain itself. */
+export interface ItemMergeMoves {
+  lots: number;
+  lotQuantity: number;
+  movements: number;
+  receiptLines: number;
+  aliases: number;
+  barcodes: number;
+  documents: number;
+  photos: number;
+  shoppingLines: number;
+  recipeIngredients: number;
+  espressoShots: number;
+  notifications: number;
+  offContributions: number;
+  tags: string[];
+  filledFields: string[];
+  filledAttributes: string[];
+  offCode: string | null;
+  offProject: string | null;
+}
+
+export interface ItemMergeTarget {
+  id: string;
+  name: string;
+  unit: string;
+  quantity: number;
+  archived: boolean;
+}
+
+export interface ItemMergePreview {
+  dryRun: true;
+  mergeable: boolean;
+  target: ItemMergeTarget;
+  sources: ItemMergeTarget[];
+  conflicts: ItemMergeConflict[];
+  moves: ItemMergeMoves;
+}
+
+export interface ItemMergeResult {
+  dryRun: false;
+  mergedAt: string;
+  target: ItemMergeTarget;
+  archived: string[];
 }

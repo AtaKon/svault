@@ -16,6 +16,7 @@ const steps = [
   [...shared, "--test", "server/tests/recipe-scan-photos.test.ts"],
   [...shared, "--test", "server/tests/recipe-cost.test.ts"],
   [...shared, "--test", "server/tests/stocktake.test.ts"],
+  [...shared, "--test", "server/tests/item-merge.test.ts"],
   [...shared, "--test", "server/tests/api.test.ts"],
   [...shared, "--test", "server/tests/label-links.test.ts"],
 ];
