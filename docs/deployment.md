@@ -134,6 +134,9 @@ Docker Compose reads `.env` next to `docker-compose.yml`.
 | `SV_RATE_LIMIT` | on | Server | `off` disables the built-in rate limits (for example when the proxy already limits). |
 | `SV_RATE_LIMIT_<NAME>` | see [Rate limits](#rate-limits) | Server | Override one limit as `<max>/<seconds>`, e.g. `SV_RATE_LIMIT_LOGIN=30/600`. |
 | `SV_CSP` | on | Server | `off` disables the Content-Security-Policy header (only for debugging a custom build). |
+| `VAPID_PUBLIC_KEY` | empty | Server | Public key for Web Push; with the two below, enables push reminders. Generate with `npm run vapid:generate`. |
+| `VAPID_PRIVATE_KEY` | empty | Server | Private key for Web Push. Keep it secret; changing it invalidates every subscription. |
+| `VAPID_SUBJECT` | empty | Server | Contact for the push service, `mailto:you@example.com` or an `https://` URL. |
 | `NODE_ENV` | `production` in Docker | Server | Enables production caching, disables request logs. |
 
 See [Bring your own database](database.md) for PostgreSQL setup, migration and the example Compose
@@ -192,6 +195,40 @@ needs an invite link from a house admin (`SV_REGISTRATION=invite`). Set `SV_REGI
 anyone who can reach the server sign up, or `closed` to stop self sign-up entirely. OIDC
 auto-provisioning creates accounts too, so it only runs while registration is `open`; existing
 accounts with a matching verified email still link. `GET /api/auth/registration` reports the mode.
+
+### Web Push
+
+Web Push reminders are optional and off by default. They need HTTPS (the browser refuses push on a
+plain-HTTP origin), plus three values on the server:
+
+```ini
+VAPID_PUBLIC_KEY=...
+VAPID_PRIVATE_KEY=...
+VAPID_SUBJECT=mailto:you@example.com
+```
+
+Generate the pair once, on a machine with the repository checked out:
+
+```bash
+npm run vapid:generate        # or: npm run vapid:generate -- --json
+```
+
+If you only have the running container, the same generator is one command:
+
+```bash
+docker compose exec svault node -e "console.log(require('web-push').generateVAPIDKeys())"
+```
+
+Then restart the container, open **Settings → Reminders**, add (or edit) a delivery channel of type
+**Web push**, and press **Enable push on this device** on the phone. The switch is per browser: every
+family member enables their own device, and turning it off removes only that browser. The private key
+is a secret; changing the pair makes every existing device subscribe again.
+
+On iPhone, add SVault to the Home Screen first: Safari only exposes Web Push to installed PWAs. Push is
+sent to the browser's own push service (Mozilla, Google or Apple) and is content-encrypted for the
+device, using the VAPID pair. The server never receives the browser's private key. When
+`SV_OUTBOUND_ALLOW_PRIVATE=false`, endpoints that resolve to private addresses are refused, like every
+other outbound URL.
 
 ## HTTPS and reverse proxies
 

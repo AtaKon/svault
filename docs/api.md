@@ -1244,9 +1244,11 @@ Channel shape:
 `ntfy` posts to `url/topic` with an optional bearer token. `apprise` posts JSON to the configured endpoint
 with an optional `x-api-key`. Webhooks receive
 `{ event, title, body, houseId, houseName, data, sentAt }` and, when a secret is set, an
-`x-svault-signature: sha256=…` header. Delivery is detached from the triggering request, deduped per
-notification key and channel, and retried three times with backoff. Resolved reminders are not re-sent.
-The weekly summary runs from the reminder scan once per ISO week when at least one channel enables it.
+`x-svault-signature: sha256=…` header. `webpush` has no URL: it targets the devices each member enabled
+under **Settings → Reminders → Push on this device**. Delivery is detached from the triggering request,
+deduped per notification key and channel, and retried three times with backoff. Resolved reminders are not
+re-sent. The weekly summary runs from the reminder scan once per ISO week when at least one channel
+enables it.
 
 ## Two-factor authentication
 
@@ -1398,6 +1400,28 @@ The rate is the total quantity in outgoing consumption movements over the last 6
 `daysLeft` is current stock divided by that rate. Waste, adjustments and transfers do not count.
 At least two consumption events spanning seven days and positive stock are required. The dashboard's
 `runningOutSoon` contains active items with at most seven days left, ordered by days left.
+
+## Web Push
+
+Web Push is off unless the server has `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` and `VAPID_SUBJECT`
+(see [deployment.md](deployment.md#web-push)). Subscriptions belong to the signed-in user, not to a
+house, because one phone can follow several houses. Every route below requires a session; API tokens
+cannot use them.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/push` | `{ enabled, publicKey, subscriptions }`. `publicKey` is `null` when the server is not configured. |
+| `POST` | `/api/push/subscribe` | Body `{ endpoint, keys: { p256dh, auth } }` from `PushSubscription.toJSON()`. `201` with `{ subscription }`. `endpoint` must be `https://`. |
+| `POST` | `/api/push/unsubscribe` | Body `{ endpoint }`. `{ ok, removed }`; only the owner's own row is deleted. |
+| `POST` | `/api/push/test` | Sends a test notification to the caller's devices. `{ ok, sent, failed, removed, error }`; `400` when no device is subscribed, `502` when every device refused. |
+
+The payload is deliberately small: `{ title, body, url }`, where `url` is an in-app path such as
+`/items/itm_…` (the object is the same reminder text the bell shows). Reminders are only pushed for
+houses the user still belongs to; a subscription is deleted when the push service answers `404` or
+`410`. A house sends push only when an enabled `webpush` channel exists in
+`house.settings.notifications.channels`, so the per-channel low-stock, expiry, budget and weekly
+switches apply unchanged. With no subscribed device the channel is skipped instead of recording a
+failed delivery.
 
 ## Extending the API
 

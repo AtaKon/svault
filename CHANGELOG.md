@@ -16,6 +16,9 @@ All notable changes to SVault are documented here. The format follows
 
 - Category budgets, optional bill spending, month-end projections, budget history and threshold reminders.
 - Consumption-based run-out forecasts on items and the dashboard, with an optional shopping-list fill.
+- Optional Web Push reminders. With VAPID keys configured, an installed PWA receives low-stock, expiry
+  and budget reminders while SVault is closed; each device is enabled separately under
+  **Settings → Reminders**.
 
 ### Security
 

@@ -100,7 +100,7 @@ exports readable. Timestamps are ISO-8601 strings; dates (`expires_at`, `purchas
 | Purchase learning | `product_aliases` (raw shop name → item, per vendor) |
 | Receipt layouts | `receipt_templates` (custom rules; built-in Lidl and Sklavenitis live in code) |
 | Reference data | `vendor_catalog` (seeded shops by country) |
-| Reminders | `notifications` |
+| Reminders | `notifications`, `notification_deliveries`, `push_subscriptions` |
 | Cooking | `recipes`, `recipe_ingredients`, `food_ideas` |
 | Vision | `photo_collections`, `photos`, `photo_labels` |
 | AI | `ai_cache` (reserved; not currently used), `ai_call_logs` (provider audit trail) |
@@ -156,7 +156,9 @@ receipt lines by vendor, month and item category.
 - The client polls the cross-house `/api/notifications` feed, so a newly shared house is visible
   before the user switches to it.
 
-Browser notifications are sent by the client while a tab is open. There is no push service.
+Browser notifications are sent by the client while a tab is open. Web Push is optional and off by
+default: with `VAPID_*` set, the reminder delivery channel `webpush` fans out to the devices each
+member subscribed, from `server/services/web-push.ts`.
 
 ## AI provider adapter
 
@@ -319,8 +321,9 @@ Implemented:
 - Security headers: `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options`,
   `Permissions-Policy` (camera only for self).
 - Random upload filenames and MIME allow-list.
-- No telemetry. Only outbound calls are the configured AI endpoint and the optional OpenFoodFacts
-  barcode lookup.
+- No telemetry. Only outbound calls are the configured AI endpoint, the optional OpenFoodFacts
+  barcode lookup, the reminder channels a house configures, and (when VAPID keys are set) the browser
+  push service of each subscribed device.
 
 Known trade-offs:
 

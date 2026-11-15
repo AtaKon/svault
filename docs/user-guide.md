@@ -353,6 +353,10 @@ editor (or enable **Track espresso shots** when creating it), and save. The item
 - Press the bell icon to enable browser notifications; they only arrive while SVault is open in a tab.
   Add ntfy, Apprise or a webhook under **Settings -> Reminders** to get reminders when SVault is closed.
   Secrets are masked, deliveries retry three times and failed attempts are visible in the same tab.
+- **Push on this device** in **Settings -> Reminders** turns on real Web Push, and reminders then arrive
+  with no tab open (an installed PWA on a phone works too). It needs HTTPS, the server must have VAPID
+  keys configured, and a house admin must enable a **Web push** delivery channel. Each device is enabled
+  separately; turning it off removes only that browser. Use **Send test** to check the phone.
 
 ### Search, filters and bulk actions
 
@@ -554,7 +558,7 @@ annotations.json        (COCO format only)
 | Attributes | Custom fields available on items (admin only) |
 | Members | Invites, roles, removal, and explicit ownership transfer |
 | AI | Provider preset, base URL, models, key, connection test |
-| Reminders | Low-stock toggle, expiry window, ntfy/Apprise/webhook channels |
+| Reminders | Low-stock toggle, expiry window, ntfy/Apprise/webhook/Web push channels and per-device push |
 | Data | Inventory CSV import/export, backup/restore, dataset import/export, data location, house deletion |
 
 **Profile** (under More) holds your name, email, password, theme and install prompt. Phones and
