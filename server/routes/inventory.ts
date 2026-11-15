@@ -17,6 +17,7 @@ import {
   serializeEspressoShot,
   serializeEspressoSummary,
   serializeItem,
+  serializeLoan,
   serializeLocation,
   serializeLot,
   serializeMovement,
@@ -350,7 +351,17 @@ async function itemDetail(itemId: string, userId: string) {
      WHERE r.house_id = ? AND (ri.item_id = ? OR LOWER(ri.name) = LOWER(?))`,
     [row.house_id, itemId, row.name],
   );
-  return { ...item, lots, movements, priceHistory, recipes, priceStats: await priceStats(itemId, item.unit) };
+  const loans = (await all<any>(
+    `SELECT l.*, i.name AS item_name, i.unit AS item_unit, u.name AS created_by_name
+     FROM item_loans l
+     JOIN items i ON i.id = l.item_id
+     LEFT JOIN users u ON u.id = l.created_by
+     WHERE l.item_id = ? AND l.house_id = ?
+     ORDER BY CASE WHEN l.returned_at IS NULL THEN 0 ELSE 1 END, l.due_at ASC, l.created_at DESC
+     LIMIT 100`,
+    [itemId, row.house_id],
+  )).map((loan) => serializeLoan(loan));
+  return { ...item, lots, movements, priceHistory, recipes, loans, priceStats: await priceStats(itemId, item.unit) };
 }
 
 /** Item pictures are the house's own item uploads or remote http(s) images (OpenFoodFacts). */

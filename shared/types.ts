@@ -510,6 +510,10 @@ export interface Item {
   /** Coffee item that keeps an espresso shot log. */
   espresso: boolean;
   quantity: number;
+  /** Units currently out on loan and not yet returned. Lending never changes stock. */
+  onLoan: number;
+  /** Quantity on hand minus open loans: what can still be used or lent. */
+  available: number;
   forecast: Forecast | null;
   value: number;
   latestPrice?: number | null;
@@ -629,6 +633,7 @@ export interface ItemDetail extends Item {
   movements: Movement[];
   priceHistory: PricePoint[];
   recipes: { id: string; title: string }[];
+  loans: Loan[];
 }
 
 export interface DietWarning { ingredient: string; allergen: string; members: string[] }
@@ -985,7 +990,7 @@ export interface Notification {
   id: string;
   houseId: string;
   houseName?: string;
-  type: "low_stock" | "expiring" | "warranty" | "system" | "invite" | "house";
+  type: "low_stock" | "expiring" | "warranty" | "system" | "invite" | "house" | "loan_overdue";
   title: string;
   body: string;
   data: Record<string, unknown>;
@@ -1514,4 +1519,46 @@ export interface OrphanFile {
   key: string;
   size: number;
   modifiedAt: string;
+}
+
+/* -------------------------------------------------------------------- loans */
+
+/**
+ * A recorded loan of a non-consumable item. `remaining` is what is still out;
+ * `open` is false once the whole quantity came back, and `overdue` compares the
+ * due date against today (date only) while the loan is open.
+ */
+export interface Loan {
+  id: string;
+  houseId: string;
+  itemId: string;
+  itemName: string | null;
+  itemUnit: string | null;
+  borrowerName: string;
+  borrowerUserId: string | null;
+  quantity: number;
+  returnedQuantity: number;
+  remaining: number;
+  lentAt: string;
+  dueAt: string | null;
+  returnedAt: string | null;
+  note: string | null;
+  createdBy: string | null;
+  createdByName: string | null;
+  open: boolean;
+  overdue: boolean;
+  createdAt: string;
+}
+
+/** Who has borrowed before, for the autosuggest in the lend sheet. */
+export interface LoanBorrower {
+  name: string;
+  userId: string | null;
+  loanCount: number;
+  member: boolean;
+}
+
+export interface LoanList {
+  loans: Loan[];
+  counts: { openCount: number; overdueCount: number; returnedCount: number; unitsOnLoan: number };
 }

@@ -1212,5 +1212,27 @@ CREATE TABLE IF NOT EXISTS ai_call_logs (
 CREATE INDEX IF NOT EXISTS ai_logs_house ON ai_call_logs(house_id, created_at);
 CREATE INDEX IF NOT EXISTS ai_logs_user ON ai_call_logs(user_id, created_at);
 CREATE INDEX IF NOT EXISTS ai_logs_operation ON ai_call_logs(operation);
+
+/* Items lent out (tools, books, gear). A loan never moves stock: the item is
+   still on the shelf, and the quantity available to use is on-hand minus the
+   open loans. returned_quantity closes a loan in parts; returned_at is set
+   only when the whole quantity is back. */
+CREATE TABLE IF NOT EXISTS item_loans (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  borrower_name TEXT NOT NULL CHECK (length(borrower_name) <= 80),
+  borrower_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  quantity REAL NOT NULL DEFAULT 1 CHECK (quantity > 0),
+  returned_quantity REAL NOT NULL DEFAULT 0 CHECK (returned_quantity >= 0),
+  lent_at TEXT NOT NULL,
+  due_at TEXT,
+  returned_at TEXT,
+  note TEXT,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS loans_house ON item_loans(house_id, returned_at, due_at);
+CREATE INDEX IF NOT EXISTS loans_item ON item_loans(item_id, returned_at);
 `;
 

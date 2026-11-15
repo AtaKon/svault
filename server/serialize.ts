@@ -22,6 +22,7 @@ import type {
   EspressoShot,
   EspressoShotSummary,
   EspressoEquipment,
+  Loan,
 } from "../shared/types.js";
 
 export const ITEM_SELECT = `
@@ -31,7 +32,9 @@ export const ITEM_SELECT = `
     COALESCE((SELECT SUM(l.quantity * COALESCE(l.unit_price, 0)) FROM stock_lots l WHERE l.item_id = i.id), 0) AS value,
     (SELECT sm.normalized_price FROM stock_movements sm
        WHERE sm.item_id = i.id AND sm.normalized_price IS NOT NULL AND sm.normalized_price > 0
-       ORDER BY sm.created_at DESC LIMIT 1) AS latest_price
+       ORDER BY sm.created_at DESC LIMIT 1) AS latest_price,
+    COALESCE((SELECT SUM(lo.quantity - lo.returned_quantity) FROM item_loans lo
+       WHERE lo.item_id = i.id AND lo.returned_at IS NULL), 0) AS on_loan
   FROM items i
   LEFT JOIN categories c ON c.id = i.category_id AND c.house_id = i.house_id
   LEFT JOIN catalog_products cp ON cp.code = i.off_code AND cp.project = i.off_project
@@ -78,6 +81,7 @@ export async function barcodesForItem(itemId: string) {
 
 export function serializeItem(row: any, barcodes: { id: string; code: string; format: string | null }[] = []): Item {
   const quantity = round(Number(row.quantity ?? 0));
+  const onLoan = Math.max(0, round(Number(row.on_loan ?? 0)));
   const reorderPoint = Number(row.reorder_point ?? 0);
   const offProduct = parseJson<OffProduct | null>(row.off_summary, null);
   const offProject = ["off", "obf", "opff", "opf"].includes(row.off_project) ? row.off_project : "off";
@@ -122,6 +126,8 @@ export function serializeItem(row: any, barcodes: { id: string; code: string; fo
     archived: bool(row.archived),
     espresso: bool(row.espresso),
     quantity,
+    onLoan,
+    available: Math.max(0, round(quantity - onLoan)),
     value: round(Number(row.value ?? 0), 2),
     latestPrice: row.latest_price == null ? null : Number(row.latest_price),
     isLow: reorderPoint > 0 && quantity <= reorderPoint,
@@ -486,6 +492,38 @@ export function serializePhoto(row: any, labels: any[] = []): Photo {
       w: l.w == null ? null : Number(l.w),
       h: l.h == null ? null : Number(l.h),
     })),
+  };
+}
+
+/**
+ * A loan as the API and the client see it. `remaining` and `overdue` are
+ * derived here so every screen agrees on what "still out" means.
+ */
+export function serializeLoan(row: any, today = new Date().toISOString().slice(0, 10)): Loan {
+  const quantity = round(Number(row.quantity ?? 0));
+  const returnedQuantity = round(Number(row.returned_quantity ?? 0));
+  const remaining = Math.max(0, round(quantity - returnedQuantity));
+  const open = !row.returned_at && remaining > 0;
+  return {
+    id: row.id,
+    houseId: row.house_id,
+    itemId: row.item_id,
+    itemName: row.item_name ?? null,
+    itemUnit: row.item_unit ?? null,
+    borrowerName: row.borrower_name,
+    borrowerUserId: row.borrower_user_id ?? null,
+    quantity,
+    returnedQuantity,
+    remaining,
+    lentAt: row.lent_at,
+    dueAt: row.due_at ?? null,
+    returnedAt: row.returned_at ?? null,
+    note: row.note ?? null,
+    createdBy: row.created_by ?? null,
+    createdByName: row.created_by_name ?? null,
+    open,
+    overdue: open && Boolean(row.due_at) && String(row.due_at) < today,
+    createdAt: row.created_at,
   };
 }
 
