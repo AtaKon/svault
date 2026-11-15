@@ -120,6 +120,7 @@ export function serializeItem(row: any, barcodes: { id: string; code: string; fo
     tags: parseJson<string[]>(row.tags, []),
     image: row.image ?? null,
     archived: bool(row.archived),
+    mergedInto: row.merged_into ?? null,
     espresso: bool(row.espresso),
     quantity,
     value: round(Number(row.value ?? 0), 2),

@@ -228,6 +228,8 @@ CREATE TABLE IF NOT EXISTS items (
   off_source TEXT,
   off_synced_at TEXT,
   off_filled TEXT NOT NULL DEFAULT '[]',
+  merged_into TEXT,
+  merged_at TEXT,
   archived INTEGER NOT NULL DEFAULT 0,
   created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL,
@@ -235,6 +237,7 @@ CREATE TABLE IF NOT EXISTS items (
 );
 CREATE INDEX IF NOT EXISTS items_house ON items(house_id);
 CREATE INDEX IF NOT EXISTS items_off ON items(off_code);
+CREATE INDEX IF NOT EXISTS items_merged_into ON items(merged_into);
 
 CREATE TABLE IF NOT EXISTS item_documents (
   id TEXT PRIMARY KEY,
@@ -813,6 +816,19 @@ CREATE INDEX IF NOT EXISTS ai_logs_house ON ai_call_logs(house_id, created_at);
 CREATE INDEX IF NOT EXISTS ai_logs_user ON ai_call_logs(user_id, created_at);
 CREATE INDEX IF NOT EXISTS ai_logs_operation ON ai_call_logs(operation);
 
+/* A pair the user said is "not a duplicate". The pair is stored with the
+   smaller item id first so one dismissal covers either order. */
+CREATE TABLE IF NOT EXISTS item_duplicate_dismissals (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  item_a TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  item_b TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (house_id, item_a, item_b)
+);
+CREATE INDEX IF NOT EXISTS item_duplicate_dismissals_house ON item_duplicate_dismissals(house_id);
+
 CREATE TABLE IF NOT EXISTS schema_meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -941,6 +957,20 @@ export const POSTGRES_MIGRATIONS: string[] = [
       ALTER TABLE bills ADD CONSTRAINT bills_source_check CHECK (source IN ('manual', 'scan'));
     END IF;
   END $$`,
+  // Item merge: an archived source item points at the item that absorbed it.
+  "ALTER TABLE items ADD COLUMN IF NOT EXISTS merged_into TEXT",
+  "ALTER TABLE items ADD COLUMN IF NOT EXISTS merged_at TEXT",
+  "CREATE INDEX IF NOT EXISTS items_merged_into ON items(merged_into)",
+  `CREATE TABLE IF NOT EXISTS item_duplicate_dismissals (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  item_a TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  item_b TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (house_id, item_a, item_b)
+);`,
+  "CREATE INDEX IF NOT EXISTS item_duplicate_dismissals_house ON item_duplicate_dismissals(house_id)",
 ];
 
 /**
@@ -968,6 +998,7 @@ export const POSTGRES_TABLE_ORDER = [
   "items",
   "item_documents",
   "item_barcodes",
+  "item_duplicate_dismissals",
   "espresso_equipment",
   "espresso_shots",
   "receipts",
