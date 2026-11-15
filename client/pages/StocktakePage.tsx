@@ -294,10 +294,11 @@ export function StocktakeSessionPage() {
     const queued = readPendingCounts(house.id, detail.id);
     if (!Object.keys(queued).length) return;
     const result = await flushPendingCounts(house.id, detail.id);
-    if (result.synced > 0) {
-      toast.success(t("Counts saved on this device were synced"));
-      await load();
+    if (result.synced > 0) toast.success(t("Counts saved on this device were synced"));
+    if (result.dropped > 0) {
+      toast.error(t("Some counts saved on this device were refused by the server and discarded"));
     }
+    if (result.synced > 0 || result.dropped > 0) await load();
     setPendingDraft(readPendingCounts(house.id, detail.id));
   }, [detail, house.id, load, t, toast]);
 
@@ -836,7 +837,9 @@ function CountRow({
               const text = value.trim();
               const parsed = text === "" ? null : Number(text);
               if (parsed != null && (!Number.isFinite(parsed) || parsed < 0)) return;
-              if (parsed === line.countedQty) return;
+              // Compare with what was last sent, not the server value, so a count the
+              // autosave already sent is not sent a second time on blur.
+              if (parsed === lastSaved.current) return;
               lastSaved.current = parsed;
               void onSave(line, parsed, undefined).then((saved) => {
                 if (!saved) lastSaved.current = line.countedQty;

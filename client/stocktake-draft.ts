@@ -34,7 +34,7 @@ export function readPendingCounts(houseId: string, stocktakeId: string): Pending
       out[lineId] = {
         lineId,
         countedQty: counted,
-        note: value.note === undefined ? undefined : value.note,
+        note: typeof value.note === "string" || value.note === null ? value.note : undefined,
         updatedAt: String(value.updatedAt ?? new Date().toISOString()),
       };
     }
@@ -80,10 +80,11 @@ const PERMANENT_REJECTIONS = new Set([400, 404, 409, 410, 422]);
 export async function flushPendingCounts(
   houseId: string,
   stocktakeId: string,
-): Promise<{ synced: number; remaining: number }> {
+): Promise<{ synced: number; dropped: number; remaining: number }> {
   const pending = readPendingCounts(houseId, stocktakeId);
   const entries = Object.values(pending).sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
   let synced = 0;
+  let dropped = 0;
   for (const entry of entries) {
     try {
       await api(`/api/houses/${houseId}/stocktakes/${stocktakeId}/lines/${entry.lineId}`, {
@@ -97,18 +98,20 @@ export async function flushPendingCounts(
       synced++;
     } catch (error) {
       if (error instanceof ApiError && error.status === 0) {
-        return { synced, remaining: entries.length - synced };
+        return { synced, dropped, remaining: entries.length - synced - dropped };
       }
       // Only a permanent rejection (bad value, line gone, session closed) may
       // drop a queued count. 401/403/408/425/429 can pass, so the count stays
       // queued and replay stops here rather than silently losing it.
       if (error instanceof ApiError && PERMANENT_REJECTIONS.has(error.status)) {
+        // Not synced: the server refused it for good, so say so instead of
+        // reporting a success the user would not see in the counts.
         clearPendingCount(houseId, stocktakeId, entry.lineId);
-        synced++;
+        dropped++;
         continue;
       }
-      return { synced, remaining: entries.length - synced };
+      return { synced, dropped, remaining: entries.length - synced - dropped };
     }
   }
-  return { synced, remaining: 0 };
+  return { synced, dropped, remaining: 0 };
 }

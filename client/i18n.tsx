@@ -2931,6 +2931,7 @@ const EL: Record<string, string> = {
   "Cancelled": "Ακυρώθηκε",
   "Could not load this stocktake": "Δεν ήταν δυνατή η φόρτωση αυτής της απογραφής.",
   "Counts saved on this device were synced": "Οι καταμετρήσεις που ήταν αποθηκευμένες σε αυτή τη συσκευή συγχρονίστηκαν.",
+  "Some counts saved on this device were refused by the server and discarded": "Ορισμένες καταμετρήσεις που είχαν αποθηκευτεί σε αυτή τη συσκευή απορρίφθηκαν από τον διακομιστή και διαγράφηκαν.",
   "Could not save this count": "Δεν ήταν δυνατή η αποθήκευση αυτής της καταμέτρησης.",
   "That item is not part of this stocktake.": "Αυτό το αντικείμενο δεν ανήκει σε αυτή την απογραφή.",
   "Could not look up that barcode": "Δεν ήταν δυνατή η αναζήτηση αυτού του barcode.",
