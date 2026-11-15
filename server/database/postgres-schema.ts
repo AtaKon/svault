@@ -425,10 +425,24 @@ CREATE TABLE IF NOT EXISTS stock_movements (
   reason TEXT,
   note TEXT,
   balance_after DOUBLE PRECISION,
+  reverses_movement_id TEXT REFERENCES stock_movements(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS movements_item ON stock_movements(item_id, created_at);
 CREATE INDEX IF NOT EXISTS movements_house ON stock_movements(house_id, created_at);
+
+CREATE TABLE IF NOT EXISTS stock_movement_lots (
+  id TEXT PRIMARY KEY,
+  movement_id TEXT NOT NULL REFERENCES stock_movements(id) ON DELETE CASCADE,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  lot_id TEXT REFERENCES stock_lots(id) ON DELETE SET NULL,
+  created_lot INTEGER NOT NULL DEFAULT 0,
+  delta DOUBLE PRECISION NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS movement_lots_movement ON stock_movement_lots(movement_id);
+CREATE INDEX IF NOT EXISTS movement_lots_lot ON stock_movement_lots(lot_id);
 
 CREATE TABLE IF NOT EXISTS receipt_lines (
   id TEXT PRIMARY KEY,
@@ -941,6 +955,10 @@ export const POSTGRES_MIGRATIONS: string[] = [
       ALTER TABLE bills ADD CONSTRAINT bills_source_check CHECK (source IN ('manual', 'scan'));
     END IF;
   END $$`,
+  // Undo links a compensating movement back to the one it reverses. The ledger
+  // stays append-only: the original row is never updated or deleted.
+  "ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS reverses_movement_id TEXT REFERENCES stock_movements(id) ON DELETE SET NULL",
+  "CREATE UNIQUE INDEX IF NOT EXISTS movements_reverses ON stock_movements(reverses_movement_id) WHERE reverses_movement_id IS NOT NULL",
 ];
 
 /**
@@ -1001,5 +1019,7 @@ export const POSTGRES_TABLE_ORDER = [
   "photo_labels",
   "ai_cache",
   "ai_call_logs",
+  // Listed last so a restore inserts batch effects after movements and batches.
+  "stock_movement_lots",
 ] as const;
 
