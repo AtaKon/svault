@@ -1479,6 +1479,51 @@ caller map class names (or `__skip`) before writing. Rounds back to the existing
 `PATCH /api/auth/me` accepts `{ "language": "en" | "el" }`. The stored preference is returned on `user`
 and drives the client dictionary and `Intl` date/number/currency formatting.
 
+## House activity feed
+
+`GET /api/houses/:houseId/activity` (viewer+) returns a read-only timeline of things that happened in
+the house. It is assembled at read time; there is no activity table and no extra write path. A source
+is included only when it already stores both an author and a timestamp.
+
+| `kind` | Source table | Timestamp | Author |
+| --- | --- | --- | --- |
+| `stock.add` / `stock.consume` / `stock.waste` / `stock.move` / `stock.count` | `stock_movements` (`in`, `out`, `waste`, `move`, `adjust`) | `created_at` | `user_id` |
+| `receipt.saved` | `receipts` | `created_at` | `created_by` |
+| `item.created` | `items` | `created_at` | `created_by` |
+| `shopping.checked` | `shopping_list_items` with a checkoff | `checked_at` | none recorded |
+| `bill.saved` | `bills` | `created_at` | `created_by` |
+
+Not covered, because the data to answer "who and when" is not stored: item archiving (`items.archived`
+is a flag with no timestamp or author), recipe cook events (there is no cook log), photo uploads,
+meal-plan edits and household settlements.
+
+Query parameters:
+
+| Name | Meaning |
+| --- | --- |
+| `before` | Opaque `nextCursor` from the previous page, or an ISO timestamp meaning "strictly older than this instant". |
+| `limit` | Page size, default `30`, maximum `100`. |
+| `member` | Only events whose stored author is this user id. Checkoffs have no author and drop out. |
+| `kind` | One or more of the kinds above, repeated (`?kind=stock.add&kind=receipt.saved`) or comma-separated. An unknown kind is `400`. |
+| `itemId` | Events for one item. Receipts match when one of their lines links the item. Bills have no item and drop out. |
+| `locationId` | Stock movements at that place. Other sources have no place and drop out. |
+| `from`, `to` | ISO timestamp or `YYYY-MM-DD` (UTC). `to` includes the whole day. |
+
+The response is `{ "events": [...], "nextCursor": "..." | null, "hasMore": boolean }`. Each event
+carries `id`, `kind`, `at`, `actorId`, `actorName`, `itemId`, `itemName`, `locationId`, `locationName`,
+`quantity`, `unit`, `amount`, `currency`, `title` (vendor, bill name, shopping line or movement
+reason), `receiptId`, `billId` and `shoppingItemId`.
+
+Ordering is `at` descending, then a per-source rank and the row id, both descending. A cursor carries
+the last pair, so rows saved in the same millisecond page without duplicates or gaps. Display names
+are joined through `house_members`, so a departed member keeps `actorId` but returns
+`actorName: null`; the client renders "Former member".
+
+```bash
+curl -b cookies.txt \
+  "http://localhost:8080/api/houses/hse_xxx/activity?limit=30&kind=stock.add,stock.consume"
+```
+
 ## Status codes
 
 | Code | Meaning |

@@ -23,6 +23,7 @@ All notable changes to SVault are documented here. The format follows
 - Saved inventory views: name the current filters, keep personal views, let house admins share one with everyone, and apply a view from a linkable URL. Views whose category or place was deleted stay visible with a warning.
 - Global search in the app header (`/` or `Ctrl`/`Cmd`+`K`) across items, recipes, receipts, bills and shops, with Greek accent-insensitive matching, grouped ranked results and recent searches kept on the device.
 - **Valuation and insurance report.** **More → Valuation report** builds a dated record of what the house owns, with per-item values from the latest purchase price, the average purchase price or the stock cost. Filter by category, place, tag, minimum value, active warranty and archived items; see the grand total, category and place subtotals and the items with no recorded value. Download the report as CSV (formula-injection safe, UTF-8 BOM) or print it from the browser with optional photos and attribute columns and an optional list of attached warranty documents. Unpriced items are listed but never counted as zero.
+- House activity feed: a read-only, newest-first timeline at **More → Activity** (`GET /api/houses/:houseId/activity`) that merges stock movements, saved receipts, new items, shopping checkoffs and bills, with cursor pagination and member, kind, item, place and date filters.
 
 ### Security
 

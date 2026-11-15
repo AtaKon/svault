@@ -1672,3 +1672,52 @@ export interface ValuationReport {
   categoryTotals: ValuationCategoryTotal[];
   placeTotals: ValuationPlaceTotal[];
 }
+
+/* ----------------------------------------------------------- activity feed */
+
+/**
+ * Kinds the read-only house timeline can show. Every kind maps to data that is
+ * already stored with an author and a timestamp; there is no activity table.
+ */
+export type ActivityKind =
+  | "stock.add"
+  | "stock.consume"
+  | "stock.waste"
+  | "stock.move"
+  | "stock.count"
+  | "receipt.saved"
+  | "item.created"
+  | "shopping.checked"
+  | "bill.saved";
+
+export interface ActivityEvent {
+  /** Source row id (`mov_`, `rcp_`, `itm_`, `shp_`, `bil_`). Unique across kinds. */
+  id: string;
+  kind: ActivityKind;
+  /** When the stored event happened, ISO-8601 UTC. */
+  at: string;
+  /** Null when the source row does not record who did it (shopping checkoffs). */
+  actorId: string | null;
+  /** Display name for a current member only; null for a departed or missing actor. */
+  actorName: string | null;
+  itemId: string | null;
+  itemName: string | null;
+  locationId: string | null;
+  locationName: string | null;
+  quantity: number | null;
+  unit: string | null;
+  amount: number | null;
+  currency: string | null;
+  /** Vendor, bill name, shopping line or movement reason. */
+  title: string | null;
+  receiptId: string | null;
+  billId: string | null;
+  shoppingItemId: string | null;
+}
+
+export interface ActivityFeed {
+  events: ActivityEvent[];
+  /** Opaque cursor for the next page; null when nothing older is left. */
+  nextCursor: string | null;
+  hasMore: boolean;
+}

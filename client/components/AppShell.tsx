@@ -34,6 +34,7 @@ const EXTRA: { to: string; label: string; icon: IconName }[] = [
   { to: "/notifications", label: "Reminders", icon: "bell" },
   { to: "/settings", label: "House settings", icon: "settings" },
   { to: "/labels", label: "Print labels", icon: "printer" },
+  { to: "/activity", label: "Activity", icon: "clock" },
 ];
 
 const CURRENCIES = ["EUR", "USD", "GBP", "CHF", "SEK", "NOK", "DKK", "PLN", "CZK", "CAD", "AUD", "JPY"];

@@ -12774,3 +12774,255 @@ describe("valuation report", () => {
     assert.ok(csvText.includes("Place totals"));
   });
 });
+
+describe("house activity feed", () => {
+  const stamp = (iso: string) => new Date(iso).toISOString();
+  let actCookie = "";
+  let actHouseId = "";
+  let actItemId = "";
+  let actFridgeId = "";
+  let ownerId = "";
+  let viewerId = "";
+  let viewerCookie = "";
+  let receiptId = "";
+  let billId = "";
+  let shoppingId = "";
+
+  it("shows stock, receipts, items, checkoffs and bills in one timeline", async () => {
+    const owner = await request("/api/auth/register", {
+      method: "POST",
+      body: {
+        name: "Activity Owner",
+        email: "activity-owner@example.com",
+        password: "test password",
+        houseName: "Activity House",
+      },
+    });
+    assert.equal(owner.status, 201);
+    actCookie = owner.cookie!;
+    actHouseId = owner.data.houses[0].id;
+    ownerId = owner.data.user.id;
+
+    const viewer = await request("/api/auth/register", {
+      method: "POST",
+      body: { name: "Activity Viewer", email: "activity-member@example.com", password: "test password" },
+    });
+    assert.equal(viewer.status, 201);
+    viewerCookie = viewer.cookie!;
+    viewerId = viewer.data.user.id;
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
+      actHouseId,
+      viewerId,
+      "viewer",
+      stamp("2026-01-01T00:00:00.000Z"),
+    ]);
+
+    const locations = await request(`/api/houses/${actHouseId}/locations`, { auth: actCookie });
+    actFridgeId = locations.data.find((entry: any) => entry.name === "Fridge").id;
+    const item = await request(`/api/houses/${actHouseId}/items`, {
+      method: "POST",
+      auth: actCookie,
+      body: { name: "Activity milk", unit: "l", initialStock: { quantity: 2, locationId: actFridgeId } },
+    });
+    assert.equal(item.status, 201);
+    actItemId = item.data.id;
+
+    // A member action, so the feed has a second author (viewers cannot write).
+    await request(`/api/houses/${actHouseId}/members/${viewerId}`, {
+      method: "PATCH",
+      auth: actCookie,
+      body: { role: "member" },
+    });
+    assert.equal(
+      (await request(`/api/items/${actItemId}/stock`, {
+        method: "POST",
+        auth: viewerCookie,
+        body: { action: "add", quantity: 1, locationId: actFridgeId },
+      })).status,
+      200,
+    );
+
+    // A saved receipt and a bill. Both store an author and a timestamp.
+    receiptId = "rcp_activity_test";
+    await run(
+      `INSERT INTO receipts (id, house_id, vendor_name, total, currency, created_by, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [receiptId, actHouseId, "Activity Market", 12.5, "EUR", viewerId, stamp("2026-01-30T11:00:00.000Z")],
+    );
+    billId = "bil_activity_test";
+    await run(
+      `INSERT INTO bills (id, house_id, name, amount, currency, created_by, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [billId, actHouseId, "Activity electricity", 42, "EUR", ownerId, stamp("2026-01-30T12:00:00.000Z")],
+    );
+
+    // Checkoffs record a timestamp but no checker; the event has no actor.
+    const line = await request(`/api/houses/${actHouseId}/shopping`, {
+      method: "POST",
+      auth: actCookie,
+      body: { name: "Activity bread", quantity: 1, unit: "pcs" },
+    });
+    shoppingId = line.data.item.id;
+    await request(`/api/houses/${actHouseId}/shopping/${shoppingId}`, {
+      method: "PATCH",
+      auth: actCookie,
+      body: { checked: true },
+    });
+
+    const feed = await request(`/api/houses/${actHouseId}/activity`, { auth: actCookie });
+    assert.equal(feed.status, 200);
+    assert.ok(Array.isArray(feed.data.events));
+    assert.equal(feed.data.hasMore, false);
+    assert.equal(feed.data.nextCursor, null);
+    const kinds = new Set(feed.data.events.map((event: any) => event.kind));
+    for (const kind of ["stock.add", "item.created", "receipt.saved", "bill.saved", "shopping.checked"]) {
+      assert.ok(kinds.has(kind), `missing ${kind}`);
+    }
+    const created = feed.data.events.find((event: any) => event.kind === "item.created" && event.itemId === actItemId);
+    assert.equal(created.actorId, ownerId);
+    assert.equal(created.actorName, "Activity Owner");
+    const added = feed.data.events.find(
+      (event: any) => event.kind === "stock.add" && event.actorId === viewerId && event.itemId === actItemId,
+    );
+    assert.equal(added.actorName, "Activity Viewer");
+    assert.equal(added.quantity, 1);
+    assert.equal(added.unit, "l");
+    assert.equal(added.locationName, "Fridge");
+    const receipt = feed.data.events.find((event: any) => event.kind === "receipt.saved");
+    assert.equal(receipt.title, "Activity Market");
+    assert.equal(receipt.amount, 12.5);
+    assert.equal(receipt.receiptId, receiptId);
+    const bill = feed.data.events.find((event: any) => event.kind === "bill.saved");
+    assert.equal(bill.title, "Activity electricity");
+    assert.equal(bill.billId, billId);
+    const checked = feed.data.events.find((event: any) => event.kind === "shopping.checked");
+    assert.equal(checked.actorId, null);
+    assert.equal(checked.title, "Activity bread");
+    assert.equal(checked.shoppingItemId, shoppingId);
+  });
+
+  it("lets viewers read the timeline and hides it from non-members", async () => {
+    assert.equal((await request(`/api/houses/${actHouseId}/activity`, { auth: viewerCookie })).status, 200);
+    assert.equal((await request(`/api/houses/${actHouseId}/activity`, { auth: "" })).status, 401);
+    const outsider = await request("/api/auth/register", {
+      method: "POST",
+      body: { name: "Activity Outsider", email: "activity-outsider@example.com", password: "test password" },
+    });
+    assert.equal(outsider.status, 201);
+    assert.equal((await request(`/api/houses/${actHouseId}/activity`, { auth: outsider.cookie! })).status, 404);
+  });
+
+  it("orders sources by time and pages through equal timestamps with a stable cursor", async () => {
+    // Pin both incoming movements to the same instant as the receipt, one hour
+    // after the bill, so the tie-breaker is exercised across sources.
+    await run("UPDATE stock_movements SET created_at = ? WHERE item_id = ? AND type = 'in'", [
+      stamp("2026-01-30T13:00:00.000Z"),
+      actItemId,
+    ]);
+    await run("UPDATE receipts SET created_at = ? WHERE id = ?", [stamp("2026-01-30T13:00:00.000Z"), receiptId]);
+    const expectedMovements = (await all<{ id: string }>(
+      "SELECT id FROM stock_movements WHERE item_id = ? AND created_at = ? ORDER BY id DESC",
+      [actItemId, stamp("2026-01-30T13:00:00.000Z")],
+    )).map((row) => row.id);
+    assert.equal(expectedMovements.length, 2);
+
+    const seen: string[] = [];
+    let before: string | null = null;
+    for (let page = 0; page < 6; page += 1) {
+      const query = new URLSearchParams({ from: "2026-01-30", to: "2026-01-30", limit: "1" });
+      if (before) query.set("before", before);
+      const res = await request(`/api/houses/${actHouseId}/activity?${query}`, { auth: actCookie });
+      assert.equal(res.status, 200);
+      assert.equal(res.data.events.length, 1);
+      seen.push(res.data.events[0].id);
+      if (!res.data.hasMore) {
+        assert.equal(res.data.nextCursor, null);
+        break;
+      }
+      assert.ok(res.data.nextCursor);
+      before = res.data.nextCursor;
+    }
+    // Newest first: the 13:00 group ordered by source rank and id, both
+    // descending (receipt, movement, movement), then the 12:00 bill.
+    assert.deepEqual(seen, [receiptId, ...expectedMovements, billId]);
+  });
+
+  it("filters by member, kind, item, place and date", async () => {
+    const byMember = await request(`/api/houses/${actHouseId}/activity?member=${viewerId}`, { auth: actCookie });
+    assert.ok(byMember.data.events.length > 0);
+    assert.ok(byMember.data.events.every((event: any) => event.actorId === viewerId));
+
+    const byKind = await request(`/api/houses/${actHouseId}/activity?kind=stock.add,receipt.saved`, { auth: actCookie });
+    assert.ok(byKind.data.events.length > 0);
+    assert.ok(byKind.data.events.every((event: any) => event.kind === "stock.add" || event.kind === "receipt.saved"));
+
+    const repeated = await request(`/api/houses/${actHouseId}/activity?kind=stock.add&kind=receipt.saved`, { auth: actCookie });
+    assert.equal(repeated.data.events.length, byKind.data.events.length);
+    assert.equal((await request(`/api/houses/${actHouseId}/activity?kind=bogus`, { auth: actCookie })).status, 400);
+
+    const byItem = await request(`/api/houses/${actHouseId}/activity?itemId=${actItemId}`, { auth: actCookie });
+    assert.ok(byItem.data.events.length > 0);
+    assert.ok(byItem.data.events.every((event: any) => event.itemId === actItemId));
+
+    const byPlace = await request(`/api/houses/${actHouseId}/activity?locationId=${actFridgeId}`, { auth: actCookie });
+    assert.ok(byPlace.data.events.length > 0);
+    assert.ok(byPlace.data.events.every((event: any) => event.locationId === actFridgeId && event.kind.startsWith("stock.")));
+
+    const byDate = await request(`/api/houses/${actHouseId}/activity?from=2026-01-30&to=2026-01-30`, { auth: actCookie });
+    const dayMovements = (await all<{ id: string }>(
+      "SELECT id FROM stock_movements WHERE item_id = ? AND created_at = ? ORDER BY id DESC",
+      [actItemId, stamp("2026-01-30T13:00:00.000Z")],
+    )).map((row) => row.id);
+    assert.deepEqual(
+      byDate.data.events.map((event: any) => event.id),
+      [receiptId, ...dayMovements, billId],
+    );
+    assert.ok(byDate.data.events.every((event: any) => event.at.startsWith("2026-01-30")));
+    const empty = await request(`/api/houses/${actHouseId}/activity?from=2025-01-01&to=2025-01-02`, { auth: actCookie });
+    assert.deepEqual(empty.data.events, []);
+    assert.equal(empty.data.hasMore, false);
+
+    assert.equal((await request(`/api/houses/${actHouseId}/activity?from=not-a-date`, { auth: actCookie })).status, 400);
+    assert.equal((await request(`/api/houses/${actHouseId}/activity?before=not-a-cursor`, { auth: actCookie })).status, 400);
+    assert.equal((await request(`/api/houses/${actHouseId}/activity?limit=zero`, { auth: actCookie })).status, 400);
+    assert.equal((await request(`/api/houses/${actHouseId}/activity?limit=1000`, { auth: actCookie })).status, 200);
+  });
+
+  it("shows a departed member without a display name", async () => {
+    const departed = await request("/api/auth/register", {
+      method: "POST",
+      body: { name: "Activity Departed", email: "activity-departed@example.com", password: "test password" },
+    });
+    assert.equal(departed.status, 201);
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
+      actHouseId,
+      departed.data.user.id,
+      "member",
+      stamp("2026-01-01T00:00:00.000Z"),
+    ]);
+    const moved = await request(`/api/items/${actItemId}/stock`, {
+      method: "POST",
+      auth: departed.cookie!,
+      body: { action: "add", quantity: 0.5, locationId: actFridgeId },
+    });
+    assert.equal(moved.status, 200);
+    await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [actHouseId, departed.data.user.id]);
+    const feed = await request(`/api/houses/${actHouseId}/activity?member=${departed.data.user.id}`, { auth: actCookie });
+    assert.ok(feed.data.events.length > 0);
+    for (const event of feed.data.events) {
+      assert.equal(event.actorId, departed.data.user.id);
+      assert.equal(event.actorName, null);
+    }
+  });
+
+  it("never leaks another house's events", async () => {
+    const other = await request("/api/houses", { method: "POST", auth: actCookie, body: { name: "Activity other house" } });
+    assert.equal(other.status, 201);
+    const otherFeed = await request(`/api/houses/${other.data.id}/activity`, { auth: actCookie });
+    assert.equal(otherFeed.status, 200);
+    assert.deepEqual(otherFeed.data.events.map((event: any) => event.id), []);
+    const mine = await request(`/api/houses/${actHouseId}/activity?limit=100`, { auth: actCookie });
+    assert.ok(mine.data.events.length > 0);
+    assert.ok(mine.data.events.every((event: any) => event.id !== other.data.id));
+  });
+});

@@ -373,6 +373,21 @@ opens a command palette that searches items, recipes, receipts, bills and shops 
 once. Results are grouped, ranked and limited per type; use the arrow keys and Enter to open one.
 Matching ignores Greek accents and case. The last eight searches are kept on this device only, with
 **Clear recent searches** to remove them.
+### House activity
+
+**More -> Activity** answers "who used the last milk?" with one newest-first timeline for the house.
+It reads what is already recorded: stock added, consumed, wasted, moved and counted, saved receipts,
+new items, shopping-list checkoffs and saved bills. Nothing new is written, so the list cannot drift
+from the item pages.
+
+- Grouped by day, with a chip row to show only some kinds and pickers for member and place. The
+  filters combine: for example, one member's uses from the fridge last week.
+- Tap an entry to open the item, the purchases page, the bills page or the shopping list.
+- Scroll to the end or press **Load more** to fetch older entries. Pages are stable even when several
+  events share the same timestamp.
+- Everyone in the house, including viewers, can read it. Names are shown only for current members; a
+  member who has left appears as "Former member". A checkoff has no author because SVault records
+  when a line was ticked but not who ticked it.
 
 ## 5. Recipes
 
