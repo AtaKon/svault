@@ -136,6 +136,7 @@ const EL: Record<string, string> = {
   "Portions to freeze": "Μερίδες για κατάψυξη",
   "of {count} {unit}": "από {count} {unit}",
   "Frozen on": "Ημερομηνία κατάψυξης",
+  "Choose the date you froze the leftovers.": "Επίλεξε την ημερομηνία που πάγωσες τα περισσεύματα.",
   "freezer places first": "πρώτα τα σημεία καταψύκτη",
   "Freezing replaces a short fridge use-by with the freezer shelf life. Thawed batches are not frozen again.": "Η κατάψυξη αντικαθιστά τη σύντομη ημερομηνία ψυγείου με τη διάρκεια κατάψυξης. Οι ξεπαγωμένες παρτίδες δεν καταψύχονται ξανά.",
   "Freeze these portions": "Κατάψυξη αυτών των μερίδων",
