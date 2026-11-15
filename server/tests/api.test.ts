@@ -11999,3 +11999,322 @@ describe("run-out forecasts", () => {
     assert.equal(result.data.items.find((item: any) => item.itemId === id).quantity, 1500);
   });
 });
+
+describe("saved inventory views", () => {
+  it("creates the saved_views table in both databases and in restore order", async () => {
+    const { POSTGRES_SCHEMA, POSTGRES_TABLE_ORDER } = await import("../database/postgres-schema.js");
+    const sqliteSource = readFileSync(path.resolve("server/database/sqlite.ts"), "utf8");
+    assert.match(sqliteSource, /CREATE TABLE IF NOT EXISTS saved_views/);
+    assert.match(POSTGRES_SCHEMA, /CREATE TABLE IF NOT EXISTS saved_views/);
+    assert.ok(POSTGRES_TABLE_ORDER.indexOf("saved_views") > POSTGRES_TABLE_ORDER.indexOf("users"));
+    assert.ok(POSTGRES_TABLE_ORDER.indexOf("saved_views") > POSTGRES_TABLE_ORDER.indexOf("houses"));
+  });
+
+  it("saves validated filters, supports rename/reorder and reports a deleted category", async () => {
+    const house = await request("/api/houses", { method: "POST", body: { name: "Saved view house" } });
+    const hid = house.data.id;
+    const category = await request(`/api/houses/${hid}/categories`, { method: "POST", body: { name: "Pantry" } });
+    const location = await request(`/api/houses/${hid}/locations`, { method: "POST", body: { name: "Top shelf" } });
+
+    const created = await request(`/api/houses/${hid}/saved-views`, {
+      method: "POST",
+      body: {
+        name: "Low pantry",
+        filters: { categoryId: category.data.id, locationId: location.data.id, low: true, q: "oil" },
+        sort: "quantity",
+      },
+    });
+    assert.equal(created.status, 201);
+    assert.deepEqual(created.data.filters, {
+      categoryId: category.data.id,
+      locationId: location.data.id,
+      low: true,
+      q: "oil",
+    });
+    assert.equal(created.data.sort, "quantity");
+    assert.equal(created.data.shared, false);
+    assert.equal(created.data.canEdit, true);
+    assert.deepEqual(created.data.missingFilters, []);
+
+    // Unknown filter keys and wrong types are rejected instead of silently ignored.
+    const unknown = await request(`/api/houses/${hid}/saved-views`, {
+      method: "POST",
+      body: { name: "Broken", filters: { nope: true } },
+    });
+    assert.equal(unknown.status, 400);
+    assert.equal(
+      (await request(`/api/houses/${hid}/saved-views`, { method: "POST", body: { name: "Broken", filters: { low: "1" } } })).status,
+      400,
+    );
+    assert.equal(
+      (await request(`/api/houses/${hid}/saved-views`, { method: "POST", body: { name: "Broken", sort: "price" } })).status,
+      400,
+    );
+    assert.equal(
+      (await request(`/api/houses/${hid}/saved-views`, {
+        method: "POST",
+        body: { name: "Foreign category", filters: { categoryId: "cat_missing" } },
+      })).status,
+      400,
+    );
+
+    const renamed = await request(`/api/houses/${hid}/saved-views/${created.data.id}`, {
+      method: "PATCH",
+      body: { name: "Pantry essentials", position: 4 },
+    });
+    assert.equal(renamed.status, 200);
+    assert.equal(renamed.data.name, "Pantry essentials");
+    assert.equal(renamed.data.position, 4);
+
+    // A deleted category leaves the view intact, with a hint instead of an error.
+    assert.equal((await request(`/api/houses/${hid}/categories/${category.data.id}`, { method: "DELETE" })).status, 200);
+    const listed = await request(`/api/houses/${hid}/saved-views`);
+    assert.equal(listed.status, 200);
+    assert.equal(listed.data.views.length, 1);
+    assert.deepEqual(listed.data.views[0].missingFilters, ["category"]);
+    assert.equal(listed.data.views[0].filters.categoryId, category.data.id);
+
+    assert.equal((await request(`/api/houses/${hid}/saved-views/${created.data.id}`, { method: "DELETE" })).status, 200);
+    assert.equal((await request(`/api/houses/${hid}/saved-views`)).data.views.length, 0);
+    assert.equal((await request(`/api/houses/${hid}/saved-views/${created.data.id}`, { method: "DELETE" })).status, 404);
+  });
+
+  it("keeps personal views private and lets only admins share a house view", async () => {
+    const house = await request("/api/houses", { method: "POST", body: { name: "Shared view house" } });
+    const hid = house.data.id;
+    const viewer = await request("/api/auth/register", {
+      method: "POST",
+      body: { name: "View Viewer", email: "view-viewer@example.com", password: "test password" },
+    });
+    const viewerId = viewer.data.user.id;
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
+      hid,
+      viewerId,
+      "viewer",
+      new Date().toISOString(),
+    ]);
+
+    // Viewers may keep a personal view: it only stores a query.
+    const personal = await request(`/api/houses/${hid}/saved-views`, {
+      method: "POST",
+      auth: viewer.cookie!,
+      body: { name: "My expiring", filters: { expiring: true } },
+    });
+    assert.equal(personal.status, 201);
+    assert.equal(personal.data.canEdit, true);
+    assert.equal(
+      (await request(`/api/houses/${hid}/saved-views`, {
+        method: "POST",
+        auth: viewer.cookie!,
+        body: { name: "Everyone sees this", filters: { low: true }, shared: true },
+      })).status,
+      403,
+    );
+
+    const shared = await request(`/api/houses/${hid}/saved-views`, {
+      method: "POST",
+      body: { name: "Low stock", filters: { low: true }, shared: true },
+    });
+    assert.equal(shared.status, 201);
+    assert.equal(shared.data.shared, true);
+
+    const viewerList = await request(`/api/houses/${hid}/saved-views`, { auth: viewer.cookie! });
+    assert.deepEqual(
+      viewerList.data.views.map((view: any) => view.name).sort(),
+      ["Low stock", "My expiring"],
+    );
+    assert.equal(viewerList.data.views.find((view: any) => view.name === "Low stock").canEdit, false);
+    // A viewer cannot edit or delete a house-wide view.
+    assert.equal(
+      (await request(`/api/houses/${hid}/saved-views/${shared.data.id}`, {
+        method: "PATCH",
+        auth: viewer.cookie!,
+        body: { name: "Hijacked" },
+      })).status,
+      403,
+    );
+    assert.equal(
+      (await request(`/api/houses/${hid}/saved-views/${shared.data.id}`, { method: "DELETE", auth: viewer.cookie! })).status,
+      403,
+    );
+
+    // The viewer's personal view stays out of the owner's list.
+    const ownerList = await request(`/api/houses/${hid}/saved-views`);
+    assert.deepEqual(ownerList.data.views.map((view: any) => view.name), ["Low stock"]);
+
+    // An admin can rename the shared view; a personal view of someone else is 404.
+    await run("UPDATE house_members SET role = 'admin' WHERE house_id = ? AND user_id = ?", [hid, viewerId]);
+    assert.equal(
+      (await request(`/api/houses/${hid}/saved-views/${shared.data.id}`, {
+        method: "PATCH",
+        auth: viewer.cookie!,
+        body: { name: "House low stock" },
+      })).status,
+      200,
+    );
+    assert.equal(
+      (await request(`/api/houses/${hid}/saved-views/${personal.data.id}`, {
+        method: "PATCH",
+        auth: cookie,
+        body: { name: "Not mine" },
+      })).status,
+      404,
+    );
+  });
+
+  it("caps personal views per user and keeps houses isolated", async () => {
+    const house = await request("/api/houses", { method: "POST", body: { name: "Cap view house" } });
+    const hid = house.data.id;
+    for (let index = 0; index < 25; index += 1) {
+      const created = await request(`/api/houses/${hid}/saved-views`, {
+        method: "POST",
+        body: { name: `View ${index}`, filters: { q: `term${index}` } },
+      });
+      assert.equal(created.status, 201);
+    }
+    const overCap = await request(`/api/houses/${hid}/saved-views`, {
+      method: "POST",
+      body: { name: "One too many", filters: {} },
+    });
+    assert.equal(overCap.status, 400);
+
+    const other = await request("/api/houses", { method: "POST", body: { name: "Other view house" } });
+    const otherView = await request(`/api/houses/${other.data.id}/saved-views`, {
+      method: "POST",
+      body: { name: "Elsewhere", filters: { low: true } },
+    });
+    assert.equal(otherView.status, 201);
+    const listed = await request(`/api/houses/${hid}/saved-views`);
+    assert.equal(listed.data.views.some((view: any) => view.id === otherView.data.id), false);
+    assert.equal(
+      (await request(`/api/houses/${hid}/saved-views/${otherView.data.id}`, { method: "PATCH", body: { name: "Nope" } })).status,
+      404,
+    );
+    // A stranger who is not a member sees no views and cannot write one.
+    assert.equal((await request(`/api/houses/${hid}/saved-views`, { auth: secondUserCookie })).status, 404);
+  });
+});
+
+describe("global search", () => {
+  it("normalises Greek accents and case and groups results by type", async () => {
+    const house = await request("/api/houses", { method: "POST", body: { name: "Search house" } });
+    const hid = house.data.id;
+    const item = await request(`/api/houses/${hid}/items`, {
+      method: "POST",
+      body: { name: "Ρεβάνι με ινδοκάρυδο", brand: "Σπίτι" },
+    });
+    assert.equal(item.status, 201);
+    const recipe = await request(`/api/houses/${hid}/recipes`, {
+      method: "POST",
+      body: { title: "Ρεβάνι", description: "Γλυκό ταψιού" },
+    });
+    assert.equal(recipe.status, 201);
+
+    const accented = await request(`/api/houses/${hid}/search?q=${encodeURIComponent("ρεβάνι")}`);
+    assert.equal(accented.status, 200);
+    assert.equal(accented.data.total, 2);
+    const itemsGroup = accented.data.groups.find((group: any) => group.type === "items");
+    const recipesGroup = accented.data.groups.find((group: any) => group.type === "recipes");
+    assert.equal(itemsGroup.hits[0].id, item.data.id);
+    assert.equal(itemsGroup.hits[0].route, `/items/${item.data.id}`);
+    assert.equal(recipesGroup.hits[0].id, recipe.data.id);
+
+    // Unaccented lowercase, uppercase and a Latin prefix all match the same row.
+    for (const query of ["ρεβανι", "ΡΕΒΑΝΙ", "ρεβαν"]) {
+      const found = await request(`/api/houses/${hid}/search?q=${encodeURIComponent(query)}`);
+      assert.ok(found.data.groups.some((group: any) => group.hits.some((hit: any) => hit.id === item.data.id)));
+    }
+
+    const types = await request(`/api/houses/${hid}/search?q=${encodeURIComponent("ρεβανι")}&types=recipes`);
+    assert.deepEqual(types.data.groups.map((group: any) => group.type), ["recipes"]);
+    assert.ok((await request(`/api/houses/${hid}/search?q=ρεβανι&limit=1`)).data.groups[0].hits.length === 1);
+  });
+
+  it("enforces the minimum length, rejects unknown types and treats wildcards literally", async () => {
+    const house = await request("/api/houses", { method: "POST", body: { name: "Wildcard house" } });
+    const hid = house.data.id;
+    await request(`/api/houses/${hid}/items`, { method: "POST", body: { name: "A%B juice" } });
+    await request(`/api/houses/${hid}/items`, { method: "POST", body: { name: "AxxB juice" } });
+
+    assert.equal((await request(`/api/houses/${hid}/search?q=a`)).status, 400);
+    const literal = await request(`/api/houses/${hid}/search?q=${encodeURIComponent("a%b")}&types=items`);
+    // `%` is an ordinary character, so AxxB must not match.
+    assert.equal(literal.data.groups.length, 1);
+    assert.deepEqual(literal.data.groups[0].hits.map((hit: any) => hit.title), ["A%B juice"]);
+    assert.equal((await request(`/api/houses/${hid}/search?q=juice&types=nope`)).status, 400);
+    assert.equal((await request(`/api/houses/${hid}/search?q=a_&types=items`)).status, 200);
+
+    const recents = await request(`/api/houses/${hid}/search?q=zz&types=items`);
+    assert.equal(recents.status, 200);
+    assert.deepEqual(recents.data.groups, []);
+  });
+
+  it("never returns another house's records and requires house membership", async () => {
+    const mine = await request("/api/houses", { method: "POST", body: { name: "Search mine" } });
+    const theirs = await request("/api/houses", { method: "POST", body: { name: "Search theirs" } });
+    const ours = await request(`/api/houses/${mine.data.id}/items`, { method: "POST", body: { name: "Κοινό μυστικό" } });
+    const secret = await request(`/api/houses/${theirs.data.id}/items`, { method: "POST", body: { name: "Κοινό μυστικό" } });
+    assert.equal(ours.status, 201);
+    assert.equal(secret.status, 201);
+
+    const result = await request(`/api/houses/${mine.data.id}/search?q=${encodeURIComponent("κοινο")}`);
+    assert.equal(result.status, 200);
+    const ids = result.data.groups.flatMap((group: any) => group.hits.map((hit: any) => hit.id));
+    assert.deepEqual(ids, [ours.data.id]);
+
+    // A signed-in stranger gets the same 404 as an unknown house.
+    assert.equal(
+      (await request(`/api/houses/${mine.data.id}/search?q=test`, { auth: secondUserCookie })).status,
+      404,
+    );
+
+    // Viewers can search: these record types are readable by all members.
+    const viewer = await request("/api/auth/register", {
+      method: "POST",
+      body: { name: "Search Viewer", email: "search-viewer@example.com", password: "test password" },
+    });
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
+      mine.data.id,
+      viewer.data.user.id,
+      "viewer",
+      new Date().toISOString(),
+    ]);
+    const viewerResult = await request(`/api/houses/${mine.data.id}/search?q=${encodeURIComponent("κοινο")}`, {
+      auth: viewer.cookie!,
+    });
+    assert.equal(viewerResult.status, 200);
+    assert.ok(viewerResult.data.total >= 1);
+  });
+
+  it("finds receipts, bills and shops in their own groups", async () => {
+    const house = await request("/api/houses", { method: "POST", body: { name: "Search records" } });
+    const hid = house.data.id;
+    const vendor = await request(`/api/houses/${hid}/vendors`, { method: "POST", body: { name: "Παντοπωλείο Αυγό" } });
+    assert.equal(vendor.status, 201);
+    const stamp = new Date().toISOString();
+    await run(
+      `INSERT INTO receipts (id, house_id, vendor_id, vendor_name, purchased_at, currency, total, source, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ["rct_search_test", hid, vendor.data.id, "Παντοπωλείο Αυγό", "2026-02-01", "EUR", 12.5, "scan", stamp],
+    );
+    await run(
+      `INSERT INTO bills (id, house_id, name, bill_type, category, amount, currency, due_date, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ["bil_search_test", hid, "Ρεύμα Αυγούστου", "electricity", "personal", 45, "EUR", "2026-02-10", stamp],
+    );
+
+    const receipts = await request(`/api/houses/${hid}/search?q=${encodeURIComponent("αυγο")}&types=receipts,shops`);
+    assert.equal(receipts.status, 200);
+    assert.deepEqual(receipts.data.groups.map((group: any) => group.type).sort(), ["receipts", "shops"]);
+    assert.equal(
+      receipts.data.groups.find((group: any) => group.type === "receipts").hits[0].route,
+      "/receipts",
+    );
+    assert.equal(receipts.data.groups.find((group: any) => group.type === "shops").hits[0].id, vendor.data.id);
+
+    const bills = await request(`/api/houses/${hid}/search?q=${encodeURIComponent("ρευμα")}&types=bills`);
+    assert.equal(bills.status, 200);
+    assert.equal(bills.data.groups[0].hits[0].id, "bil_search_test");
+    assert.equal(bills.data.groups[0].hits[0].route, "/bills");
+  });
+});
