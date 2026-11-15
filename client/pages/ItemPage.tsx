@@ -10,6 +10,7 @@ import {
   Card,
   ConfirmDialog,
   EmptyState,
+  Field,
   IconButton,
   Input,
   LoadingBlock,
@@ -25,9 +26,13 @@ import { NutritionRows, basisLabel } from "@/components/Nutrition";
 import { OffProductPicker } from "@/components/OffProductPicker";
 import { ZoomableImage } from "@/components/ZoomableImage";
 import { StockDialog } from "@/components/ItemCard";
+import { ItemLoansCard } from "@/components/Loans";
 import { PriceChart } from "@/components/PriceChart";
 import { EspressoLogCard } from "@/components/Espresso";
+import { MergeIntoSheet } from "@/components/ItemMerge";
 import { useToast } from "@/components/toast";
+import { useStockUndo } from "@/undo-stock";
+import { useLiveRefresh } from "@/live";
 import { daysUntil, money, qty, relativeTime, shortDate, todayInput, unitPriceLabel } from "@/format";
 import { offProjectLabel } from "@/off";
 import type {
@@ -49,8 +54,11 @@ const MOVEMENT_LABELS: Record<Movement["type"], { label: string; icon: IconName;
   adjust: { label: "Count", icon: "pencil", tone: "bg-raised text-muted" },
   waste: { label: "Wasted", icon: "trash", tone: "bg-danger-soft text-danger" },
   move: { label: "Moved", icon: "mapPin", tone: "bg-raised text-muted" },
+  count: { label: "Counted", icon: "check", tone: "bg-brand-soft text-brand" },
 };
 
+/** History offers Undo for the last day only; the API still has the last word. */
+const RECENT_UNDO_MS = 24 * 60 * 60 * 1000;
 
 /** Document kinds as stored by the API, with their display labels. */
 const DOCUMENT_KIND_LABELS: Record<string, string> = { other: "Other", manual: "Manual", receipt: "Purchase receipt", warranty: "Warranty card" };
@@ -72,6 +80,7 @@ export function ItemPage() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const toast = useToast();
+  const undo = useStockUndo();
   const [documents, setDocuments] = useState<{ id: string; originalName: string; kind: string }[]>([]);
   const [documentKind, setDocumentKind] = useState("other");
   const [documentBusy, setDocumentBusy] = useState(false);
@@ -83,10 +92,18 @@ export function ItemPage() {
   const [stockOpen, setStockOpen] = useState(false);
   const [stockAction, setStockAction] = useState<"add" | "remove">("add");
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [mergeOpen, setMergeOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [quickBusy, setQuickBusy] = useState(false);
+  const [undoBusy, setUndoBusy] = useState<string | null>(null);
   const [openingDates, setOpeningDates] = useState<Record<string, string>>({});
   const [openingBusy, setOpeningBusy] = useState<string | null>(null);
+  const [freezeLot, setFreezeLot] = useState<{ id: string; quantity: number; unit: string } | null>(null);
+  const [freezePortions, setFreezePortions] = useState("");
+  const [freezeDate, setFreezeDate] = useState(todayInput());
+  const [freezeLocation, setFreezeLocation] = useState("");
+  const [freezeBusy, setFreezeBusy] = useState(false);
+  const [thawBusy, setThawBusy] = useState<string | null>(null);
   const [barcodeInput, setBarcodeInput] = useState("");
   const [barcodeBusy, setBarcodeBusy] = useState(false);
   const [scanOpen, setScanOpen] = useState(false);
@@ -131,6 +148,8 @@ export function ItemPage() {
     setPriceVendor("");
   }, [itemId]);
 
+  useLiveRefresh(house.id, ["stock", "items"], load);
+
   const setOpened = async (lotId: string, opened: boolean) => {
     setOpeningBusy(lotId);
     try {
@@ -146,12 +165,70 @@ export function ItemPage() {
     }
   };
 
+  const openFreeze = (lot: { id: string; quantity: number; unit: string }) => {
+    setFreezeLot(lot);
+    setFreezePortions(["pcs", "pc", "piece", "pieces"].includes(lot.unit.toLowerCase()) ? String(lot.quantity) : "1");
+    setFreezeDate(todayInput());
+    const preferred = locations.find((place) => place.isFreezer);
+    setFreezeLocation(preferred?.id ?? "");
+  };
+
+  const freezeBatch = async () => {
+    if (!item || !freezeLot) return;
+    const portions = Number(freezePortions);
+    if (!Number.isFinite(portions) || portions <= 0) {
+      toast.error(t("Enter a positive number of portions"));
+      return;
+    }
+    setFreezeBusy(true);
+    try {
+      await api(`/api/houses/${house.id}/freezer/freeze`, {
+        method: "POST",
+        body: {
+          itemId: item.id,
+          lotId: freezeLot.id,
+          portions,
+          locationId: freezeLocation || null,
+          frozenOn: freezeDate || undefined,
+        },
+      });
+      const detail = await api<ItemDetail>(`/api/items/${item.id}`);
+      setItem(detail);
+      setFreezeLot(null);
+      toast.success(t("Batch frozen"));
+      window.dispatchEvent(new Event("sv:refresh-badges"));
+    } catch (err) {
+      toast.error(err instanceof Error ? t(err.message) : t("Could not freeze the batch"));
+    } finally {
+      setFreezeBusy(false);
+    }
+  };
+
+  const thawBatch = async (lotId: string) => {
+    if (!item) return;
+    setThawBusy(lotId);
+    try {
+      await api(`/api/houses/${house.id}/freezer/thaw`, {
+        method: "POST",
+        body: { itemId: item.id, lotId },
+      });
+      const detail = await api<ItemDetail>(`/api/items/${item.id}`);
+      setItem(detail);
+      toast.success(t("Batch thawed"));
+      window.dispatchEvent(new Event("sv:refresh-badges"));
+    } catch (err) {
+      toast.error(err instanceof Error ? t(err.message) : t("Could not thaw the batch"));
+    } finally {
+      setThawBusy(null);
+    }
+  };
+
   const quick = async (action: "add" | "remove") => {
     if (!item) return;
     setQuickBusy(true);
     try {
       if (isOffline() && user) {
-        await enqueueStockAction({
+        const queued = await enqueueStockAction({
           userId: user.id,
           houseId: house.id,
           itemId: item.id,
@@ -165,7 +242,17 @@ export function ItemPage() {
             ? { ...previous, quantity: Math.max(0, previous.quantity + (action === "add" ? 1 : -1)) }
             : previous,
         );
-        toast.push(t("Queued offline — it will sync when you reconnect"));
+        undo.notify(t("Queued offline — it will sync when you reconnect"), {
+          itemId: item.id,
+          queuedId: queued.id,
+          onQueuedCancelled: () =>
+            setItem((previous) =>
+              previous
+                ? { ...previous, quantity: Math.max(0, previous.quantity + (action === "add" ? -1 : 1)) }
+                : previous,
+            ),
+          onUndone: () => void load(),
+        });
         return;
       }
       const detail = await api<ItemDetail>(`/api/items/${item.id}/stock`, {
@@ -174,10 +261,25 @@ export function ItemPage() {
       });
       setItem(detail);
       window.dispatchEvent(new Event("sv:refresh-badges"));
+      undo.notify(t(action === "add" ? "Added one {item}" : "Removed one {item}", { item: item.name }), {
+        itemId: item.id,
+        movementId: detail.lastMovementId,
+        onUndone: () => void load(),
+      });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t("Could not update stock"));
     } finally {
       setQuickBusy(false);
+    }
+  };
+
+  const undoMovement = async (movementId: string) => {
+    if (!item) return;
+    setUndoBusy(movementId);
+    try {
+      await undo.run({ itemId: item.id, movementId, onUndone: () => void load() });
+    } finally {
+      setUndoBusy(null);
     }
   };
 
@@ -315,6 +417,13 @@ export function ItemPage() {
   if (!item) return <LoadingBlock label={t("Loading item")} />;
 
   const lotValue = item.lots.reduce((sum, lot) => sum + lot.quantity * (lot.unitPrice ?? 0), 0);
+  const movementCanBeUndone = (movement: Movement) =>
+    can("member") &&
+    movement.undoable === true &&
+    !movement.reversed &&
+    !movement.reversesMovementId &&
+    Date.now() - Date.parse(movement.createdAt) <= RECENT_UNDO_MS &&
+    (can("admin") || movement.userId === user?.id);
   const openStock = (action: "add" | "remove") => {
     setStockAction(action);
     setStockOpen(true);
@@ -350,6 +459,10 @@ export function ItemPage() {
         subtitle={item.description || undefined}
         actions={
           <>
+            <IconButton icon="printer" label={t("Print label")} onClick={() => navigate(`/labels?item=${item.id}`)} />
+            {can("member") && !item.archived && !item.mergedInto && (
+              <IconButton icon="grid" label={t("Merge into…")} onClick={() => setMergeOpen(true)} />
+            )}
             {can("member") && (
               <IconButton icon="pencil" label={t("Edit item")} onClick={() => navigate(`/items/${item.id}/edit`)} />
             )}
@@ -357,6 +470,18 @@ export function ItemPage() {
           </>
         }
       />
+
+      {item.mergedInto && (
+        <Card className="flex flex-wrap items-center gap-2 border-warn/30 bg-warn-soft/50 p-3 text-sm">
+          <Icon name="alert" size={15} className="text-warn" />
+          <span className="min-w-0 flex-1">
+            {t("This item was merged into another one and is archived.")}
+          </span>
+          <Link to={`/items/${item.mergedInto}`} className="font-medium text-brand hover:underline">
+            {t("Open the item that kept the history")}
+          </Link>
+        </Card>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-[1.15fr_1fr]">
         <div className="space-y-4">
@@ -388,11 +513,18 @@ export function ItemPage() {
                   <div className="mt-1.5 text-xs text-muted">
                     {lotValue > 0 ? t("{amount} on the shelf", { amount: money(lotValue, house.currency) }) : t("No purchase price recorded")}
                   </div>
+                  {item.onLoan > 0 && (
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-warn">
+                      <Icon name="users" size={12} />
+                      {t("{count} {unit} on loan", { count: qty(item.onLoan), unit: item.unit })}
+                      <span className="text-muted">· {qty(item.available)} {t("available")}</span>
+                    </div>
+                  )}
                 </div>
                 <div className="flex shrink-0 items-center gap-1.5">
                   <button
                     onClick={() => void quick("remove")}
-                    disabled={quickBusy || item.quantity <= 0}
+                    disabled={quickBusy || item.available <= 0}
                     aria-busy={quickBusy || undefined}
                     aria-label={t("Remove one")}
                     className="flex h-11 w-11 items-center justify-center rounded-xl border border-line bg-surface text-muted transition-colors hover:border-danger/40 hover:text-danger disabled:opacity-40"
@@ -427,11 +559,13 @@ export function ItemPage() {
               <div className="mt-4 grid grid-cols-2 gap-2">
                 <Button icon="plus" onClick={() => openStock("add")} disabled={!can("member")}>
                   {t("Add stock ")}</Button>
-                <Button variant="secondary" icon="minus" onClick={() => openStock("remove")} disabled={!can("member") || item.quantity <= 0}>
+                <Button variant="secondary" icon="minus" onClick={() => openStock("remove")} disabled={!can("member") || item.available <= 0}>
                   {t("Take out ")}</Button>
               </div>
             </div>
           </Card>
+
+          <ItemLoansCard item={item} canWrite={can("member")} onChanged={() => void load()} />
 
           <Card className="p-4">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -541,11 +675,28 @@ export function ItemPage() {
                             {lot.openedAt ? t("opened {date}", { date: shortDate(lot.openedAt) }) : t("Not opened")}
                             {lot.openedAt && lot.effectiveExpiresAt ? t(" · use by {date}", { date: shortDate(lot.effectiveExpiresAt) }) : ""}
                           </div>
+                          {lot.frozenOn && (
+                            <div className="mt-1 text-xs text-brand">
+                              ❄️ {lot.thawedOn
+                                ? t("thawed {ago} · eat by {date}", { ago: relativeTime(lot.thawedOn), date: shortDate(lot.effectiveExpiresAt) })
+                                : t("frozen {ago} · {count} portions", { ago: relativeTime(lot.frozenOn), count: qty(lot.portions ?? lot.quantity) })}
+                            </div>
+                          )}
                           {can("member") && <div className="mt-2 flex flex-wrap items-center gap-2">
                             {!lot.openedAt && <Input aria-label={t("Opened date")} className="w-auto max-w-full" type="date" value={openingDates[lot.id] || todayInput()} onChange={(e) => setOpeningDates((dates) => ({ ...dates, [lot.id]: e.target.value }))} />}
                             <button type="button" disabled={openingBusy === lot.id} onClick={() => void setOpened(lot.id, !lot.openedAt)} className="rounded-md px-2 py-1 text-xs font-medium text-brand hover:bg-raised disabled:opacity-50">
                               {lot.openedAt ? t("Mark as not opened") : t("Mark opened")}
                             </button>
+                            {!lot.frozenOn && !lot.thawedOn && (
+                              <button type="button" onClick={() => openFreeze({ id: lot.id, quantity: lot.quantity, unit: lot.unit })} className="rounded-md px-2 py-1 text-xs font-medium text-brand hover:bg-raised">
+                                ❄️ {t("Freeze")}
+                              </button>
+                            )}
+                            {lot.frozenOn && !lot.thawedOn && (
+                              <button type="button" disabled={thawBusy === lot.id} onClick={() => void thawBatch(lot.id)} className="rounded-md px-2 py-1 text-xs font-medium text-brand hover:bg-raised disabled:opacity-50">
+                                {thawBusy === lot.id ? t("Thawing…") : t("Thaw")}
+                              </button>
+                            )}
                           </div>}
                         </div>
                         {lot.effectiveExpiresAt && (
@@ -570,6 +721,7 @@ export function ItemPage() {
               <div className="divide-y divide-line">
                 {item.movements.slice(0, 20).map((movement) => {
                   const meta = MOVEMENT_LABELS[movement.type];
+                  const canUndo = movementCanBeUndone(movement);
                   return (
                     <div key={movement.id} className="flex items-start gap-3 py-2.5">
                       <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg", meta.tone)}>
@@ -581,7 +733,7 @@ export function ItemPage() {
                             {movement.delta > 0 ? "+" : ""}
                             {qty(movement.delta)} {movement.unit}
                           </span>
-                          <span className="text-[11px] text-muted">{relativeTime(movement.createdAt)}</span>
+                          <span className="shrink-0 text-[11px] text-muted">{relativeTime(movement.createdAt)}</span>
                         </div>
                         <div className="text-[11px] text-muted">
                           {t(meta.label)}
@@ -589,9 +741,21 @@ export function ItemPage() {
                           {movement.vendorName ? ` · ${movement.vendorName}` : ""}
                           {movement.userName ? ` · ${movement.userName}` : ""}
                           {movement.locationName ? ` · ${movement.locationName}` : ""}
+                          {movement.reversed ? ` · ${t("Undone")}` : ""}
                         </div>
                         {movement.note && <div className="mt-0.5 text-[11px] italic text-muted">“{movement.note}”</div>}
                       </div>
+                      {canUndo && (
+                        <button
+                          type="button"
+                          onClick={() => void undoMovement(movement.id)}
+                          disabled={undoBusy === movement.id}
+                          aria-label={t("Undo this stock change")}
+                          className="shrink-0 rounded-lg px-2 py-1 text-[11px] font-semibold text-brand transition-colors hover:bg-raised disabled:opacity-50"
+                        >
+                          {undoBusy === movement.id ? <Spinner size={12} /> : t("Undo")}
+                        </button>
+                      )}
                     </div>
                   );
                 })}
@@ -946,6 +1110,45 @@ export function ItemPage() {
             <Spinner size={14} /> {t("Saving barcode…")}</div>
         )}
       </Sheet>
+
+      <Sheet
+        open={Boolean(freezeLot)}
+        onClose={() => { if (!freezeBusy) setFreezeLot(null); }}
+        title={t("Freeze this batch")}
+        description={t("Move all or part of a batch to a freezer. The eat-by date comes from the freezer shelf life.")}
+        footer={<Button block loading={freezeBusy} onClick={() => void freezeBatch()}>{t("Freeze batch")}</Button>}
+      >
+        <div className="space-y-3">
+          <Field label={t("Portions to freeze")} hint={freezeLot ? t("of {count} {unit}", { count: qty(freezeLot.quantity), unit: freezeLot.unit }) : undefined}>
+            <Input type="number" min="0.001" step="any" inputMode="decimal" value={freezePortions} onChange={(e) => setFreezePortions(e.target.value)} />
+          </Field>
+          <Field label={t("Frozen on")}>
+            <Input type="date" value={freezeDate} onChange={(e) => setFreezeDate(e.target.value)} />
+          </Field>
+          <Field label={t("Place")} hint={t("freezer places first")}>
+            <Select value={freezeLocation} onChange={(e) => setFreezeLocation(e.target.value)}>
+              <option value="">{t("No location")}</option>
+              {[...locations].sort((a, b) => Number(b.isFreezer) - Number(a.isFreezer) || a.name.localeCompare(b.name)).map((place) => (
+                <option key={place.id} value={place.id}>{place.isFreezer ? `❄️ ${place.name}` : place.name}</option>
+              ))}
+            </Select>
+          </Field>
+          <p className="text-[11px] leading-relaxed text-muted">
+            {t("Freezing replaces a short fridge use-by with the freezer shelf life. Thawed batches are not frozen again.")}
+          </p>
+        </div>
+      </Sheet>
+      <MergeIntoSheet
+        open={mergeOpen}
+        houseId={item.houseId}
+        source={{ id: item.id, name: item.name, unit: item.unit }}
+        onClose={() => setMergeOpen(false)}
+        onMerged={(result) => {
+          setMergeOpen(false);
+          window.dispatchEvent(new Event("sv:refresh-badges"));
+          navigate(`/items/${result.target.id}`);
+        }}
+      />
 
       <ConfirmDialog
         open={deleteOpen}

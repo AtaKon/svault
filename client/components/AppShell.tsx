@@ -7,7 +7,10 @@ import { Button, Field, Input, Select, Sheet, cn } from "@/components/ui";
 import { Icon, LogoMark, type IconName } from "@/components/icons";
 import { useToast } from "@/components/toast";
 import { OfflineQueueBar } from "@/components/OfflineQueueBar";
+import { useLabelHouseBinding } from "@/components/LabelDeepLink";
+import { GlobalSearch } from "@/components/GlobalSearch";
 import { currentTheme, toggleTheme } from "@/theme";
+import { setLiveContext, useLiveRefresh } from "@/live";
 import type { House, Notification } from "@shared/types";
 
 const NAV: { to: string; label: string; icon: IconName; end?: boolean }[] = [
@@ -22,6 +25,7 @@ const EXTRA: { to: string; label: string; icon: IconName }[] = [
   { to: "/insights", label: "Insights", icon: "price" },
   { to: "/contribute", label: "Contribute", icon: "sparkles" },
   { to: "/espresso", label: "Espresso log", icon: "cup" },
+  { to: "/loans", label: "Loans", icon: "users" },
   { to: "/shopping", label: "Shopping list", icon: "list" },
   { to: "/plan", label: "Meal plan", icon: "calendar" },
   { to: "/intake", label: "Bulk intake", icon: "upload" },
@@ -30,7 +34,10 @@ const EXTRA: { to: string; label: string; icon: IconName }[] = [
   { to: "/bills", label: "Bills & splitting", icon: "receipt" },
   { to: "/photos", label: "Photo library", icon: "image" },
   { to: "/notifications", label: "Reminders", icon: "bell" },
+  { to: "/items/duplicates", label: "Find duplicates", icon: "grid" },
   { to: "/settings", label: "House settings", icon: "settings" },
+  { to: "/labels", label: "Print labels", icon: "printer" },
+  { to: "/activity", label: "Activity", icon: "clock" },
 ];
 
 const CURRENCIES = ["EUR", "USD", "GBP", "CHF", "SEK", "NOK", "DKK", "PLN", "CZK", "CAD", "AUD", "JPY"];
@@ -40,11 +47,14 @@ export function AppShell() {
   const { t } = useI18n();
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [unread, setUnread] = useState(0);
   const toast = useToast();
   const location = useLocation();
   const navigate = useNavigate();
   const [theme, setTheme] = useState(currentTheme());
+
+  useLabelHouseBinding();
 
   const knownNotifications = useRef<Set<string>>(new Set());
   const notificationsPrimed = useRef(false);
@@ -100,26 +110,65 @@ export function AppShell() {
       }
     };
     void load();
-    const timer = window.setInterval(load, 90_000);
     const onBadge = () => void load();
     window.addEventListener("sv:refresh-badges", onBadge);
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
       window.removeEventListener("sv:refresh-badges", onBadge);
     };
   }, [user]);
 
+  // One live connection per tab. The reminder badge and every page share it,
+  // and the hook below refetches the badge through the existing event so this
+  // effect stays the only place that knows how notifications load.
+  useEffect(() => {
+    setLiveContext(house && user ? { houseId: house.id, userId: user.id } : null);
+    return () => setLiveContext(null);
+  }, [house?.id, user?.id]);
+
+  useLiveRefresh(
+    house?.id ?? null,
+    ["notifications", "stock", "items"],
+    () => {
+      window.dispatchEvent(new Event("sv:refresh-badges"));
+    },
+    { enabled: Boolean(user) },
+  );
+
   useEffect(() => {
     window.scrollTo({ top: 0 });
   }, [location.pathname]);
+
+  // "/" or Ctrl/Cmd+K opens global search, except while typing in a field.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const typing =
+        target instanceof HTMLElement &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT" ||
+          target.isContentEditable);
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setSearchOpen((current) => !current);
+        return;
+      }
+      if (!typing && event.key === "/") {
+        event.preventDefault();
+        setSearchOpen(true);
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
 
   if (!house) return null;
 
   return (
     <div className="min-h-dvh bg-bg">
       {/* desktop sidebar */}
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-[260px] flex-col border-r border-line bg-surface/70 px-4 py-5 backdrop-blur lg:flex">
+      <aside className="fixed inset-y-0 left-0 z-30 hidden w-[260px] flex-col border-r border-line bg-surface/70 px-4 py-5 backdrop-blur lg:flex print:hidden">
         <div className="flex items-center gap-2.5 px-1">
           <LogoMark size={34} />
           <div>
@@ -143,6 +192,14 @@ export function AppShell() {
         </button>
 
         <nav className="mt-5 flex flex-col gap-0.5">
+          <button
+            onClick={() => setSearchOpen(true)}
+            className="mb-1 flex items-center gap-2.5 rounded-lg border border-line bg-bg px-2.5 py-2 text-sm text-muted transition-colors hover:bg-raised hover:text-ink"
+          >
+            <Icon name="search" size={16} />
+            <span className="flex-1 text-left">{t("Search")}</span>
+            <kbd className="rounded border border-line bg-raised px-1.5 py-0.5 text-[10px] font-medium">Ctrl K</kbd>
+          </button>
           {NAV.filter((item) => item.to !== "/more").map((item) => (
             <SideLink key={item.to} {...item} label={t(item.label)} />
           ))}
@@ -182,7 +239,7 @@ export function AppShell() {
       </aside>
 
       {/* mobile top bar */}
-      <header ref={mobileHeaderRef} className="safe-top sticky top-0 z-30 border-b border-line bg-bg/90 backdrop-blur lg:hidden">
+      <header ref={mobileHeaderRef} className="safe-top sticky top-0 z-30 border-b border-line bg-bg/90 backdrop-blur lg:hidden print:hidden">
         <div className="flex items-center gap-2 px-4 py-2.5">
           <button
             onClick={() => setSwitcherOpen(true)}
@@ -194,6 +251,13 @@ export function AppShell() {
               <span className="block text-[10px] uppercase tracking-[0.14em] text-muted">{t(house.role)}</span>
             </span>
             <Icon name="chevronDown" size={14} className="ml-0.5 shrink-0 text-muted" />
+          </button>
+          <button
+            onClick={() => setSearchOpen(true)}
+            className="flex h-10 w-10 items-center justify-center rounded-xl text-muted hover:bg-raised hover:text-ink"
+            aria-label={t("Search")}
+          >
+            <Icon name="search" size={19} />
           </button>
           <button
             onClick={() => navigate("/notifications")}
@@ -220,7 +284,7 @@ export function AppShell() {
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-5xl px-4 pb-28 pt-4 sm:px-6 lg:ml-[260px] lg:w-[calc(100%-260px)] lg:max-w-none lg:px-10 lg:pb-14 lg:pt-8">
+      <main className="mx-auto w-full max-w-5xl px-4 pb-28 pt-4 sm:px-6 lg:ml-[260px] lg:w-[calc(100%-260px)] lg:max-w-none lg:px-10 lg:pb-14 lg:pt-8 print:ml-0 print:w-full print:max-w-none print:p-0">
         <div className="mx-auto w-full max-w-[1120px]">
           <OfflineQueueBar />
           <Outlet />
@@ -228,12 +292,12 @@ export function AppShell() {
       </main>
 
       {/* mobile bottom nav */}
-      <nav className="safe-bottom fixed inset-x-0 bottom-0 z-30 border-t border-line bg-surface/95 backdrop-blur lg:hidden">
+      <nav className="safe-bottom fixed inset-x-0 bottom-0 z-30 border-t border-line bg-surface/95 backdrop-blur lg:hidden print:hidden">
         <div className="mx-auto grid max-w-md grid-cols-5 px-2 pb-1 pt-1.5">
           {NAV.map((item) => {
             const moreActive =
               item.to === "/more" &&
-              ["/more", "/photos", "/ideas", "/shopping", "/plan", "/intake", "/receipts", "/bills", "/notifications", "/settings", "/profile", "/developer", "/insights", "/espresso", "/contribute", "/admin"].some(
+              ["/more", "/photos", "/ideas", "/shopping", "/plan", "/intake", "/receipts", "/bills", "/notifications", "/settings", "/profile", "/developer", "/insights", "/espresso", "/loans", "/contribute", "/admin"].some(
                 (path) => location.pathname === path || location.pathname.startsWith(`${path}/`),
               );
             return (
@@ -270,6 +334,8 @@ export function AppShell() {
           })}
         </div>
       </nav>
+
+      <GlobalSearch open={searchOpen} onClose={() => setSearchOpen(false)} />
 
       <HouseSwitcher
         open={switcherOpen}

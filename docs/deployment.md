@@ -93,6 +93,7 @@ Docker Compose reads `.env` next to `docker-compose.yml`.
 | `SV_CATALOG_URL` | empty | Server | Optional shared OpenFoodFacts receipt-name catalogue (JSON) for **Settings → Data → Sync catalogue**. |
 | `RP_ID` | request host | Server | WebAuthn relying-party domain, e.g. `svault.example.com`. |
 | `ORIGIN` | request origin | Server | Public HTTPS origin for passkeys, e.g. `https://svault.example.com`. |
+| `PUBLIC_URL` | browser origin | Server | Public base URL printed into QR labels (e.g. `https://svault.example.com`). Set it when a printed label should point at a different hostname than the browser used, for example a public domain behind a reverse proxy. Empty uses the browser's own origin. |
 | `OIDC_ISSUER` | empty | Server | OpenID Connect issuer URL; empty disables SSO. |
 | `OIDC_CLIENT_ID` | empty | Server | OIDC client id. |
 | `OIDC_CLIENT_SECRET` | empty | Server | OIDC client secret (never sent to the browser). |
@@ -134,6 +135,10 @@ Docker Compose reads `.env` next to `docker-compose.yml`.
 | `SV_RATE_LIMIT` | on | Server | `off` disables the built-in rate limits (for example when the proxy already limits). |
 | `SV_RATE_LIMIT_<NAME>` | see [Rate limits](#rate-limits) | Server | Override one limit as `<max>/<seconds>`, e.g. `SV_RATE_LIMIT_LOGIN=30/600`. |
 | `SV_CSP` | on | Server | `off` disables the Content-Security-Policy header (only for debugging a custom build). |
+| `VAPID_PUBLIC_KEY` | empty | Server | Public key for Web Push; with the two below, enables push reminders. Generate with `npm run vapid:generate`. |
+| `VAPID_PRIVATE_KEY` | empty | Server | Private key for Web Push. Keep it secret; changing it invalidates every subscription. |
+| `VAPID_SUBJECT` | empty | Server | Contact for the push service, `mailto:you@example.com` or an `https://` URL. |
+| `LIVE_UPDATES` | `on` | Server | Server-Sent Events stream at `/api/houses/:houseId/events` for live updates between members. `off` disables it and the client falls back to polling every 90 s. Each account may hold 5 streams and each house 100. |
 | `NODE_ENV` | `production` in Docker | Server | Enables production caching, disables request logs. |
 
 See [Bring your own database](database.md) for PostgreSQL setup, migration and the example Compose
@@ -192,6 +197,40 @@ needs an invite link from a house admin (`SV_REGISTRATION=invite`). Set `SV_REGI
 anyone who can reach the server sign up, or `closed` to stop self sign-up entirely. OIDC
 auto-provisioning creates accounts too, so it only runs while registration is `open`; existing
 accounts with a matching verified email still link. `GET /api/auth/registration` reports the mode.
+
+### Web Push
+
+Web Push reminders are optional and off by default. They need HTTPS (the browser refuses push on a
+plain-HTTP origin), plus three values on the server:
+
+```ini
+VAPID_PUBLIC_KEY=...
+VAPID_PRIVATE_KEY=...
+VAPID_SUBJECT=mailto:you@example.com
+```
+
+Generate the pair once, on a machine with the repository checked out:
+
+```bash
+npm run vapid:generate        # or: npm run vapid:generate -- --json
+```
+
+If you only have the running container, the same generator is one command:
+
+```bash
+docker compose exec svault node -e "console.log(require('web-push').generateVAPIDKeys())"
+```
+
+Then restart the container, open **Settings → Reminders**, add (or edit) a delivery channel of type
+**Web push**, and press **Enable push on this device** on the phone. The switch is per browser: every
+family member enables their own device, and turning it off removes only that browser. The private key
+is a secret; changing the pair makes every existing device subscribe again.
+
+On iPhone, add SVault to the Home Screen first: Safari only exposes Web Push to installed PWAs. Push is
+sent to the browser's own push service (Mozilla, Google or Apple) and is content-encrypted for the
+device, using the VAPID pair. The server never receives the browser's private key. When
+`SV_OUTBOUND_ALLOW_PRIVATE=false`, endpoints that resolve to private addresses are refused, like every
+other outbound URL.
 
 ## HTTPS and reverse proxies
 
@@ -254,6 +293,28 @@ server {
 By default the server trusts one proxy hop (`SV_TRUST_PROXY=1`), so `X-Forwarded-*` headers are
 respected. Set `SV_TRUST_PROXY` to the number of hops for chained proxies, or `false` if the container
 is ever reached without a proxy in front of it.
+
+### Live updates and streaming proxies
+
+`GET /api/houses/:houseId/events` is a Server-Sent Events stream used for live updates between
+household members. It is plain chunked `text/event-stream`, sends a heartbeat comment every 25 seconds
+and must not be buffered or compressed:
+
+- **Nginx:** add `proxy_buffering off; proxy_cache off;` to the API location. The existing
+  `proxy_read_timeout 180s` is enough; the app also sends `X-Accel-Buffering: no`.
+- **Traefik:** streaming works with the default HTTP/1.1 backend. Do not enable response compression
+  for `/api`, or exclude the event path.
+- **Nginx Proxy Manager:** put `proxy_buffering off; proxy_read_timeout 180s; proxy_send_timeout 180s;`
+  in the Advanced tab.
+- **Caddy:** the `encode` directive compresses responses; the app's `Cache-Control: no-transform`
+  usually prevents it, but on older Caddy versions exclude the path explicitly:
+  `encode zstd gzip { not path /api/houses/*/events }`.
+- **Cloudflare:** caching is not used for `/api`, but some plans buffer streamed responses. If events
+  arrive only when the connection closes, set `LIVE_UPDATES=off`; the client then falls back to
+  polling every 90 seconds.
+
+The client holds one stream per tab, pauses it while the tab is hidden and reconnects with backoff.
+Removing a member closes their stream within a minute.
 
 ### Nginx Proxy Manager
 

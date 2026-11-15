@@ -6,19 +6,60 @@ All notable changes to SVault are documented here. The format follows
 
 ## [Unreleased]
 
+### Notes on how these features fit together
+
+- A stocktake expects the **shelf** quantity: on-hand minus units that are lent out. Counting what is on the
+  shelf is no variance, and a lent unit is no longer booked as a shortage. In a place count this applies when
+  all of the item's stock sits in that place.
+- Merging items also moves their loans, per-batch undo effects and closed stocktake lines (scaled to the
+  target's unit); an open count drops the merged-away item's line.
+- Undoing a take-out from a frozen batch gives the batch its portions back.
+- Stocktake, freeze, thaw and undo changes are announced to open pages like any other stock change.
+- The valuation report needs member access or above; viewers are refused.
+
 ### Fixed
 
 - **Offline reload.** Reloading SVault without a network no longer lands on the sign-in page. The last signed-in session is kept on the device and used only while the server cannot be reached; a 401 or signing out clears it. Requests that cannot reach the server now say "You are offline" instead of "Failed to fetch".
 - **PostgreSQL: replacing a bill document.** Uploading a new PDF for an existing bill failed with 500 on PostgreSQL ("could not determine data type of parameter").
 - **PostgreSQL test suite.** `npm run test:postgres` passes in full. Four tests used SQLite-only SQL (`PRAGMA`, trigger syntax, text in a numeric column, a hard-coded database name) and now run, or skip only the SQLite-specific part, on PostgreSQL. CI runs the PostgreSQL suite on every pull request.
+- **Sign-in after a deep link.** Opening a protected page while signed out returned to Home after signing in. It now returns to the page and query string that was requested, which is what printable labels and filtered inventory links rely on.
 
 ### Added
 
+- Undo for the last stock action: a short toast with an **Undo** button after any successful add, use,
+  waste, count or move, plus an **Undo** action on the newest rows of an item's history. Undo appends a
+  compensating movement to the ledger (nothing is edited or deleted), restores the exact batches a FIFO
+  consume or a move touched, reverses both parts of a cross-batch action in one transaction, and refuses
+  with a clear message when a later change has made it unsafe. Members undo their own changes, admins
+  and owners undo anyone's, and a change still waiting in the offline queue is removed from the queue
+  instead of being sent.
+- **Stocktake mode.** A guided physical count per place or category. Starting a session snapshots the expected quantity per item; counting autosaves per line, supports barcode jump-to-item and works on a phone. Review shows variances and value impact, and commit applies every selected variance in one transaction as `count` movements (FIFO shortage, new batch for surplus). Lines whose stock moved during the session must be confirmed and the variance is applied to the current quantity; a second commit is refused. History lists past sessions with line and variance counts.
 - Category budgets, optional bill spending, month-end projections, budget history and threshold reminders.
 - Consumption-based run-out forecasts on items and the dashboard, with an optional shopping-list fill.
+- Printable QR labels for items and places: multi-select with search, three label sizes (including a 3 × 8 A4 sheet), live preview and a print stylesheet. Scanning a label with the in-app scanner opens the item or place, also after signing in; foreign or script QR payloads are ignored.
+- Cost per recipe and portion, from recorded purchase prices or the batches in stock, with an honest
+  coverage note and a per-ingredient breakdown. The recipe list can sort and filter by cost per portion.
+- Saved inventory views: name the current filters, keep personal views, let house admins share one with everyone, and apply a view from a linkable URL. Views whose category or place was deleted stay visible with a warning.
+- Global search in the app header (`/` or `Ctrl`/`Cmd`+`K`) across items, recipes, receipts, bills and shops, with Greek accent-insensitive matching, grouped ranked results and recent searches kept on the device.
+- **Valuation and insurance report.** **More → Valuation report** builds a dated record of what the house owns, with per-item values from the latest purchase price, the average purchase price or the stock cost. Filter by category, place, tag, minimum value, active warranty and archived items; see the grand total, category and place subtotals and the items with no recorded value. Download the report as CSV (formula-injection safe, UTF-8 BOM) or print it from the browser with optional photos and attribute columns and an optional list of attached warranty documents. Unpriced items are listed but never counted as zero.
+- House activity feed: a read-only, newest-first timeline at **More → Activity** (`GET /api/houses/:houseId/activity`) that merges stock movements, saved receipts, new items, shopping checkoffs and bills, with cursor pagination and member, kind, item, place and date filters.
+- Optional Web Push reminders. With VAPID keys configured, an installed PWA receives low-stock, expiry
+  and budget reminders while SVault is closed; each device is enabled separately under
+  **Settings → Reminders**.
+- Lending tracker: record who borrowed a tool, book or piece of gear, see "x on loan" on items and the
+  dashboard, return loans fully or in parts, and get one overdue reminder per loan per day. Lending
+  never changes stock; consuming below the lent quantity is refused.
+- **Freezer and meal-prep batches.** Freeze all or part of a batch (or cook-mode leftovers) with portions, a frozen date and a freezer place. View everything frozen under **More → Freezer**, grouped by place and ordered by eat-by, with a use-first strip, filters, one-tap portion take-out and a thaw action. Items can set a freezer shelf life (90 days by default) and a thaw window (2 days by default), and frozen or thawed batches feed the existing expiry reminders and dashboard.
+- Duplicate item finder: deterministic groups with reason chips, a side-by-side comparison, a dry-run
+  merge summary and a merge that moves every reference, converts compatible units, archives the
+  sources with `merged_into` and remembers dismissed pairs. A **Merge into…** action on the item page
+  uses the same flow.
 
 ### Security
 
+- Web Push endpoints are always public HTTPS hosts. A signed-in user supplies the endpoint and the
+  server posts to it, so private, loopback and link-local addresses are refused when subscribing and
+  again when sending (and re-checked at connect time), regardless of `SV_OUTBOUND_ALLOW_PRIVATE`.
 - Writing an Open Food Facts folksonomy property now needs accepted OFF consent and member access to
   at least one household. A named `houseId`/`itemId` must belong to a house the caller is a member of,
   so a signed-in user can no longer write through the instance token or name another house's item.
@@ -286,6 +327,12 @@ All notable changes to SVault are documented here. The format follows
   recipe cards show a `kcal / portion` badge.
 - Shopping list and a weekly meal planner are still proposed in the [roadmap](docs/roadmap.md); no code
   has landed for them yet.
+- **Live updates between members.** Inventory, item details, the shopping list, the meal plan,
+  purchases and the reminder bell now refresh when another member changes them, delivered as minimal
+  Server-Sent Events that carry no household data. The stream has a heartbeat, backed-off reconnection,
+  pauses while the tab is hidden and falls back to 90-second polling when it is unavailable. Removing a
+  member closes their stream. `LIVE_UPDATES=off` disables it, and reverse-proxy notes are in
+  [docs/deployment.md](docs/deployment.md#live-updates-and-streaming-proxies).
 
 ### Changed
 

@@ -59,6 +59,8 @@ notificationRoutes.post(
     }
     await syncHouseExpiry(houseId, expiryDays);
     await syncHouseWarranties(houseId, Number(settings?.notifications?.warrantyDays ?? 30));
+    const { syncHouseLoans } = await import("../services/loans.js");
+    await syncHouseLoans(houseId);
     const rows = await Promise.all((await all<any>(
       `SELECT * FROM notifications WHERE house_id = ? AND resolved_at IS NULL
          AND (user_id IS NULL OR user_id = ?) ORDER BY created_at DESC LIMIT 100`,

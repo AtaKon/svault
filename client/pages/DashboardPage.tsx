@@ -6,14 +6,18 @@ import { useI18n } from "@/i18n";
 import { Badge, Button, Card, PageHeader, Skeleton, Stat, cn } from "@/components/ui";import { Icon, type IconName } from "@/components/icons";
 import { ItemCard } from "@/components/ItemCard";
 import { useToast } from "@/components/toast";
+import { useLiveRefresh } from "@/live";
 import { compactMoney, daysUntil, qty, relativeTime, shortDate } from "@/format";
-import type { Dashboard, Item, ItemDetail, Movement, Recipe, StockLot } from "@shared/types";
+import type { Dashboard, Item, ItemDetail, LoanList, Movement, Recipe, StockLot } from "@shared/types";
 
 interface DashboardData extends Omit<Dashboard, "recent"> {
   recent: (Movement & { itemName?: string })[];
   expiring: (StockLot & { itemName: string; itemId: string })[];
   recentRecipe: Recipe | null;
 }
+
+/** Loans listed on the dashboard card; the rest are counted in "N more". */
+const LOAN_CARD_ROWS = 4;
 
 export function DashboardPage() {
   const { house, can } = useHouse();
@@ -22,6 +26,7 @@ export function DashboardPage() {
   const navigate = useNavigate();
   const toast = useToast();
   const [data, setData] = useState<DashboardData | null>(null);
+  const [loans, setLoans] = useState<LoanList | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -38,6 +43,21 @@ export function DashboardPage() {
     setData(null);
     void load();
   }, [load]);
+
+  // The "On loan" card only exists while something is actually lent out, so
+  // this is a separate small request rather than part of the dashboard payload.
+  useEffect(() => {
+    let cancelled = false;
+    api<LoanList>(`/api/houses/${house.id}/loans?status=open&limit=5`)
+      .then((result) => {
+        if (!cancelled) setLoans(result);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [house.id]);
+  useLiveRefresh(house.id, ["stock", "items", "shopping", "notifications", "plan", "receipts"], load);
 
   const onItemUpdated = (detail: ItemDetail) => {
     setData((current) =>
@@ -113,6 +133,22 @@ export function DashboardPage() {
         />
       </div>
 
+      {data?.freezer && data.freezer.portions > 0 && (
+        <Link to="/freezer" className="block">
+          <Card className="flex items-center gap-3 p-3.5 transition-colors hover:bg-raised">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-soft text-brand text-lg" aria-hidden="true">❄️</span>
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-medium">{t("Freezer")}</div>
+              <div className="text-[11px] text-muted">
+                {t("{count} portions", { count: qty(data.freezer.portions) })}
+                {data.freezer.useSoon > 0 ? ` · ${t("{count} to use soon", { count: qty(data.freezer.useSoon) })}` : ` · ${t("nothing to rush")}`}
+              </div>
+            </div>
+            <Icon name="chevronRight" size={15} className="shrink-0 text-muted" />
+          </Card>
+        </Link>
+      )}
+
       {data && data.itemCount === 0 && (
         <Card className="overflow-hidden">
           <div className="relative bg-brand px-5 py-6 text-brand-ink">
@@ -178,6 +214,43 @@ export function DashboardPage() {
               </div>
             )}
           </section>
+
+          {loans && loans.counts.openCount > 0 && (
+            <section>
+              <div className="mb-2.5 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                <h2 className="font-display text-xl">{t("On loan")}</h2>
+                <Link to="/loans" className="text-xs font-medium text-brand hover:underline">
+                  {t("See all")}
+                </Link>
+              </div>
+              <Card className="divide-y divide-line">
+                {loans.loans.slice(0, LOAN_CARD_ROWS).map((loan) => (
+                  <Link
+                    key={loan.id}
+                    to={`/items/${loan.itemId}`}
+                    className="flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-raised"
+                  >
+                    <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg", loan.overdue ? "bg-danger-soft text-danger" : "bg-raised text-muted")}>
+                      <Icon name="users" size={15} />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[13px] font-medium">{loan.itemName}</span>
+                      <span className="block truncate text-[11px] text-muted">
+                        {loan.borrowerName} · {qty(loan.remaining)} {loan.itemUnit}
+                        {loan.dueAt ? ` · ${shortDate(loan.dueAt)}` : ""}
+                      </span>
+                    </span>
+                    {loan.overdue && <Badge tone="danger">{t("Overdue")}</Badge>}
+                  </Link>
+                ))}
+                {loans.counts.openCount > Math.min(LOAN_CARD_ROWS, loans.loans.length) && (
+                  <Link to="/loans" className="block px-4 py-2 text-[11px] font-medium text-brand hover:underline">
+                    {t("{count} more open loans", { count: loans.counts.openCount - Math.min(LOAN_CARD_ROWS, loans.loans.length) })}
+                  </Link>
+                )}
+              </Card>
+            </section>
+          )}
 
           <section>
             <h2 className="mb-2.5 font-display text-xl">{t("Running out soon")}</h2>
@@ -350,9 +423,14 @@ export function DashboardPage() {
           <section>
             <div className="mb-2.5 flex items-center justify-between">
               <h2 className="font-display text-xl">{t("Recent activity")}</h2>
-              <button onClick={() => void load()} className="-my-2 -mr-2 flex h-10 w-10 items-center justify-center rounded-lg text-muted transition-colors hover:text-ink" aria-label={t("Refresh activity")}>
-                <Icon name="refresh" size={15} />
-              </button>
+              <div className="flex items-center gap-2">
+                <Link to="/activity" className="-my-2 rounded-lg px-2 py-1 text-[12px] text-muted transition-colors hover:text-ink">
+                  {t("See all")}
+                </Link>
+                <button onClick={() => void load()} className="-my-2 -mr-2 flex h-10 w-10 items-center justify-center rounded-lg text-muted transition-colors hover:text-ink" aria-label={t("Refresh activity")}>
+                  <Icon name="refresh" size={15} />
+                </button>
+              </div>
             </div>
             {!data ? (
               <Skeleton className="h-32" />
@@ -407,6 +485,7 @@ const MOVEMENT_META: Record<Movement["type"], { icon: IconName; label: string; t
   adjust: { icon: "pencil", label: "counted", tone: "bg-raised text-muted" },
   waste: { icon: "trash", label: "wasted", tone: "bg-danger-soft text-danger" },
   move: { icon: "mapPin", label: "moved", tone: "bg-raised text-muted" },
+  count: { icon: "check", label: "counted", tone: "bg-brand-soft text-brand" },
 };
 
 function ActivityRow({ movement }: { movement: Movement & { itemName?: string } }) {

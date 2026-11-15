@@ -12,6 +12,7 @@ const LINKS: { to: string; label: string; description: string; icon: IconName; t
   { to: "/insights", label: "Insights", description: "Spending, prices, waste and use-it-up", icon: "price", tint: "bg-warn-soft text-warn" },
   { to: "/contribute", label: "Contribute", description: "Share missing product data with Open Food Facts", icon: "sparkles", tint: "bg-brand-soft text-brand" },
   { to: "/espresso", label: "Espresso log", description: "Ratings, grind and extraction history", icon: "cup", tint: "bg-warn-soft text-warn" },
+  { to: "/loans", label: "Loans", description: "Who borrowed what, and what is due back", icon: "users", tint: "bg-brand-soft text-brand" },
   { to: "/shopping", label: "Shopping list", description: "From recipes, low stock and the plan", icon: "list", tint: "bg-brand-soft text-brand" },
   { to: "/plan", label: "Meal plan", description: "Seven days, scaled servings", icon: "calendar", tint: "bg-warn-soft text-warn" },
   { to: "/intake", label: "Bulk intake", description: "A receipt or a queue of barcodes", icon: "upload", tint: "bg-brand-soft text-brand" },
@@ -21,7 +22,13 @@ const LINKS: { to: string; label: string; description: string; icon: IconName; t
   { to: "/photos", label: "Photo library", description: "Label photos and export datasets", icon: "image", tint: "bg-brand-soft text-brand" },
   { to: "/recipes", label: "Recipes", description: "The family collection", icon: "book", tint: "bg-raised text-muted" },
   { to: "/notifications", label: "Reminders", description: "Low stock and expiry", icon: "bell", tint: "bg-raised text-muted" },
+  { to: "/items/duplicates", label: "Find duplicates", description: "Merge items that were added twice", icon: "grid", tint: "bg-brand-soft text-brand" },
   { to: "/settings", label: "House settings", description: "Places, categories, attributes, members", icon: "settings", tint: "bg-raised text-muted" },
+  { to: "/labels", label: "Print labels", description: "QR labels for items and places", icon: "printer", tint: "bg-brand-soft text-brand" },
+  { to: "/reports/valuation", label: "Valuation report", description: "Insurance and moving checklist with totals", icon: "price", tint: "bg-brand-soft text-brand" },
+  { to: "/activity", label: "Activity", description: "Who added, used, moved or saved what", icon: "clock", tint: "bg-brand-soft text-brand" },
+  { to: "/freezer", label: "Freezer", description: "Frozen portions, thawing and use-first dates", icon: "clock", tint: "bg-brand-soft text-brand" },
+  { to: "/stocktake", label: "Stocktake", description: "Count a place and record the differences", icon: "check", tint: "bg-brand-soft text-brand" },
 ];
 
 export function MorePage() {
@@ -74,7 +81,8 @@ export function MorePage() {
       </Card>
 
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-        {LINKS.map((link) => (
+        {/* The valuation report lists prices for the whole house: members and above only. */}
+        {LINKS.filter((link) => link.to !== "/reports/valuation" || house?.role !== "viewer").map((link) => (
           <button
             key={link.to}
             onClick={() => navigate(link.to)}

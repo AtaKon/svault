@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, useCallback, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import type { Item, ItemDetail, Location, Vendor } from "@shared/types";
 import { api } from "@/api";
@@ -9,6 +9,7 @@ import { ZoomableImage } from "@/components/ZoomableImage";
 import { useToast } from "@/components/toast";
 import { useAuth } from "@/state";
 import { enqueueStockAction, isOffline } from "@/offline-queue";
+import { useStockUndo } from "@/undo-stock";
 import { useI18n } from "@/i18n";
 
 /* ----------------------------------------------------------------- item card */
@@ -26,17 +27,28 @@ export function ItemCard({
   const navigate = useNavigate();
   const { house, user } = useAuth();
   const toast = useToast();
+  const undo = useStockUndo();
   const [busy, setBusy] = useState<"add" | "remove" | null>(null);
   const [current, setCurrent] = useState(item);
 
   useEffect(() => setCurrent(item), [item]);
+
+  const refresh = useCallback(async () => {
+    try {
+      const detail = await api<ItemDetail>(`/api/items/${item.id}`);
+      setCurrent(detail);
+      onUpdated?.(detail);
+    } catch {
+      /* the list keeps the last known value */
+    }
+  }, [item.id, onUpdated]);
 
   const step = async (action: "add" | "remove") => {
     setBusy(action);
     try {
       if (isOffline()) {
         if (!house || !user) return;
-        await enqueueStockAction({
+        const queued = await enqueueStockAction({
           userId: user.id,
           houseId: house.id,
           itemId: item.id,
@@ -49,7 +61,16 @@ export function ItemCard({
           ...previous,
           quantity: Math.max(0, previous.quantity + (action === "add" ? 1 : -1)),
         }));
-        toast.push(t("Queued offline — it will sync when you reconnect"));
+        undo.notify(t("Queued offline — it will sync when you reconnect"), {
+          itemId: item.id,
+          queuedId: queued.id,
+          onQueuedCancelled: () =>
+            setCurrent((previous) => ({
+              ...previous,
+              quantity: Math.max(0, previous.quantity + (action === "add" ? -1 : 1)),
+            })),
+          onUndone: () => void refresh(),
+        });
         return;
       }
       const detail = await api<ItemDetail>(`/api/items/${item.id}/stock`, {
@@ -58,6 +79,11 @@ export function ItemCard({
       });
       setCurrent(detail);
       onUpdated?.(detail);
+      undo.notify(t(action === "add" ? "Added one {item}" : "Removed one {item}", { item: item.name }), {
+        itemId: item.id,
+        movementId: detail.lastMovementId,
+        onUndone: () => void refresh(),
+      });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t("Could not update stock"));
     } finally {
@@ -121,6 +147,11 @@ export function ItemCard({
         {!compact && (item.priceStats?.latest ?? item.latestPrice) != null && (
           <div className="mt-1 min-w-0 truncate text-[11px] text-muted">
             {unitPriceLabel(item.priceStats?.latest ?? item.latestPrice, item.unit, house?.currency)}
+          </div>
+        )}
+        {current.onLoan > 0 && (
+          <div className="mt-0.5 min-w-0 truncate text-[11px] text-warn">
+            {t("{count} {unit} on loan", { count: formatQty(current.onLoan), unit: item.unit })}
           </div>
         )}
       </div>
@@ -198,6 +229,7 @@ export function StockDialog({
   const { house, user } = useAuth();
   const { t } = useI18n();
   const toast = useToast();
+  const undo = useStockUndo();
   const [action, setAction] = useState<StockAction>(initialAction);
   const [amount, setAmount] = useState("1");
   const [price, setPrice] = useState("");
@@ -274,7 +306,7 @@ export function StockDialog({
         if (action === "add" && vendorId === "__new" && newVendor.trim()) {
           throw new Error(t("Add the new shop while you are online, then queue the stock change"));
         }
-        await enqueueStockAction({
+        const queued = await enqueueStockAction({
           userId: user.id,
           houseId: house.id,
           itemId: item.id,
@@ -283,13 +315,22 @@ export function StockDialog({
           body,
           baseUpdatedAt: item.updatedAt,
         });
-        toast.push(t("Queued offline — it will sync when you reconnect"));
+        undo.notify(t("Queued offline — it will sync when you reconnect"), {
+          itemId: item.id,
+          queuedId: queued.id,
+        });
         onClose();
         return;
       }
       const detail = await api<ItemDetail>(`/api/items/${item.id}/stock`, { method: "POST", body });
       onUpdated(detail);
-      toast.success(t(STOCK_SUCCESS_MESSAGES[action]));
+      undo.notify(t(STOCK_SUCCESS_MESSAGES[action]), {
+        itemId: item.id,
+        movementId: detail.lastMovementId,
+        onUndone: () => {
+          void api<ItemDetail>(`/api/items/${item.id}`).then(onUpdated).catch(() => undefined);
+        },
+      });
       onClose();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t("Could not update stock"));

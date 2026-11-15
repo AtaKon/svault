@@ -1,17 +1,19 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, qs } from "@/api";
 import { useHouse } from "@/state";
 import { useI18n } from "@/i18n";
 import { Button, Card, EmptyState, Input, PageHeader, Select, Skeleton, Tabs, cn, useDebounced } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { ItemCard } from "@/components/ItemCard";
+import { SavedViews } from "@/components/SavedViews";
 import { useToast } from "@/components/toast";
+import { useLiveRefresh } from "@/live";
 import { qty } from "@/format";
-import type { Category, Item, ItemDetail, Location } from "@shared/types";
+import type { Category, Item, ItemDetail, InventorySort, Location, SavedView, SavedViewFilters } from "@shared/types";
 
 export function InventoryPage() {
-  const { house } = useHouse();
+  const { house, can } = useHouse();
   const { t } = useI18n();
   const navigate = useNavigate();
   const toast = useToast();
@@ -25,9 +27,14 @@ export function InventoryPage() {
   const query = params.get("q") ?? "";
   const categoryId = params.get("category") ?? "";
   const locationId = params.get("location") ?? "";
+  const tag = params.get("tag") ?? "";
   const low = params.get("low") === "1";
   const expiring = params.get("expiring") === "1";
-  const sort = params.get("sort") ?? "name";
+  const archived = params.get("archived") === "1";
+  const sortParam = params.get("sort") ?? "name";
+  const sort: InventorySort = ["name", "recent", "quantity", "value"].includes(sortParam)
+    ? (sortParam as InventorySort)
+    : "name";
   const [search, setSearch] = useState(query);
   const debouncedSearch = useDebounced(search, 250);
 
@@ -58,7 +65,7 @@ export function InventoryPage() {
   const load = useCallback(async () => {
     try {
       const data = await api<{ items: Item[]; total: number }>(
-        `/api/houses/${house.id}/items${qs({ q: query, categoryId, locationId, low: low ? 1 : undefined, expiring: expiring ? 1 : undefined, sort, limit: 500 })}`,
+        `/api/houses/${house.id}/items${qs({ q: query, categoryId, locationId, tag, low: low ? 1 : undefined, expiring: expiring ? 1 : undefined, archived: archived ? 1 : undefined, sort, limit: 500 })}`,
       );
       setItems(data.items);
       setTotal(data.total);
@@ -66,11 +73,13 @@ export function InventoryPage() {
     } catch (err) {
       setError(err instanceof Error ? t(err.message) : t("Could not load items"));
     }
-  }, [house.id, query, categoryId, locationId, low, expiring, sort, t]);
+  }, [house.id, query, categoryId, locationId, tag, low, expiring, archived, sort, t]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  useLiveRefresh(house.id, ["stock", "items"], load);
 
   const setParam = (key: string, value: string | null) => {
     const next = new URLSearchParams(params);
@@ -105,11 +114,43 @@ export function InventoryPage() {
       [
         low && { label: t("Running low"), clear: () => setParam("low", null) },
         expiring && { label: t("Expiring soon"), clear: () => setParam("expiring", null) },
+        archived && { label: t("Archived items"), clear: () => setParam("archived", null) },
+        tag && { label: t("Tag: {tag}", { tag }), clear: () => setParam("tag", null) },
         categoryId && { label: categories.find((c) => c.id === categoryId)?.name ?? t("Category"), clear: () => setParam("category", null) },
         locationId && { label: locations.find((l) => l.id === locationId)?.name ?? t("Place"), clear: () => setParam("location", null) },
       ].filter(Boolean) as { label: string; clear: () => void }[],
-    [low, expiring, categoryId, locationId, categories, locations, t],
+    [low, expiring, archived, tag, categoryId, locationId, categories, locations, t],
   );
+
+  const currentFilters = useMemo<SavedViewFilters>(
+    () => ({
+      ...(query ? { q: query } : {}),
+      ...(categoryId ? { categoryId } : {}),
+      ...(locationId ? { locationId } : {}),
+      ...(tag ? { tag } : {}),
+      ...(low ? { low: true } : {}),
+      ...(expiring ? { expiring: true } : {}),
+      ...(archived ? { archived: true } : {}),
+    }),
+    [query, categoryId, locationId, tag, low, expiring, archived],
+  );
+
+  // Applying a view replaces the query string with a pushed history entry, so
+  // the URL is shareable and Back returns to the previous view.
+  const applyView = (view: SavedView) => {
+    const next = new URLSearchParams();
+    const filters = view.filters;
+    if (filters.q) next.set("q", filters.q);
+    if (filters.categoryId) next.set("category", filters.categoryId);
+    if (filters.locationId) next.set("location", filters.locationId);
+    if (filters.tag) next.set("tag", filters.tag);
+    if (filters.low) next.set("low", "1");
+    if (filters.expiring) next.set("expiring", "1");
+    if (filters.archived) next.set("archived", "1");
+    if (view.sort !== "name") next.set("sort", view.sort);
+    setSearch(filters.q ?? "");
+    setParams(next);
+  };
 
   return (
     <div>
@@ -122,6 +163,15 @@ export function InventoryPage() {
             <Button variant="secondary" icon="list" onClick={() => void addLowStock()}>
               {t("Add low stock")}
             </Button>
+            {locationId && (
+              <Button
+                variant="secondary"
+                icon="check"
+                onClick={() => navigate(`/stocktake?location=${encodeURIComponent(locationId)}`)}
+              >
+                {t("Count this place")}
+              </Button>
+            )}
             <Button
               variant="secondary"
               icon="receipt"
@@ -179,6 +229,14 @@ export function InventoryPage() {
           </Select>
         </div>
 
+        <SavedViews
+          houseId={house.id}
+          canShare={can("admin")}
+          currentFilters={currentFilters}
+          currentSort={sort}
+          onApply={applyView}
+        />
+
         <div className="flex items-center gap-2 overflow-hidden">
             <Tabs
             items={[{ value: "", label: t("All") }, ...categories.map((cat) => ({ value: cat.id, label: cat.name }))]}
@@ -220,6 +278,13 @@ export function InventoryPage() {
               </button>
             ))}
           </div>
+        )}
+
+        {locations.find((location) => location.id === locationId)?.isFreezer && (
+          <Link to="/freezer" className="inline-flex items-center gap-1.5 rounded-full bg-brand-soft px-2.5 py-1 text-[11px] font-medium text-brand hover:bg-brand-soft/80">
+            ❄️ {t("Open the freezer")}
+            <Icon name="chevronRight" size={11} />
+          </Link>
         )}
       </div>
 

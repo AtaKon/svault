@@ -39,6 +39,13 @@ services:
       OIDC_AUTO_PROVISION: "${OIDC_AUTO_PROVISION:-true}"
       OIDC_DEFAULT_HOUSE_ID: "${OIDC_DEFAULT_HOUSE_ID:-}"
       OIDC_LABEL: "${OIDC_LABEL:-Single sign-on}"
+      # Optional Web Push reminders. All three enable push; see docs/deployment.md.
+      VAPID_PUBLIC_KEY: "${VAPID_PUBLIC_KEY:-}"
+      VAPID_PRIVATE_KEY: "${VAPID_PRIVATE_KEY:-}"
+      VAPID_SUBJECT: "${VAPID_SUBJECT:-}"
+      # Live updates between members (Server-Sent Events). Set "off" if a proxy
+      # cannot stream; the browser then falls back to polling.
+      LIVE_UPDATES: "${LIVE_UPDATES:-on}"
     healthcheck:
       test:
         [

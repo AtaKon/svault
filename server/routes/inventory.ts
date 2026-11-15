@@ -17,11 +17,12 @@ import {
   serializeEspressoShot,
   serializeEspressoSummary,
   serializeItem,
+  serializeLoan,
   serializeLocation,
   serializeLot,
   serializeMovement,
 } from "../serialize.js";
-import { addStock, afterStockChange, itemQuantity, moveStock, removeStock, setStock } from "../services/stock.js";
+import { addStock, afterStockChange, itemQuantity, moveStock, removeStock, setStock, undoableMovements } from "../services/stock.js";
 import { clearItemNotifications, syncHouseExpiry } from "../services/notifications.js";
 import { normaliseNutrition } from "../services/nutrition.js";
 import { learnProductAlias } from "../services/product-aliases.js";
@@ -309,23 +310,29 @@ async function itemDetail(itemId: string, userId: string) {
   // Only this item's movements, not the whole house.
   item.forecast = (await forecastsForHouse(row.house_id, itemId)).get(itemId) ?? null;
   const lots = (await all<any>(
-    `SELECT l.*, i.opened_shelf_life_days, loc.name AS location_name, v.name AS vendor_name FROM stock_lots l
+    `SELECT l.*, i.opened_shelf_life_days, i.freezer_shelf_life_days, i.thaw_shelf_life_days,
+            loc.name AS location_name, v.name AS vendor_name, r.title AS source_recipe_title
+     FROM stock_lots l
      JOIN items i ON i.id = l.item_id
      LEFT JOIN locations loc ON loc.id = l.location_id AND loc.house_id = ?
      LEFT JOIN vendors v ON v.id = l.vendor_id
+     LEFT JOIN recipes r ON r.id = l.source_recipe_id
      WHERE l.item_id = ?
      ORDER BY CASE WHEN l.quantity > 0 THEN 0 ELSE 1 END, CASE WHEN l.expires_at IS NULL THEN 1 ELSE 0 END,
        l.expires_at ASC, l.created_at ASC`,
     [row.house_id, itemId],
   )).map(serializeLot);
   const movements = (await all<any>(
-    `SELECT m.*, loc.name AS location_name, u.name AS user_name, v.name AS vendor_name FROM stock_movements m
+    `SELECT m.*, (SELECT 1 FROM stock_movements r WHERE r.reverses_movement_id = m.id LIMIT 1) AS reversed,
+       loc.name AS location_name, u.name AS user_name, v.name AS vendor_name FROM stock_movements m
      LEFT JOIN locations loc ON loc.id = m.location_id AND loc.house_id = ?
      LEFT JOIN users u ON u.id = m.user_id
      LEFT JOIN vendors v ON v.id = m.vendor_id
      WHERE m.item_id = ? ORDER BY m.created_at DESC LIMIT 80`,
     [row.house_id, itemId],
   )).map(serializeMovement);
+  const undoable = await undoableMovements(itemId);
+  for (const movement of movements) movement.undoable = undoable.has(movement.id);
   const priceHistory = (await all<any>(
     `SELECT m.normalized_price AS price, m.created_at AS at, m.unit, m.quantity, m.unit_price,
        m.vendor_id, v.name AS vendor_name, m.receipt_id, m.note
@@ -350,7 +357,17 @@ async function itemDetail(itemId: string, userId: string) {
      WHERE r.house_id = ? AND (ri.item_id = ? OR LOWER(ri.name) = LOWER(?))`,
     [row.house_id, itemId, row.name],
   );
-  return { ...item, lots, movements, priceHistory, recipes, priceStats: await priceStats(itemId, item.unit) };
+  const loans = (await all<any>(
+    `SELECT l.*, i.name AS item_name, i.unit AS item_unit, u.name AS created_by_name
+     FROM item_loans l
+     JOIN items i ON i.id = l.item_id
+     LEFT JOIN users u ON u.id = l.created_by
+     WHERE l.item_id = ? AND l.house_id = ?
+     ORDER BY CASE WHEN l.returned_at IS NULL THEN 0 ELSE 1 END, l.due_at ASC, l.created_at DESC
+     LIMIT 100`,
+    [itemId, row.house_id],
+  )).map((loan) => serializeLoan(loan));
+  return { ...item, lots, movements, priceHistory, recipes, loans, priceStats: await priceStats(itemId, item.unit) };
 }
 
 /** Item pictures are the house's own item uploads or remote http(s) images (OpenFoodFacts). */
@@ -405,18 +422,20 @@ inventoryRoutes.post(
         kind: z.string().trim().max(30).optional(),
         icon: z.string().trim().max(8).nullish(),
         parentId: z.string().trim().max(60).nullish(),
+        isFreezer: z.boolean().optional(),
       }),
       req.body,
     );
     await validateHouseReference("locations", body.parentId, houseId);
     const id = newId("loc");
-    await run("INSERT INTO locations (id, house_id, name, kind, icon, parent_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", [
+    await run("INSERT INTO locations (id, house_id, name, kind, icon, parent_id, is_freezer, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [
       id,
       houseId,
       body.name,
       body.kind ?? "shelf",
       body.icon ?? null,
       body.parentId ?? null,
+      (body.isFreezer ?? body.kind === "freezer") ? 1 : 0,
       now(),
     ]);
     res.status(201).json(serializeLocation(await get<any>("SELECT * FROM locations WHERE id = ?", [id])));
@@ -433,17 +452,19 @@ inventoryRoutes.patch(
         kind: z.string().trim().max(30).optional(),
         icon: z.string().trim().max(8).nullish(),
         parentId: z.string().trim().max(60).nullish(),
+        isFreezer: z.boolean().optional(),
       }),
       req.body,
     );
     const current = await get<any>("SELECT * FROM locations WHERE id = ? AND house_id = ?", [req.params.locationId, houseId]);
     if (!current) throw new ApiError(404, "Location not found");
     await validateHouseReference("locations", body.parentId, houseId, current.id);
-    await run("UPDATE locations SET name = ?, kind = ?, icon = ?, parent_id = ? WHERE id = ?", [
+    await run("UPDATE locations SET name = ?, kind = ?, icon = ?, parent_id = ?, is_freezer = ? WHERE id = ?", [
       body.name ?? current.name,
       body.kind ?? current.kind,
       body.icon === undefined ? current.icon : body.icon,
       body.parentId === undefined ? current.parent_id : body.parentId,
+      body.isFreezer === undefined ? current.is_freezer : body.isFreezer ? 1 : 0,
       current.id,
     ]);
     res.json(serializeLocation(await get<any>("SELECT * FROM locations WHERE id = ?", [current.id])));
@@ -679,7 +700,7 @@ inventoryRoutes.get(
     }
     if (expiring) {
       const horizon = new Date(Date.now() + 14 * 864e5).toISOString().slice(0, 10);
-      const lots = await all<any>(`SELECT l.*, i.opened_shelf_life_days FROM stock_lots l JOIN items i ON i.id = l.item_id WHERE l.house_id = ? AND l.quantity > 0`, [houseId]);
+      const lots = await all<any>(`SELECT l.*, i.opened_shelf_life_days, i.freezer_shelf_life_days, i.thaw_shelf_life_days FROM stock_lots l JOIN items i ON i.id = l.item_id WHERE l.house_id = ? AND l.quantity > 0`, [houseId]);
       const ids = [...new Set(lots.filter((lot) => { const expiry = effectiveExpiry(lot, lot); return expiry && expiry <= horizon; }).map((lot) => String(lot.item_id)))];
       if (ids.length) { where.push(`i.id IN (${ids.map(() => "?").join(", ")})`); params.push(...ids); }
       else where.push("1 = 0");
@@ -728,6 +749,8 @@ inventoryRoutes.post(
         reorderPoint: z.number().min(0).max(1e9).optional(),
         targetStock: z.number().min(0).max(1e9).nullish(),
         openedShelfLifeDays: z.number().int().min(0).max(36500).nullish(),
+        freezerShelfLifeDays: z.number().int().min(0).max(36500).nullish(),
+        thawShelfLifeDays: z.number().int().min(0).max(36500).nullish(),
         attributes: z.record(z.string(), z.any()).optional(),
         tags: z.union([z.array(z.string()), z.string()]).optional(),
         image: z.string().max(300).nullish(),
@@ -772,8 +795,9 @@ inventoryRoutes.post(
     await tx(async () => {
       await run(
         `INSERT INTO items (id, house_id, name, description, brand, category_id, unit, reorder_point, target_stock, opened_shelf_life_days,
+           freezer_shelf_life_days, thaw_shelf_life_days,
            attributes, tags, image, nutrition, espresso, warranty_until, warranty_note, archived, created_by, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
         [
           id,
           houseId,
@@ -785,6 +809,8 @@ inventoryRoutes.post(
           body.reorderPoint ?? 0,
           body.targetStock ?? null,
           body.openedShelfLifeDays ?? null,
+          body.freezerShelfLifeDays ?? null,
+          body.thawShelfLifeDays ?? null,
           JSON.stringify(normalized.attributes),
           JSON.stringify(parseTags(body.tags)),
           body.image ?? null,
@@ -1040,6 +1066,8 @@ itemRoutes.patch(
         reorderPoint: z.number().min(0).max(1e9).optional(),
         targetStock: z.number().min(0).max(1e9).nullish(),
         openedShelfLifeDays: z.number().int().min(0).max(36500).nullish(),
+        freezerShelfLifeDays: z.number().int().min(0).max(36500).nullish(),
+        thawShelfLifeDays: z.number().int().min(0).max(36500).nullish(),
         attributes: z.record(z.string(), z.any()).optional(),
         tags: z.union([z.array(z.string()), z.string()]).optional(),
         image: z.string().max(300).nullish(),
@@ -1072,7 +1100,8 @@ itemRoutes.patch(
             })();
     await run(
       `UPDATE items SET name = ?, description = ?, brand = ?, category_id = ?, unit = ?, reorder_point = ?,
-         target_stock = ?, opened_shelf_life_days = ?, attributes = ?, tags = ?, image = ?, nutrition = ?, espresso = ?, warranty_until = ?, warranty_note = ?, archived = ?, updated_at = ? WHERE id = ?`,
+         target_stock = ?, opened_shelf_life_days = ?, freezer_shelf_life_days = ?, thaw_shelf_life_days = ?,
+         attributes = ?, tags = ?, image = ?, nutrition = ?, espresso = ?, warranty_until = ?, warranty_note = ?, archived = ?, updated_at = ? WHERE id = ?`,
       [
         body.name ?? item.name,
         body.description === undefined ? item.description : body.description,
@@ -1082,6 +1111,8 @@ itemRoutes.patch(
         body.reorderPoint ?? item.reorder_point,
         body.targetStock === undefined ? item.target_stock : body.targetStock,
         body.openedShelfLifeDays === undefined ? item.opened_shelf_life_days : body.openedShelfLifeDays,
+        body.freezerShelfLifeDays === undefined ? item.freezer_shelf_life_days : body.freezerShelfLifeDays,
+        body.thawShelfLifeDays === undefined ? item.thaw_shelf_life_days : body.thawShelfLifeDays,
         JSON.stringify(normalized.attributes),
         JSON.stringify(body.tags === undefined ? parseJson(item.tags, []) : parseTags(body.tags)),
         body.image === undefined ? item.image : body.image,
@@ -1096,6 +1127,7 @@ itemRoutes.patch(
     );
     await afterStockChange(item.id);
     if (body.openedShelfLifeDays !== undefined) await syncHouseExpiry(item.house_id);
+    if (body.freezerShelfLifeDays !== undefined || body.thawShelfLifeDays !== undefined) await syncHouseExpiry(item.house_id);
     if (body.offCode !== undefined) {
       if (body.offCode === null || body.offCode === "") {
         await unlinkItemFromOff(item.id);
@@ -1215,12 +1247,13 @@ itemRoutes.post(
       vendorId: body.vendorId ?? null,
     };
     const detail = await tx(async () => {
-      if (body.action === "add") await addStock(base);
-      else if (body.action === "remove") await removeStock(base);
-      else if (body.action === "waste") await removeStock({ ...base, waste: true });
-      else if (body.action === "set") await setStock({ ...base, target: body.target ?? 0 });
+      let movementId: string | null = null;
+      if (body.action === "add") movementId = await addStock(base);
+      else if (body.action === "remove") movementId = await removeStock(base);
+      else if (body.action === "waste") movementId = await removeStock({ ...base, waste: true });
+      else if (body.action === "set") movementId = await setStock({ ...base, target: body.target ?? 0 });
       else
-        await moveStock({
+        movementId = await moveStock({
           itemId: item.id,
           houseId: item.house_id,
           userId: req.user!.id,
@@ -1230,7 +1263,7 @@ itemRoutes.post(
           toLocationId: body.toLocationId ?? "",
           note: body.note ?? undefined,
         });
-      const result = await itemDetail(item.id, req.user!.id);
+      const result = { ...(await itemDetail(item.id, req.user!.id)), lastMovementId: movementId };
       if (body.idempotencyKey) {
         await run(
           "INSERT INTO stock_mutations (id, house_id, idempotency_key, user_id, response, created_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
@@ -1250,14 +1283,20 @@ itemRoutes.get(
     const { item } = await itemAccess(req);
     const limit = intParam(req.query.limit, 50, 300);
     const rows = await all<any>(
-      `SELECT m.*, loc.name AS location_name, u.name AS user_name, v.name AS vendor_name FROM stock_movements m
+      `SELECT m.*, (SELECT 1 FROM stock_movements r WHERE r.reverses_movement_id = m.id LIMIT 1) AS reversed,
+         loc.name AS location_name, u.name AS user_name, v.name AS vendor_name FROM stock_movements m
        LEFT JOIN locations loc ON loc.id = m.location_id AND loc.house_id = ?
        LEFT JOIN users u ON u.id = m.user_id
        LEFT JOIN vendors v ON v.id = m.vendor_id
        WHERE m.item_id = ? ORDER BY m.created_at DESC LIMIT ?`,
       [item.house_id, item.id, limit],
     );
-    res.json(rows.map(serializeMovement));
+    const undoable = await undoableMovements(item.id);
+    res.json(rows.map((row) => {
+      const movement = serializeMovement(row);
+      movement.undoable = undoable.has(movement.id);
+      return movement;
+    }));
   }),
 );
 

@@ -7,6 +7,7 @@ import { Spinner } from "@/components/ui";
 import { AuthPage, JoinPage, NoHousePage } from "@/pages/AuthPages";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { InventoryPage } from "@/pages/InventoryPage";
+import { DuplicatesPage } from "@/pages/DuplicatesPage";
 import { ItemPage } from "@/pages/ItemPage";
 import { ItemFormPage } from "@/pages/ItemFormPage";
 import { ScanPage } from "@/pages/ScanPage";
@@ -27,6 +28,7 @@ import { SettingsPage } from "@/pages/SettingsPage";
 import { ProfilePage } from "@/pages/ProfilePage";
 import { DeveloperPage } from "@/pages/DeveloperPage";
 import { MorePage } from "@/pages/MorePage";
+import { LabelsPage } from "@/pages/LabelsPage";
 import { ExtraPages } from "@/pages/ExtraPages";
 import { ShoppingPage } from "@/pages/ShoppingPage";
 import { PlanPage } from "@/pages/PlanPage";
@@ -34,7 +36,12 @@ import { IntakePage } from "@/pages/IntakePage";
 import { InsightsPage } from "@/pages/InsightsPage";
 import { ContributionsPage } from "@/pages/ContributionsPage";
 import { EspressoPage } from "@/pages/EspressoPage";
+import { LoansPage } from "@/pages/LoansPage";
 import { AdminPage } from "@/pages/AdminPage";
+import { ValuationPage } from "@/pages/ValuationPage";
+import { ActivityPage } from "@/pages/ActivityPage";
+import { FreezerPage } from "@/pages/FreezerPage";
+import { StocktakePage, StocktakeSessionPage } from "@/pages/StocktakePage";
 import { useI18n } from "@/i18n";
 
 export function App() {
@@ -52,6 +59,7 @@ export function App() {
       >
         <Route index element={<DashboardPage />} />
         <Route path="/items" element={<InventoryPage />} />
+        <Route path="/items/duplicates" element={<DuplicatesPage />} />
         <Route path="/items/new" element={<ItemFormPage />} />
         <Route path="/items/:itemId" element={<ItemPage />} />
         <Route path="/items/:itemId/edit" element={<ItemFormPage />} />
@@ -75,13 +83,20 @@ export function App() {
         <Route path="/insights" element={<InsightsPage />} />
         <Route path="/contribute" element={<ContributionsPage />} />
         <Route path="/espresso" element={<EspressoPage />} />
+        <Route path="/loans" element={<LoansPage />} />
+        <Route path="/freezer" element={<FreezerPage />} />
         <Route path="/admin" element={<AdminPage />} />
         <Route path="/photos" element={<PhotosPage />} />
         <Route path="/notifications" element={<NotificationsPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/profile" element={<ProfilePage />} />
         <Route path="/developer" element={<DeveloperPage />} />
+        <Route path="/activity" element={<ActivityPage />} />
         <Route path="/more" element={<MorePage />} />
+        <Route path="/labels" element={<LabelsPage />} />
+        <Route path="/reports/valuation" element={<ValuationPage />} />
+        <Route path="/stocktake" element={<StocktakePage />} />
+        <Route path="/stocktake/:stocktakeId" element={<StocktakeSessionPage />} />
         <Route path="*" element={<ExtraPages />} />
       </Route>
     </Routes>
@@ -104,7 +119,7 @@ function RequireAuth({ children }: { children: ReactNode }) {
       </div>
     );
   }
-  if (!user) return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+  if (!user) return <Navigate to="/login" replace state={{ from: location.pathname + location.search }} />;
   if (!house) return <NoHousePage />;
   return <>{children}</>;
 }

@@ -88,11 +88,32 @@ export class SqliteDriver implements DatabaseDriver {
     ensureColumn("login_challenges", "attempts", "INTEGER NOT NULL DEFAULT 0");
     ensureColumn("notifications", "user_id", "TEXT REFERENCES users(id) ON DELETE CASCADE");
     ensureColumn("items", "opened_shelf_life_days", "INTEGER");
+    ensureColumn("items", "freezer_shelf_life_days", "INTEGER");
+    ensureColumn("items", "thaw_shelf_life_days", "INTEGER");
+    // Places created before the freezer flag existed are recognised once by
+    // their old kind; later user edits are never overwritten on boot.
+    if (ensureColumn("locations", "is_freezer", "INTEGER NOT NULL DEFAULT 0")) {
+      runLocal("UPDATE locations SET is_freezer = 1 WHERE kind = 'freezer'");
+    }
     ensureColumn("stock_lots", "opened_at", "TEXT");
+    ensureColumn("stock_lots", "portions", "REAL");
+    ensureColumn("stock_lots", "cooked_on", "TEXT");
+    ensureColumn("stock_lots", "frozen_on", "TEXT");
+    ensureColumn("stock_lots", "thawed_on", "TEXT");
+    // No foreign key: stock_lots is created before recipes, and a deleted
+    // recipe should not take a batch of food with it.
+    ensureColumn("stock_lots", "source_recipe_id", "TEXT");
+    conn.exec("CREATE INDEX IF NOT EXISTS lots_frozen ON stock_lots(house_id, frozen_on)");
     ensureColumn("stock_lots", "vendor_id", "TEXT REFERENCES vendors(id) ON DELETE SET NULL");
     ensureColumn("stock_lots", "receipt_id", "TEXT REFERENCES receipts(id) ON DELETE SET NULL");
     ensureColumn("stock_movements", "vendor_id", "TEXT REFERENCES vendors(id) ON DELETE SET NULL");
     ensureColumn("stock_movements", "receipt_id", "TEXT REFERENCES receipts(id) ON DELETE SET NULL");
+    // Undo never updates or deletes a movement: the compensating movement points
+    // back at the one it reverses, and a movement can be reversed only once.
+    ensureColumn("stock_movements", "reverses_movement_id", "TEXT REFERENCES stock_movements(id) ON DELETE SET NULL");
+    conn.exec(
+      "CREATE UNIQUE INDEX IF NOT EXISTS movements_reverses ON stock_movements(reverses_movement_id) WHERE reverses_movement_id IS NOT NULL",
+    );
     ensureColumn("receipts", "subtotal", "REAL");
     ensureColumn("receipts", "tax", "REAL");
     ensureColumn("receipts", "tax_breakdown", "TEXT NOT NULL DEFAULT '[]'");
@@ -148,11 +169,16 @@ export class SqliteDriver implements DatabaseDriver {
     ensureColumn("receipt_lines", "off_project", "TEXT NOT NULL DEFAULT 'off'");
     ensureColumn("catalog_mappings", "off_project", "TEXT NOT NULL DEFAULT 'off'");
     ensureColumn("items", "espresso", "INTEGER NOT NULL DEFAULT 0");
+    // A merged item is archived and points at the item that absorbed it, so
+    // receipts, aliases and history stay intelligible after a merge.
+    ensureColumn("items", "merged_into", "TEXT");
+    ensureColumn("items", "merged_at", "TEXT");
     // SCHEMA above has already created espresso_equipment, so the foreign key
     // target exists before these columns are added to an upgraded database.
     ensureColumn("espresso_shots", "grinder_id", "TEXT REFERENCES espresso_equipment(id) ON DELETE SET NULL");
     ensureColumn("espresso_shots", "machine_id", "TEXT REFERENCES espresso_equipment(id) ON DELETE SET NULL");
     conn.exec("CREATE INDEX IF NOT EXISTS items_off ON items(off_code)");
+    conn.exec("CREATE INDEX IF NOT EXISTS items_merged_into ON items(merged_into)");
     conn.exec("CREATE INDEX IF NOT EXISTS espresso_shots_grinder ON espresso_shots(grinder_id)");
     conn.exec("CREATE INDEX IF NOT EXISTS espresso_shots_machine ON espresso_shots(machine_id)");
 
@@ -563,6 +589,7 @@ CREATE TABLE IF NOT EXISTS locations (
   kind TEXT NOT NULL DEFAULT 'shelf',
   icon TEXT,
   parent_id TEXT REFERENCES locations(id) ON DELETE CASCADE,
+  is_freezer INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS locations_house ON locations(house_id);
@@ -603,6 +630,8 @@ CREATE TABLE IF NOT EXISTS items (
   reorder_point REAL NOT NULL DEFAULT 0,
   target_stock REAL,
   opened_shelf_life_days INTEGER,
+  freezer_shelf_life_days INTEGER,
+  thaw_shelf_life_days INTEGER,
   attributes TEXT NOT NULL DEFAULT '{}',
   tags TEXT NOT NULL DEFAULT '[]',
   image TEXT,
@@ -616,6 +645,8 @@ CREATE TABLE IF NOT EXISTS items (
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS items_house ON items(house_id);
+/* The activity feed reads the newest item creations in a house. */
+CREATE INDEX IF NOT EXISTS items_house_created ON items(house_id, created_at);
 
 CREATE TABLE IF NOT EXISTS item_documents (
   id TEXT PRIMARY KEY,
@@ -704,6 +735,11 @@ CREATE TABLE IF NOT EXISTS stock_lots (
   purchased_at TEXT,
   expires_at TEXT,
   opened_at TEXT,
+  portions REAL,
+  cooked_on TEXT,
+  frozen_on TEXT,
+  thawed_on TEXT,
+  source_recipe_id TEXT,
   note TEXT,
   created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL
@@ -727,10 +763,29 @@ CREATE TABLE IF NOT EXISTS stock_movements (
   reason TEXT,
   note TEXT,
   balance_after REAL,
+  reverses_movement_id TEXT REFERENCES stock_movements(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS movements_item ON stock_movements(item_id, created_at);
 CREATE INDEX IF NOT EXISTS movements_house ON stock_movements(house_id, created_at);
+/* Filtering the activity feed by kind narrows this index to one movement type. */
+CREATE INDEX IF NOT EXISTS movements_house_type ON stock_movements(house_id, type, created_at);
+
+/* Which batch each movement changed and by how much. Additive audit detail:
+   it is what makes an undo able to restore the exact batches a FIFO consume or
+   a move touched, instead of guessing. The movement ledger stays append-only. */
+CREATE TABLE IF NOT EXISTS stock_movement_lots (
+  id TEXT PRIMARY KEY,
+  movement_id TEXT NOT NULL REFERENCES stock_movements(id) ON DELETE CASCADE,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  lot_id TEXT REFERENCES stock_lots(id) ON DELETE SET NULL,
+  created_lot INTEGER NOT NULL DEFAULT 0,
+  delta REAL NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS movement_lots_movement ON stock_movement_lots(movement_id);
+CREATE INDEX IF NOT EXISTS movement_lots_lot ON stock_movement_lots(lot_id);
 
 CREATE TABLE IF NOT EXISTS stock_mutations (
   id TEXT PRIMARY KEY,
@@ -820,6 +875,7 @@ CREATE TABLE IF NOT EXISTS bills (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS bills_house ON bills(house_id, due_date, created_at);
+CREATE INDEX IF NOT EXISTS bills_house_created ON bills(house_id, created_at);
 
 CREATE TABLE IF NOT EXISTS household_settlements (
   id TEXT PRIMARY KEY,
@@ -1043,6 +1099,7 @@ CREATE TABLE IF NOT EXISTS shopping_list_items (
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS shopping_house ON shopping_list_items(house_id, checked, created_at);
+CREATE INDEX IF NOT EXISTS shopping_checked_at ON shopping_list_items(house_id, checked_at);
 
 /* Remembers which source (a recipe line, a low-stock item, a whole week of
    planned meals) produced a shopping-list line, so adding it twice is a no-op. */
@@ -1212,5 +1269,107 @@ CREATE TABLE IF NOT EXISTS ai_call_logs (
 CREATE INDEX IF NOT EXISTS ai_logs_house ON ai_call_logs(house_id, created_at);
 CREATE INDEX IF NOT EXISTS ai_logs_user ON ai_call_logs(user_id, created_at);
 CREATE INDEX IF NOT EXISTS ai_logs_operation ON ai_call_logs(operation);
+
+/* Saved inventory filters. user_id NULL marks a view an admin shared with
+   the whole house; otherwise it is personal to one member. Filters are the
+   validated inventory query object stored as JSON. */
+CREATE TABLE IF NOT EXISTS saved_views (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  filters TEXT NOT NULL DEFAULT '{}',
+  sort TEXT NOT NULL DEFAULT 'name',
+  position INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS saved_views_house ON saved_views(house_id, user_id, position);
+/* Web Push devices. A subscription belongs to a user, not a house, because a
+   phone can follow more than one house; delivery checks membership at send time.
+   endpoint is unique across the instance so re-subscribing the same browser
+   updates the existing row instead of adding a duplicate. */
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  endpoint TEXT NOT NULL UNIQUE,
+  p256dh TEXT NOT NULL,
+  auth TEXT NOT NULL,
+  user_agent TEXT,
+  created_at TEXT NOT NULL,
+  last_used_at TEXT
+);
+CREATE INDEX IF NOT EXISTS push_subs_user ON push_subscriptions(user_id);
+/* Items lent out (tools, books, gear). A loan never moves stock: the item is
+   still on the shelf, and the quantity available to use is on-hand minus the
+   open loans. returned_quantity closes a loan in parts; returned_at is set
+   only when the whole quantity is back. */
+CREATE TABLE IF NOT EXISTS item_loans (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  borrower_name TEXT NOT NULL CHECK (length(borrower_name) <= 80),
+  borrower_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  quantity REAL NOT NULL DEFAULT 1 CHECK (quantity > 0),
+  returned_quantity REAL NOT NULL DEFAULT 0 CHECK (returned_quantity >= 0),
+  lent_at TEXT NOT NULL,
+  due_at TEXT,
+  returned_at TEXT,
+  note TEXT,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS loans_house ON item_loans(house_id, returned_at, due_at);
+CREATE INDEX IF NOT EXISTS loans_item ON item_loans(item_id, returned_at);
+/* A stocktake is a guided physical count. Starting one snapshots the expected
+   quantity per item, so the review can show variances and commit can detect
+   stock that moved while the count was open. */
+CREATE TABLE IF NOT EXISTS stocktakes (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  location_id TEXT REFERENCES locations(id) ON DELETE SET NULL,
+  category_id TEXT REFERENCES categories(id) ON DELETE SET NULL,
+  location_name TEXT,
+  category_name TEXT,
+  status TEXT NOT NULL DEFAULT 'draft',
+  note TEXT,
+  started_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  committed_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  committed_at TEXT,
+  cancelled_at TEXT
+);
+CREATE INDEX IF NOT EXISTS stocktakes_house ON stocktakes(house_id, created_at);
+/* One open count per house, enforced even if two starts race. */
+CREATE UNIQUE INDEX IF NOT EXISTS stocktakes_one_draft ON stocktakes(house_id) WHERE status = 'draft';
+
+CREATE TABLE IF NOT EXISTS stocktake_lines (
+  id TEXT PRIMARY KEY,
+  stocktake_id TEXT NOT NULL REFERENCES stocktakes(id) ON DELETE CASCADE,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  expected_qty REAL NOT NULL DEFAULT 0,
+  counted_qty REAL,
+  unit_cost REAL,
+  note TEXT,
+  counted_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  counted_at TEXT,
+  committed_delta REAL,
+  created_at TEXT NOT NULL,
+  UNIQUE (stocktake_id, item_id)
+);
+CREATE INDEX IF NOT EXISTS stocktake_lines_session ON stocktake_lines(stocktake_id);
+CREATE INDEX IF NOT EXISTS stocktake_lines_item ON stocktake_lines(item_id);
+/* A pair the user said is "not a duplicate". The pair is stored with the
+   smaller item id first so one dismissal covers either order. */
+CREATE TABLE IF NOT EXISTS item_duplicate_dismissals (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  item_a TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  item_b TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (house_id, item_a, item_b)
+);
+CREATE INDEX IF NOT EXISTS item_duplicate_dismissals_house ON item_duplicate_dismissals(house_id);
 `;
 

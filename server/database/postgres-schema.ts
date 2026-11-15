@@ -165,6 +165,7 @@ CREATE TABLE IF NOT EXISTS locations (
   kind TEXT NOT NULL DEFAULT 'shelf',
   icon TEXT,
   parent_id TEXT REFERENCES locations(id) ON DELETE CASCADE,
+  is_freezer INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS locations_house ON locations(house_id);
@@ -216,6 +217,8 @@ CREATE TABLE IF NOT EXISTS items (
   reorder_point DOUBLE PRECISION NOT NULL DEFAULT 0,
   target_stock DOUBLE PRECISION,
   opened_shelf_life_days INTEGER,
+  freezer_shelf_life_days INTEGER,
+  thaw_shelf_life_days INTEGER,
   attributes TEXT NOT NULL DEFAULT '{}',
   tags TEXT NOT NULL DEFAULT '[]',
   image TEXT,
@@ -228,13 +231,17 @@ CREATE TABLE IF NOT EXISTS items (
   off_source TEXT,
   off_synced_at TEXT,
   off_filled TEXT NOT NULL DEFAULT '[]',
+  merged_into TEXT,
+  merged_at TEXT,
   archived INTEGER NOT NULL DEFAULT 0,
   created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS items_house ON items(house_id);
+CREATE INDEX IF NOT EXISTS items_house_created ON items(house_id, created_at);
 CREATE INDEX IF NOT EXISTS items_off ON items(off_code);
+CREATE INDEX IF NOT EXISTS items_merged_into ON items(merged_into);
 
 CREATE TABLE IF NOT EXISTS item_documents (
   id TEXT PRIMARY KEY,
@@ -361,6 +368,7 @@ CREATE TABLE IF NOT EXISTS bills (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS bills_house ON bills(house_id, due_date, created_at);
+CREATE INDEX IF NOT EXISTS bills_house_created ON bills(house_id, created_at);
 
 CREATE TABLE IF NOT EXISTS household_settlements (
   id TEXT PRIMARY KEY,
@@ -400,6 +408,11 @@ CREATE TABLE IF NOT EXISTS stock_lots (
   purchased_at TEXT,
   expires_at TEXT,
   opened_at TEXT,
+  portions DOUBLE PRECISION,
+  cooked_on TEXT,
+  frozen_on TEXT,
+  thawed_on TEXT,
+  source_recipe_id TEXT,
   note TEXT,
   created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL
@@ -425,10 +438,25 @@ CREATE TABLE IF NOT EXISTS stock_movements (
   reason TEXT,
   note TEXT,
   balance_after DOUBLE PRECISION,
+  reverses_movement_id TEXT REFERENCES stock_movements(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS movements_item ON stock_movements(item_id, created_at);
 CREATE INDEX IF NOT EXISTS movements_house ON stock_movements(house_id, created_at);
+CREATE INDEX IF NOT EXISTS movements_house_type ON stock_movements(house_id, type, created_at);
+
+CREATE TABLE IF NOT EXISTS stock_movement_lots (
+  id TEXT PRIMARY KEY,
+  movement_id TEXT NOT NULL REFERENCES stock_movements(id) ON DELETE CASCADE,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  lot_id TEXT REFERENCES stock_lots(id) ON DELETE SET NULL,
+  created_lot INTEGER NOT NULL DEFAULT 0,
+  delta DOUBLE PRECISION NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS movement_lots_movement ON stock_movement_lots(movement_id);
+CREATE INDEX IF NOT EXISTS movement_lots_lot ON stock_movement_lots(lot_id);
 
 CREATE TABLE IF NOT EXISTS receipt_lines (
   id TEXT PRIMARY KEY,
@@ -648,6 +676,7 @@ CREATE TABLE IF NOT EXISTS shopping_list_items (
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS shopping_house ON shopping_list_items(house_id, checked, created_at);
+CREATE INDEX IF NOT EXISTS shopping_checked_at ON shopping_list_items(house_id, checked_at);
 
 CREATE TABLE IF NOT EXISTS shopping_list_sources (
   house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
@@ -813,10 +842,104 @@ CREATE INDEX IF NOT EXISTS ai_logs_house ON ai_call_logs(house_id, created_at);
 CREATE INDEX IF NOT EXISTS ai_logs_user ON ai_call_logs(user_id, created_at);
 CREATE INDEX IF NOT EXISTS ai_logs_operation ON ai_call_logs(operation);
 
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  endpoint TEXT NOT NULL UNIQUE,
+  p256dh TEXT NOT NULL,
+  auth TEXT NOT NULL,
+  user_agent TEXT,
+  created_at TEXT NOT NULL,
+  last_used_at TEXT
+);
+CREATE INDEX IF NOT EXISTS push_subs_user ON push_subscriptions(user_id);
+CREATE TABLE IF NOT EXISTS stocktakes (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  location_id TEXT REFERENCES locations(id) ON DELETE SET NULL,
+  category_id TEXT REFERENCES categories(id) ON DELETE SET NULL,
+  location_name TEXT,
+  category_name TEXT,
+  status TEXT NOT NULL DEFAULT 'draft',
+  note TEXT,
+  started_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  committed_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  committed_at TEXT,
+  cancelled_at TEXT
+);
+CREATE INDEX IF NOT EXISTS stocktakes_house ON stocktakes(house_id, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS stocktakes_one_draft ON stocktakes(house_id) WHERE status = 'draft';
+
+CREATE TABLE IF NOT EXISTS stocktake_lines (
+  id TEXT PRIMARY KEY,
+  stocktake_id TEXT NOT NULL REFERENCES stocktakes(id) ON DELETE CASCADE,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  expected_qty DOUBLE PRECISION NOT NULL DEFAULT 0,
+  counted_qty DOUBLE PRECISION,
+  unit_cost DOUBLE PRECISION,
+  note TEXT,
+  counted_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  counted_at TEXT,
+  committed_delta DOUBLE PRECISION,
+  created_at TEXT NOT NULL,
+  UNIQUE (stocktake_id, item_id)
+);
+CREATE INDEX IF NOT EXISTS stocktake_lines_session ON stocktake_lines(stocktake_id);
+CREATE INDEX IF NOT EXISTS stocktake_lines_item ON stocktake_lines(item_id);
+/* A pair the user said is "not a duplicate". The pair is stored with the
+   smaller item id first so one dismissal covers either order. */
+CREATE TABLE IF NOT EXISTS item_duplicate_dismissals (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  item_a TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  item_b TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (house_id, item_a, item_b)
+);
+CREATE INDEX IF NOT EXISTS item_duplicate_dismissals_house ON item_duplicate_dismissals(house_id);
+
 CREATE TABLE IF NOT EXISTS schema_meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+/* Saved inventory filters. user_id NULL marks a view an admin shared with the
+   whole house; otherwise it is personal to one member. */
+CREATE TABLE IF NOT EXISTS saved_views (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  filters TEXT NOT NULL DEFAULT '{}',
+  sort TEXT NOT NULL DEFAULT 'name',
+  position INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS saved_views_house ON saved_views(house_id, user_id, position);
+/* Items lent out (tools, books, gear). A loan never moves stock: the item is
+   still on the shelf, and the quantity available to use is on-hand minus the
+   open loans. returned_quantity closes a loan in parts; returned_at is set
+   only when the whole quantity is back. */
+CREATE TABLE IF NOT EXISTS item_loans (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  borrower_name TEXT NOT NULL CHECK (length(borrower_name) <= 80),
+  borrower_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  quantity DOUBLE PRECISION NOT NULL DEFAULT 1 CHECK (quantity > 0),
+  returned_quantity DOUBLE PRECISION NOT NULL DEFAULT 0 CHECK (returned_quantity >= 0),
+  lent_at TEXT NOT NULL,
+  due_at TEXT,
+  returned_at TEXT,
+  note TEXT,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS loans_house ON item_loans(house_id, returned_at, due_at);
+CREATE INDEX IF NOT EXISTS loans_item ON item_loans(item_id, returned_at);
 `;
 
 /**
@@ -848,7 +971,26 @@ export const POSTGRES_MIGRATIONS: string[] = [
   FOREIGN KEY (house_id, user_id) REFERENCES house_members(house_id, user_id) ON DELETE CASCADE
 );`,
   "ALTER TABLE items ADD COLUMN IF NOT EXISTS opened_shelf_life_days INTEGER",
+  "ALTER TABLE items ADD COLUMN IF NOT EXISTS freezer_shelf_life_days INTEGER",
+  "ALTER TABLE items ADD COLUMN IF NOT EXISTS thaw_shelf_life_days INTEGER",
+  // Mark places that predate the freezer flag once, by their old kind. User
+  // edits to the flag are preserved on later boots.
+  `DO $$ BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM information_schema.columns
+       WHERE table_name = 'locations' AND column_name = 'is_freezer'
+     ) THEN
+       ALTER TABLE locations ADD COLUMN is_freezer INTEGER NOT NULL DEFAULT 0;
+       UPDATE locations SET is_freezer = 1 WHERE kind = 'freezer';
+     END IF;
+   END $$;`,
   "ALTER TABLE stock_lots ADD COLUMN IF NOT EXISTS opened_at TEXT",
+  "ALTER TABLE stock_lots ADD COLUMN IF NOT EXISTS portions DOUBLE PRECISION",
+  "ALTER TABLE stock_lots ADD COLUMN IF NOT EXISTS cooked_on TEXT",
+  "ALTER TABLE stock_lots ADD COLUMN IF NOT EXISTS frozen_on TEXT",
+  "ALTER TABLE stock_lots ADD COLUMN IF NOT EXISTS thawed_on TEXT",
+  "ALTER TABLE stock_lots ADD COLUMN IF NOT EXISTS source_recipe_id TEXT",
+  "CREATE INDEX IF NOT EXISTS lots_frozen ON stock_lots(house_id, frozen_on)",
   "ALTER TABLE users ADD COLUMN IF NOT EXISTS developer_mode INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE users ADD COLUMN IF NOT EXISTS password_set INTEGER NOT NULL DEFAULT 1",
   "ALTER TABLE user_totp ADD COLUMN IF NOT EXISTS last_used_step BIGINT",
@@ -941,6 +1083,42 @@ export const POSTGRES_MIGRATIONS: string[] = [
       ALTER TABLE bills ADD CONSTRAINT bills_source_check CHECK (source IN ('manual', 'scan'));
     END IF;
   END $$`,
+  // Undo links a compensating movement back to the one it reverses. The ledger
+  // stays append-only: the original row is never updated or deleted.
+  "ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS reverses_movement_id TEXT REFERENCES stock_movements(id) ON DELETE SET NULL",
+  "CREATE UNIQUE INDEX IF NOT EXISTS movements_reverses ON stock_movements(reverses_movement_id) WHERE reverses_movement_id IS NOT NULL",
+  // Lending tracker: loans are a separate record and never move stock.
+  `CREATE TABLE IF NOT EXISTS item_loans (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  borrower_name TEXT NOT NULL CHECK (length(borrower_name) <= 80),
+  borrower_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  quantity DOUBLE PRECISION NOT NULL DEFAULT 1 CHECK (quantity > 0),
+  returned_quantity DOUBLE PRECISION NOT NULL DEFAULT 0 CHECK (returned_quantity >= 0),
+  lent_at TEXT NOT NULL,
+  due_at TEXT,
+  returned_at TEXT,
+  note TEXT,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL
+);`,
+  "CREATE INDEX IF NOT EXISTS loans_house ON item_loans(house_id, returned_at, due_at)",
+  "CREATE INDEX IF NOT EXISTS loans_item ON item_loans(item_id, returned_at)",
+  // Item merge: an archived source item points at the item that absorbed it.
+  "ALTER TABLE items ADD COLUMN IF NOT EXISTS merged_into TEXT",
+  "ALTER TABLE items ADD COLUMN IF NOT EXISTS merged_at TEXT",
+  "CREATE INDEX IF NOT EXISTS items_merged_into ON items(merged_into)",
+  `CREATE TABLE IF NOT EXISTS item_duplicate_dismissals (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  item_a TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  item_b TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (house_id, item_a, item_b)
+);`,
+  "CREATE INDEX IF NOT EXISTS item_duplicate_dismissals_house ON item_duplicate_dismissals(house_id)",
 ];
 
 /**
@@ -961,13 +1139,16 @@ export const POSTGRES_TABLE_ORDER = [
   "house_members",
   "member_diet_profiles",
   "house_invites",
+  "saved_views",
   "locations",
   "categories",
   "attribute_defs",
   "vendors",
   "items",
+  "item_loans",
   "item_documents",
   "item_barcodes",
+  "item_duplicate_dismissals",
   "espresso_equipment",
   "espresso_shots",
   "receipts",
@@ -1001,5 +1182,10 @@ export const POSTGRES_TABLE_ORDER = [
   "photo_labels",
   "ai_cache",
   "ai_call_logs",
+  "push_subscriptions",
+  // Listed last so a restore inserts batch effects after movements and batches.
+  "stock_movement_lots",
+  "stocktakes",
+  "stocktake_lines",
 ] as const;
 

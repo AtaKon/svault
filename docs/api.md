@@ -180,8 +180,8 @@ All mounted under `/api/houses/:houseId`.
 | Method | Path | Min role | Purpose |
 | --- | --- | --- | --- |
 | `GET` | `/locations` | viewer+ | List places with item counts. |
-| `POST` | `/locations` | member+ | Create a place (`name`, `kind`, `icon`, `parentId`). |
-| `PATCH` | `/locations/:locationId` | member+ | Rename or re-parent. |
+| `POST` | `/locations` | member+ | Create a place (`name`, `kind`, `icon`, `parentId`, `isFreezer`). `isFreezer` defaults to true when `kind` is `freezer`. |
+| `PATCH` | `/locations/:locationId` | member+ | Rename, re-parent or change `isFreezer`. |
 | `DELETE` | `/locations/:locationId` | admin+ | Delete a place; batches become unassigned. |
 | `GET` | `/categories` | viewer+ | List categories with item counts. |
 | `POST` | `/categories` | member+ | Create a category. |
@@ -198,7 +198,7 @@ Attribute types: `text`, `number`, `select`, `date`, `boolean`, `url`. Built-in 
 
 ## Inventory
 
-Item create and update accept `openedShelfLifeDays`, a nullable integer from 0 to 36500. Lot responses include `openedAt` and `effectiveExpiresAt`: the earlier of the printed `expiresAt` and the opening date plus shelf life, when available. Both batch endpoints require that the lot belongs to the item and its household; consumption does not mark batches opened.
+Item create and update accept `openedShelfLifeDays`, `freezerShelfLifeDays` and `thawShelfLifeDays`, nullable integers from 0 to 36500. Lot responses include `openedAt`, `portions`, `cookedOn`, `frozenOn`, `thawedOn`, `sourceRecipeId` and `effectiveExpiresAt`. Effective expiry is the earlier of the printed `expiresAt` and the opening date plus shelf life, unless the batch is frozen or thawed: then it is `frozenOn` plus the freezer shelf life (90 days when unset), or `thawedOn` plus the thaw window (2 days when unset); an opened batch still wins when its date is earlier. Both opened endpoints require that the lot belongs to the item and its household; consumption does not mark batches opened.
 
 ### Items
 
@@ -216,7 +216,8 @@ Item create and update accept `openedShelfLifeDays`, a nullable integer from 0 t
 | `DELETE` | `/api/items/:itemId/documents/:documentId` | member+ | Delete a document and its file. |
 | `PUT` | `/api/items/:itemId/lots/:lotId/opened` | member+ | Mark a batch opened; optional `{ "openedAt": "YYYY-MM-DD" }` defaults to today. |
 | `DELETE` | `/api/items/:itemId/lots/:lotId/opened` | member+ | Clear the opening date. |
-| `POST` | `/api/items/:itemId/stock` | member+ | Add, remove, waste, set or move stock. |
+| `POST` | `/api/items/:itemId/stock` | member+ | Add, remove, waste, set or move stock. The response also carries `lastMovementId`, the ledger row the action appended. |
+| `POST` | `/api/houses/:houseId/movements/:movementId/undo` | member+ | Reverse one stock change by appending a compensating movement. |
 | `GET` | `/api/items/:itemId/movements` | viewer+ | Movement ledger (`limit` 1-300, default 50). |
 | `POST` | `/api/items/:itemId/image` | member+ | `multipart/form-data` field `image`. |
 | `POST` | `/api/items/:itemId/barcodes` | member+ | Attach `{ "code": "...", "format": "ean13" }`. |
@@ -237,6 +238,31 @@ Item create and update accept `openedShelfLifeDays`, a nullable integer from 0 t
 | `POST` | `/api/houses/:houseId/espresso-equipment` | member+ | Save `{ "kind": "machine" \\| "grinder", "name": "...", "brand": "..." }`. Names are unique per kind. |
 | `PATCH` | `/api/houses/:houseId/espresso-equipment/:equipmentId` | member+ | Rename or edit `name`, `brand` or `notes`. Existing shot snapshots follow the new name. |
 | `DELETE` | `/api/houses/:houseId/espresso-equipment/:equipmentId` | member+ | Delete saved equipment. Shots keep the recorded name. |
+| `GET` | `/api/houses/:houseId/items/duplicates` | viewer+ | Candidate duplicate groups ranked by deterministic signals. Optional `limit` (1-200, default 60). |
+| `POST` | `/api/houses/:houseId/items/duplicates/dismiss` | member+ | Mark pairs as "not a duplicate" so they are not suggested again. Body `{ "pairs": [{ "a": "itm_...", "b": "itm_..." }] }` (1-50). |
+| `POST` | `/api/houses/:houseId/items/:targetId/merge` | member+ | Merge `{ "sourceIds": ["itm_..."], "dryRun": true }` into the target. `dryRun` returns the preview; without it the merge is applied. |
+
+### Undo a stock change
+
+`POST /api/houses/:houseId/movements/:movementId/undo` appends a **compensating** movement. The
+original ledger row is never edited or deleted.
+
+- Consume and waste come back as an `in` movement on the same batches, a count stays an `adjust`, and
+  a move moves the quantity back to its original place. A FIFO consume that spanned several batches is
+  reversed in one transaction, so every batch it touched is restored together.
+- A batch that the movement created is emptied only while it is untouched.
+- The compensating movement carries `reverses_movement_id`, so a movement can be undone at most once
+  and an undo cannot itself be undone. `GET /api/items/:itemId` marks each movement with `reversed`
+  and `undoable` and includes `userId`, which is what the client uses to offer Undo on the author's
+  movements from the last 24 hours.
+- Members undo their own movements; admins and owners undo anyone's. A viewer gets `403`.
+- `409` when undo is no longer safe: a later movement touched one of the same batches, the batch the
+  movement created was used, the item is archived, the movement is itself an undo, or the movement
+  predates the per-batch effects this endpoint needs.
+- Response: `{ itemId, itemName, quantity, movementId, reversesMovementId, type, delta }`. Low-stock and
+  expiry reminders are re-evaluated before the response is sent.
+- While a change is still in the offline queue there is nothing on the server to reverse; the client
+  cancels the queued entry instead of calling this endpoint.
 
 List query parameters:
 
@@ -315,6 +341,33 @@ per incoming purchase: `at`, normalized `price` per item unit, entered `unit`, `
 `vendorId`, `vendorName`, `receiptId` and `note`. Clients can filter this list by shop for per-vendor
 price comparisons.
 
+### Duplicate items and merging
+
+Duplicate detection is deterministic and local; it never calls AI. Items are bucketed by shared
+barcode, OpenFoodFacts link, normalised name (case, diacritics including Greek accents, punctuation,
+unit tokens such as `1L`/`1 lt`), significant words and brand, then only pairs inside a bucket are
+compared. Each pair carries `reasons` (`shared_barcode`, `same_product_link`, `same_name`,
+`similar_name`, `same_brand`, `compatible_units`) and a 0-1 `confidence`.
+
+`POST …/items/:targetId/merge` requires the same role as editing an item (member+). It accepts 1-20
+`sourceIds` and refuses:
+
+- a source from another house (`409`, `source_not_found`),
+- an archived or already merged target (`409`, `target_archived` / `already_merged`),
+- units that cannot be converted while batches or history have to move (`409`, `incompatible_unit`).
+
+`dryRun: true` returns `{ mergeable, target, sources, conflicts, moves }` without writing. The real
+call runs in one transaction: batches are converted into the target's base unit, movements,
+receipt lines, purchase history, aliases, barcodes (deduplicated), tags (unioned), attributes (target
+wins, empty keys are filled), documents, photos, shopping-list lines, recipe links, espresso shots,
+Open Food Facts contributions and the Open Food Facts link move to the target; reminders are rebuilt
+from the new state. The target keeps its own values and only fills empty fields from the sources.
+Each source is then archived (not deleted) with `merged_into` pointing at the target, so old receipt
+names, catalogue entries and links still resolve to the item that kept the history.
+
+The duplicates list skips dismissed pairs. `POST …/duplicates/dismiss` stores the pair with the
+smaller item id first, so either ordering is remembered.
+
 ### Espresso log
 
 Set `"espresso": true` on a coffee item to give it a shot log. The item page then shows ratings and
@@ -385,6 +438,51 @@ OpenFoodFacts product (`code`, `project`, `productType`, `name`, `brand`, `gener
 `categories`, `image`, `ingredients`, `allergens`, `labels`, `nutriscore`, `novaGroup`, `countries`,
 `packaging`, `servingSize`, `nutrition`) and `item` is null. `nutrition` is the parsed per-100 panel,
 or null when the product has no nutrition data.
+
+## Saved views and global search
+
+Saved views store a named inventory filter set for one house. Global search is one ranked query across
+items, recipes, receipts, bills and shops.
+
+### Saved views
+
+| Method | Path | Min role | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/houses/:houseId/saved-views` | viewer+ | The caller's personal views and every shared view in the house, ordered by position. |
+| `POST` | `/api/houses/:houseId/saved-views` | viewer+ | Create `{ name, filters, sort, position?, shared? }`. Viewers may create personal views. |
+| `PATCH` | `/api/houses/:houseId/saved-views/:viewId` | viewer+ / admin+ | Rename, reshape, move or (un)share a view. Personal views are owner-only; shared views need an admin. |
+| `DELETE` | `/api/houses/:houseId/saved-views/:viewId` | viewer+ / admin+ | Delete a view under the same rules. |
+
+`filters` is validated with the same strict schema as the item list: `q`, `categoryId`, `locationId`,
+`tag`, `low`, `expiring`, `archived`. Unknown keys are rejected with `400` rather than ignored, and a
+category/place id must belong to the house. `sort` is one of `name`, `recent`, `quantity` or `value`.
+`shared: true` writes a house-wide view (`user_id` NULL) and requires `admin+`. A personal view that is
+shared can be un-shared only by an admin; it becomes that admin's personal view. There is a cap of 25
+personal views per user per house and 25 shared views per house.
+
+Responses are `{ views: SavedView[] }` where a view carries `id`, `name`, `shared`, `filters`, `sort`,
+`position`, `canEdit`, `createdAt` and `missingFilters`. `missingFilters` lists `category` or
+`location` when the stored id no longer exists; the view is still returned so the client can show a
+hint instead of failing. Owners can rename, reorder and delete their views; `canEdit` reflects the
+caller's rights.
+
+### Search
+
+`GET /api/houses/:houseId/search?q=...&types=items,recipes,receipts,bills,shops&limit=6` is available
+to `viewer+` and always scoped to one house. `q` must be 2–120 characters after trimming; `types`
+defaults to all five and rejects unknown values; `limit` is 1–20 per type (default 6). The response is
+`{ query, groups: [{ type, hits: [SearchHit] }], total }`, with only non-empty groups. A hit is
+`{ type, id, title, subtitle, route }`; `route` is the client path that opens it.
+
+Matching is accent-, case- and punctuation-insensitive for Greek and Latin text, so `ρεβανι` finds
+`Ρεβάνι` and `ΡΕΒΑΝΊ`. `%` and `_` are ordinary characters, not wildcards. Items match name, brand,
+description, tags and barcodes; recipes match title, description and tags; receipts match shop, notes
+and product lines; bills match name, type, notes and due date; shops match name, kind and notes.
+Results are ranked by exact/prefix/substring title match, then recency. Each type scans a bounded
+recent window (1500 items; 500 recipes; 400 receipts, bills and 300 shops) so one query stays cheap
+on a long-lived house. Each type keeps its existing visibility rule: house membership is required and
+every query filters on `house_id`, so another house's records never appear. The endpoint shares the
+in-memory rate limiter (`SV_RATE_LIMIT_SEARCH`, default 120 per minute per user).
 
 ## OpenFoodFacts catalogue
 
@@ -765,7 +863,8 @@ matched item's category; unlinked lines are reported as `Uncategorised`.
 | `POST` | `/api/houses/:houseId/recipes/upload` | member+ | Upload a source image (`field: image`) and get `{ path }`. |
 | `POST` | `/api/houses/:houseId/recipes/scan` | member+ | Parse OCR text and/or an image into a draft, optionally save. |
 | `POST` | `/api/houses/:houseId/recipes/import` | member+ | Import a recipe from a URL (schema.org JSON-LD, text fallback, optional AI clean-up), optionally save. |
-| `GET` | `/api/recipes/:recipeId` | viewer+ | Recipe detail with `match` (available/total/missing) and `nutrition`. |
+| `GET` | `/api/houses/:houseId/recipes/costs` | viewer+ | Cost per portion for every recipe in one query set. Optional `basis`. |
+| `GET` | `/api/recipes/:recipeId` | viewer+ | Recipe detail with `match` (available/total/missing), `nutrition` and `cost`. Optional `basis`. |
 | `PATCH` | `/api/recipes/:recipeId` | member+ | Partial update. |
 | `DELETE` | `/api/recipes/:recipeId` | member+ | Delete a recipe. |
 | `POST` | `/api/recipes/:recipeId/cook` | member+ | Consume linked stock and optionally record leftovers. |
@@ -880,6 +979,85 @@ countable units (`pcs`, `clove`, `slice`…) use a typical piece weight. Lines t
 are left out, so `covered`/`coverage` describe how much of the recipe the estimate represents. Cook
 mode uses the same shared helpers in `shared/recipe-grams.ts`.
 
+### Recipe cost
+
+The recipe detail carries `cost`, and `GET /api/houses/:houseId/recipes/costs` returns the same
+figure for every recipe at once:
+
+```json
+{
+  "basis": "latest",
+  "currency": "EUR",
+  "recipes": [
+    {
+      "recipeId": "rcp_...",
+      "title": "Gemista",
+      "servings": 4,
+      "total": 7.42,
+      "perPortion": 1.86,
+      "priced": 7,
+      "ingredients": 9,
+      "coverage": 0.78,
+      "partial": true
+    }
+  ]
+}
+```
+
+The detail `cost` object adds the per-line breakdown:
+
+```json
+{
+  "basis": "latest",
+  "total": 7.42,
+  "perPortion": 1.86,
+  "servings": 4,
+  "priced": 7,
+  "ingredients": 9,
+  "coverage": 0.78,
+  "partial": true,
+  "lines": [
+    {
+      "id": "rin_...",
+      "name": "rice",
+      "quantity": 200,
+      "unit": "g",
+      "itemId": "itm_...",
+      "pricedQuantity": 0.2,
+      "itemUnit": "kg",
+      "unitPrice": 1.95,
+      "basis": "latest",
+      "cost": 0.39,
+      "reason": null
+    }
+  ],
+  "unpriced": [{ "name": "tomatoes", "reason": "unlinked" }]
+}
+```
+
+`basis` selects the unit price:
+
+| Basis | Price used |
+| --- | --- |
+| `latest` (default) | The latest recorded unit price on an incoming stock movement. |
+| `average` | Average of the item's purchases in the last 90 days, at most 20 of them. |
+| `stock` | Weighted cost of the batches currently in stock. |
+
+The basis comes from `?basis=` on the request, or `settings.recipeCostBasis` on the house (set with
+`PATCH /api/houses/:houseId`), or `latest`. An unknown basis is rejected with `400`. A line whose
+basis has no price falls back through `latest` → `average` → `stock` and reports the basis it used in
+`lines[].basis`.
+
+An ingredient line is converted to the item's own unit with the same tables the stock engine uses, so
+`200 g` of an item priced per kg costs `0.2 × unitPrice`. A line without a unit is treated as already
+written in the item's unit. A line that is not linked to an item (`unlinked`), has no quantity
+(`quantity`), has no price (`unpriced`) or cannot be converted (`unconverted`) keeps `cost: null` and
+is listed in `unpriced`. `coverage` is `priced / ingredients`, and `partial` is true while any line is
+uncosted: a partial `total` is only ever the cost of the priced lines, never presented as the whole
+recipe. `perPortion` is null when the recipe has no servings. Both endpoints run a fixed set of
+house-wide aggregate queries, so the list costs the same number of queries for one recipe as for
+fifty.
+
 ## Food ideas
 
 | Method | Path | Min role | Purpose |
@@ -949,6 +1127,8 @@ See the [user guide](user-guide.md#export-a-dataset) for the archive layout.
 
 Joining a house — by accepting an invite or being added by an admin — creates a `house` notification
 addressed to that user only. Other members do not see it.
+
+Overdue loans add a `loan_overdue` reminder, at most once per loan per day. See [Lending](#lending).
 
 ### House summary
 
@@ -1244,9 +1424,11 @@ Channel shape:
 `ntfy` posts to `url/topic` with an optional bearer token. `apprise` posts JSON to the configured endpoint
 with an optional `x-api-key`. Webhooks receive
 `{ event, title, body, houseId, houseName, data, sentAt }` and, when a secret is set, an
-`x-svault-signature: sha256=…` header. Delivery is detached from the triggering request, deduped per
-notification key and channel, and retried three times with backoff. Resolved reminders are not re-sent.
-The weekly summary runs from the reminder scan once per ISO week when at least one channel enables it.
+`x-svault-signature: sha256=…` header. `webpush` has no URL: it targets the devices each member enabled
+under **Settings → Reminders → Push on this device**. Delivery is detached from the triggering request,
+deduped per notification key and channel, and retried three times with backoff. Resolved reminders are not
+re-sent. The weekly summary runs from the reminder scan once per ISO week when at least one channel
+enables it.
 
 ## Two-factor authentication
 
@@ -1296,6 +1478,50 @@ Configure `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, optional `OIDC_
 are accepted. Existing users are linked by email; new users are provisioned only when
 `OIDC_AUTO_PROVISION` is on and registration is `open` (`SV_REGISTRATION`). Password login
 and the first local owner remain as the break-glass path. Errors redirect to `/login?oidc_error=...`.
+
+## Stocktake
+
+| Method | Path | Min role | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/houses/:houseId/stocktakes` | viewer+ | Open and past sessions, newest first. `?limit` 1–200, default 50. |
+| `GET` | `/api/houses/:houseId/stocktakes/:stocktakeId` | viewer+ | One session with its lines and current quantities. |
+| `POST` | `/api/houses/:houseId/stocktakes` | member+ | Start a count. Body `{ locationId?, categoryId?, note? }`. |
+| `PATCH` | `/api/houses/:houseId/stocktakes/:stocktakeId/lines/:lineId` | member+ | Save one line. Body `{ countedQty?, note? }`. |
+| `POST` | `/api/houses/:houseId/stocktakes/:stocktakeId/commit` | member+ | Apply the selected lines in one transaction. |
+| `POST` | `/api/houses/:houseId/stocktakes/:stocktakeId/cancel` | member+ | Close a draft without changing stock. |
+
+Starting a session snapshots the expected quantity per item: the batches in the chosen place, or every
+batch for a category or whole-house count. A place count lists only items that currently have stock
+there; a category or whole-house count lists every active item in scope, so a surprise find can be
+counted from zero. Only one draft may be open per house; a second start answers `409` with
+`details.stocktakeId`, pointing at the open session.
+
+Each line carries `expectedQty`, `countedQty` (null until counted), `unitCost` (weighted average batch
+cost at snapshot time, when prices are known), `variance`, `valueImpact`, `currentQty` and `changed`.
+`PATCH` sets `countedBy`/`countedAt`; sending `countedQty: null` clears the line. Lines can only be
+edited while the session is a draft (`409` otherwise).
+
+Commit body:
+
+```json
+{
+  "lineIds": ["stl_..."],
+  "confirmChangedLineIds": ["stl_..."]
+}
+```
+
+Omitted `lineIds` commits every counted line. If an item's scoped quantity differs from the snapshot,
+the request answers `409` with `details: { "code": "changed-since-snapshot", "changedLineIds": [...] }`;
+resend with those ids in `confirmChangedLineIds`. The variance (`countedQty - expectedQty`) is applied
+to the current quantity, never written blindly as an absolute count, and a shortage is capped at what
+is actually in scope. Surplus creates a batch in the counted place; shortage consumes FIFO there. Every
+applied line records a `count` movement with the note `stocktake <id>`. Committing a committed session
+answers `409`, so a retry cannot double-apply. Viewers can read sessions and history; starting,
+counting, committing and cancelling require member access.
+
+`POST …/commit` returns `{ stocktake, appliedLines, appliedDelta }`. The bundled client keeps unsent
+counts in this browser's `localStorage` while offline and replays them when the connection returns;
+commit itself always needs the server.
 
 ## Offline stock mutations
 
@@ -1354,6 +1580,51 @@ caller map class names (or `__skip`) before writing. Rounds back to the existing
 `PATCH /api/auth/me` accepts `{ "language": "en" | "el" }`. The stored preference is returned on `user`
 and drives the client dictionary and `Intl` date/number/currency formatting.
 
+## House activity feed
+
+`GET /api/houses/:houseId/activity` (viewer+) returns a read-only timeline of things that happened in
+the house. It is assembled at read time; there is no activity table and no extra write path. A source
+is included only when it already stores both an author and a timestamp.
+
+| `kind` | Source table | Timestamp | Author |
+| --- | --- | --- | --- |
+| `stock.add` / `stock.consume` / `stock.waste` / `stock.move` / `stock.count` | `stock_movements` (`in`, `out`, `waste`, `move`, `adjust`) | `created_at` | `user_id` |
+| `receipt.saved` | `receipts` | `created_at` | `created_by` |
+| `item.created` | `items` | `created_at` | `created_by` |
+| `shopping.checked` | `shopping_list_items` with a checkoff | `checked_at` | none recorded |
+| `bill.saved` | `bills` | `created_at` | `created_by` |
+
+Not covered, because the data to answer "who and when" is not stored: item archiving (`items.archived`
+is a flag with no timestamp or author), recipe cook events (there is no cook log), photo uploads,
+meal-plan edits and household settlements.
+
+Query parameters:
+
+| Name | Meaning |
+| --- | --- |
+| `before` | Opaque `nextCursor` from the previous page, or an ISO timestamp meaning "strictly older than this instant". |
+| `limit` | Page size, default `30`, maximum `100`. |
+| `member` | Only events whose stored author is this user id. Checkoffs have no author and drop out. |
+| `kind` | One or more of the kinds above, repeated (`?kind=stock.add&kind=receipt.saved`) or comma-separated. An unknown kind is `400`. |
+| `itemId` | Events for one item. Receipts match when one of their lines links the item. Bills have no item and drop out. |
+| `locationId` | Stock movements at that place. Other sources have no place and drop out. |
+| `from`, `to` | ISO timestamp or `YYYY-MM-DD` (UTC). `to` includes the whole day. |
+
+The response is `{ "events": [...], "nextCursor": "..." | null, "hasMore": boolean }`. Each event
+carries `id`, `kind`, `at`, `actorId`, `actorName`, `itemId`, `itemName`, `locationId`, `locationName`,
+`quantity`, `unit`, `amount`, `currency`, `title` (vendor, bill name, shopping line or movement
+reason), `receiptId`, `billId` and `shoppingItemId`.
+
+Ordering is `at` descending, then a per-source rank and the row id, both descending. A cursor carries
+the last pair, so rows saved in the same millisecond page without duplicates or gaps. Display names
+are joined through `house_members`, so a departed member keeps `actorId` but returns
+`actorName: null`; the client renders "Former member".
+
+```bash
+curl -b cookies.txt \
+  "http://localhost:8080/api/houses/hse_xxx/activity?limit=30&kind=stock.add,stock.consume"
+```
+
 ## Status codes
 
 | Code | Meaning |
@@ -1364,7 +1635,7 @@ and drives the client dictionary and `Intl` date/number/currency formatting.
 | `401` | Not signed in |
 | `403` | Signed in but below the required role, registration closed, or a blocked cross-site request |
 | `404` | Resource not found or not visible to this user |
-| `409` | Conflict (duplicate email, barcode already linked) |
+| `409` | Conflict (duplicate email, barcode already linked, an already committed stocktake, or stock changed since a stocktake snapshot) |
 | `429` | Rate limited; wait for `Retry-After` seconds |
 | `413` | Reverse proxy body limit (raise `client_max_body_size`) |
 | `500` | Unexpected server error (details are logged, not returned) |
@@ -1399,6 +1670,127 @@ The rate is the total quantity in outgoing consumption movements over the last 6
 At least two consumption events spanning seven days and positive stock are required. The dashboard's
 `runningOutSoon` contains active items with at most seven days left, ordered by days left.
 
+### Printable QR labels
+
+`GET /api/labels` returns `{ "baseUrl": string | null }`, the configured `PUBLIC_URL` used to build
+printed label links; `null` means the client falls back to its own origin. Any signed-in user may read
+it and it carries no household data.
+
+A label is a deep link, never a copy of the inventory: `/items/:itemId?house=:houseId` for an item and
+`/items?location=:locationId&house=:houseId` for a place. QR codes are produced in the browser with the
+ZXing encoder the camera scanner already ships (no network, no new storage). The `house` parameter only
+selects the house after a scan and is ignored when the user is not a member. Opening a label while
+signed out returns to the target after sign-in (`state.from` keeps the query string). A non-member who
+opens an item link gets the usual `404` and never sees the item's name.
+### Valuation and insurance export
+
+`GET /api/houses/:houseId/reports/valuation` returns a dated valuation report for the house. It
+needs member access or above: it lists prices and purchase history for everything the house owns,
+so viewers (who can browse stock) get `403`. Admins and owners are included.
+
+Query parameters:
+
+| Parameter | Default | Meaning |
+| --- | --- | --- |
+| `format` | `json` | `json` or `csv` (UTF-8 with a BOM, comma delimiter, spreadsheet-formula guard). |
+| `basis` | `latest` | `latest` (latest incoming purchase price), `average` (average incoming purchase price) or `stockCost` (what the stock on hand cost). |
+| `categories` | all | Comma-separated category IDs, matched exactly (children are not implied). |
+| `places` | all | Comma-separated location IDs; an item matches when it has stock in one of them. |
+| `tags` | all | Comma-separated tags; an item matches any of them, case-insensitively. |
+| `minValue` | none | Minimum item total. Items without a price never pass this filter. |
+| `warranty` | `0` | `1` keeps only items whose warranty end date is today or later. |
+| `archived` | `0` | `1` includes archived items. |
+| `documents` | `0` | `1` adds the attached-document names and types to each item. Contents and download links are never included. |
+
+The JSON body carries `houseName`, `currency`, `reportDate`, `generatedAt`, `basis`, `itemCount`,
+`itemsWithoutValue`, `grandTotal`, `truncated`, the item rows and the `categoryTotals` /
+`placeTotals` subtotal blocks. Each item has its name, brand, category, places, quantity and unit,
+unit and total value, `valueSource` (`latest-purchase`, `average-purchase`, `stock-cost` or `none`),
+the latest purchase date and shop, warranty fields, custom attributes, image reference and document
+count. Totals use the current stock quantity. An item with no recorded price has `null` values, is
+listed with `no value recorded` and is excluded from every total rather than counted as zero. Purchase
+dates and shops come from the most recent batch that recorded a purchase date. Place subtotals add back
+up to the grand total; stock without a place appears under `No place`.
+
+The report is capped at 20,000 matching items (ordered by name) and sets `truncated: true` when the cap
+was hit; the CSV shows the same rows. The CSV begins with a metadata line, then the item table, then
+category and place subtotal blocks. Cells whose text starts with `=`, `+`, `-` or `@` are prefixed with
+a single quote so spreadsheets do not execute them. There is no server-side PDF generation; the client
+prints the HTML report with `window.print()`.
+## Web Push
+
+Web Push is off unless the server has `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` and `VAPID_SUBJECT`
+(see [deployment.md](deployment.md#web-push)). Subscriptions belong to the signed-in user, not to a
+house, because one phone can follow several houses. Every route below requires a session; API tokens
+cannot use them.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/push` | `{ enabled, publicKey, subscriptions }`. `publicKey` is `null` when the server is not configured. |
+| `POST` | `/api/push/subscribe` | Body `{ endpoint, keys: { p256dh, auth } }` from `PushSubscription.toJSON()`. `201` with `{ subscription }`. `endpoint` must be `https://`, without credentials, and never a private, loopback or link-local address (`400`). An endpoint already registered to another account is refused with `409` unless the same `p256dh`/`auth` keys are presented (the same browser signing in as someone else). |
+| `POST` | `/api/push/unsubscribe` | Body `{ endpoint }`. `{ ok, removed }`; only the owner's own row is deleted. |
+| `POST` | `/api/push/test` | Sends a test notification to the caller's devices. `{ ok, sent, failed, removed, error }`; `400` when no device is subscribed, `502` when every device refused. |
+
+The payload is deliberately small: `{ title, body, url }`, where `url` is an in-app path such as
+`/items/itm_…` (the object is the same reminder text the bell shows). Reminders are only pushed for
+houses the user still belongs to; a subscription is deleted when the push service answers `404` or
+`410`. A house sends push only when an enabled `webpush` channel exists in
+`house.settings.notifications.channels`, so the per-channel low-stock, expiry, budget and weekly
+switches apply unchanged. With no subscribed device the channel is skipped instead of recording a
+failed delivery.
+
+Because any signed-in user supplies the endpoint and the server POSTs to it, push endpoints are held to
+a stricter rule than admin-configured reminder channels: **private, loopback and link-local targets are
+always refused, whatever `SV_OUTBOUND_ALLOW_PRIVATE` says.** Real push services are public HTTPS hosts.
+The name is resolved and checked before each send, and the connection itself re-checks the address it
+uses, so DNS rebinding cannot reach the server's own network.
+## Lending
+
+A loan records who has borrowed a non-consumable item (a tool, a book, gear). It is deliberately not a
+stock movement: the item still belongs to the house, and lending never changes the on-hand quantity or
+the ledger. Only a free-text borrower name (up to 80 characters) is stored — no phone number or email.
+
+| Method | Path | Min role | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/houses/:houseId/loans` | viewer+ | List loans. `status` is `open` (default in the UI), `overdue`, `returned` or `all`; optional `itemId`, `limit` 1-500. Returns `{ loans, counts }`. |
+| `GET` | `/api/houses/:houseId/loans/borrowers` | viewer+ | Suggested borrowers: household members first, then names from past loans, each with `loanCount` and `member`. |
+| `POST` | `/api/houses/:houseId/loans` | member+ | Record `{ itemId, borrowerName, quantity?, lentAt?, dueAt?, note?, borrowerUserId? }`. `quantity` defaults to 1 and may not exceed the available quantity. |
+| `PATCH` | `/api/loans/:loanId` | member+ | Change `dueAt` (YYYY-MM-DD or null) and/or `note`. |
+| `POST` | `/api/loans/:loanId/return` | member+ | Mark returned. Empty body returns everything still out; `{ "quantity": 1 }` returns part of it and keeps the loan open. |
+| `DELETE` | `/api/loans/:loanId` | member+ | Delete a loan recorded by mistake. Only the person who recorded it, or an admin+, may do this. |
+
+A loan is `{ id, houseId, itemId, itemName, itemUnit, borrowerName, borrowerUserId, quantity,
+returnedQuantity, remaining, lentAt, dueAt, returnedAt, note, createdBy, createdByName, open, overdue,
+createdAt }`. `open` is false once the entire quantity is back; `overdue` compares `dueAt` with today as
+calendar dates (YYYY-MM-DD), so time zones do not move the line.
+
+**Available quantity.** Item responses gain `onLoan` and `available`, where
+`available = on-hand quantity - open loans` (never below zero). The item list, item detail and the lend
+sheet use the same numbers. Low-stock reminders and run-out forecasts intentionally keep using the
+on-hand quantity: lending is not consumption, and the house still owns the item. Consuming stock
+(`POST /api/items/:itemId/stock` with `remove`, `waste` or a lowering `set`) is refused when it would go
+below the open loans, so FIFO can never silently take units promised to a borrower.
+
+**Reminders.** An overdue loan (open, with a `dueAt` before today) creates one `loan_overdue`
+notification per loan per day; the dedupe key carries the date, so the 30-minute scan does not repeat
+it. Returning the loan, or deleting it, resolves the reminder. Overdue reminders are delivered through
+the existing `expiring` channel preference, alongside expiry and warranty reminders.
+
+Loan due dates are not added to the calendar feed: that would need a new per-feed toggle and a
+migration on `calendar_feeds`, so it is left out of this change.
+## Freezer batches
+
+All mounted under `/api/houses/:houseId/freezer`. A batch belongs to the freezer when `frozenOn` is set; `thawedOn` switches it to the thaw window but keeps it visible until it is eaten. Freezing, thawing and taking out stock go through `server/services/stock.ts`.
+
+| Method | Path | Min role | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/` | viewer+ | Frozen and thawed batches with `totals` (`batches`, `portions`, `useSoon`) and `useSoonDays` (the house expiry window). Batches are ordered by `effectiveExpiresAt` soonest first. |
+| `POST` | `/freeze` | member+ | `{ itemId, lotId, portions?, locationId?, frozenOn? }`. A count batch (unit `pcs`) can be frozen piece by piece; `portions` defaults to its quantity. A weighed or liquid batch is frozen whole and `portions` (default 1) labels how many equal portions it holds. `frozenOn` defaults to today and `locationId` to the batch's current place. A thawed or already frozen batch is refused with 400. |
+| `POST` | `/thaw` | member+ | `{ itemId, lotId, thawedOn?, locationId? }`. Marks a frozen batch thawed and switches effective expiry to the thaw window. Thawing twice or thawing a fresh batch is 400. |
+| `POST` | `/take-out` | member+ | `{ itemId, lotId, portions?, thaw? }`. Consumes a whole portion (an equal share of the batch) from that batch, or `portions` of them, with an `out` movement; `thaw: true` also marks the rest of the batch thawed. |
+
+Cook mode accepts `leftovers.freeze: true` and an optional `leftovers.frozenOn`. A frozen leftover batch stores `cookedOn`, `portions`, `sourceRecipeId`, `frozenOn` and no `expiresAt`; if `locationId` is omitted the first freezer place is used. Lot responses include `sourceRecipeTitle` when a recipe still exists. The dashboard adds `freezer: { portions, useSoon }`, or `null` when nothing is frozen, and expiry reminders include frozen and thawed batches with the same `exp:<lotId>` dedupe key.
+
 ## Extending the API
 
 If you add an endpoint:
@@ -1410,3 +1802,42 @@ If you add an endpoint:
 5. Add a test in `server/tests/api.test.ts` and update this page.
 
 See [development.md](development.md) for the workflow.
+
+## Live updates (Server-Sent Events)
+
+`GET /api/houses/:houseId/events` opens a `text/event-stream` for a house. It is the only streaming
+endpoint and it requires the normal `sv_session` cookie: read-only API tokens (`Authorization: Bearer
+svt_...`) get `403`, and callers who are not members of the house get `404` like every other house
+route. Set `LIVE_UPDATES=off` to disable the endpoint (`404`) when a proxy cannot stream; the bundled
+client then falls back to polling every 90 seconds.
+
+Every event is a minimal invalidation hint, never household data:
+
+```
+id: 42
+data: {"type":"shopping","actorUserId":"usr_...","at":"2026-11-15T10:04:11.283Z"}
+
+```
+
+`type` is one of `stock`, `shopping`, `items`, `recipes`, `plan`, `notifications`, `receipts` or
+`bills`. `id` is optional and identifies the affected entity when the emitter knows it. Events carry
+no item names, quantities or prices; clients refetch the data they are already allowed to read.
+
+- Events are emitted **after** the write commits. A transaction that rolls back, or a request that
+  fails with `4xx`/`5xx`, never produces an event.
+- The server sends `retry: 5000`, a `: connected` comment, and a `: heartbeat` comment every 25
+  seconds. `Cache-Control: no-cache, no-transform`, `Connection: keep-alive` and
+  `X-Accel-Buffering: no` keep proxies and compression middleware from buffering the stream.
+- Membership is re-checked every minute; a removed member's stream is closed.
+- A single account may hold 5 open streams and a house 100. Above that the endpoint answers `429` with
+  `Retry-After: 30`.
+- Event ids are per process and there is no replay. After a reconnect the client refetches instead of
+  asking for missed events, so no payload history is stored anywhere.
+
+The fan-out is an in-process bus (`server/services/live.ts`), which fits SVault's single-container
+deployment. The publish/subscribe surface is deliberately small so a PostgreSQL `LISTEN`/`NOTIFY`
+backend could replace it later without changing routes or clients.
+
+Browser notes: `/api` is never cached by the service worker, and the client pauses the stream while the
+tab is hidden, reconnects with exponential backoff (capped at 30 seconds) and refetches on visibility.
+See [deployment.md](deployment.md#live-updates-and-streaming-proxies) for reverse-proxy settings.

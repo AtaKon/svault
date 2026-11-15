@@ -1,4 +1,5 @@
 import { DietWarnings } from "@/components/diet-profile";
+import { RecipeCostCard } from "@/components/RecipeCost";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api } from "@/api";
@@ -20,6 +21,7 @@ import { ZoomableImage } from "@/components/ZoomableImage";
 import { useToast } from "@/components/toast";
 import { aiCostLabel, minutesLabel, plural, qty, relativeTime } from "@/format";
 import { gramsLabel } from "@shared/recipe-grams";
+import type { RecipeCostBasis } from "@shared/recipe-cost";
 import type { Recipe } from "@shared/types";
 import { useI18n } from "@/i18n";
 
@@ -36,16 +38,19 @@ export function RecipePage() {
   const [deleting, setDeleting] = useState(false);
   const [done, setDone] = useState<Set<number>>(new Set());
   const [aiHint, setAiHint] = useState<string | null>(null);
+  // Null means "whatever the house defaults to"; the cost card shows the basis
+  // the server actually used, so a house default is never hidden from the user.
+  const [costBasis, setCostBasis] = useState<RecipeCostBasis | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const data = await api<Recipe>(`/api/recipes/${recipeId}`);
+      const data = await api<Recipe>(`/api/recipes/${recipeId}${costBasis ? `?basis=${costBasis}` : ""}`);
       setRecipe(data);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? t(err.message) : t("Could not load the recipe"));
     }
-  }, [recipeId]);
+  }, [recipeId, costBasis]);
 
   useEffect(() => {
     void load();
@@ -386,6 +391,13 @@ export function RecipePage() {
               </div>
             )}
           </Card>
+
+          <RecipeCostCard
+            cost={recipe.cost ?? null}
+            currency={house.currency}
+            basis={recipe.cost?.basis ?? "latest"}
+            onBasisChange={setCostBasis}
+          />
 
           <Card className="p-4">
             <div className="mb-3 flex items-center justify-between">

@@ -613,7 +613,8 @@ export async function useItUp(houseId: string, days?: number): Promise<{
   const earliest = new Date(Date.now() - 3 * DAY).toISOString().slice(0, 10);
 
   const lots = await all<any>(
-    `SELECT l.*, i.name AS item_name, i.unit AS item_unit, i.category_id, i.opened_shelf_life_days, loc.name AS location_name
+    `SELECT l.*, i.name AS item_name, i.unit AS item_unit, i.category_id, i.opened_shelf_life_days,
+            i.freezer_shelf_life_days, i.thaw_shelf_life_days, loc.name AS location_name
      FROM stock_lots l
      JOIN items i ON i.id = l.item_id
      LEFT JOIN locations loc ON loc.id = l.location_id AND loc.house_id = ?

@@ -94,14 +94,15 @@ exports readable. Timestamps are ISO-8601 strings; dates (`expires_at`, `purchas
 | Identity | `users`, `sessions` |
 | Tenancy | `houses`, `house_members`, `house_invites` |
 | Taxonomy | `locations`, `categories`, `attribute_defs` |
-| Inventory | `items`, `item_barcodes`, `stock_lots`, `stock_movements` |
+| Inventory | `items`, `item_barcodes`, `stock_lots`, `stock_movements`, `item_loans` |
 | Coffee | `espresso_shots` (rating and dial-in history for espresso-enabled items), `espresso_equipment` (saved machines and grinders) |
 | Purchases | `vendors`, `receipts`, `receipt_lines` |
 | Purchase learning | `product_aliases` (raw shop name → item, per vendor) |
 | Receipt layouts | `receipt_templates` (custom rules; built-in Lidl and Sklavenitis live in code) |
 | Reference data | `vendor_catalog` (seeded shops by country) |
-| Reminders | `notifications` |
+| Reminders | `notifications`, `notification_deliveries`, `push_subscriptions` |
 | Cooking | `recipes`, `recipe_ingredients`, `food_ideas` |
+| Stocktake | `stocktakes`, `stocktake_lines` |
 | Vision | `photo_collections`, `photos`, `photo_labels` |
 | AI | `ai_cache` (reserved; not currently used), `ai_call_logs` (provider audit trail) |
 
@@ -131,6 +132,10 @@ Key constraints:
 - **Move** removes from one place and creates/updates a lot in another without changing the total.
 - Every mutation runs in a transaction. `tx()` uses `BEGIN` at the top level and `SAVEPOINT` for nested
   calls, so a multi-step recipe/AI save can compose safely.
+- Each movement also records the batches it changed (`stock_movement_lots`). This is what allows an undo
+  to restore the exact batches a FIFO consume or a move touched. Undo never edits the ledger: it appends
+  a compensating movement that points back through `reverses_movement_id`, and a unique index makes a
+  movement reversible at most once.
 - `afterStockChange()` re-evaluates low-stock and expiry reminders for the item/house.
 
 Prices are normalised with `pricePerUnit(price, enteredUnit, baseUnit)`. Incompatible units are
@@ -156,7 +161,9 @@ receipt lines by vendor, month and item category.
 - The client polls the cross-house `/api/notifications` feed, so a newly shared house is visible
   before the user switches to it.
 
-Browser notifications are sent by the client while a tab is open. There is no push service.
+Browser notifications are sent by the client while a tab is open. Web Push is optional and off by
+default: with `VAPID_*` set, the reminder delivery channel `webpush` fans out to the devices each
+member subscribed, from `server/services/web-push.ts`.
 
 ## AI provider adapter
 
@@ -307,6 +314,11 @@ food ideas. What never does: stock, prices, barcodes, reminders, photo labelling
   a cached shell fallback.
 - `/api` and `/uploads` are **never** cached. Inventory and stock are always read from the server so
   the UI cannot present stale quantities as current.
+- Live updates use one `text/event-stream` connection per tab (`server/routes/live.ts`), subscribed
+  through `server/services/live.ts`. The fan-out is in-process because SVault runs as one container;
+  the publish/subscribe surface is small enough for a PostgreSQL `LISTEN`/`NOTIFY` backend later.
+  Events carry only `{ type, id?, actorUserId, at }`, never household data, and are emitted after the
+  writing transaction commits. A 90-second poll remains as the fallback when streaming is unavailable.
 - Offline stock mutations are not queued yet; see the [roadmap](roadmap.md).
 
 ## Security posture
@@ -319,8 +331,9 @@ Implemented:
 - Security headers: `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options`,
   `Permissions-Policy` (camera only for self).
 - Random upload filenames and MIME allow-list.
-- No telemetry. Only outbound calls are the configured AI endpoint and the optional OpenFoodFacts
-  barcode lookup.
+- No telemetry. Only outbound calls are the configured AI endpoint, the optional OpenFoodFacts
+  barcode lookup, the reminder channels a house configures, and (when VAPID keys are set) the browser
+  push service of each subscribed device.
 
 Known trade-offs:
 

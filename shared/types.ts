@@ -2,6 +2,7 @@
 
 import type { RecipeReasoningMode } from "./ai-reasoning.js";
 import type { BillType } from "./bill-types.js";
+import type { RecipeCost, RecipeCostBasis } from "./recipe-cost.js";
 
 export type Role = "owner" | "admin" | "member" | "viewer";
 
@@ -30,7 +31,7 @@ export interface House {
   createdAt: string;
 }
 
-export type NotificationChannelType = "ntfy" | "apprise" | "webhook";
+export type NotificationChannelType = "ntfy" | "apprise" | "webhook" | "webpush";
 
 export interface NotificationChannelEvents {
   lowStock: boolean;
@@ -95,6 +96,8 @@ export interface HouseSettings {
   };
   units?: "metric" | "imperial";
   purchases?: { country?: string };
+  /** Default unit-price basis for recipe costs; a request may override it. */
+  recipeCostBasis?: RecipeCostBasis;
 }
 
 export interface Location {
@@ -105,6 +108,8 @@ export interface Location {
   icon: string | null;
   parentId: string | null;
   itemCount?: number;
+  /** A freezer place: frozen batches are grouped here and the "Freeze" sheet lists it first. */
+  isFreezer: boolean;
 }
 
 export interface Category {
@@ -123,6 +128,7 @@ export type AttributeType =
   | "date"
   | "boolean"
   | "url";
+
 
 export interface AttributeDef {
   id: string;
@@ -442,12 +448,19 @@ export interface StockLot {
   vendorName?: string | null;
   receiptId: string | null;
   createdAt: string;
+  /** Portion count for cooked/frozen batches; kept in step with quantity on consumption. */
+  portions: number | null;
+  cookedOn: string | null;
+  frozenOn: string | null;
+  thawedOn: string | null;
+  sourceRecipeId: string | null;
+  sourceRecipeTitle?: string | null;
 }
 
 export interface Movement {
   id: string;
   itemId: string;
-  type: "in" | "out" | "adjust" | "waste" | "move";
+  type: "in" | "out" | "adjust" | "waste" | "move" | "count";
   delta: number;
   unit: string;
   unitPrice: number | null;
@@ -457,10 +470,17 @@ export interface Movement {
   locationId: string | null;
   locationName?: string | null;
   userName?: string | null;
+  userId?: string | null;
   vendorId: string | null;
   vendorName?: string | null;
   receiptId: string | null;
   balanceAfter: number | null;
+  /** Set on the compensating movement that an undo appended. */
+  reversesMovementId?: string | null;
+  /** True once a compensating movement has undone this one. */
+  reversed?: boolean;
+  /** True while Undo is still structurally possible; the API can still refuse. */
+  undoable?: boolean;
   createdAt: string;
 }
 
@@ -490,6 +510,10 @@ export interface Forecast { dailyRate: number; daysLeft: number; windowDays: num
 
 export interface Item {
   openedShelfLifeDays: number | null;
+  /** Days a frozen batch keeps after `frozenOn`; null uses the 90-day default. */
+  freezerShelfLifeDays: number | null;
+  /** Days a thawed batch keeps after `thawedOn`; null uses the 2-day default. */
+  thawShelfLifeDays: number | null;
   id: string;
   houseId: string;
   name: string;
@@ -507,9 +531,15 @@ export interface Item {
   tags: string[];
   image: string | null;
   archived: boolean;
+  /** When the item was merged away, the item that absorbed it. */
+  mergedInto?: string | null;
   /** Coffee item that keeps an espresso shot log. */
   espresso: boolean;
   quantity: number;
+  /** Units currently out on loan and not yet returned. Lending never changes stock. */
+  onLoan: number;
+  /** Quantity on hand minus open loans: what can still be used or lent. */
+  available: number;
   forecast: Forecast | null;
   value: number;
   latestPrice?: number | null;
@@ -629,6 +659,9 @@ export interface ItemDetail extends Item {
   movements: Movement[];
   priceHistory: PricePoint[];
   recipes: { id: string; title: string }[];
+  /** The movement created by the stock action that produced this response. */
+  lastMovementId?: string | null;
+  loans: Loan[];
 }
 
 export interface DietWarning { ingredient: string; allergen: string; members: string[] }
@@ -681,6 +714,8 @@ export interface Recipe {
   portion?: RecipePortion | null;
   /** Nutrition estimated from the ingredients that link to tracked items. */
   nutrition?: RecipeNutrition | null;
+  /** Cost of the priced ingredients, with honest coverage. */
+  cost?: RecipeCost | null;
 }
 
 export interface RecipePortion {
@@ -715,6 +750,19 @@ export interface RecipeMatch {
   total: number;
   coverage: number;
   missing: { name: string; quantity: number | null; unit: string | null }[];
+}
+
+/** One row of `GET /api/houses/:houseId/recipes/costs`, without the breakdown. */
+export interface RecipeCostSummary {
+  recipeId: string;
+  title: string;
+  servings: number | null;
+  total: number | null;
+  perPortion: number | null;
+  priced: number;
+  ingredients: number;
+  coverage: number;
+  partial: boolean;
 }
 
 export interface Vendor {
@@ -985,7 +1033,7 @@ export interface Notification {
   id: string;
   houseId: string;
   houseName?: string;
-  type: "low_stock" | "expiring" | "warranty" | "system" | "invite" | "house";
+  type: "low_stock" | "expiring" | "warranty" | "system" | "invite" | "house" | "loan_overdue";
   title: string;
   body: string;
   data: Record<string, unknown>;
@@ -1049,6 +1097,8 @@ export interface Dashboard {
     unlabeledPhotos: number;
     unreadNotifications: number;
   };
+  /** Only present when the house has frozen batches. */
+  freezer?: { portions: number; useSoon: number } | null;
 }
 
 /* --------------------------------------------------------------- shopping list */
@@ -1514,4 +1564,483 @@ export interface OrphanFile {
   key: string;
   size: number;
   modifiedAt: string;
+}
+
+/* --------------------------------------------------------- saved views/search */
+
+/** Inventory list filters that a saved view can carry. Matches the item list query. */
+export interface SavedViewFilters {
+  q?: string;
+  categoryId?: string | null;
+  locationId?: string | null;
+  tag?: string | null;
+  low?: boolean;
+  expiring?: boolean;
+  archived?: boolean;
+}
+
+export type InventorySort = "name" | "recent" | "quantity" | "value";
+
+/** A personal view (shared: false) or one an admin shared with the whole house. */
+export interface SavedView {
+  id: string;
+  name: string;
+  shared: boolean;
+  filters: SavedViewFilters;
+  sort: InventorySort;
+  position: number;
+  /** True when the caller may rename, move, reshape or delete the view. */
+  canEdit: boolean;
+  /** Referenced filters whose category/place no longer exists in the house. */
+  missingFilters: ("category" | "location")[];
+  createdAt: string;
+}
+
+export type SearchType = "items" | "recipes" | "receipts" | "bills" | "shops";
+
+export interface SearchHit {
+  type: SearchType;
+  id: string;
+  title: string;
+  subtitle: string | null;
+  /** Client route that opens the result. */
+  route: string;
+}
+
+export interface SearchGroup {
+  type: SearchType;
+  hits: SearchHit[];
+}
+
+export interface SearchResponse {
+  query: string;
+  groups: SearchGroup[];
+  total: number;
+}
+/* ------------------------------------------------------- valuation report */
+
+/** How a unit value is derived for the valuation report. */
+export type ValuationBasis = "latest" | "average" | "stockCost";
+
+/** Where a single item's value came from. `none` means no price is recorded. */
+export type ValuationValueSource = "latest-purchase" | "average-purchase" | "stock-cost" | "none";
+
+export interface ValuationPlace {
+  locationId: string | null;
+  locationName: string | null;
+  quantity: number;
+}
+
+/** A warranty or manual document attached to an item, by name and type only. */
+export interface ValuationDocumentRef {
+  name: string;
+  kind: string;
+  mime: string;
+  size: number;
+}
+
+export interface ValuationItem {
+  id: string;
+  name: string;
+  brand: string | null;
+  categoryId: string | null;
+  categoryName: string | null;
+  unit: string;
+  quantity: number;
+  places: ValuationPlace[];
+  /** Unit value in the house currency; null when no price is recorded. */
+  unitValue: number | null;
+  /** quantity × unit value (or the priced stock cost); null when no price is recorded. */
+  totalValue: number | null;
+  valueSource: ValuationValueSource;
+  /** Purchase date of the most recent batch that recorded one. */
+  purchasedAt: string | null;
+  /** Shop of that same latest batch. */
+  shop: string | null;
+  warrantyUntil: string | null;
+  warrantyNote: string | null;
+  /** Custom attributes, so the print view can show the ones the user picks. */
+  attributes: Record<string, unknown>;
+  image: string | null;
+  tags: string[];
+  /** Number of attached documents (warranties, manuals, receipts). */
+  documentCount: number;
+  /** Present only when the report asked for the documents list. */
+  documents?: ValuationDocumentRef[];
+  archived: boolean;
+}
+
+export interface ValuationCategoryTotal {
+  categoryId: string | null;
+  categoryName: string | null;
+  itemCount: number;
+  itemsWithoutValue: number;
+  total: number;
+}
+
+export interface ValuationPlaceTotal {
+  locationId: string | null;
+  locationName: string | null;
+  itemCount: number;
+  total: number;
+}
+
+export interface ValuationReport {
+  houseId: string;
+  houseName: string;
+  currency: string;
+  /** YYYY-MM-DD the report was produced for. */
+  reportDate: string;
+  generatedAt: string;
+  basis: ValuationBasis;
+  itemCount: number;
+  /** Items with no recorded price. They are listed but never counted as zero. */
+  itemsWithoutValue: number;
+  grandTotal: number;
+  /** True when the house had more matches than the report cap. */
+  truncated: boolean;
+  includeDocuments: boolean;
+  items: ValuationItem[];
+  categoryTotals: ValuationCategoryTotal[];
+  placeTotals: ValuationPlaceTotal[];
+}
+
+/* ----------------------------------------------------------- activity feed */
+
+/**
+ * Kinds the read-only house timeline can show. Every kind maps to data that is
+ * already stored with an author and a timestamp; there is no activity table.
+ */
+export type ActivityKind =
+  | "stock.add"
+  | "stock.consume"
+  | "stock.waste"
+  | "stock.move"
+  | "stock.count"
+  | "receipt.saved"
+  | "item.created"
+  | "shopping.checked"
+  | "bill.saved";
+
+
+export interface ActivityEvent {
+  /** Source row id (`mov_`, `rcp_`, `itm_`, `shp_`, `bil_`). Unique across kinds. */
+  id: string;
+  kind: ActivityKind;
+  /** When the stored event happened, ISO-8601 UTC. */
+  at: string;
+  /** Null when the source row does not record who did it (shopping checkoffs). */
+  actorId: string | null;
+  /** Display name for a current member only; null for a departed or missing actor. */
+  actorName: string | null;
+  itemId: string | null;
+  itemName: string | null;
+  locationId: string | null;
+  locationName: string | null;
+  quantity: number | null;
+  unit: string | null;
+  amount: number | null;
+  currency: string | null;
+  /** Vendor, bill name, shopping line or movement reason. */
+  title: string | null;
+  receiptId: string | null;
+  billId: string | null;
+  shoppingItemId: string | null;
+}
+
+export interface ActivityFeed {
+  events: ActivityEvent[];
+  /** Opaque cursor for the next page; null when nothing older is left. */
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
+/* ------------------------------------------------------------------ web push */
+
+/** One browser/device subscribed to push reminders for the signed-in user. */
+export interface PushSubscriptionSummary {
+  id: string;
+  createdAt: string;
+  userAgent: string | null;
+}
+
+/** `GET /api/push`: whether the server has VAPID keys, and this user's devices. */
+export interface WebPushStatus {
+  enabled: boolean;
+  /** Only present when the server is configured; the browser needs it to subscribe. */
+  publicKey: string | null;
+  subscriptions: PushSubscriptionSummary[];
+}
+
+/** Response of `POST /api/houses/:houseId/movements/:movementId/undo`. */
+export interface UndoStockResult {
+  itemId: string;
+  itemName: string;
+  /** Quantity in stock after the compensating movement. */
+  quantity: number;
+  /** The compensating movement that was appended to the ledger. */
+  movementId: string;
+  reversesMovementId: string;
+  type: Movement["type"];
+  delta: number;
+}
+
+/* -------------------------------------------------------------------- loans */
+
+/**
+ * A recorded loan of a non-consumable item. `remaining` is what is still out;
+ * `open` is false once the whole quantity came back, and `overdue` compares the
+ * due date against today (date only) while the loan is open.
+ */
+export interface Loan {
+  id: string;
+  houseId: string;
+  itemId: string;
+  itemName: string | null;
+  itemUnit: string | null;
+  borrowerName: string;
+  borrowerUserId: string | null;
+  quantity: number;
+  returnedQuantity: number;
+  remaining: number;
+  lentAt: string;
+  dueAt: string | null;
+  returnedAt: string | null;
+  note: string | null;
+  createdBy: string | null;
+  createdByName: string | null;
+  open: boolean;
+  overdue: boolean;
+  createdAt: string;
+}
+
+/** Who has borrowed before, for the autosuggest in the lend sheet. */
+export interface LoanBorrower {
+  name: string;
+  userId: string | null;
+  loanCount: number;
+  member: boolean;
+}
+
+export interface LoanList {
+  loans: Loan[];
+  counts: { openCount: number; overdueCount: number; returnedCount: number; unitsOnLoan: number };
+}
+
+/* -------------------------------------------------------------------- freezer */
+
+/** Default freezer shelf life when an item does not set its own. */
+export const DEFAULT_FREEZER_SHELF_LIFE_DAYS = 90;
+/** Default window to eat a thawed batch when an item does not set its own. */
+export const DEFAULT_THAW_SHELF_LIFE_DAYS = 2;
+
+export interface FreezerBatch extends StockLot {
+  itemName: string;
+  itemUnit: string;
+  categoryId: string | null;
+  locationName: string | null;
+  /** True when the current place is marked as a freezer. */
+  inFreezerPlace: boolean;
+  sourceRecipeTitle: string | null;
+}
+
+export interface FreezerView {
+  batches: FreezerBatch[];
+  totals: { batches: number; portions: number; useSoon: number };
+  /** Days used to decide "use soon"; mirrors the house expiry reminder window. */
+  useSoonDays: number;
+}
+
+/* ----------------------------------------------------------------- stocktake */
+
+export type StocktakeStatus = "draft" | "committed" | "cancelled";
+
+/** One item in a guided count. `expectedQty` is the snapshot taken when the
+ * session started; `currentQty` is the same scope read now (draft only). */
+export interface StocktakeLine {
+  id: string;
+  stocktakeId: string;
+  itemId: string;
+  itemName: string;
+  unit: string;
+  categoryId: string | null;
+  expectedQty: number;
+  countedQty: number | null;
+  /** Weighted-average batch cost per base unit at snapshot time, when priced. */
+  unitCost: number | null;
+  note: string | null;
+  countedBy: string | null;
+  countedByName: string | null;
+  countedAt: string | null;
+  /** Counted minus expected. Null until the line is counted. */
+  variance: number | null;
+  /** Variance multiplied by the snapshot unit cost, when both are known. */
+  valueImpact: number | null;
+  /** Delta actually applied at commit (null while the session is open). */
+  committedDelta: number | null;
+  /** Quantity in the session's scope right now (draft only; 0 otherwise). */
+  currentQty: number;
+  /** Stock moved since the snapshot, so committing needs an explicit confirmation. */
+  changed: boolean;
+}
+
+export interface Stocktake {
+  id: string;
+  houseId: string;
+  locationId: string | null;
+  locationName: string | null;
+  categoryId: string | null;
+  categoryName: string | null;
+  status: StocktakeStatus;
+  note: string | null;
+  startedBy: string | null;
+  startedByName: string | null;
+  committedBy: string | null;
+  committedByName: string | null;
+  createdAt: string;
+  committedAt: string | null;
+  cancelledAt: string | null;
+  lineCount: number;
+  countedCount: number;
+  varianceCount: number;
+  /** Lines whose current quantity differs from the snapshot (draft only). */
+  changedCount: number;
+  /** Present on the detail endpoint; omitted from history lists. */
+  lines?: StocktakeLine[];
+}
+
+export interface StocktakeCommitResult {
+  stocktake: Stocktake;
+  appliedLines: number;
+  appliedDelta: number;
+}
+
+/* ------------------------------------------------------- duplicate & merge */
+
+/** Why two items were suggested as duplicates. Values are stable keys the UI translates. */
+export type DuplicateReason =
+  | "shared_barcode"
+  | "same_product_link"
+  | "same_name"
+  | "similar_name"
+  | "same_brand"
+  | "compatible_units";
+
+/** The compact item shape used by duplicate suggestions and the merge preview. */
+export interface DuplicateItem {
+  id: string;
+  name: string;
+  brand: string | null;
+  unit: string;
+  quantity: number;
+  archived: boolean;
+  barcodes: string[];
+  offCode: string | null;
+  createdAt: string;
+}
+
+export interface DuplicatePair {
+  a: string;
+  b: string;
+  confidence: number;
+  reasons: DuplicateReason[];
+}
+
+export interface DuplicateGroup {
+  /** Stable key for the group, built from the lowest item id in it. */
+  key: string;
+  confidence: number;
+  reasons: DuplicateReason[];
+  items: DuplicateItem[];
+  pairs: DuplicatePair[];
+}
+
+export interface DuplicateSuggestions {
+  groups: DuplicateGroup[];
+  /** Number of active items that were compared, for an "all clear" message. */
+  scannedItems: number;
+}
+
+export type ItemMergeConflictKind =
+  | "incompatible_unit"
+  | "same_item"
+  | "source_not_found"
+  | "target_archived"
+  | "source_archived"
+  | "already_merged";
+
+export interface ItemMergeConflict {
+  kind: ItemMergeConflictKind;
+  message: string;
+  itemId?: string;
+  unit?: string;
+}
+
+/** What a merge moves, in target units, so the dry run can explain itself. */
+export interface ItemMergeMoves {
+  lots: number;
+  lotQuantity: number;
+  movements: number;
+  receiptLines: number;
+  aliases: number;
+  barcodes: number;
+  documents: number;
+  photos: number;
+  shoppingLines: number;
+  recipeIngredients: number;
+  espressoShots: number;
+  notifications: number;
+  offContributions: number;
+  tags: string[];
+  filledFields: string[];
+  filledAttributes: string[];
+  offCode: string | null;
+  offProject: string | null;
+}
+
+export interface ItemMergeTarget {
+  id: string;
+  name: string;
+  unit: string;
+  quantity: number;
+  archived: boolean;
+}
+
+export interface ItemMergePreview {
+  dryRun: true;
+  mergeable: boolean;
+  target: ItemMergeTarget;
+  sources: ItemMergeTarget[];
+  conflicts: ItemMergeConflict[];
+  moves: ItemMergeMoves;
+}
+
+export interface ItemMergeResult {
+  dryRun: false;
+  mergedAt: string;
+  target: ItemMergeTarget;
+  archived: string[];
+}
+
+/**
+ * Minimal invalidation signal pushed to household members over Server-Sent
+ * Events. It intentionally carries no household payload: clients refetch the
+ * data they are allowed to see through the normal API.
+ */
+export type LiveEventType =
+  | "stock"
+  | "shopping"
+  | "items"
+  | "recipes"
+  | "plan"
+  | "notifications"
+  | "receipts"
+  | "bills";
+
+export interface LiveEvent {
+  type: LiveEventType;
+  /** Entity id when the emitter knows it (for example an item or shopping line). */
+  id?: string;
+  actorUserId: string;
+  at: string;
 }

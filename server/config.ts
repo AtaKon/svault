@@ -78,6 +78,13 @@ export const AI_LOG_PREVIEW_CHARS = Number.isFinite(aiLogPreview)
 export const RP_ID = process.env.RP_ID ?? "";
 export const RP_ORIGIN = process.env.ORIGIN ?? process.env.RP_ORIGIN ?? "";
 
+/**
+ * Public base URL printed into QR labels, e.g. https://svault.example.com.
+ * Empty means "use the address the browser is on", which is correct for
+ * localhost and single-origin installs behind no proxy.
+ */
+export const PUBLIC_URL = (process.env.PUBLIC_URL ?? "").trim();
+
 /** Optional OpenID Connect provider. Everything is server-side. */
 export const OIDC = {
   issuer: process.env.OIDC_ISSUER ?? "",
@@ -155,4 +162,19 @@ export function trustProxySetting(raw: string | undefined): boolean | number | s
   if (value === "true") return 1;
   if (/^\d+$/.test(value)) return Number(value);
   return value;
+}
+
+/**
+ * Web Push (VAPID) is opt-in and off by default: it enables only when all three
+ * values are present. The browser subscribes with the public key, the server
+ * signs with the private key, and the push service needs a contact subject
+ * (`mailto:you@example.com` or an `https://` URL). Read lazily so a value added
+ * to the environment after import (tests, `--env-file`) is honoured.
+ * Generate a pair with `npm run vapid:generate`.
+ */
+export function webPushConfig(): { enabled: boolean; publicKey: string; privateKey: string; subject: string } {
+  const publicKey = (process.env.VAPID_PUBLIC_KEY ?? "").trim();
+  const privateKey = (process.env.VAPID_PRIVATE_KEY ?? "").trim();
+  const subject = (process.env.VAPID_SUBJECT ?? "").trim();
+  return { enabled: Boolean(publicKey && privateKey && subject), publicKey, privateKey, subject };
 }

@@ -21,7 +21,9 @@ import {
 } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { useToast } from "@/components/toast";
-import { qty } from "@/format";import { LOCATION_ICONS, LOCATION_KINDS } from "@/units";
+import { WebPushCard } from "@/components/WebPushCard";
+import { qty } from "@/format";
+import { LOCATION_ICONS, LOCATION_KINDS } from "@/units";
 import { normaliseRecipeReasoning, type RecipeReasoningMode } from "@shared/ai-reasoning";
 import type {
   AttributeDef,
@@ -330,6 +332,7 @@ function PlacesTab({ house }: { house: House }) {
   const { t } = useI18n();
   const toast = useToast();
   const { can } = useHouse();
+  const navigate = useNavigate();
   const [locations, setLocations] = useState<HouseLocation[] | null>(null);
   const [editing, setEditing] = useState<HouseLocation | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -348,7 +351,7 @@ function PlacesTab({ house }: { house: House }) {
     void load();
   }, [load]);
 
-  const save = async (data: { name: string; kind: string; icon: string }) => {
+  const save = async (data: { name: string; kind: string; icon: string; isFreezer: boolean }) => {
     setBusy(true);
     try {
       if (editing) {
@@ -412,8 +415,11 @@ function PlacesTab({ house }: { house: House }) {
               <div className="min-w-0 flex-1">
                 <div className="text-sm font-medium">{location.name}</div>
                 <div className="text-[11px] capitalize text-muted">
-                  {t(location.kind)} · {location.itemCount ?? 0} {t("items")}</div>
+                  {t(location.kind)} · {location.itemCount ?? 0} {t("items")}
+                  {location.isFreezer ? ` · ❄️ ${t("freezer")}` : ""}
+                </div>
               </div>
+              <IconButton icon="printer" label={t("Print label")} onClick={() => navigate(`/labels?place=${location.id}`)} />
               {can("member") && (
                 <>
                   <IconButton
@@ -458,18 +464,20 @@ function PlaceSheet({
   onClose: () => void;
   location: HouseLocation | null;
   busy: boolean;
-  onSave: (data: { name: string; kind: string; icon: string }) => void;
+  onSave: (data: { name: string; kind: string; icon: string; isFreezer: boolean }) => void;
 }) {
   const { t } = useI18n();
   const [name, setName] = useState("");
   const [kind, setKind] = useState("shelf");
   const [icon, setIcon] = useState("📦");
+  const [isFreezer, setIsFreezer] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     setName(location?.name ?? "");
     setKind(location?.kind ?? "shelf");
     setIcon(location?.icon ?? "📦");
+    setIsFreezer(location?.isFreezer ?? location?.kind === "freezer");
   }, [open, location]);
 
   return (
@@ -478,7 +486,7 @@ function PlaceSheet({
       onClose={onClose}
       title={location ? t("Edit place") : t("New place")}
       footer={
-        <Button block loading={busy} disabled={!name.trim()} onClick={() => onSave({ name: name.trim(), kind, icon })}>
+        <Button block loading={busy} disabled={!name.trim()} onClick={() => onSave({ name: name.trim(), kind, icon, isFreezer })}>
           {location ? t("Save place") : t("Add place")}
         </Button>
       }
@@ -493,6 +501,7 @@ function PlaceSheet({
             onChange={(event) => {
               setKind(event.target.value);
               setIcon(LOCATION_ICONS[event.target.value] ?? "📦");
+              if (event.target.value === "freezer") setIsFreezer(true);
             }}
           >
             {LOCATION_KINDS.map((entry) => (
@@ -505,6 +514,12 @@ function PlaceSheet({
         <Field label={t("Icon")} hint={t("any emoji")}>
           <Input value={icon} onChange={(event) => setIcon(event.target.value)} maxLength={8} className="w-24" />
         </Field>
+        <Switch
+          checked={isFreezer}
+          onChange={setIsFreezer}
+          label={t("This place is a freezer")}
+          description={t("Frozen batches are grouped here and this place is offered first when freezing.")}
+        />
       </div>
     </Sheet>
   );
@@ -1519,12 +1534,14 @@ function RemindersTab({ house, onSave }: { house: House; onSave: (patch: Record<
           {t("Save reminders")}</Button>
       </Card>
 
+      <WebPushCard channelEnabled={channels.some((channel) => channel.type === "webpush" && channel.enabled)} />
+
       <Card className="space-y-3 p-4">
         <div className="flex items-start justify-between gap-3">
           <div>
             <h2 className="font-display text-lg">{t("Delivery channels")}</h2>
             <p className="text-[11px] text-muted">
-              {t("Send reminders to ntfy, Apprise or any webhook. Failures retry three times with backoff.")}</p>
+              {t("Send reminders to ntfy, Apprise, a webhook, or Web Push to this device. Failures retry three times with backoff.")}</p>
           </div>
           <Button size="sm" variant="secondary" icon="plus" onClick={addChannel} disabled={!can("admin")}>
             {t("Add")}</Button>
@@ -1547,6 +1564,7 @@ function RemindersTab({ house, onSave }: { house: House; onSave: (patch: Record<
                 <option value="ntfy">{t("ntfy")}</option>
                 <option value="apprise">{t("Apprise")}</option>
                 <option value="webhook">{t("Webhook")}</option>
+                <option value="webpush">{t("Web push")}</option>
               </Select>
               <div className="min-w-[140px] flex-1">
                 <Input
@@ -1573,14 +1591,20 @@ function RemindersTab({ house, onSave }: { house: House; onSave: (patch: Record<
               />
             </div>
 
-            <Field label={channel.type === "ntfy" ? t("Server URL") : channel.type === "apprise" ? t("Apprise endpoint") : t("Webhook URL")}>
-              <Input
-                value={channel.url}
-                onChange={(event) => patchChannel(channel.id, { url: event.target.value })}
-                placeholder={channel.type === "ntfy" ? "https://ntfy.sh" : "https://example.com/notify"}
-                type="url"
-                className="h-9 text-[13px]"
-              />
+            <Field label={channel.type === "ntfy" ? t("Server URL") : channel.type === "apprise" ? t("Apprise endpoint") : channel.type === "webpush" ? t("Web push") : t("Webhook URL")}>
+              {channel.type === "webpush" ? (
+                <p className="rounded-xl border border-line bg-bg px-3 py-2 text-[11px] text-muted">
+                  {t("No URL: reminders go to the devices each member enabled above.")}
+                </p>
+              ) : (
+                <Input
+                  value={channel.url}
+                  onChange={(event) => patchChannel(channel.id, { url: event.target.value })}
+                  placeholder={channel.type === "ntfy" ? "https://ntfy.sh" : "https://example.com/notify"}
+                  type="url"
+                  className="h-9 text-[13px]"
+                />
+              )}
             </Field>
 
             {channel.type === "ntfy" && (

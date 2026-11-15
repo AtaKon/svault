@@ -62,6 +62,7 @@ npm run seed
 | `npm run typecheck` | `tsc --noEmit` over client, shared and server |
 | `npm run seed` | Demo seeder against `DATA_DIR` |
 | `npm run icons` | Regenerates PWA icons from `assets/icon.svg` |
+| `npm run vapid:generate` | Prints a fresh VAPID key pair for optional Web Push reminders |
 | `node scripts/smoke.mjs URL` | Black-box smoke test against a running server |
 | `node scripts/visual-check.mjs URL` | Playwright screenshots and console/API error scan |
 | `node scripts/functional-check.mjs URL` | Click-through checks on a throwaway copy |

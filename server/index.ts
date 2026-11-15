@@ -14,10 +14,16 @@ import { oidcRoutes } from "./routes/oidc.js";
 import { houseRoutes } from "./routes/houses.js";
 import { itemDocumentRoutes } from "./routes/item-documents.js";
 import { inventoryRoutes, itemRoutes } from "./routes/inventory.js";
+import { savedViewRoutes } from "./routes/saved-views.js";
+import { searchRoutes } from "./routes/search.js";
+import { movementRoutes } from "./routes/movements.js";
+import { loanRoutes, singleLoanRoutes } from "./routes/loans.js";
+import { itemMergeRoutes } from "./routes/item-merge.js";
 import { receiptRoutes, singleReceiptRoutes } from "./routes/receipts.js";
 import { billRoutes, singleBillRoutes } from "./routes/bills.js";
 import { receiptTemplateRoutes } from "./routes/receipt-templates.js";
 import { recipeRoutes, singleRecipeRoutes } from "./routes/recipes.js";
+import { recipeCostRoutes } from "./routes/recipe-costs.js";
 import { ideaRoutes, singleIdeaRoutes } from "./routes/ideas.js";
 import { photoRoutes, singlePhotoRoutes } from "./routes/photos.js";
 import { globalNotificationRoutes, notificationRoutes } from "./routes/notifications.js";
@@ -25,6 +31,7 @@ import { dashboardRoutes } from "./routes/dashboard.js";
 import { catalogRoutes } from "./routes/catalog.js";
 import { offRoutes } from "./routes/off.js";
 import { shoppingRoutes } from "./routes/shopping.js";
+import { stocktakeRoutes } from "./routes/stocktakes.js";
 import { planRoutes } from "./routes/plan.js";
 import { intakeRoutes } from "./routes/intake.js";
 import { importRoutes } from "./routes/imports.js";
@@ -32,10 +39,17 @@ import { backupRoutes } from "./routes/backup.js";
 import { datasetRoutes } from "./routes/dataset.js";
 import { aiLogRoutes } from "./routes/ai-logs.js";
 import { insightRoutes } from "./routes/insights.js";
+import { activityRoutes } from "./routes/activity.js";
 import { adminRoutes } from "./routes/admin.js";
 import { calendarRoutes } from "./routes/calendar.js";
 import { calendarFeedRoutes } from "./routes/calendar-feed.js";
 import { apiTokenRoutes } from "./routes/api-tokens.js";
+import { labelRoutes } from "./routes/labels.js";
+import { reportRoutes } from "./routes/reports.js";
+import { pushRoutes } from "./routes/push.js";
+import { freezerRoutes } from "./routes/freezer.js";
+import { liveRoutes } from "./routes/live.js";
+import { liveRecordEvents, liveWriteEvents } from "./services/live.js";
 import { inMaintenance } from "./maintenance.js";
 import { stripQuery } from "./lib/redact.js";
 import { assertAiBudget } from "./services/ai-budget.js";
@@ -226,12 +240,39 @@ app.post("/api/houses/:houseId/recipes/scan", aiLimit, aiBudgetGuard);
 app.post("/api/houses/:houseId/recipes/import", aiLimit, aiBudgetGuard);
 app.post("/api/houses/:houseId/intake/parse", aiLimit, aiBudgetGuard);
 app.post("/api/houses/:houseId/ideas", aiLimit, aiBudgetGuard);
+app.get(
+  "/api/houses/:houseId/search",
+  limitRequests(limiters.search, userOrIp, "Too many searches. Wait a moment and try again."),
+);
 app.post("/api/houses/:houseId/ai/test", aiLimit, aiBudgetGuard);
 app.post("/api/recipes/:recipeId/ai", aiLimit, aiBudgetGuard);
 app.post(
   "/api/houses/:houseId/insights/price-alerts/scan",
   limitRequests(limiters.insights, userOrIp, "Too many price checks. Wait a few minutes and try again."),
 );
+
+/* Live updates: push a minimal invalidation after a successful write. The
+   event is attached at the path prefix, so the routers below need no extra
+   code. Reads and failed requests emit nothing; stock changes are emitted by
+   the stock service so background and composed writes are covered too. */
+app.use("/api/houses/:houseId/items", liveWriteEvents("items"));
+app.use("/api/houses/:houseId/locations", liveWriteEvents("items"));
+app.use("/api/houses/:houseId/categories", liveWriteEvents("items"));
+app.use("/api/houses/:houseId/attributes", liveWriteEvents("items"));
+app.use("/api/houses/:houseId/espresso-shots", liveWriteEvents("items"));
+app.use("/api/houses/:houseId/espresso-equipment", liveWriteEvents("items"));
+app.use("/api/houses/:houseId/intake", liveWriteEvents("items"));
+app.use("/api/houses/:houseId/imports", liveWriteEvents("items"));
+app.use("/api/houses/:houseId/shopping", liveWriteEvents("shopping"));
+app.use("/api/houses/:houseId/plan", liveWriteEvents("plan"));
+app.use("/api/houses/:houseId/recipes", liveWriteEvents("recipes"));
+app.use("/api/houses/:houseId/notifications", liveWriteEvents("notifications"));
+app.use("/api/houses/:houseId/receipts", liveWriteEvents("receipts"));
+app.use("/api/houses/:houseId/bills", liveWriteEvents("bills"));
+app.use("/api/items/:itemId", liveRecordEvents("items", { param: "itemId", table: "items" }));
+app.use("/api/recipes/:recipeId", liveRecordEvents("recipes", { param: "recipeId", table: "recipes" }));
+app.use("/api/receipts/:receiptId", liveRecordEvents("receipts", { param: "receiptId", table: "receipts" }));
+app.use("/api/bills/:billId", liveRecordEvents("bills", { param: "billId", table: "bills" }));
 
 app.use("/api/auth", authRoutes);
 app.use("/api/auth", passkeyRoutes);
@@ -240,6 +281,11 @@ app.use("/api/auth", oidcRoutes);
 app.use("/api/houses", houseRoutes);
 app.use("/api/houses", aiLogRoutes);
 app.use("/api/houses", inventoryRoutes);
+app.use("/api/houses", savedViewRoutes);
+app.use("/api/houses", searchRoutes);
+app.use("/api/houses", movementRoutes);
+app.use("/api/houses", loanRoutes);
+app.use("/api/houses", itemMergeRoutes);
 app.use("/api/houses", receiptRoutes);
 app.use("/api/houses", billRoutes);
 app.use("/api/houses", receiptTemplateRoutes);
@@ -249,13 +295,20 @@ app.use("/api/houses", photoRoutes);
 app.use("/api/houses", notificationRoutes);
 app.use("/api/houses", dashboardRoutes);
 app.use("/api/houses", shoppingRoutes);
+app.use("/api/houses", stocktakeRoutes);
 app.use("/api/houses", planRoutes);
 app.use("/api/houses", intakeRoutes);
 app.use("/api/houses", importRoutes);
 app.use("/api/houses", backupRoutes);
 app.use("/api/houses", datasetRoutes);
 app.use("/api/houses", insightRoutes);
+app.use("/api/houses", recipeCostRoutes);
+app.use("/api/houses", reportRoutes);
+app.use("/api/houses", activityRoutes);
+app.use("/api/houses", freezerRoutes);
+app.use("/api/houses", liveRoutes);
 app.use("/api/notifications", globalNotificationRoutes);
+app.use("/api/push", pushRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/tokens", apiTokenRoutes);
 app.use("/api/calendar-feed", calendarFeedRoutes);
@@ -264,11 +317,13 @@ app.use("/api/catalog", catalogRoutes);
 app.use("/api/off", offRoutes);
 app.use("/api/items", itemDocumentRoutes);
 app.use("/api/items", itemRoutes);
+app.use("/api/loans", singleLoanRoutes);
 app.use("/api/recipes", singleRecipeRoutes);
 app.use("/api/receipts", singleReceiptRoutes);
 app.use("/api/bills", singleBillRoutes);
 app.use("/api/ideas", singleIdeaRoutes);
 app.use("/api/photos", singlePhotoRoutes);
+app.use("/api/labels", labelRoutes);
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, version: 1, database: databaseKind(), time: new Date().toISOString() });

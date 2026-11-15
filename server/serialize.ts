@@ -22,6 +22,10 @@ import type {
   EspressoShot,
   EspressoShotSummary,
   EspressoEquipment,
+  ActivityEvent,
+  Loan,
+  Stocktake,
+  StocktakeLine,
 } from "../shared/types.js";
 
 export const ITEM_SELECT = `
@@ -31,7 +35,9 @@ export const ITEM_SELECT = `
     COALESCE((SELECT SUM(l.quantity * COALESCE(l.unit_price, 0)) FROM stock_lots l WHERE l.item_id = i.id), 0) AS value,
     (SELECT sm.normalized_price FROM stock_movements sm
        WHERE sm.item_id = i.id AND sm.normalized_price IS NOT NULL AND sm.normalized_price > 0
-       ORDER BY sm.created_at DESC LIMIT 1) AS latest_price
+       ORDER BY sm.created_at DESC LIMIT 1) AS latest_price,
+    COALESCE((SELECT SUM(lo.quantity - lo.returned_quantity) FROM item_loans lo
+       WHERE lo.item_id = i.id AND lo.returned_at IS NULL), 0) AS on_loan
   FROM items i
   LEFT JOIN categories c ON c.id = i.category_id AND c.house_id = i.house_id
   LEFT JOIN catalog_products cp ON cp.code = i.off_code AND cp.project = i.off_project
@@ -78,6 +84,7 @@ export async function barcodesForItem(itemId: string) {
 
 export function serializeItem(row: any, barcodes: { id: string; code: string; format: string | null }[] = []): Item {
   const quantity = round(Number(row.quantity ?? 0));
+  const onLoan = Math.max(0, round(Number(row.on_loan ?? 0)));
   const reorderPoint = Number(row.reorder_point ?? 0);
   const offProduct = parseJson<OffProduct | null>(row.off_summary, null);
   const offProject = ["off", "obf", "opff", "opf"].includes(row.off_project) ? row.off_project : "off";
@@ -105,6 +112,8 @@ export function serializeItem(row: any, barcodes: { id: string; code: string; fo
     id: row.id,
     houseId: row.house_id,
     openedShelfLifeDays: row.opened_shelf_life_days == null ? null : Number(row.opened_shelf_life_days),
+    freezerShelfLifeDays: row.freezer_shelf_life_days == null ? null : Number(row.freezer_shelf_life_days),
+    thawShelfLifeDays: row.thaw_shelf_life_days == null ? null : Number(row.thaw_shelf_life_days),
     name: row.name,
     description: row.description ?? null,
     warrantyUntil: row.warranty_until ?? null,
@@ -120,8 +129,11 @@ export function serializeItem(row: any, barcodes: { id: string; code: string; fo
     tags: parseJson<string[]>(row.tags, []),
     image: row.image ?? null,
     archived: bool(row.archived),
+    mergedInto: row.merged_into ?? null,
     espresso: bool(row.espresso),
     quantity,
+    onLoan,
+    available: Math.max(0, round(quantity - onLoan)),
     value: round(Number(row.value ?? 0), 2),
     latestPrice: row.latest_price == null ? null : Number(row.latest_price),
     isLow: reorderPoint > 0 && quantity <= reorderPoint,
@@ -173,6 +185,12 @@ export function serializeLot(row: any): StockLot {
     expiresAt: row.expires_at ?? null,
     openedAt: row.opened_at ?? null,
     effectiveExpiresAt: effectiveExpiry(row, row),
+    portions: row.portions == null ? null : Number(row.portions),
+    cookedOn: row.cooked_on ?? null,
+    frozenOn: row.frozen_on ?? null,
+    thawedOn: row.thawed_on ?? null,
+    sourceRecipeId: row.source_recipe_id ?? null,
+    sourceRecipeTitle: row.source_recipe_title ?? null,
     note: row.note ?? null,
     vendorId: row.vendor_id ?? null,
     vendorName: row.vendor_name ?? null,
@@ -195,10 +213,14 @@ export function serializeMovement(row: any): Movement {
     locationId: row.location_id ?? null,
     locationName: row.location_name ?? null,
     userName: row.user_name ?? null,
+    userId: row.user_id ?? null,
     vendorId: row.vendor_id ?? null,
     vendorName: row.vendor_name ?? null,
     receiptId: row.receipt_id ?? null,
     balanceAfter: row.balance_after == null ? null : round(Number(row.balance_after ?? 0)),
+    reversesMovementId: row.reverses_movement_id ?? null,
+    reversed: row.reversed == null ? false : Boolean(row.reversed),
+    undoable: row.undoable == null ? undefined : Boolean(row.undoable),
     createdAt: row.created_at,
   };
 }
@@ -371,6 +393,7 @@ export function serializeLocation(row: any): Location {
     icon: row.icon ?? null,
     parentId: row.parent_id ?? null,
     itemCount: row.item_count == null ? undefined : Number(row.item_count),
+    isFreezer: Number(row.is_freezer ?? 0) === 1,
   };
 }
 
@@ -489,6 +512,38 @@ export function serializePhoto(row: any, labels: any[] = []): Photo {
   };
 }
 
+/**
+ * A loan as the API and the client see it. `remaining` and `overdue` are
+ * derived here so every screen agrees on what "still out" means.
+ */
+export function serializeLoan(row: any, today = new Date().toISOString().slice(0, 10)): Loan {
+  const quantity = round(Number(row.quantity ?? 0));
+  const returnedQuantity = round(Number(row.returned_quantity ?? 0));
+  const remaining = Math.max(0, round(quantity - returnedQuantity));
+  const open = !row.returned_at && remaining > 0;
+  return {
+    id: row.id,
+    houseId: row.house_id,
+    itemId: row.item_id,
+    itemName: row.item_name ?? null,
+    itemUnit: row.item_unit ?? null,
+    borrowerName: row.borrower_name,
+    borrowerUserId: row.borrower_user_id ?? null,
+    quantity,
+    returnedQuantity,
+    remaining,
+    lentAt: row.lent_at,
+    dueAt: row.due_at ?? null,
+    returnedAt: row.returned_at ?? null,
+    note: row.note ?? null,
+    createdBy: row.created_by ?? null,
+    createdByName: row.created_by_name ?? null,
+    open,
+    overdue: open && Boolean(row.due_at) && String(row.due_at) < today,
+    createdAt: row.created_at,
+  };
+}
+
 export async function serializeNotification(row: any, userId: string): Promise<Notification> {
   const readBy = parseJson<string[]>(row.read_by, []);
   const data = parseJson<Record<string, unknown>>(row.data, {});
@@ -507,5 +562,88 @@ export async function serializeNotification(row: any, userId: string): Promise<N
     read: readBy.includes(userId),
     resolvedAt: row.resolved_at ?? null,
     createdAt: row.created_at,
+  };
+}
+
+/**
+ * One house-activity row. Producer names are joined through `house_members`, so
+ * an actor who has left the house keeps the id but loses the display name; the
+ * client renders that case as "Former member".
+ */
+export function serializeActivityEvent(row: any): ActivityEvent {
+  const number = (value: unknown) => (value == null ? null : Number(value));
+  return {
+    id: row.source_id,
+    kind: row.kind,
+    at: row.occurred_at,
+    actorId: row.actor_id ?? null,
+    actorName: row.actor_name ?? null,
+    itemId: row.item_id ?? null,
+    itemName: row.item_name ?? null,
+    locationId: row.location_id ?? null,
+    locationName: row.location_name ?? null,
+    quantity: number(row.quantity),
+    unit: row.unit ?? null,
+    amount: number(row.amount),
+    currency: row.currency ?? null,
+    title: row.title ?? null,
+    receiptId: row.receipt_id ?? null,
+    billId: row.bill_id ?? null,
+    shoppingItemId: row.shopping_item_id ?? null,
+  };
+}
+
+export function serializeStocktakeLine(row: any, currentQty: number | null = null): StocktakeLine {
+  const expectedQty = round(Number(row.expected_qty ?? 0));
+  const countedQty = row.counted_qty == null ? null : round(Number(row.counted_qty));
+  const variance = countedQty == null ? null : round(countedQty - expectedQty);
+  const unitCost = row.unit_cost == null ? null : Number(row.unit_cost);
+  const current = currentQty == null ? 0 : round(currentQty);
+  return {
+    id: row.id,
+    stocktakeId: row.stocktake_id,
+    itemId: row.item_id,
+    itemName: row.item_name ?? "",
+    unit: row.item_unit ?? row.unit ?? "pcs",
+    categoryId: row.item_category_id ?? null,
+    expectedQty,
+    countedQty,
+    unitCost,
+    note: row.note ?? null,
+    countedBy: row.counted_by ?? null,
+    countedByName: row.counted_by_name ?? null,
+    countedAt: row.counted_at ?? null,
+    variance,
+    valueImpact: variance != null && unitCost != null ? round(variance * unitCost, 2) : null,
+    committedDelta: row.committed_delta == null ? null : round(Number(row.committed_delta)),
+    currentQty: current,
+    changed: currentQty != null && current !== expectedQty,
+  };
+}
+
+export function serializeStocktake(row: any, lines?: StocktakeLine[]): Stocktake {
+  return {
+    id: row.id,
+    houseId: row.house_id,
+    locationId: row.location_id ?? null,
+    locationName: row.resolved_location_name ?? row.location_name ?? null,
+    categoryId: row.category_id ?? null,
+    categoryName: row.resolved_category_name ?? row.category_name ?? null,
+    status: row.status,
+    note: row.note ?? null,
+    startedBy: row.started_by ?? null,
+    startedByName: row.started_by_name ?? null,
+    committedBy: row.committed_by ?? null,
+    committedByName: row.committed_by_name ?? null,
+    createdAt: row.created_at,
+    committedAt: row.committed_at ?? null,
+    cancelledAt: row.cancelled_at ?? null,
+    lineCount: Number(row.line_count ?? lines?.length ?? 0),
+    countedCount: Number(row.counted_count ?? lines?.filter((line) => line.countedQty != null).length ?? 0),
+    varianceCount: Number(
+      row.variance_count ?? lines?.filter((line) => line.variance != null && line.variance !== 0).length ?? 0,
+    ),
+    changedCount: lines?.filter((line) => line.changed).length ?? 0,
+    lines,
   };
 }

@@ -6,6 +6,7 @@ import { useI18n } from "@/i18n";
 import { Badge, Button, Card, EmptyState, PageHeader, Skeleton, cn } from "@/components/ui";
 import { Icon, type IconName } from "@/components/icons";
 import { useToast } from "@/components/toast";
+import { useLiveRefresh } from "@/live";
 import { relativeTime } from "@/format";
 import type { Notification } from "@shared/types";
 
@@ -16,6 +17,7 @@ const TYPE_META: Record<Notification["type"], { icon: IconName; tone: string }> 
   system: { icon: "bell", tone: "bg-raised text-muted" },
   invite: { icon: "users", tone: "bg-brand-soft text-brand" },
   house: { icon: "users", tone: "bg-brand-soft text-brand" },
+  loan_overdue: { icon: "arrowUpRight", tone: "bg-warn-soft text-warn" },
 };
 
 export function NotificationsPage() {
@@ -45,6 +47,8 @@ export function NotificationsPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useLiveRefresh(house.id, ["notifications", "stock", "items"], load);
 
   const markAll = async () => {
     setBusy(true);

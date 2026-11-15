@@ -131,6 +131,7 @@ const { createPosoKaneiClient, PosoKaneiUnavailableError } = await import("../se
 const { RateLimitError, RateLimiter, limiters } = await import("../rate-limit.js");
 const { createShoppingOffersHandler, posoKaneiUnavailableApiError } = await import("../routes/insights.js");
 const { parseCsv, parseCsvNumber } = await import("../services/csv.js");
+const { MAX_VALUATION_ITEMS, buildValuationReport, csvCell, emptyValuationFilters, valuationCsv, valueForItem } = await import("../services/valuation.js");
 const { espressoBrewedAt } = await import("../routes/inventory.js");
 const { totpCode, verifyTotp, generateTotpSecret, generateBackupCodes } = await import("../services/totp.js");
 const { backupForTest, validateBackup } = await import("../services/backup.js");
@@ -11999,3 +12000,2210 @@ describe("run-out forecasts", () => {
     assert.equal(result.data.items.find((item: any) => item.itemId === id).quantity, 1500);
   });
 });
+
+describe("recipe cost per portion", () => {
+  it("costs a recipe from latest, average and in-stock prices with honest coverage", async () => {
+    const item = await request(`/api/houses/${houseId}/items`, {
+      method: "POST",
+      body: { name: "Cost test flour", unit: "kg" },
+    });
+    const itemId = item.data.id;
+    const addStock = (quantity: number, unitPrice: number) =>
+      request(`/api/items/${itemId}/stock`, { method: "POST", body: { action: "add", quantity, unitPrice } });
+    await addStock(1, 2);
+    await addStock(1, 3);
+    // Pin the purchase dates: two requests can land in the same millisecond, and
+    // the average window and the latest price both depend on the order.
+    const movements = await all<any>("SELECT id, normalized_price FROM stock_movements WHERE item_id = ? AND type = 'in'", [itemId]);
+    const older = movements.find((row) => Number(row.normalized_price) === 2);
+    const newer = movements.find((row) => Number(row.normalized_price) === 3);
+    await run("UPDATE stock_movements SET created_at = ? WHERE id = ?", [new Date(Date.now() - 30 * 864e5).toISOString(), older.id]);
+    await run("UPDATE stock_movements SET created_at = ? WHERE id = ?", [new Date(Date.now() - 10 * 864e5).toISOString(), newer.id]);
+
+    const recipe = await request(`/api/houses/${houseId}/recipes`, {
+      method: "POST",
+      body: {
+        title: "Cost test bread",
+        servings: 2,
+        ingredients: [
+          { name: "Cost test flour", itemId, quantity: 0.5, unit: "kg" },
+          { name: "Cost test salt", quantity: 5, unit: "g" },
+        ],
+      },
+    });
+    assert.equal(recipe.status, 201);
+    const url = `/api/recipes/${recipe.data.id}`;
+
+    const latest = await request(url);
+    assert.equal(latest.status, 200);
+    assert.equal(latest.data.cost.basis, "latest");
+    assert.equal(latest.data.cost.total, 1.5);
+    assert.equal(latest.data.cost.perPortion, 0.75);
+    assert.equal(latest.data.cost.priced, 1);
+    assert.equal(latest.data.cost.ingredients, 2);
+    assert.equal(latest.data.cost.coverage, 0.5);
+    assert.equal(latest.data.cost.partial, true, "an unpriced ingredient must not be presented as complete");
+    assert.deepEqual(latest.data.cost.unpriced, [{ name: "Cost test salt", reason: "unlinked" }]);
+    assert.equal(latest.data.cost.lines[0].itemUnit, "kg");
+    assert.equal(latest.data.cost.lines[0].unitPrice, 3);
+
+    const average = await request(`${url}?basis=average`);
+    assert.equal(average.data.cost.basis, "average");
+    assert.equal(average.data.cost.total, 1.25);
+    assert.equal(average.data.cost.perPortion, 0.625);
+
+    // Weighted cost of the two batches still on the shelf: 2 and 3 per kg.
+    const stock = await request(`${url}?basis=stock`);
+    assert.equal(stock.data.cost.basis, "stock");
+    assert.equal(stock.data.cost.total, 1.25);
+
+    // With no batch left, the stock basis falls back to the latest price.
+    await request(`/api/items/${itemId}/stock`, { method: "POST", body: { action: "remove", quantity: 2 } });
+    const fallback = await request(`${url}?basis=stock`);
+    assert.equal(fallback.data.cost.basis, "stock");
+    assert.equal(fallback.data.cost.lines[0].basis, "latest");
+    assert.equal(fallback.data.cost.total, 1.5);
+
+    const badBasis = await request(`${url}?basis=nope`);
+    assert.equal(badBasis.status, 400);
+  });
+
+  it("lists every recipe's cost without a query per recipe", async () => {
+    const { databaseQueryCount, resetQueryCount } = await import("../db.js");
+    const item = await request(`/api/houses/${houseId}/items`, {
+      method: "POST",
+      body: { name: "Cost list rice", unit: "kg" },
+    });
+    await request(`/api/items/${item.data.id}/stock`, { method: "POST", body: { action: "add", quantity: 2, unitPrice: 4 } });
+    const first = await request(`/api/houses/${houseId}/recipes`, {
+      method: "POST",
+      body: { title: "Cost list one", servings: 4, ingredients: [{ name: "Cost list rice", itemId: item.data.id, quantity: 0.4, unit: "kg" }] },
+    });
+    assert.equal(first.status, 201);
+
+    resetQueryCount();
+    const before = await request(`/api/houses/${houseId}/recipes/costs?basis=latest`);
+    const queriesWithOneRecipe = databaseQueryCount();
+    assert.equal(before.status, 200);
+    assert.equal(before.data.basis, "latest");
+    assert.ok(typeof before.data.currency === "string" && before.data.currency.length === 3);
+    const row = before.data.recipes.find((entry: any) => entry.recipeId === first.data.id);
+    assert.equal(row.total, 1.6);
+    assert.equal(row.perPortion, 0.4);
+    assert.equal(row.coverage, 1);
+    assert.equal(row.partial, false);
+    assert.equal(row.servings, 4);
+
+    // Two more recipes must not add a query each: the cost list is built from
+    // house-wide reads, not one lookup per row.
+    for (const title of ["Cost list two", "Cost list three"]) {
+      const created = await request(`/api/houses/${houseId}/recipes`, {
+        method: "POST",
+        body: { title, servings: 2, ingredients: [{ name: "Cost list rice", itemId: item.data.id, quantity: 0.2, unit: "kg" }] },
+      });
+      assert.equal(created.status, 201);
+    }
+    resetQueryCount();
+    const after = await request(`/api/houses/${houseId}/recipes/costs?basis=latest`);
+    assert.equal(databaseQueryCount(), queriesWithOneRecipe);
+    assert.equal(after.data.recipes.filter((entry: any) => entry.title.startsWith("Cost list ")).length, 3);
+
+    const viewer = await request("/api/auth/register", {
+      method: "POST",
+      body: { name: "Cost viewer", email: "cost-viewer@example.com", password: "test password" },
+    });
+    // A recipe viewer may read costs; a stranger must not learn the house exists.
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, 'viewer', ?)", [
+      houseId,
+      viewer.data.user.id,
+      new Date().toISOString(),
+    ]);
+    assert.equal((await request(`/api/houses/${houseId}/recipes/costs`, { auth: viewer.cookie! })).status, 200);
+    const stranger = await request("/api/auth/register", {
+      method: "POST",
+      body: { name: "Cost stranger", email: "cost-stranger@example.com", password: "test password" },
+    });
+    assert.equal((await request(`/api/houses/${houseId}/recipes/costs`, { auth: stranger.cookie! })).status, 404);
+    await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [houseId, viewer.data.user.id]);
+  });
+});
+
+describe("saved inventory views", () => {
+  it("creates the saved_views table in both databases and in restore order", async () => {
+    const { POSTGRES_SCHEMA, POSTGRES_TABLE_ORDER } = await import("../database/postgres-schema.js");
+    const sqliteSource = readFileSync(path.resolve("server/database/sqlite.ts"), "utf8");
+    assert.match(sqliteSource, /CREATE TABLE IF NOT EXISTS saved_views/);
+    assert.match(POSTGRES_SCHEMA, /CREATE TABLE IF NOT EXISTS saved_views/);
+    assert.ok(POSTGRES_TABLE_ORDER.indexOf("saved_views") > POSTGRES_TABLE_ORDER.indexOf("users"));
+    assert.ok(POSTGRES_TABLE_ORDER.indexOf("saved_views") > POSTGRES_TABLE_ORDER.indexOf("houses"));
+  });
+
+  it("saves validated filters, supports rename/reorder and reports a deleted category", async () => {
+    const house = await request("/api/houses", { method: "POST", body: { name: "Saved view house" } });
+    const hid = house.data.id;
+    const category = await request(`/api/houses/${hid}/categories`, { method: "POST", body: { name: "Pantry" } });
+    const location = await request(`/api/houses/${hid}/locations`, { method: "POST", body: { name: "Top shelf" } });
+
+    const created = await request(`/api/houses/${hid}/saved-views`, {
+      method: "POST",
+      body: {
+        name: "Low pantry",
+        filters: { categoryId: category.data.id, locationId: location.data.id, low: true, q: "oil" },
+        sort: "quantity",
+      },
+    });
+    assert.equal(created.status, 201);
+    assert.deepEqual(created.data.filters, {
+      categoryId: category.data.id,
+      locationId: location.data.id,
+      low: true,
+      q: "oil",
+    });
+    assert.equal(created.data.sort, "quantity");
+    assert.equal(created.data.shared, false);
+    assert.equal(created.data.canEdit, true);
+    assert.deepEqual(created.data.missingFilters, []);
+
+    // Unknown filter keys and wrong types are rejected instead of silently ignored.
+    const unknown = await request(`/api/houses/${hid}/saved-views`, {
+      method: "POST",
+      body: { name: "Broken", filters: { nope: true } },
+    });
+    assert.equal(unknown.status, 400);
+    assert.equal(
+      (await request(`/api/houses/${hid}/saved-views`, { method: "POST", body: { name: "Broken", filters: { low: "1" } } })).status,
+      400,
+    );
+    assert.equal(
+      (await request(`/api/houses/${hid}/saved-views`, { method: "POST", body: { name: "Broken", sort: "price" } })).status,
+      400,
+    );
+    assert.equal(
+      (await request(`/api/houses/${hid}/saved-views`, {
+        method: "POST",
+        body: { name: "Foreign category", filters: { categoryId: "cat_missing" } },
+      })).status,
+      400,
+    );
+
+    const renamed = await request(`/api/houses/${hid}/saved-views/${created.data.id}`, {
+      method: "PATCH",
+      body: { name: "Pantry essentials", position: 4 },
+    });
+    assert.equal(renamed.status, 200);
+    assert.equal(renamed.data.name, "Pantry essentials");
+    assert.equal(renamed.data.position, 4);
+
+    // A deleted category leaves the view intact, with a hint instead of an error.
+    assert.equal((await request(`/api/houses/${hid}/categories/${category.data.id}`, { method: "DELETE" })).status, 200);
+    const listed = await request(`/api/houses/${hid}/saved-views`);
+    assert.equal(listed.status, 200);
+    assert.equal(listed.data.views.length, 1);
+    assert.deepEqual(listed.data.views[0].missingFilters, ["category"]);
+    assert.equal(listed.data.views[0].filters.categoryId, category.data.id);
+
+    assert.equal((await request(`/api/houses/${hid}/saved-views/${created.data.id}`, { method: "DELETE" })).status, 200);
+    assert.equal((await request(`/api/houses/${hid}/saved-views`)).data.views.length, 0);
+    assert.equal((await request(`/api/houses/${hid}/saved-views/${created.data.id}`, { method: "DELETE" })).status, 404);
+  });
+
+  it("keeps personal views private and lets only admins share a house view", async () => {
+    const house = await request("/api/houses", { method: "POST", body: { name: "Shared view house" } });
+    const hid = house.data.id;
+    const viewer = await request("/api/auth/register", {
+      method: "POST",
+      body: { name: "View Viewer", email: "view-viewer@example.com", password: "test password" },
+    });
+    const viewerId = viewer.data.user.id;
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
+      hid,
+      viewerId,
+      "viewer",
+      new Date().toISOString(),
+    ]);
+
+    // Viewers may keep a personal view: it only stores a query.
+    const personal = await request(`/api/houses/${hid}/saved-views`, {
+      method: "POST",
+      auth: viewer.cookie!,
+      body: { name: "My expiring", filters: { expiring: true } },
+    });
+    assert.equal(personal.status, 201);
+    assert.equal(personal.data.canEdit, true);
+    assert.equal(
+      (await request(`/api/houses/${hid}/saved-views`, {
+        method: "POST",
+        auth: viewer.cookie!,
+        body: { name: "Everyone sees this", filters: { low: true }, shared: true },
+      })).status,
+      403,
+    );
+
+    const shared = await request(`/api/houses/${hid}/saved-views`, {
+      method: "POST",
+      body: { name: "Low stock", filters: { low: true }, shared: true },
+    });
+    assert.equal(shared.status, 201);
+    assert.equal(shared.data.shared, true);
+
+    const viewerList = await request(`/api/houses/${hid}/saved-views`, { auth: viewer.cookie! });
+    assert.deepEqual(
+      viewerList.data.views.map((view: any) => view.name).sort(),
+      ["Low stock", "My expiring"],
+    );
+    assert.equal(viewerList.data.views.find((view: any) => view.name === "Low stock").canEdit, false);
+    // A viewer cannot edit or delete a house-wide view.
+    assert.equal(
+      (await request(`/api/houses/${hid}/saved-views/${shared.data.id}`, {
+        method: "PATCH",
+        auth: viewer.cookie!,
+        body: { name: "Hijacked" },
+      })).status,
+      403,
+    );
+    assert.equal(
+      (await request(`/api/houses/${hid}/saved-views/${shared.data.id}`, { method: "DELETE", auth: viewer.cookie! })).status,
+      403,
+    );
+
+    // The viewer's personal view stays out of the owner's list.
+    const ownerList = await request(`/api/houses/${hid}/saved-views`);
+    assert.deepEqual(ownerList.data.views.map((view: any) => view.name), ["Low stock"]);
+
+    // An admin can rename the shared view; a personal view of someone else is 404.
+    await run("UPDATE house_members SET role = 'admin' WHERE house_id = ? AND user_id = ?", [hid, viewerId]);
+    assert.equal(
+      (await request(`/api/houses/${hid}/saved-views/${shared.data.id}`, {
+        method: "PATCH",
+        auth: viewer.cookie!,
+        body: { name: "House low stock" },
+      })).status,
+      200,
+    );
+    assert.equal(
+      (await request(`/api/houses/${hid}/saved-views/${personal.data.id}`, {
+        method: "PATCH",
+        auth: cookie,
+        body: { name: "Not mine" },
+      })).status,
+      404,
+    );
+  });
+
+  it("caps personal views per user and keeps houses isolated", async () => {
+    const house = await request("/api/houses", { method: "POST", body: { name: "Cap view house" } });
+    const hid = house.data.id;
+    for (let index = 0; index < 25; index += 1) {
+      const created = await request(`/api/houses/${hid}/saved-views`, {
+        method: "POST",
+        body: { name: `View ${index}`, filters: { q: `term${index}` } },
+      });
+      assert.equal(created.status, 201);
+    }
+    const overCap = await request(`/api/houses/${hid}/saved-views`, {
+      method: "POST",
+      body: { name: "One too many", filters: {} },
+    });
+    assert.equal(overCap.status, 400);
+
+    const other = await request("/api/houses", { method: "POST", body: { name: "Other view house" } });
+    const otherView = await request(`/api/houses/${other.data.id}/saved-views`, {
+      method: "POST",
+      body: { name: "Elsewhere", filters: { low: true } },
+    });
+    assert.equal(otherView.status, 201);
+    const listed = await request(`/api/houses/${hid}/saved-views`);
+    assert.equal(listed.data.views.some((view: any) => view.id === otherView.data.id), false);
+    assert.equal(
+      (await request(`/api/houses/${hid}/saved-views/${otherView.data.id}`, { method: "PATCH", body: { name: "Nope" } })).status,
+      404,
+    );
+    // A stranger who is not a member sees no views and cannot write one.
+    assert.equal((await request(`/api/houses/${hid}/saved-views`, { auth: secondUserCookie })).status, 404);
+  });
+});
+
+describe("global search", () => {
+  it("normalises Greek accents and case and groups results by type", async () => {
+    const house = await request("/api/houses", { method: "POST", body: { name: "Search house" } });
+    const hid = house.data.id;
+    const item = await request(`/api/houses/${hid}/items`, {
+      method: "POST",
+      body: { name: "Ρεβάνι με ινδοκάρυδο", brand: "Σπίτι" },
+    });
+    assert.equal(item.status, 201);
+    const recipe = await request(`/api/houses/${hid}/recipes`, {
+      method: "POST",
+      body: { title: "Ρεβάνι", description: "Γλυκό ταψιού" },
+    });
+    assert.equal(recipe.status, 201);
+
+    const accented = await request(`/api/houses/${hid}/search?q=${encodeURIComponent("ρεβάνι")}`);
+    assert.equal(accented.status, 200);
+    assert.equal(accented.data.total, 2);
+    const itemsGroup = accented.data.groups.find((group: any) => group.type === "items");
+    const recipesGroup = accented.data.groups.find((group: any) => group.type === "recipes");
+    assert.equal(itemsGroup.hits[0].id, item.data.id);
+    assert.equal(itemsGroup.hits[0].route, `/items/${item.data.id}`);
+    assert.equal(recipesGroup.hits[0].id, recipe.data.id);
+
+    // Unaccented lowercase, uppercase and a Latin prefix all match the same row.
+    for (const query of ["ρεβανι", "ΡΕΒΑΝΙ", "ρεβαν"]) {
+      const found = await request(`/api/houses/${hid}/search?q=${encodeURIComponent(query)}`);
+      assert.ok(found.data.groups.some((group: any) => group.hits.some((hit: any) => hit.id === item.data.id)));
+    }
+
+    const types = await request(`/api/houses/${hid}/search?q=${encodeURIComponent("ρεβανι")}&types=recipes`);
+    assert.deepEqual(types.data.groups.map((group: any) => group.type), ["recipes"]);
+    assert.ok((await request(`/api/houses/${hid}/search?q=ρεβανι&limit=1`)).data.groups[0].hits.length === 1);
+  });
+
+  it("enforces the minimum length, rejects unknown types and treats wildcards literally", async () => {
+    const house = await request("/api/houses", { method: "POST", body: { name: "Wildcard house" } });
+    const hid = house.data.id;
+    await request(`/api/houses/${hid}/items`, { method: "POST", body: { name: "A%B juice" } });
+    await request(`/api/houses/${hid}/items`, { method: "POST", body: { name: "AxxB juice" } });
+
+    assert.equal((await request(`/api/houses/${hid}/search?q=a`)).status, 400);
+    const literal = await request(`/api/houses/${hid}/search?q=${encodeURIComponent("a%b")}&types=items`);
+    // `%` is an ordinary character, so AxxB must not match.
+    assert.equal(literal.data.groups.length, 1);
+    assert.deepEqual(literal.data.groups[0].hits.map((hit: any) => hit.title), ["A%B juice"]);
+    assert.equal((await request(`/api/houses/${hid}/search?q=juice&types=nope`)).status, 400);
+    assert.equal((await request(`/api/houses/${hid}/search?q=a_&types=items`)).status, 200);
+
+    const recents = await request(`/api/houses/${hid}/search?q=zz&types=items`);
+    assert.equal(recents.status, 200);
+    assert.deepEqual(recents.data.groups, []);
+  });
+
+  it("never returns another house's records and requires house membership", async () => {
+    const mine = await request("/api/houses", { method: "POST", body: { name: "Search mine" } });
+    const theirs = await request("/api/houses", { method: "POST", body: { name: "Search theirs" } });
+    const ours = await request(`/api/houses/${mine.data.id}/items`, { method: "POST", body: { name: "Κοινό μυστικό" } });
+    const secret = await request(`/api/houses/${theirs.data.id}/items`, { method: "POST", body: { name: "Κοινό μυστικό" } });
+    assert.equal(ours.status, 201);
+    assert.equal(secret.status, 201);
+
+    const result = await request(`/api/houses/${mine.data.id}/search?q=${encodeURIComponent("κοινο")}`);
+    assert.equal(result.status, 200);
+    const ids = result.data.groups.flatMap((group: any) => group.hits.map((hit: any) => hit.id));
+    assert.deepEqual(ids, [ours.data.id]);
+
+    // A signed-in stranger gets the same 404 as an unknown house.
+    assert.equal(
+      (await request(`/api/houses/${mine.data.id}/search?q=test`, { auth: secondUserCookie })).status,
+      404,
+    );
+
+    // Viewers can search: these record types are readable by all members.
+    const viewer = await request("/api/auth/register", {
+      method: "POST",
+      body: { name: "Search Viewer", email: "search-viewer@example.com", password: "test password" },
+    });
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
+      mine.data.id,
+      viewer.data.user.id,
+      "viewer",
+      new Date().toISOString(),
+    ]);
+    const viewerResult = await request(`/api/houses/${mine.data.id}/search?q=${encodeURIComponent("κοινο")}`, {
+      auth: viewer.cookie!,
+    });
+    assert.equal(viewerResult.status, 200);
+    assert.ok(viewerResult.data.total >= 1);
+  });
+
+  it("finds receipts, bills and shops in their own groups", async () => {
+    const house = await request("/api/houses", { method: "POST", body: { name: "Search records" } });
+    const hid = house.data.id;
+    const vendor = await request(`/api/houses/${hid}/vendors`, { method: "POST", body: { name: "Παντοπωλείο Αυγό" } });
+    assert.equal(vendor.status, 201);
+    const stamp = new Date().toISOString();
+    await run(
+      `INSERT INTO receipts (id, house_id, vendor_id, vendor_name, purchased_at, currency, total, source, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ["rct_search_test", hid, vendor.data.id, "Παντοπωλείο Αυγό", "2026-02-01", "EUR", 12.5, "scan", stamp],
+    );
+    await run(
+      `INSERT INTO bills (id, house_id, name, bill_type, category, amount, currency, due_date, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ["bil_search_test", hid, "Ρεύμα Αυγούστου", "electricity", "personal", 45, "EUR", "2026-02-10", stamp],
+    );
+
+    const receipts = await request(`/api/houses/${hid}/search?q=${encodeURIComponent("αυγο")}&types=receipts,shops`);
+    assert.equal(receipts.status, 200);
+    assert.deepEqual(receipts.data.groups.map((group: any) => group.type).sort(), ["receipts", "shops"]);
+    assert.equal(
+      receipts.data.groups.find((group: any) => group.type === "receipts").hits[0].route,
+      "/receipts",
+    );
+    assert.equal(receipts.data.groups.find((group: any) => group.type === "shops").hits[0].id, vendor.data.id);
+
+    const bills = await request(`/api/houses/${hid}/search?q=${encodeURIComponent("ρευμα")}&types=bills`);
+    assert.equal(bills.status, 200);
+    assert.equal(bills.data.groups[0].hits[0].id, "bil_search_test");
+    assert.equal(bills.data.groups[0].hits[0].route, "/bills");
+  });
+});
+
+describe("valuation report", () => {
+  const valuationItem = (overrides: Record<string, unknown>) => ({
+    id: "itm_valuation",
+    name: "Item",
+    brand: null,
+    categoryId: "cat_tools",
+    categoryName: "Tools",
+    unit: "pcs",
+    quantity: 1,
+    latestPrice: null,
+    averagePrice: null,
+    pricedQuantity: 0,
+    stockValue: 0,
+    purchasedAt: null,
+    shop: null,
+    warrantyUntil: null,
+    warrantyNote: null,
+    attributes: {},
+    tags: [],
+    image: null,
+    archived: false,
+    documentCount: 0,
+    places: [],
+    ...overrides,
+  }) as any;
+
+  it("adds priced items and never counts an unpriced item as zero", () => {
+    const report = buildValuationReport({
+      house: { id: "hse_test", name: "Test House", currency: "EUR" },
+      reportDate: "2026-11-15",
+      filters: emptyValuationFilters("latest"),
+      items: [
+        valuationItem({
+          id: "itm_a",
+          name: "Drill",
+          quantity: 2,
+          latestPrice: 10,
+          averagePrice: 8,
+          places: [{ locationId: "loc_kitchen", locationName: "Kitchen", quantity: 2, value: 20 }],
+        }),
+        valuationItem({
+          id: "itm_b",
+          name: "Mystery box",
+          quantity: 3,
+          categoryId: null,
+          categoryName: null,
+          places: [{ locationId: "loc_garage", locationName: "Garage", quantity: 3, value: 0 }],
+        }),
+        valuationItem({ id: "itm_c", name: "Laptop", quantity: 1, latestPrice: 100, categoryId: null, categoryName: null }),
+      ],
+    });
+
+    assert.equal(report.grandTotal, 120);
+    assert.equal(report.itemCount, 3);
+    assert.equal(report.itemsWithoutValue, 1);
+    const mystery = report.items.find((item) => item.id === "itm_b")!;
+    assert.equal(mystery.totalValue, null);
+    assert.equal(mystery.unitValue, null);
+    assert.equal(mystery.valueSource, "none");
+    // The unpriced item is listed in its category's count but adds nothing to the total.
+    const tools = report.categoryTotals.find((entry) => entry.categoryName === "Tools")!;
+    assert.deepEqual({ itemCount: tools.itemCount, itemsWithoutValue: tools.itemsWithoutValue, total: tools.total }, {
+      itemCount: 1,
+      itemsWithoutValue: 0,
+      total: 20,
+    });
+    const uncategorised = report.categoryTotals.find((entry) => entry.categoryId === null)!;
+    assert.deepEqual(
+      { itemCount: uncategorised.itemCount, itemsWithoutValue: uncategorised.itemsWithoutValue, total: uncategorised.total },
+      { itemCount: 2, itemsWithoutValue: 1, total: 100 },
+    );
+    // Place subtotals add back up to the grand total; the unpriced place row stays at zero.
+    const kitchen = report.placeTotals.find((entry) => entry.locationName === "Kitchen")!;
+    const garage = report.placeTotals.find((entry) => entry.locationName === "Garage")!;
+    const nowhere = report.placeTotals.find((entry) => entry.locationId === null)!;
+    assert.equal(kitchen.total, 20);
+    assert.equal(garage.total, 0);
+    assert.equal(garage.itemCount, 1);
+    assert.equal(nowhere.total, 100);
+  });
+
+  it("derives latest, average and stock-cost values from the same records", () => {
+    const item = { quantity: 4, latestPrice: 120, averagePrice: 110, pricedQuantity: 4, stockValue: 460 };
+    assert.deepEqual(valueForItem(item, "latest"), { unitValue: 120, totalValue: 480, valueSource: "latest-purchase" });
+    assert.deepEqual(valueForItem(item, "average"), { unitValue: 110, totalValue: 440, valueSource: "average-purchase" });
+    assert.deepEqual(valueForItem(item, "stockCost"), { unitValue: 115, totalValue: 460, valueSource: "stock-cost" });
+    const noLotPrice = { quantity: 4, latestPrice: 120, averagePrice: 110, pricedQuantity: 0, stockValue: 0 };
+    assert.equal(valueForItem(noLotPrice, "stockCost").totalValue, null);
+    assert.equal(valueForItem({ ...noLotPrice, latestPrice: null, averagePrice: null }, "latest").totalValue, null);
+  });
+
+  it("combines category, place, tag, value, warranty and archived filters", () => {
+    const base = {
+      quantity: 1,
+      latestPrice: 50,
+      warrantyUntil: "2030-01-01",
+      places: [{ locationId: "loc_1", locationName: "Kitchen", quantity: 1, value: 50 }],
+    };
+    const items = [
+      valuationItem({ id: "itm_keep", name: "Keep", tags: ["tools"], ...base }),
+      valuationItem({ id: "itm_archived", name: "Archived", archived: true, tags: ["tools"], ...base }),
+      valuationItem({ id: "itm_other_cat", name: "Other", categoryId: "cat_food", categoryName: "Food", tags: ["tools"], ...base }),
+      valuationItem({ id: "itm_other_place", name: "Elsewhere", ...base, tags: ["tools"], places: [{ locationId: "loc_2", locationName: "Garage", quantity: 1, value: 50 }] }),
+      valuationItem({ id: "itm_food", name: "Food", categoryId: "cat_food", categoryName: "Food", tags: ["food"], ...base }),
+      valuationItem({ id: "itm_no_warranty", name: "Old", tags: ["tools"], ...base, warrantyUntil: "2020-01-01" }),
+      valuationItem({ id: "itm_cheap", name: "Cheap", tags: ["tools"], ...base, latestPrice: 2 }),
+    ];
+    const run = (filters: Record<string, unknown>) =>
+      buildValuationReport({
+        house: { id: "hse_test", name: "Test House", currency: "EUR" },
+        reportDate: "2026-11-15",
+        filters: { ...emptyValuationFilters("latest"), ...filters } as any,
+        items,
+      });
+    const ids = (report: any) => report.items.map((item: any) => item.id).sort();
+    assert.deepEqual(ids(run({})), ["itm_cheap", "itm_food", "itm_keep", "itm_no_warranty", "itm_other_cat", "itm_other_place"]);
+    assert.deepEqual(ids(run({ includeArchived: true })).includes("itm_archived"), true);
+    assert.deepEqual(ids(run({ categoryIds: ["cat_tools"] })), [
+      "itm_cheap",
+      "itm_keep",
+      "itm_no_warranty",
+      "itm_other_place",
+    ]);
+    assert.deepEqual(ids(run({ locationIds: ["loc_2"] })), ["itm_other_place"]);
+    assert.deepEqual(ids(run({ tags: ["food"] })), ["itm_food"]);
+    assert.deepEqual(ids(run({ tags: ["tools", "food"] })).length, 6);
+    assert.deepEqual(ids(run({ minValue: 10 })), ["itm_food", "itm_keep", "itm_no_warranty", "itm_other_cat", "itm_other_place"]);
+    assert.deepEqual(ids(run({ warrantyOnly: true, categoryIds: ["cat_tools"] })), ["itm_cheap", "itm_keep", "itm_other_place"]);
+  });
+
+  it("escapes CSV cells and neutralises spreadsheet formulas", () => {
+    assert.equal(csvCell("=1+1"), "\"'=1+1\"");
+    assert.equal(csvCell("+1"), "\"'+1\"");
+    assert.equal(csvCell("-5"), "\"'-5\"");
+    assert.equal(csvCell("@cmd"), "\"'@cmd\"");
+    assert.equal(csvCell("plain"), "\"plain\"");
+    assert.equal(csvCell('He said "hi"'), '"He said ""hi"""');
+    assert.equal(csvCell(12.5), "12.5");
+    assert.equal(csvCell(null), "");
+
+    const report = buildValuationReport({
+      house: { id: "hse_test", name: "Test House", currency: "EUR" },
+      reportDate: "2026-11-15",
+      filters: emptyValuationFilters("latest"),
+      items: [
+        valuationItem({
+          id: "itm_formula",
+          name: '=HYPERLINK("http://example.test","x")',
+          brand: "A, B",
+          quantity: 1,
+          latestPrice: 5,
+          attributes: { serial: "SN-1", model: "+M" },
+        }),
+      ],
+    });
+    const csv = valuationCsv(report);
+    assert.ok(!csv.startsWith("\uFEFF"), "the BOM belongs to the HTTP route");
+    assert.ok(csv.includes("\"'=HYPERLINK(\"\"http://example.test\"\",\"\"x\"\")\""));
+    assert.ok(csv.includes("\"A, B\""));
+    assert.ok(csv.includes("serial=SN-1; model=+M"));
+    assert.ok(csv.includes("Category totals"));
+    assert.ok(csv.includes("Place totals"));
+    assert.equal(MAX_VALUATION_ITEMS, 20000);
+  });
+
+  it("serves JSON and CSV to members but not viewers, with isolated houses and archived exclusion", async () => {
+    const owner = await request("/api/auth/register", {
+      body: { name: "Valuation owner", email: "valuation-owner@example.com", password: "test password" },
+    });
+    const member = await request("/api/auth/register", {
+      body: { name: "Valuation member", email: "valuation-member@example.com", password: "test password" },
+    });
+    const hid = owner.data.houses[0].id;
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
+      hid,
+      member.data.user.id,
+      "member",
+      new Date().toISOString(),
+    ]);
+    const locations = await request(`/api/houses/${hid}/locations`, { auth: owner.cookie! });
+    const fridge = locations.data.find((entry: any) => entry.name === "Fridge") ?? locations.data[0];
+    await run("INSERT INTO vendors (id, house_id, name, kind, created_at) VALUES (?, ?, ?, ?, ?)", [
+      "ven_valuation_test",
+      hid,
+      "Tool Shop",
+      "shop",
+      new Date().toISOString(),
+    ]);
+    const warrantyUntil = new Date(Date.now() + 200 * 864e5).toISOString().slice(0, 10);
+    const drill = await request(`/api/houses/${hid}/items`, {
+      auth: owner.cookie!,
+      body: {
+        name: "Valuation drill",
+        unit: "pcs",
+        tags: ["tools"],
+        warrantyUntil,
+        warrantyNote: "Keep receipt",
+        attributes: { serial: "SN-1", model: "D-9" },
+        initialStock: {
+          quantity: 1,
+          unitPrice: 100,
+          locationId: fridge.id,
+          purchasedAt: "2026-01-05",
+          vendorId: "ven_valuation_test",
+        },
+      },
+    });
+    assert.equal(drill.status, 201, JSON.stringify(drill.data));
+    const secondBatch = await request(`/api/items/${drill.data.id}/stock`, {
+      auth: owner.cookie!,
+      method: "POST",
+      body: {
+        action: "add",
+        quantity: 3,
+        unitPrice: 120,
+        locationId: fridge.id,
+        purchasedAt: "2026-02-01",
+        vendorId: "ven_valuation_test",
+      },
+    });
+    assert.equal(secondBatch.status, 200, JSON.stringify(secondBatch.data));
+    const food = await request(`/api/houses/${hid}/items`, {
+      auth: owner.cookie!,
+      body: { name: "Valuation food", unit: "pcs", initialStock: { quantity: 2, locationId: fridge.id } },
+    });
+    const archivedItem = await request(`/api/houses/${hid}/items`, {
+      auth: owner.cookie!,
+      body: { name: "Valuation archived", unit: "pcs", initialStock: { quantity: 1, unitPrice: 50 } },
+    });
+    await request(`/api/items/${archivedItem.data.id}`, { auth: owner.cookie!, method: "PATCH", body: { archived: true } });
+    const formula = await request(`/api/houses/${hid}/items`, {
+      auth: owner.cookie!,
+      body: { name: "=1+1" },
+    });
+    assert.equal(formula.status, 201);
+
+    // A member reads the report; viewers may not (it lists prices and purchase history).
+    const latest = await request(`/api/houses/${hid}/reports/valuation`, { auth: member.cookie! });
+    assert.equal(latest.status, 200, JSON.stringify(latest.data));
+    assert.equal(latest.data.basis, "latest");
+    assert.equal(latest.data.itemCount, 3);
+
+    const viewer = await request("/api/auth/register", {
+      body: { name: "Valuation viewer", email: "valuation-viewer@example.com", password: "test password" },
+    });
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
+      hid,
+      viewer.data.user.id,
+      "viewer",
+      new Date().toISOString(),
+    ]);
+    assert.equal((await request(`/api/houses/${hid}/reports/valuation`, { auth: viewer.cookie! })).status, 403);
+    assert.equal((await request(`/api/houses/${hid}/reports/valuation?format=csv`, { auth: viewer.cookie! })).status, 403);
+    assert.equal(latest.data.itemsWithoutValue, 2);
+    assert.equal(latest.data.grandTotal, 480);
+    assert.equal(latest.data.houseName, owner.data.houses[0].name);
+    const drillRow = latest.data.items.find((item: any) => item.id === drill.data.id);
+    assert.equal(drillRow.unitValue, 120);
+    assert.equal(drillRow.totalValue, 480);
+    assert.equal(drillRow.valueSource, "latest-purchase");
+    assert.equal(drillRow.purchasedAt, "2026-02-01");
+    assert.equal(drillRow.shop, "Tool Shop");
+    assert.equal(drillRow.warrantyUntil, warrantyUntil);
+    assert.equal(drillRow.warrantyNote, "Keep receipt");
+    assert.equal(drillRow.attributes.serial, "SN-1");
+    assert.equal(drillRow.places.length, 1);
+    assert.equal(drillRow.places[0].locationName, fridge.name);
+    assert.equal(drillRow.places[0].quantity, 4);
+    const foodRow = latest.data.items.find((item: any) => item.id === food.data.id);
+    assert.equal(foodRow.totalValue, null);
+    assert.equal(foodRow.valueSource, "none");
+    assert.equal(latest.data.placeTotals.find((entry: any) => entry.locationId === fridge.id).total, 480);
+
+    const average = await request(`/api/houses/${hid}/reports/valuation?basis=average`, { auth: member.cookie! });
+    assert.equal(average.data.grandTotal, 440);
+    assert.equal(average.data.items.find((item: any) => item.id === drill.data.id).unitValue, 110);
+    const stockCost = await request(`/api/houses/${hid}/reports/valuation?basis=stockCost`, { auth: member.cookie! });
+    assert.equal(stockCost.data.grandTotal, 460);
+    assert.equal(stockCost.data.items.find((item: any) => item.id === drill.data.id).unitValue, 115);
+
+    // Archived items are out by default and back in when asked for.
+    const withArchived = await request(`/api/houses/${hid}/reports/valuation?archived=1`, { auth: member.cookie! });
+    assert.equal(withArchived.data.itemCount, 4);
+    assert.equal(withArchived.data.grandTotal, 530);
+
+    // Filter combinations.
+    assert.equal((await request(`/api/houses/${hid}/reports/valuation?tags=tools&archived=1`, { auth: member.cookie! })).data.itemCount, 1);
+    assert.equal((await request(`/api/houses/${hid}/reports/valuation?places=${fridge.id}&archived=1`, { auth: member.cookie! })).data.itemCount, 2);
+    assert.equal((await request(`/api/houses/${hid}/reports/valuation?minValue=100`, { auth: member.cookie! })).data.itemCount, 1);
+    assert.equal((await request(`/api/houses/${hid}/reports/valuation?warranty=1`, { auth: member.cookie! })).data.itemCount, 1);
+    assert.equal((await request(`/api/houses/${hid}/reports/valuation?basis=nope`, { auth: member.cookie! })).status, 400);
+
+    // Documents are listed by name and type only; no file contents or links.
+    const form = new FormData();
+    form.set("document", new Blob(["%PDF-1.4 valuation"], { type: "application/pdf" }), "warranty.pdf");
+    form.set("kind", "warranty");
+    assert.equal((await request(`/api/items/${drill.data.id}/documents`, { auth: owner.cookie!, body: form })).status, 201);
+    const withDocs = await request(`/api/houses/${hid}/reports/valuation?documents=1`, { auth: member.cookie! });
+    const documentRow = withDocs.data.items.find((item: any) => item.id === drill.data.id);
+    assert.equal(documentRow.documentCount, 1);
+    assert.equal(documentRow.documents[0].name, "warranty.pdf");
+    assert.equal(documentRow.documents[0].kind, "warranty");
+    assert.equal(documentRow.documents[0].url, undefined);
+    assert.equal(documentRow.documents[0].filename, undefined);
+
+    // Cross-house isolation and strangers.
+    const otherHouse = await request("/api/houses", {
+      auth: owner.cookie!,
+      method: "POST",
+      body: { name: "Valuation other house" },
+    });
+    await request(`/api/houses/${otherHouse.data.id}/items`, {
+      auth: owner.cookie!,
+      body: { name: "Other house item", initialStock: { quantity: 1, unitPrice: 999 } },
+    });
+    const otherReport = await request(`/api/houses/${otherHouse.data.id}/reports/valuation`, { auth: owner.cookie! });
+    assert.equal(otherReport.data.itemCount, 1);
+    assert.equal(otherReport.data.grandTotal, 999);
+    assert.ok(!otherReport.data.items.some((item: any) => item.id === drill.data.id));
+    assert.equal((await request(`/api/houses/${hid}/reports/valuation`)).status, 404);
+    assert.equal((await request(`/api/houses/${hid}/reports/valuation`, { auth: secondUserCookie })).status, 404);
+
+    // CSV: UTF-8 BOM, a spreadsheet-safe name and the totals block.
+    const csvResponse = await fetch(`${base}/api/houses/${hid}/reports/valuation?format=csv&archived=1`, {
+      headers: { cookie: member.cookie! },
+    });
+    assert.equal(csvResponse.status, 200);
+    assert.equal(csvResponse.headers.get("content-type"), "text/csv; charset=utf-8");
+    assert.match(csvResponse.headers.get("content-disposition") ?? "", /attachment; filename="svault-valuation-/);
+    // Fetch strips the BOM when decoding text, so check the raw bytes.
+    const csvBytes = new Uint8Array(await csvResponse.arrayBuffer());
+    assert.deepEqual([...csvBytes.slice(0, 3)], [0xef, 0xbb, 0xbf]);
+    const csvText = new TextDecoder().decode(csvBytes);
+    assert.ok(csvText.includes("\"'=1+1\""));
+    assert.ok(csvText.includes("Valuation drill"));
+    assert.ok(csvText.includes("Category totals"));
+    assert.ok(csvText.includes("Place totals"));
+  });
+});
+
+describe("house activity feed", () => {
+  const stamp = (iso: string) => new Date(iso).toISOString();
+  let actCookie = "";
+  let actHouseId = "";
+  let actItemId = "";
+  let actFridgeId = "";
+  let ownerId = "";
+  let viewerId = "";
+  let viewerCookie = "";
+  let receiptId = "";
+  let billId = "";
+  let shoppingId = "";
+
+  it("shows stock, receipts, items, checkoffs and bills in one timeline", async () => {
+    const owner = await request("/api/auth/register", {
+      method: "POST",
+      body: {
+        name: "Activity Owner",
+        email: "activity-owner@example.com",
+        password: "test password",
+        houseName: "Activity House",
+      },
+    });
+    assert.equal(owner.status, 201);
+    actCookie = owner.cookie!;
+    actHouseId = owner.data.houses[0].id;
+    ownerId = owner.data.user.id;
+
+    const viewer = await request("/api/auth/register", {
+      method: "POST",
+      body: { name: "Activity Viewer", email: "activity-member@example.com", password: "test password" },
+    });
+    assert.equal(viewer.status, 201);
+    viewerCookie = viewer.cookie!;
+    viewerId = viewer.data.user.id;
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
+      actHouseId,
+      viewerId,
+      "viewer",
+      stamp("2026-01-01T00:00:00.000Z"),
+    ]);
+
+    const locations = await request(`/api/houses/${actHouseId}/locations`, { auth: actCookie });
+    actFridgeId = locations.data.find((entry: any) => entry.name === "Fridge").id;
+    const item = await request(`/api/houses/${actHouseId}/items`, {
+      method: "POST",
+      auth: actCookie,
+      body: { name: "Activity milk", unit: "l", initialStock: { quantity: 2, locationId: actFridgeId } },
+    });
+    assert.equal(item.status, 201);
+    actItemId = item.data.id;
+
+    // A member action, so the feed has a second author (viewers cannot write).
+    await request(`/api/houses/${actHouseId}/members/${viewerId}`, {
+      method: "PATCH",
+      auth: actCookie,
+      body: { role: "member" },
+    });
+    assert.equal(
+      (await request(`/api/items/${actItemId}/stock`, {
+        method: "POST",
+        auth: viewerCookie,
+        body: { action: "add", quantity: 1, locationId: actFridgeId },
+      })).status,
+      200,
+    );
+
+    // A saved receipt and a bill. Both store an author and a timestamp.
+    receiptId = "rcp_activity_test";
+    await run(
+      `INSERT INTO receipts (id, house_id, vendor_name, total, currency, created_by, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [receiptId, actHouseId, "Activity Market", 12.5, "EUR", viewerId, stamp("2026-01-30T11:00:00.000Z")],
+    );
+    billId = "bil_activity_test";
+    await run(
+      `INSERT INTO bills (id, house_id, name, amount, currency, created_by, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [billId, actHouseId, "Activity electricity", 42, "EUR", ownerId, stamp("2026-01-30T12:00:00.000Z")],
+    );
+
+    // Checkoffs record a timestamp but no checker; the event has no actor.
+    const line = await request(`/api/houses/${actHouseId}/shopping`, {
+      method: "POST",
+      auth: actCookie,
+      body: { name: "Activity bread", quantity: 1, unit: "pcs" },
+    });
+    shoppingId = line.data.item.id;
+    await request(`/api/houses/${actHouseId}/shopping/${shoppingId}`, {
+      method: "PATCH",
+      auth: actCookie,
+      body: { checked: true },
+    });
+
+    const feed = await request(`/api/houses/${actHouseId}/activity`, { auth: actCookie });
+    assert.equal(feed.status, 200);
+    assert.ok(Array.isArray(feed.data.events));
+    assert.equal(feed.data.hasMore, false);
+    assert.equal(feed.data.nextCursor, null);
+    const kinds = new Set(feed.data.events.map((event: any) => event.kind));
+    for (const kind of ["stock.add", "item.created", "receipt.saved", "bill.saved", "shopping.checked"]) {
+      assert.ok(kinds.has(kind), `missing ${kind}`);
+    }
+    const created = feed.data.events.find((event: any) => event.kind === "item.created" && event.itemId === actItemId);
+    assert.equal(created.actorId, ownerId);
+    assert.equal(created.actorName, "Activity Owner");
+    const added = feed.data.events.find(
+      (event: any) => event.kind === "stock.add" && event.actorId === viewerId && event.itemId === actItemId,
+    );
+    assert.equal(added.actorName, "Activity Viewer");
+    assert.equal(added.quantity, 1);
+    assert.equal(added.unit, "l");
+    assert.equal(added.locationName, "Fridge");
+    const receipt = feed.data.events.find((event: any) => event.kind === "receipt.saved");
+    assert.equal(receipt.title, "Activity Market");
+    assert.equal(receipt.amount, 12.5);
+    assert.equal(receipt.receiptId, receiptId);
+    const bill = feed.data.events.find((event: any) => event.kind === "bill.saved");
+    assert.equal(bill.title, "Activity electricity");
+    assert.equal(bill.billId, billId);
+    const checked = feed.data.events.find((event: any) => event.kind === "shopping.checked");
+    assert.equal(checked.actorId, null);
+    assert.equal(checked.title, "Activity bread");
+    assert.equal(checked.shoppingItemId, shoppingId);
+  });
+
+  it("lets viewers read the timeline and hides it from non-members", async () => {
+    assert.equal((await request(`/api/houses/${actHouseId}/activity`, { auth: viewerCookie })).status, 200);
+    assert.equal((await request(`/api/houses/${actHouseId}/activity`, { auth: "" })).status, 401);
+    const outsider = await request("/api/auth/register", {
+      method: "POST",
+      body: { name: "Activity Outsider", email: "activity-outsider@example.com", password: "test password" },
+    });
+    assert.equal(outsider.status, 201);
+    assert.equal((await request(`/api/houses/${actHouseId}/activity`, { auth: outsider.cookie! })).status, 404);
+  });
+
+  it("orders sources by time and pages through equal timestamps with a stable cursor", async () => {
+    // Pin both incoming movements to the same instant as the receipt, one hour
+    // after the bill, so the tie-breaker is exercised across sources.
+    await run("UPDATE stock_movements SET created_at = ? WHERE item_id = ? AND type = 'in'", [
+      stamp("2026-01-30T13:00:00.000Z"),
+      actItemId,
+    ]);
+    await run("UPDATE receipts SET created_at = ? WHERE id = ?", [stamp("2026-01-30T13:00:00.000Z"), receiptId]);
+    const expectedMovements = (await all<{ id: string }>(
+      "SELECT id FROM stock_movements WHERE item_id = ? AND created_at = ? ORDER BY id DESC",
+      [actItemId, stamp("2026-01-30T13:00:00.000Z")],
+    )).map((row) => row.id);
+    assert.equal(expectedMovements.length, 2);
+
+    const seen: string[] = [];
+    let before: string | null = null;
+    for (let page = 0; page < 6; page += 1) {
+      const query = new URLSearchParams({ from: "2026-01-30", to: "2026-01-30", limit: "1" });
+      if (before) query.set("before", before);
+      const res = await request(`/api/houses/${actHouseId}/activity?${query}`, { auth: actCookie });
+      assert.equal(res.status, 200);
+      assert.equal(res.data.events.length, 1);
+      seen.push(res.data.events[0].id);
+      if (!res.data.hasMore) {
+        assert.equal(res.data.nextCursor, null);
+        break;
+      }
+      assert.ok(res.data.nextCursor);
+      before = res.data.nextCursor;
+    }
+    // Newest first: the 13:00 group ordered by source rank and id, both
+    // descending (receipt, movement, movement), then the 12:00 bill.
+    assert.deepEqual(seen, [receiptId, ...expectedMovements, billId]);
+  });
+
+  it("filters by member, kind, item, place and date", async () => {
+    const byMember = await request(`/api/houses/${actHouseId}/activity?member=${viewerId}`, { auth: actCookie });
+    assert.ok(byMember.data.events.length > 0);
+    assert.ok(byMember.data.events.every((event: any) => event.actorId === viewerId));
+
+    const byKind = await request(`/api/houses/${actHouseId}/activity?kind=stock.add,receipt.saved`, { auth: actCookie });
+    assert.ok(byKind.data.events.length > 0);
+    assert.ok(byKind.data.events.every((event: any) => event.kind === "stock.add" || event.kind === "receipt.saved"));
+
+    const repeated = await request(`/api/houses/${actHouseId}/activity?kind=stock.add&kind=receipt.saved`, { auth: actCookie });
+    assert.equal(repeated.data.events.length, byKind.data.events.length);
+    assert.equal((await request(`/api/houses/${actHouseId}/activity?kind=bogus`, { auth: actCookie })).status, 400);
+
+    const byItem = await request(`/api/houses/${actHouseId}/activity?itemId=${actItemId}`, { auth: actCookie });
+    assert.ok(byItem.data.events.length > 0);
+    assert.ok(byItem.data.events.every((event: any) => event.itemId === actItemId));
+
+    const byPlace = await request(`/api/houses/${actHouseId}/activity?locationId=${actFridgeId}`, { auth: actCookie });
+    assert.ok(byPlace.data.events.length > 0);
+    assert.ok(byPlace.data.events.every((event: any) => event.locationId === actFridgeId && event.kind.startsWith("stock.")));
+
+    const byDate = await request(`/api/houses/${actHouseId}/activity?from=2026-01-30&to=2026-01-30`, { auth: actCookie });
+    const dayMovements = (await all<{ id: string }>(
+      "SELECT id FROM stock_movements WHERE item_id = ? AND created_at = ? ORDER BY id DESC",
+      [actItemId, stamp("2026-01-30T13:00:00.000Z")],
+    )).map((row) => row.id);
+    assert.deepEqual(
+      byDate.data.events.map((event: any) => event.id),
+      [receiptId, ...dayMovements, billId],
+    );
+    assert.ok(byDate.data.events.every((event: any) => event.at.startsWith("2026-01-30")));
+    const empty = await request(`/api/houses/${actHouseId}/activity?from=2025-01-01&to=2025-01-02`, { auth: actCookie });
+    assert.deepEqual(empty.data.events, []);
+    assert.equal(empty.data.hasMore, false);
+
+    assert.equal((await request(`/api/houses/${actHouseId}/activity?from=not-a-date`, { auth: actCookie })).status, 400);
+    assert.equal((await request(`/api/houses/${actHouseId}/activity?before=not-a-cursor`, { auth: actCookie })).status, 400);
+    assert.equal((await request(`/api/houses/${actHouseId}/activity?limit=zero`, { auth: actCookie })).status, 400);
+    assert.equal((await request(`/api/houses/${actHouseId}/activity?limit=1000`, { auth: actCookie })).status, 200);
+  });
+
+  it("shows a departed member without a display name", async () => {
+    const departed = await request("/api/auth/register", {
+      method: "POST",
+      body: { name: "Activity Departed", email: "activity-departed@example.com", password: "test password" },
+    });
+    assert.equal(departed.status, 201);
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
+      actHouseId,
+      departed.data.user.id,
+      "member",
+      stamp("2026-01-01T00:00:00.000Z"),
+    ]);
+    const moved = await request(`/api/items/${actItemId}/stock`, {
+      method: "POST",
+      auth: departed.cookie!,
+      body: { action: "add", quantity: 0.5, locationId: actFridgeId },
+    });
+    assert.equal(moved.status, 200);
+    await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [actHouseId, departed.data.user.id]);
+    const feed = await request(`/api/houses/${actHouseId}/activity?member=${departed.data.user.id}`, { auth: actCookie });
+    assert.ok(feed.data.events.length > 0);
+    for (const event of feed.data.events) {
+      assert.equal(event.actorId, departed.data.user.id);
+      assert.equal(event.actorName, null);
+    }
+  });
+
+  it("never leaks another house's events", async () => {
+    const other = await request("/api/houses", { method: "POST", auth: actCookie, body: { name: "Activity other house" } });
+    assert.equal(other.status, 201);
+    const otherFeed = await request(`/api/houses/${other.data.id}/activity`, { auth: actCookie });
+    assert.equal(otherFeed.status, 200);
+    assert.deepEqual(otherFeed.data.events.map((event: any) => event.id), []);
+    const mine = await request(`/api/houses/${actHouseId}/activity?limit=100`, { auth: actCookie });
+    assert.ok(mine.data.events.length > 0);
+    assert.ok(mine.data.events.every((event: any) => event.id !== other.data.id));
+  });
+});
+
+describe("web push reminders", async () => {
+  const { setPushSenderForTests } = await import("../services/web-push.js");
+  const { generateVAPIDKeys } = await import("web-push");
+  const vapid = generateVAPIDKeys();
+  const calls: { endpoint: string; payload: any }[] = [];
+  let senderMode: "ok" | "expired" = "ok";
+
+  // Config reads the environment lazily, so the keys only need to exist for the
+  // duration of this suite. The sender is replaced: no test talks to a real
+  // push service.
+  process.env.VAPID_PUBLIC_KEY = vapid.publicKey;
+  process.env.VAPID_PRIVATE_KEY = vapid.privateKey;
+  process.env.VAPID_SUBJECT = "mailto:push@example.com";
+  const defaultPushSender = async (subscription: { endpoint: string }, payload: string) => {
+    calls.push({ endpoint: subscription.endpoint, payload: JSON.parse(payload) });
+    if (senderMode === "expired") return { ok: false, statusCode: 410, expired: true, error: "Gone" };
+    return { ok: true, statusCode: 201, expired: false, error: null };
+  };
+  setPushSenderForTests(defaultPushSender);
+
+  let ownerCookie = "";
+  let memberCookie = "";
+  let pushHouse = "";
+  let memberUserId = "";
+
+  const endpoint = (suffix: string) => `https://push.example.com/${suffix}`;
+  const subscribe = (url: string, auth: string = ownerCookie) =>
+    request("/api/push/subscribe", {
+      method: "POST",
+      auth,
+      body: { endpoint: url, keys: { p256dh: "BCplaceholderP256dhKey", auth: "auth-secret" } },
+    });
+  const unsubscribe = (url: string, auth: string) =>
+    request("/api/push/unsubscribe", { method: "POST", auth, body: { endpoint: url } });
+  const saveChannels = (lowStock: boolean) =>
+    request(`/api/houses/${pushHouse}`, {
+      method: "PATCH",
+      auth: ownerCookie,
+      body: {
+        settings: {
+          notifications: {
+            channels: [
+              {
+                id: "ch_push",
+                type: "webpush",
+                name: "Phones",
+                enabled: true,
+                events: { lowStock, expiring: true, weeklySummary: false, budget: true },
+              },
+            ],
+          },
+        },
+      },
+    });
+  const addLowItem = (name: string) =>
+    request(`/api/houses/${pushHouse}/items`, {
+      method: "POST",
+      auth: ownerCookie,
+      body: { name, unit: "pcs", reorderPoint: 5, initialStock: { quantity: 1 } },
+    });
+
+  before(async () => {
+    const owner = await request("/api/auth/register", {
+      method: "POST",
+      body: { name: "Push Owner", email: "push-owner@example.com", password: "test password" },
+    });
+    ownerCookie = owner.cookie!;
+    pushHouse = owner.data.houses[0].id;
+    const member = await request("/api/auth/register", {
+      method: "POST",
+      body: { name: "Push Member", email: "push-member@example.com", password: "test password" },
+    });
+    memberCookie = member.cookie!;
+    const invite = await request(`/api/houses/${pushHouse}/members`, {
+      method: "POST",
+      auth: ownerCookie,
+      body: { email: "push-member@example.com", role: "member" },
+    });
+    assert.equal(invite.status, 201);
+    await request(`/api/auth/invites/${invite.data.invite.code}/accept`, { method: "POST", auth: memberCookie });
+    const detail = await request(`/api/houses/${pushHouse}`, { auth: ownerCookie });
+    memberUserId = detail.data.members.find((entry: any) => entry.email === "push-member@example.com").id;
+  });
+
+  after(async () => {
+    setPushSenderForTests();
+    delete process.env.VAPID_PUBLIC_KEY;
+    delete process.env.VAPID_PRIVATE_KEY;
+    delete process.env.VAPID_SUBJECT;
+  });
+
+  it("stays off and refuses subscriptions until VAPID keys are configured", async () => {
+    const saved = {
+      publicKey: process.env.VAPID_PUBLIC_KEY,
+      privateKey: process.env.VAPID_PRIVATE_KEY,
+      subject: process.env.VAPID_SUBJECT,
+    };
+    delete process.env.VAPID_PUBLIC_KEY;
+    delete process.env.VAPID_PRIVATE_KEY;
+    delete process.env.VAPID_SUBJECT;
+    try {
+      const status = await request("/api/push", { auth: ownerCookie });
+      assert.equal(status.status, 200);
+      assert.equal(status.data.enabled, false);
+      assert.equal(status.data.publicKey, null);
+      const refused = await subscribe(endpoint("unconfigured"));
+      assert.equal(refused.status, 400);
+      assert.match(refused.data.error, /not configured/i);
+      assert.equal((await request("/api/push/test", { method: "POST", auth: ownerCookie, body: {} })).status, 400);
+    } finally {
+      process.env.VAPID_PUBLIC_KEY = saved.publicKey;
+      process.env.VAPID_PRIVATE_KEY = saved.privateKey;
+      process.env.VAPID_SUBJECT = saved.subject;
+    }
+  });
+
+  it("requires a session and validates the subscription", async () => {
+    assert.equal((await request("/api/push", { auth: "" })).status, 401);
+    assert.equal((await subscribe(endpoint("anonymous"), "")).status, 401);
+    const insecure = await subscribe("http://push.example.com/insecure");
+    assert.equal(insecure.status, 400);
+    assert.match(insecure.data.error, /https/);
+    const invalid = await subscribe("not a url");
+    assert.equal(invalid.status, 400);
+    const missingKeys = await request("/api/push/subscribe", {
+      method: "POST",
+      auth: ownerCookie,
+      body: { endpoint: endpoint("nokeys") },
+    });
+    assert.equal(missingKeys.status, 400);
+  });
+
+  it("stores one subscription per user and only its owner can remove it", async () => {
+    const url = endpoint("device-one");
+    const created = await subscribe(url);
+    assert.equal(created.status, 201);
+    const status = await request("/api/push", { auth: ownerCookie });
+    assert.equal(status.data.enabled, true);
+    assert.equal(status.data.publicKey, vapid.publicKey);
+    assert.equal(status.data.subscriptions.length, 1);
+    assert.equal((await request("/api/push", { auth: memberCookie })).data.subscriptions.length, 0);
+
+    const foreignRemoval = await unsubscribe(url, memberCookie);
+    assert.equal(foreignRemoval.status, 200);
+    assert.equal(foreignRemoval.data.removed, false);
+    assert.equal((await request("/api/push", { auth: ownerCookie })).data.subscriptions.length, 1);
+
+    const removed = await unsubscribe(url, ownerCookie);
+    assert.equal(removed.data.removed, true);
+    assert.equal((await request("/api/push", { auth: ownerCookie })).data.subscriptions.length, 0);
+  });
+
+  it("does not let another account take over a registered device without its keys", async () => {
+    const url = endpoint("takeover");
+    assert.equal((await subscribe(url, ownerCookie)).status, 201);
+    try {
+      const stolen = await request("/api/push/subscribe", {
+        method: "POST",
+        auth: memberCookie,
+        body: { endpoint: url, keys: { p256dh: "BCdifferentP256dhKey", auth: "different-auth" } },
+      });
+      assert.equal(stolen.status, 409);
+      assert.equal((await request("/api/push", { auth: memberCookie })).data.subscriptions.length, 0);
+      assert.equal((await request("/api/push", { auth: ownerCookie })).data.subscriptions.some((entry: any) => entry), true);
+
+      // The same browser (same keys) signing in as someone else does move it.
+      const moved = await subscribe(url, memberCookie);
+      assert.equal(moved.status, 201);
+      assert.equal((await request("/api/push", { auth: memberCookie })).data.subscriptions.length, 1);
+    } finally {
+      await unsubscribe(url, memberCookie);
+      await unsubscribe(url, ownerCookie);
+    }
+  });
+
+  it("only ever points a notification at a path inside the app", async () => {
+    const { sendPushToSubscriptions } = await import("../services/web-push.js");
+    const seen: string[] = [];
+    setPushSenderForTests(async (_subscription, payload) => {
+      seen.push(JSON.parse(payload).url);
+      return { ok: true, statusCode: 201, expired: false, error: null };
+    });
+    try {
+      const subscription = [{ id: "x", userId: "x", endpoint: "https://push.example.com/p", p256dh: "k", auth: "a", userAgent: null, createdAt: "" }];
+      for (const url of ["//evil.example/x", "/\\evil.example", "https://evil.example", "items/1", "/items/itm_1"]) {
+        await sendPushToSubscriptions(subscription, { title: "t", body: "b", url });
+      }
+    } finally {
+      setPushSenderForTests(defaultPushSender);
+    }
+    assert.deepEqual(seen, ["/notifications", "/notifications", "/notifications", "/notifications", "/items/itm_1"]);
+  });
+
+  it("refuses push endpoints that point at private or local addresses", async () => {
+    // Any signed-in user supplies the endpoint and the server POSTs to it, so a
+    // private target is refused even though SV_OUTBOUND_ALLOW_PRIVATE defaults to true.
+    for (const url of [
+      "https://127.0.0.1/push",
+      "https://10.0.0.5/push",
+      "https://192.168.1.20:8443/push",
+      "https://169.254.169.254/latest",
+      "https://[::1]/push",
+      "https://localhost/push",
+      "https://user:secret@push.example.com/push",
+    ]) {
+      const response = await subscribe(url);
+      assert.equal(response.status, 400, url);
+    }
+    const { publicEndpointProblem } = await import("../services/web-push.js");
+    assert.match((await publicEndpointProblem("https://10.1.2.3/x")) ?? "", /public address/);
+    assert.match((await publicEndpointProblem("https://[fd00::1]/x")) ?? "", /public address/);
+    assert.match((await publicEndpointProblem("https://0.0.0.0/x")) ?? "", /public address/);
+    assert.match((await publicEndpointProblem("https://[::ffff:127.0.0.1]/x")) ?? "", /public address/);
+    assert.match((await publicEndpointProblem("https://[::]/x")) ?? "", /public address/);
+    assert.equal(await publicEndpointProblem("https://8.8.8.8/x"), null);
+    assert.match((await publicEndpointProblem("http://8.8.8.8/x")) ?? "", /https/);
+  });
+
+  it("sends a test push with a minimal payload", async () => {
+    assert.equal((await request("/api/push/test", { method: "POST", auth: ownerCookie, body: {} })).status, 400);
+    const url = endpoint("test-device");
+    assert.equal((await subscribe(url)).status, 201);
+    calls.length = 0;
+    const sent = await request("/api/push/test", { method: "POST", auth: ownerCookie, body: {} });
+    assert.equal(sent.status, 200);
+    assert.equal(sent.data.sent, 1);
+    assert.equal(calls.length, 1);
+    assert.deepEqual(Object.keys(calls[0].payload).sort(), ["body", "title", "url"]);
+    assert.equal(calls[0].payload.url, "/notifications");
+    await unsubscribe(url, ownerCookie);
+  });
+
+  it("delivers to house members only, respects the channel switch and drops expired devices", async () => {
+    const ownerEndpoint = endpoint("owner-phone");
+    const memberEndpoint = endpoint("member-phone");
+    assert.equal((await subscribe(ownerEndpoint)).status, 201);
+    assert.equal((await subscribe(memberEndpoint, memberCookie)).status, 201);
+    assert.equal((await saveChannels(true)).status, 200);
+
+    calls.length = 0;
+    const first = await addLowItem("Push water");
+    assert.equal(first.status, 201);
+    assert.deepEqual(
+      calls.map((entry) => entry.endpoint).sort(),
+      [memberEndpoint, ownerEndpoint].sort(),
+    );
+    assert.ok(calls.every((entry) => entry.payload.url === `/items/${first.data.id}`));
+    const log = await request(`/api/houses/${pushHouse}/reminder-deliveries`, { auth: ownerCookie });
+    const firstDeliveries = log.data.deliveries.filter((entry: any) => entry.dedupeKey === `low:${first.data.id}`);
+    assert.equal(firstDeliveries.length, 1);
+    assert.equal(firstDeliveries[0].status, "sent");
+
+    // The per-channel low-stock switch turns push off for this house.
+    assert.equal((await saveChannels(false)).status, 200);
+    calls.length = 0;
+    await addLowItem("Push bread");
+    assert.equal(calls.length, 0);
+
+    // Re-enable, then remove the member: their device must not be pushed again.
+    assert.equal((await saveChannels(true)).status, 200);
+    const kicked = await request(`/api/houses/${pushHouse}/members/${memberUserId}`, {
+      method: "DELETE",
+      auth: ownerCookie,
+    });
+    assert.equal(kicked.status, 200);
+    calls.length = 0;
+    await addLowItem("Push rice");
+    assert.deepEqual(calls.map((entry) => entry.endpoint), [ownerEndpoint]);
+
+    // A 410 from the push service deletes the device instead of retrying forever.
+    senderMode = "expired";
+    calls.length = 0;
+    const gone = await addLowItem("Push salt");
+    assert.equal(gone.status, 201);
+    assert.ok(calls.length >= 1);
+    senderMode = "ok";
+    assert.equal((await request("/api/push", { auth: ownerCookie })).data.subscriptions.length, 0);
+    const afterExpiry = await request(`/api/houses/${pushHouse}/reminder-deliveries`, { auth: ownerCookie });
+    const failed = afterExpiry.data.deliveries.filter((entry: any) => entry.dedupeKey === `low:${gone.data.id}`);
+    assert.equal(failed.length, 1);
+    assert.equal(failed[0].status, "failed");
+
+    // With no subscribed device the channel is skipped quietly, not logged as failed.
+    calls.length = 0;
+    const quiet = await addLowItem("Push pepper");
+    assert.equal(quiet.status, 201);
+    assert.equal(calls.length, 0);
+    const quietLog = await request(`/api/houses/${pushHouse}/reminder-deliveries`, { auth: ownerCookie });
+    assert.equal(quietLog.data.deliveries.filter((entry: any) => entry.dedupeKey === `low:${quiet.data.id}`).length, 0);
+
+    await unsubscribe(memberEndpoint, memberCookie);
+    await request(`/api/houses/${pushHouse}`, { method: "DELETE", auth: ownerCookie });
+  });
+
+  it("tests the web push channel from the house settings without ringing other devices", async () => {
+    const house = await request("/api/houses", { method: "POST", auth: ownerCookie, body: { name: "Push settings house" } });
+    const houseId = house.data.id;
+    const saved = await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      auth: ownerCookie,
+      body: {
+        settings: {
+          notifications: {
+            channels: [
+              {
+                id: "ch_push",
+                type: "webpush",
+                name: "Phones",
+                enabled: true,
+                events: { lowStock: true, expiring: true, weeklySummary: false, budget: true },
+              },
+            ],
+          },
+        },
+      },
+    });
+    assert.equal(saved.status, 200);
+    assert.equal(saved.data.settings.notifications.channels[0].type, "webpush");
+    assert.equal(
+      (await request(`/api/houses/${houseId}/notifications/test`, { method: "POST", auth: ownerCookie, body: { channelId: "ch_push" } })).status,
+      400,
+      "no device subscribed yet",
+    );
+    const url = endpoint("settings-device");
+    assert.equal((await subscribe(url)).status, 201);
+    calls.length = 0;
+    const tested = await request(`/api/houses/${houseId}/notifications/test`, {
+      method: "POST",
+      auth: ownerCookie,
+      body: { channelId: "ch_push" },
+    });
+    assert.equal(tested.status, 200);
+    assert.equal(tested.data.ok, true);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].endpoint, url);
+    await unsubscribe(url, ownerCookie);
+    await request(`/api/houses/${houseId}`, { method: "DELETE", auth: ownerCookie });
+  });
+});
+
+describe("undo stock action", () => {
+  /** Batches with stock left, so a round trip can be compared exactly. */
+  const openBatches = async (itemId: string) =>
+    (await all<any>("SELECT id, quantity FROM stock_lots WHERE item_id = ? AND quantity > 0 ORDER BY id", [itemId])).map(
+      (row) => ({ id: row.id as string, quantity: Number(row.quantity) }),
+    );
+
+  async function itemWithBatches(name: string, locationId?: string) {
+    const created = await request(`/api/houses/${houseId}/items`, {
+      method: "POST",
+      body: {
+        name,
+        unit: "pcs",
+        initialStock: { quantity: 2, expiresAt: "2030-01-01", unitPrice: 1, locationId },
+      },
+    });
+    assert.equal(created.status, 201);
+    const second = await request(`/api/items/${created.data.id}/stock`, {
+      method: "POST",
+      body: { action: "add", quantity: 3, expiresAt: "2031-01-01", unitPrice: 2, locationId },
+    });
+    assert.equal(second.status, 200);
+    return created.data.id as string;
+  }
+
+  const undo = (movementId: string, auth?: string, house = houseId) =>
+    request(`/api/houses/${house}/movements/${movementId}/undo`, {
+      method: "POST",
+      ...(auth ? { auth } : {}),
+    });
+
+  it("round-trips every movement type and restores the batches exactly", async () => {
+    const locations = (await request(`/api/houses/${houseId}/locations`)).data;
+    const from = locations[0].id;
+    const to = locations[1].id;
+    const id = await itemWithBatches("Undo round trip", from);
+    const steps: { label: string; body: Record<string, unknown> }[] = [
+      { label: "add", body: { action: "add", quantity: 2, unitPrice: 1.5, expiresAt: "2029-05-05", locationId: from } },
+      { label: "remove", body: { action: "remove", quantity: 3 } },
+      { label: "waste", body: { action: "waste", quantity: 1 } },
+      { label: "move", body: { action: "move", quantity: 1, fromLocationId: from, toLocationId: to } },
+      { label: "count up", body: { action: "set", target: 8 } },
+      { label: "count down", body: { action: "set", target: 1 } },
+    ];
+    for (const step of steps) {
+      const before = await openBatches(id);
+      const detail = await request(`/api/items/${id}/stock`, { method: "POST", body: step.body });
+      assert.equal(detail.status, 200, `${step.label}: ${JSON.stringify(detail.data)}`);
+      assert.ok(detail.data.lastMovementId, `${step.label} returns the movement it recorded`);
+      const undone = await undo(detail.data.lastMovementId);
+      assert.equal(undone.status, 200, `${step.label}: ${JSON.stringify(undone.data)}`);
+      assert.equal(undone.data.reversesMovementId, detail.data.lastMovementId);
+      assert.deepEqual(await openBatches(id), before, `${step.label} restores the batches exactly`);
+    }
+  });
+
+  it("undoes a FIFO consume that spanned several batches atomically", async () => {
+    const id = await itemWithBatches("Undo composite");
+    const before = await openBatches(id);
+    const removed = await request(`/api/items/${id}/stock`, { method: "POST", body: { action: "remove", quantity: 4 } });
+    assert.equal(removed.status, 200);
+    assert.equal(removed.data.quantity, 1);
+    const effects = await all<any>(
+      "SELECT lot_id, delta FROM stock_movement_lots WHERE movement_id = ? ORDER BY delta ASC",
+      [removed.data.lastMovementId],
+    );
+    assert.equal(effects.length, 2);
+    assert.deepEqual(effects.map((effect) => Number(effect.delta)), [-2, -2]);
+    const undone = await undo(removed.data.lastMovementId);
+    assert.equal(undone.status, 200, JSON.stringify(undone.data));
+    assert.equal(undone.data.quantity, 5);
+    assert.deepEqual(await openBatches(id), before);
+  });
+
+  it("refuses a second undo and refuses to undo an undo", async () => {
+    const id = await itemWithBatches("Undo twice");
+    const removed = await request(`/api/items/${id}/stock`, { method: "POST", body: { action: "remove", quantity: 1 } });
+    const first = await undo(removed.data.lastMovementId);
+    assert.equal(first.status, 200);
+    const second = await undo(removed.data.lastMovementId);
+    assert.equal(second.status, 409);
+    assert.match(second.data.error, /already been undone/);
+    const third = await undo(first.data.movementId);
+    assert.equal(third.status, 409);
+    assert.match(third.data.error, /cannot itself be undone/);
+    const linked = await all<any>("SELECT id FROM stock_movements WHERE reverses_movement_id = ?", [removed.data.lastMovementId]);
+    assert.equal(linked.length, 1);
+  });
+
+  it("refuses undo once a later change has touched the same batch", async () => {
+    const id = await itemWithBatches("Undo superseded");
+    const first = await request(`/api/items/${id}/stock`, { method: "POST", body: { action: "remove", quantity: 1 } });
+    const second = await request(`/api/items/${id}/stock`, { method: "POST", body: { action: "remove", quantity: 1 } });
+    assert.equal(second.status, 200);
+    const refused = await undo(first.data.lastMovementId);
+    assert.equal(refused.status, 409);
+    assert.match(refused.data.error, /no longer safe/);
+    // The newest change is still reversible.
+    assert.equal((await undo(second.data.lastMovementId)).status, 200);
+  });
+
+  it("refuses undo on an archived item", async () => {
+    const id = await itemWithBatches("Undo archived");
+    const removed = await request(`/api/items/${id}/stock`, { method: "POST", body: { action: "remove", quantity: 1 } });
+    assert.equal((await request(`/api/items/${id}`, { method: "PATCH", body: { archived: true } })).status, 200);
+    const refused = await undo(removed.data.lastMovementId);
+    assert.equal(refused.status, 409);
+    assert.match(refused.data.error, /archived/);
+    await request(`/api/items/${id}`, { method: "PATCH", body: { archived: false } });
+  });
+
+  it("keeps the movement ledger append-only", async () => {
+    const id = await itemWithBatches("Undo append only");
+    const removed = await request(`/api/items/${id}/stock`, { method: "POST", body: { action: "remove", quantity: 1 } });
+    const before = await all<any>("SELECT * FROM stock_movements WHERE item_id = ? ORDER BY created_at, id", [id]);
+    const undone = await undo(removed.data.lastMovementId);
+    assert.equal(undone.status, 200);
+    const after = await all<any>("SELECT * FROM stock_movements WHERE item_id = ? ORDER BY created_at, id", [id]);
+    assert.equal(after.length, before.length + 1);
+    for (const row of before) {
+      assert.deepEqual(after.find((entry) => entry.id === row.id), row);
+    }
+    const compensating = after.find((entry) => entry.id === undone.data.movementId);
+    assert.equal(compensating.reverses_movement_id, removed.data.lastMovementId);
+  });
+
+  it("marks movements undoable and undone on the item history", async () => {
+    const id = await itemWithBatches("Undo history");
+    const owner = await get<{ id: string }>("SELECT id FROM users WHERE email = ?", ["owner@example.com"]);
+    const removed = await request(`/api/items/${id}/stock`, { method: "POST", body: { action: "remove", quantity: 1 } });
+    const movementId = removed.data.lastMovementId as string;
+    let item = await request(`/api/items/${id}`);
+    let row = item.data.movements.find((entry: any) => entry.id === movementId);
+    assert.equal(row.undoable, true);
+    assert.equal(row.reversed, false);
+    assert.equal(row.userId, owner?.id);
+    assert.equal(row.reversesMovementId, null);
+    assert.equal((await undo(movementId)).status, 200);
+    item = await request(`/api/items/${id}`);
+    row = item.data.movements.find((entry: any) => entry.id === movementId);
+    assert.equal(row.reversed, true);
+    assert.equal(row.undoable, false);
+    const compensating = item.data.movements.find((entry: any) => entry.reversesMovementId === movementId);
+    assert.ok(compensating);
+    assert.equal(compensating.undoable, false);
+    assert.equal(compensating.type, "in");
+    assert.equal(compensating.delta, 1);
+    assert.equal(compensating.reason, "Undone");
+  });
+
+  it("re-evaluates low-stock reminders after undo", async () => {
+    const created = await request(`/api/houses/${houseId}/items`, {
+      method: "POST",
+      body: { name: "Undo reminders", unit: "pcs", reorderPoint: 5, initialStock: { quantity: 6 } },
+    });
+    const id = created.data.id;
+    const removed = await request(`/api/items/${id}/stock`, { method: "POST", body: { action: "remove", quantity: 4 } });
+    let feed = await request(`/api/houses/${houseId}/notifications`);
+    assert.ok(feed.data.notifications.some((entry: any) => entry.type === "low_stock" && entry.data.itemId === id));
+    assert.equal((await undo(removed.data.lastMovementId)).status, 200);
+    feed = await request(`/api/houses/${houseId}/notifications`);
+    assert.ok(!feed.data.notifications.some((entry: any) => entry.type === "low_stock" && entry.data.itemId === id));
+  });
+
+  it("lets members undo their own changes and admins undo anyone's", async () => {
+    const house = await request("/api/houses", { method: "POST", body: { name: "Undo roles house" } });
+    assert.equal(house.status, 201);
+    const rolesHouseId = house.data.id as string;
+    const created = await request(`/api/houses/${rolesHouseId}/items`, {
+      method: "POST",
+      body: { name: "Undo roles item", unit: "pcs", initialStock: { quantity: 1 } },
+    });
+    assert.equal(created.status, 201);
+    const id = created.data.id as string;
+
+    const signUp = async (email: string) => {
+      const registered = await request("/api/auth/register", {
+        method: "POST",
+        auth: "",
+        body: { name: email, email, password: "test password" },
+      });
+      assert.equal(registered.status, 201);
+      return { id: registered.data.user.id as string, cookie: registered.cookie! };
+    };
+    const member = await signUp("undo.member@example.com");
+    const other = await signUp("undo.other@example.com");
+    const viewer = await signUp("undo.viewer@example.com");
+    const admin = await signUp("undo.admin@example.com");
+    const joinedAt = new Date().toISOString();
+    for (const [userId, role] of [
+      [member.id, "member"],
+      [other.id, "member"],
+      [viewer.id, "viewer"],
+      [admin.id, "admin"],
+    ] as const) {
+      await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
+        rolesHouseId,
+        userId,
+        role,
+        joinedAt,
+      ]);
+    }
+
+    const own = await request(`/api/items/${id}/stock`, { method: "POST", auth: member.cookie, body: { action: "add", quantity: 1 } });
+    assert.equal(own.status, 200);
+    assert.equal((await undo(own.data.lastMovementId, viewer.cookie, rolesHouseId)).status, 403);
+    const foreign = await undo(own.data.lastMovementId, other.cookie, rolesHouseId);
+    assert.equal(foreign.status, 403);
+    assert.match(foreign.data.error, /only undo your own/);
+    assert.equal((await undo(own.data.lastMovementId, secondUserCookie, rolesHouseId)).status, 404);
+    // The admin may undo the member's change.
+    assert.equal((await undo(own.data.lastMovementId, admin.cookie, rolesHouseId)).status, 200);
+
+    const mine = await request(`/api/items/${id}/stock`, { method: "POST", auth: member.cookie, body: { action: "remove", quantity: 1 } });
+    assert.equal(mine.status, 200);
+    assert.equal((await undo(mine.data.lastMovementId, member.cookie, rolesHouseId)).status, 200);
+  });
+});
+
+describe("lending tracker", () => {
+  const future = (days: number) => new Date(Date.now() + days * 864e5).toISOString().slice(0, 10);
+  const past = (days: number) => new Date(Date.now() - days * 864e5).toISOString().slice(0, 10);
+
+  it("records loans without moving stock, guards the quantity and returns in parts", async () => {
+    const house = await request("/api/houses", { method: "POST", body: { name: "Lending stock test" } });
+    const hid = house.data.id;
+    const created = await request(`/api/houses/${hid}/items`, {
+      method: "POST",
+      body: { name: "Cordless drill", unit: "pcs", reorderPoint: 2, initialStock: { quantity: 3 } },
+    });
+    assert.equal(created.status, 201);
+    const id = created.data.id;
+    assert.equal(created.data.onLoan, 0);
+    assert.equal(created.data.available, 3);
+
+    const lent = await request(`/api/houses/${hid}/loans`, {
+      method: "POST",
+      body: { itemId: id, borrowerName: "Nikos", quantity: 2, dueAt: future(3), note: "Blue case" },
+    });
+    assert.equal(lent.status, 201);
+    assert.equal(lent.data.loan.open, true);
+    assert.equal(lent.data.loan.remaining, 2);
+    assert.equal(lent.data.loan.overdue, false);
+    const loanId = lent.data.loan.id;
+
+    // A loan is a record, not a stock movement: the shelf quantity is unchanged.
+    const detail = await request(`/api/items/${id}`);
+    assert.equal(detail.data.quantity, 3);
+    assert.equal(detail.data.onLoan, 2);
+    assert.equal(detail.data.available, 1);
+    assert.equal(detail.data.loans.length, 1);
+    assert.equal(detail.data.loans[0].borrowerName, "Nikos");
+    assert.equal(detail.data.movements.filter((movement: any) => movement.type === "out").length, 0);
+    // Low stock keeps using the on-hand quantity: lending is not consumption,
+    // so 3 on the shelf with 2 lent out is not "running low".
+    assert.equal(detail.data.isLow, false);
+
+    const tooMany = await request(`/api/houses/${hid}/loans`, {
+      method: "POST",
+      body: { itemId: id, borrowerName: "Mina", quantity: 2 },
+    });
+    assert.equal(tooMany.status, 400);
+    assert.match(tooMany.data.error, /available to lend/);
+
+    // FIFO cannot silently consume units that are promised to a borrower.
+    const blocked = await request(`/api/items/${id}/stock`, {
+      method: "POST",
+      body: { action: "remove", quantity: 2 },
+    });
+    assert.equal(blocked.status, 400);
+    assert.match(blocked.data.error, /out on loan/);
+    assert.equal(
+      (await request(`/api/items/${id}/stock`, { method: "POST", body: { action: "remove", quantity: 1 } })).status,
+      200,
+    );
+    assert.equal(
+      (await request(`/api/items/${id}/stock`, { method: "POST", body: { action: "remove", quantity: 1 } })).status,
+      400,
+    );
+    // A count correction cannot fall below the loaned quantity either.
+    const count = await request(`/api/items/${id}/stock`, { method: "POST", body: { action: "set", target: 1 } });
+    assert.equal(count.status, 400);
+    assert.match(count.data.error, /out on loan/);
+
+    const partial = await request(`/api/loans/${loanId}/return`, { method: "POST", body: { quantity: 1 } });
+    assert.equal(partial.status, 200);
+    assert.equal(partial.data.loan.open, true);
+    assert.equal(partial.data.loan.returnedQuantity, 1);
+    assert.equal(partial.data.loan.remaining, 1);
+    assert.equal((await request(`/api/loans/${loanId}/return`, { method: "POST", body: { quantity: 5 } })).status, 400);
+    const rest = await request(`/api/loans/${loanId}/return`, { method: "POST", body: {} });
+    assert.equal(rest.status, 200);
+    assert.equal(rest.data.loan.open, false);
+    assert.equal(rest.data.loan.remaining, 0);
+    assert.ok(rest.data.loan.returnedAt);
+    assert.equal((await request(`/api/loans/${loanId}/return`, { method: "POST", body: {} })).status, 400);
+    // Returning the loan never added stock back, because lending never removed it.
+    assert.equal((await request(`/api/items/${id}`)).data.quantity, 2);
+  });
+
+  it("finds overdue loans by calendar date and reminds once a day", async () => {
+    const house = await request("/api/houses", { method: "POST", body: { name: "Overdue lending test" } });
+    const hid = house.data.id;
+    const created = await request(`/api/houses/${hid}/items`, {
+      method: "POST",
+      body: { name: "Ladder", unit: "pcs", initialStock: { quantity: 2 } },
+    });
+    const id = created.data.id;
+    const late = await request(`/api/houses/${hid}/loans`, {
+      method: "POST",
+      body: { itemId: id, borrowerName: "Anna", quantity: 1, dueAt: past(1) },
+    });
+    assert.equal(late.status, 201);
+    assert.equal(late.data.loan.overdue, true);
+    const soon = await request(`/api/houses/${hid}/loans`, {
+      method: "POST",
+      body: { itemId: id, borrowerName: "Kostas", quantity: 1, dueAt: future(2) },
+    });
+    assert.equal(soon.status, 201);
+    assert.equal(soon.data.loan.overdue, false);
+
+    const overdue = await request(`/api/houses/${hid}/loans?status=overdue`);
+    assert.equal(overdue.status, 200);
+    assert.deepEqual(overdue.data.loans.map((loan: any) => loan.id), [late.data.loan.id]);
+    assert.equal(overdue.data.counts.overdueCount, 1);
+    assert.equal(overdue.data.counts.openCount, 2);
+    assert.equal((await request(`/api/houses/${hid}/loans?status=open`)).data.loans.length, 2);
+    assert.equal((await request(`/api/houses/${hid}/loans?status=returned`)).data.loans.length, 0);
+    assert.equal((await request(`/api/houses/${hid}/loans?status=nonsense`)).status, 400);
+
+    // The scheduled scan creates one reminder per loan per day, not one per scan.
+    assert.equal((await request(`/api/houses/${hid}/notifications/scan`, { method: "POST", body: {} })).status, 200);
+    assert.equal((await request(`/api/houses/${hid}/notifications/scan`, { method: "POST", body: {} })).status, 200);
+    const today = new Date().toISOString().slice(0, 10);
+    const rows = await all<any>("SELECT * FROM notifications WHERE house_id = ? AND type = 'loan_overdue'", [hid]);
+    const forLate = rows.filter((row) => JSON.parse(row.data).loanId === late.data.loan.id);
+    assert.equal(forLate.length, 1);
+    assert.equal(forLate[0].dedupe_key, `loan:${late.data.loan.id}:${today}`);
+    assert.equal(forLate[0].resolved_at, null);
+    assert.ok(rows.every((row) => JSON.parse(row.data).loanId !== soon.data.loan.id));
+    const feed = await request(`/api/houses/${hid}/notifications`);
+    assert.ok(feed.data.notifications.some((entry: any) => entry.type === "loan_overdue" && entry.data.loanId === late.data.loan.id));
+
+    // Returning it resolves the reminder without waiting for the next scan.
+    assert.equal((await request(`/api/loans/${late.data.loan.id}/return`, { method: "POST", body: {} })).status, 200);
+    const after = await all<any>("SELECT * FROM notifications WHERE house_id = ? AND type = 'loan_overdue'", [hid]);
+    assert.ok(after.every((row) => row.resolved_at));
+    assert.ok(
+      !(await request(`/api/houses/${hid}/notifications`)).data.notifications.some(
+        (entry: any) => entry.type === "loan_overdue",
+      ),
+    );
+  });
+
+  it("enforces the role matrix and keeps houses apart", async () => {
+    const house = await request("/api/houses", { method: "POST", body: { name: "Lending roles test" } });
+    const hid = house.data.id;
+    const created = await request(`/api/houses/${hid}/items`, {
+      method: "POST",
+      body: { name: "Extension cord", unit: "pcs", initialStock: { quantity: 2 } },
+    });
+    const id = created.data.id;
+    const lent = await request(`/api/houses/${hid}/loans`, {
+      method: "POST",
+      body: { itemId: id, borrowerName: "Petros", quantity: 1 },
+    });
+    const loanId = lent.data.loan.id;
+    // The lend sheet suggests past borrowers next to household members.
+    const borrowers = await request(`/api/houses/${hid}/loans/borrowers`);
+    assert.equal(borrowers.status, 200);
+    assert.ok(borrowers.data.borrowers.some((entry: any) => entry.name === "Petros" && entry.loanCount === 1));
+    assert.ok(borrowers.data.borrowers.some((entry: any) => entry.name === "Test Owner" && entry.member === true));
+
+    const viewer = await request("/api/auth/register", {
+      method: "POST",
+      body: { name: "Loan viewer", email: "loan-viewer@example.com", password: "test password" },
+    });
+    const member = await request("/api/auth/register", {
+      method: "POST",
+      body: { name: "Loan member", email: "loan-member@example.com", password: "test password" },
+    });
+    const outsider = await request("/api/auth/register", {
+      method: "POST",
+      body: { name: "Loan outsider", email: "loan-outsider@example.com", password: "test password" },
+    });
+    const joinedAt = new Date().toISOString();
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
+      hid,
+      viewer.data.user.id,
+      "viewer",
+      joinedAt,
+    ]);
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
+      hid,
+      member.data.user.id,
+      "member",
+      joinedAt,
+    ]);
+
+    assert.equal((await request(`/api/houses/${hid}/loans`, { auth: viewer.cookie! })).status, 200);
+    assert.equal(
+      (await request(`/api/houses/${hid}/loans`, { auth: viewer.cookie!, body: { itemId: id, borrowerName: "X" } })).status,
+      403,
+    );
+    assert.equal(
+      (await request(`/api/loans/${loanId}`, { method: "PATCH", auth: viewer.cookie!, body: { note: "nope" } })).status,
+      403,
+    );
+    assert.equal(
+      (await request(`/api/loans/${loanId}/return`, { method: "POST", auth: viewer.cookie!, body: {} })).status,
+      403,
+    );
+    assert.equal((await request(`/api/loans/${loanId}`, { method: "DELETE", auth: viewer.cookie! })).status, 403);
+
+    // A member may edit the due date and record their own loan, but may not
+    // delete someone else's.
+    const edited = await request(`/api/loans/${loanId}`, {
+      method: "PATCH",
+      auth: member.cookie!,
+      body: { dueAt: future(5), note: "Back on Sunday" },
+    });
+    assert.equal(edited.status, 200);
+    assert.equal(edited.data.loan.note, "Back on Sunday");
+    assert.equal((await request(`/api/loans/${loanId}`, { method: "DELETE", auth: member.cookie! })).status, 403);
+    const own = await request(`/api/houses/${hid}/loans`, {
+      method: "POST",
+      auth: member.cookie!,
+      body: { itemId: id, borrowerName: "Sofia", quantity: 1 },
+    });
+    assert.equal(own.status, 201);
+    assert.equal((await request(`/api/loans/${own.data.loan.id}`, { method: "DELETE", auth: member.cookie! })).status, 200);
+    // A viewer cannot record a loan even when they are the borrower.
+    assert.equal(
+      (await request(`/api/houses/${hid}/loans`, { method: "POST", auth: viewer.cookie!, body: { itemId: id, borrowerName: "Viewer" } })).status,
+      403,
+    );
+
+    // Another house cannot read or touch these loans.
+    assert.equal((await request(`/api/houses/${hid}/loans`, { auth: outsider.cookie! })).status, 404);
+    assert.equal(
+      (await request(`/api/loans/${loanId}`, { method: "PATCH", auth: outsider.cookie!, body: { note: "hi" } })).status,
+      404,
+    );
+    assert.equal((await request(`/api/loans/${loanId}/return`, { method: "POST", auth: outsider.cookie!, body: {} })).status, 404);
+    assert.equal((await request(`/api/loans/${loanId}`, { method: "DELETE", auth: outsider.cookie! })).status, 404);
+
+    // A borrower must be a member of this house when a user id is named.
+    const foreign = await request(`/api/houses/${hid}/loans`, {
+      method: "POST",
+      body: { itemId: id, borrowerName: "Stranger", borrowerUserId: outsider.data.user.id },
+    });
+    assert.equal(foreign.status, 400);
+
+    // A named member is recorded under their own name, whatever name was typed.
+    const named = await request(`/api/houses/${hid}/loans`, {
+      method: "POST",
+      body: { itemId: id, borrowerName: "Somebody Else Entirely", borrowerUserId: member.data.user.id, quantity: 1 },
+    });
+    assert.equal(named.status, 201);
+    assert.equal(named.data.loan.borrowerName, "Loan member");
+    assert.equal(named.data.loan.borrowerUserId, member.data.user.id);
+  });
+
+  it("declares the loan table for SQLite, PostgreSQL and restore order", async () => {
+    const { POSTGRES_SCHEMA, POSTGRES_MIGRATIONS, POSTGRES_TABLE_ORDER } = await import(
+      "../database/postgres-schema.js"
+    );
+    assert.match(POSTGRES_SCHEMA, /CREATE TABLE IF NOT EXISTS item_loans/);
+    assert.ok(POSTGRES_MIGRATIONS.some((statement) => /CREATE TABLE IF NOT EXISTS item_loans/.test(statement)));
+    assert.ok(POSTGRES_MIGRATIONS.includes("CREATE INDEX IF NOT EXISTS loans_house ON item_loans(house_id, returned_at, due_at)"));
+    assert.ok(POSTGRES_MIGRATIONS.includes("CREATE INDEX IF NOT EXISTS loans_item ON item_loans(item_id, returned_at)"));
+    assert.ok(POSTGRES_TABLE_ORDER.indexOf("item_loans") > POSTGRES_TABLE_ORDER.indexOf("items"));
+    assert.ok(POSTGRES_TABLE_ORDER.indexOf("item_loans") > POSTGRES_TABLE_ORDER.indexOf("users"));
+    assert.ok(POSTGRES_TABLE_ORDER.indexOf("item_loans") < POSTGRES_TABLE_ORDER.indexOf("notifications"));
+    const sqliteSource = readFileSync(path.resolve("server/database/sqlite.ts"), "utf8");
+    assert.match(sqliteSource, /CREATE TABLE IF NOT EXISTS item_loans/);
+    // The live database has the table too, whichever driver is in use.
+    assert.ok(Number((await get<any>("SELECT COUNT(*) AS n FROM item_loans"))?.n) >= 0);
+  });
+});
+
+describe("freezer batches", () => {
+  it("derives eat-by dates for frozen, thawed and opened batches", async () => {
+    const { effectiveExpiry } = await import("../services/effective-expiry.js");
+    // A frozen batch ignores the short fridge use-by and uses the default 90 days.
+    assert.equal(effectiveExpiry({ frozen_on: "2026-01-01", expires_at: "2026-01-04" }, {}), "2026-04-01");
+    // Per-item overrides and the short thaw window take over.
+    assert.equal(effectiveExpiry({ frozen_on: "2026-01-01" }, { freezer_shelf_life_days: 30 }), "2026-01-31");
+    assert.equal(
+      effectiveExpiry({ frozen_on: "2026-01-01", thawed_on: "2026-02-01" }, { freezer_shelf_life_days: 30 }),
+      "2026-02-03",
+    );
+    assert.equal(
+      effectiveExpiry({ frozen_on: "2026-01-01", thawed_on: "2026-02-01" }, { thaw_shelf_life_days: 5 }),
+      "2026-02-06",
+    );
+    // Opening a frozen batch still shortens the date, and the earliest wins.
+    assert.equal(
+      effectiveExpiry({ frozen_on: "2026-01-01", opened_at: "2026-01-20" }, { opened_shelf_life_days: 3 }),
+      "2026-01-23",
+    );
+    assert.equal(
+      effectiveExpiry({ frozen_on: "2026-01-01", thawed_on: "2026-01-10", opened_at: "2026-01-12" }, { opened_shelf_life_days: 5, thaw_shelf_life_days: 2 }),
+      "2026-01-12",
+    );
+    // Unfrozen batches keep the original printed/opened behaviour.
+    assert.equal(effectiveExpiry({ expires_at: "2026-03-10", opened_at: "2026-02-28" }, { opened_shelf_life_days: 3 }), "2026-03-03");
+  });
+
+  it("freezes part of a batch, thaws it, takes portions out and warns before the eat-by date", async () => {
+    const { addDays } = await import("../services/effective-expiry.js");
+    const house = await request("/api/houses", { method: "POST", body: { name: "Freezer test house" } });
+    const hid = house.data.id;
+    const places = await request(`/api/houses/${hid}/locations`);
+    const freezer = places.data.find((place: any) => place.isFreezer);
+    assert.ok(freezer, "houses start with a freezer place");
+    const today = new Date().toISOString().slice(0, 10);
+    const created = await request(`/api/houses/${hid}/items`, {
+      method: "POST",
+      body: { name: "Freezer soup", unit: "pcs", initialStock: { quantity: 5, expiresAt: addDays(today, 3) } },
+    });
+    const id = created.data.id;
+    const lot = created.data.lots[0];
+
+    const frozen = await request(`/api/houses/${hid}/freezer/freeze`, {
+      method: "POST",
+      body: { itemId: id, lotId: lot.id, portions: 2, locationId: freezer.id, frozenOn: "2030-01-01" },
+    });
+    assert.equal(frozen.status, 200, JSON.stringify(frozen.data));
+    let detail = await request(`/api/items/${id}`);
+    const frozenLot = detail.data.lots.find((entry: any) => entry.id === frozen.data.lotId);
+    assert.equal(frozenLot.frozenOn, "2030-01-01");
+    assert.equal(frozenLot.portions, 2);
+    assert.equal(frozenLot.locationId, freezer.id);
+    assert.equal(frozenLot.effectiveExpiresAt, "2030-04-01");
+    assert.equal(Number(detail.data.lots.find((entry: any) => entry.id === lot.id).quantity), 3);
+
+    // Per-item shelf life changes feed straight into reminders and the view.
+    assert.equal((await request(`/api/items/${id}`, { method: "PATCH", body: { freezerShelfLifeDays: 10, thawShelfLifeDays: 1 } })).status, 200);
+    detail = await request(`/api/items/${id}`);
+    assert.equal(detail.data.lots.find((entry: any) => entry.id === frozen.data.lotId).effectiveExpiresAt, "2030-01-11");
+
+    // A second batch lands inside the expiry reminder window.
+    const near = await request(`/api/houses/${hid}/items`, {
+      method: "POST",
+      body: { name: "Freezer near", unit: "pcs", initialStock: { quantity: 1 } },
+    });
+    const nearFrozen = await request(`/api/houses/${hid}/freezer/freeze`, {
+      method: "POST",
+      body: { itemId: near.data.id, lotId: near.data.lots[0].id, portions: 1, frozenOn: addDays(today, -85) },
+    });
+    assert.equal(nearFrozen.status, 200);
+    const nearExpiry = addDays(today, 5);
+    const reminders = await request(`/api/houses/${hid}/notifications`);
+    const reminder = reminders.data.notifications.find((entry: any) => entry.data.lotId === nearFrozen.data.lotId);
+    assert.equal(reminder?.data.expiresAt, nearExpiry);
+    assert.match(reminder.body, /in the freezer/);
+
+    const view = await request(`/api/houses/${hid}/freezer`);
+    assert.equal(view.data.totals.batches, 2);
+    assert.equal(view.data.totals.portions, 3);
+    assert.equal(view.data.totals.useSoon, 1);
+    assert.equal(view.data.batches[0].id, nearFrozen.data.lotId);
+    assert.equal((await request(`/api/houses/${hid}/dashboard`)).data.freezer.useSoon, 1);
+
+    // Thawing switches to the item's one-day thaw window.
+    assert.equal((await request(`/api/houses/${hid}/freezer/thaw`, {
+      method: "POST",
+      body: { itemId: id, lotId: frozen.data.lotId, thawedOn: "2030-01-05" },
+    })).status, 200);
+    detail = await request(`/api/items/${id}`);
+    const thawed = detail.data.lots.find((entry: any) => entry.id === frozen.data.lotId);
+    assert.equal(thawed.thawedOn, "2030-01-05");
+    assert.equal(thawed.effectiveExpiresAt, "2030-01-06");
+    assert.equal((await request(`/api/houses/${hid}/freezer/thaw`, { method: "POST", body: { itemId: id, lotId: frozen.data.lotId } })).status, 400);
+
+    // Taking one portion consumes through the stock service and can thaw the rest.
+    assert.equal((await request(`/api/houses/${hid}/freezer/take-out`, {
+      method: "POST",
+      body: { itemId: id, lotId: frozen.data.lotId, portions: 1, thaw: true },
+    })).status, 200);
+    detail = await request(`/api/items/${id}`);
+    const taken = detail.data.lots.find((entry: any) => entry.id === frozen.data.lotId);
+    assert.equal(Number(taken.quantity), 1);
+    assert.equal(taken.portions, 1);
+    assert.ok(detail.data.movements.some((movement: any) => movement.reason === "Taken out of the freezer"));
+    await request(`/api/houses/${hid}/freezer/take-out`, { method: "POST", body: { itemId: id, lotId: frozen.data.lotId } });
+    assert.equal((await request(`/api/houses/${hid}/freezer`)).data.totals.portions, 1);
+
+    // Refreezing a thawed batch, thawing a fresh one, and touching an empty batch are refused.
+    assert.equal((await request(`/api/houses/${hid}/freezer/freeze`, {
+      method: "POST",
+      body: { itemId: id, lotId: frozen.data.lotId, portions: 1 },
+    })).status, 400);
+    assert.equal((await request(`/api/houses/${hid}/freezer/thaw`, { method: "POST", body: { itemId: id, lotId: lot.id } })).status, 400);
+    assert.equal((await request(`/api/houses/${hid}/freezer/take-out`, { method: "POST", body: { itemId: id, lotId: lot.id } })).status, 400);
+    assert.equal((await request(`/api/houses/${hid}/freezer/freeze`, {
+      method: "POST",
+      body: { itemId: id, lotId: lot.id, portions: 99 },
+    })).status, 400);
+
+    // A portion is an equal share of the batch, not one item unit.
+    const weighed = await request(`/api/houses/${hid}/items`, {
+      method: "POST",
+      body: { name: "Freezer mince", unit: "g", initialStock: { quantity: 500 } },
+    });
+    const weighedFreeze = await request(`/api/houses/${hid}/freezer/freeze`, {
+      method: "POST",
+      body: { itemId: weighed.data.id, lotId: weighed.data.lots[0].id, portions: 5 },
+    });
+    assert.equal(weighedFreeze.status, 200);
+    assert.equal((await request(`/api/houses/${hid}/freezer/take-out`, {
+      method: "POST",
+      body: { itemId: weighed.data.id, lotId: weighedFreeze.data.lotId },
+    })).status, 200);
+    const weighedLot = (await request(`/api/items/${weighed.data.id}`)).data.lots[0];
+    assert.equal(Number(weighedLot.quantity), 400);
+    assert.equal(weighedLot.portions, 4);
+
+    // Viewers cannot freeze, and a batch from another house is not found.
+    const viewer = await request("/api/auth/register", {
+      method: "POST",
+      body: { name: "Freezer viewer", email: "freezer-viewer@example.com", password: "test password" },
+    });
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, 'viewer', ?)", [hid, viewer.data.user.id, new Date().toISOString()]);
+    assert.equal((await request(`/api/houses/${hid}/freezer/freeze`, {
+      method: "POST",
+      auth: viewer.cookie!,
+      body: { itemId: near.data.id, lotId: near.data.lots[0].id, portions: 1 },
+    })).status, 403);
+    const foreign = await request("/api/houses", { method: "POST", body: { name: "Foreign freezer house" } });
+    const foreignItem = await request(`/api/houses/${foreign.data.id}/items`, { method: "POST", body: { name: "Foreign freezer item", initialStock: { quantity: 1 } } });
+    assert.equal((await request(`/api/houses/${hid}/freezer/freeze`, {
+      method: "POST",
+      body: { itemId: foreignItem.data.id, lotId: foreignItem.data.lots[0].id, portions: 1 },
+    })).status, 404);
+    await run("DELETE FROM house_members WHERE house_id = ? AND user_id = ?", [hid, viewer.data.user.id]);
+  });
+
+  it("freezes cook-mode leftovers with their recipe, cook date and portions", async () => {
+    const { addDays } = await import("../services/effective-expiry.js");
+    const house = await request("/api/houses", { method: "POST", body: { name: "Freezer cook house" } });
+    const hid = house.data.id;
+    const recipe = await request(`/api/houses/${hid}/recipes`, { method: "POST", body: { title: "Freezer cook test", servings: 2 } });
+    const cooked = await request(`/api/recipes/${recipe.data.id}/cook`, {
+      method: "POST",
+      body: {
+        portions: 1,
+        idempotencyKey: randomUUID(),
+        lines: [],
+        leftovers: { portions: 3, locationId: null, freeze: true, frozenOn: "2030-01-01" },
+      },
+    });
+    assert.equal(cooked.status, 200, JSON.stringify(cooked.data));
+    assert.equal(cooked.data.leftovers.frozenOn, "2030-01-01");
+    const lot = await get<any>(
+      "SELECT l.*, loc.is_freezer FROM stock_lots l LEFT JOIN locations loc ON loc.id = l.location_id WHERE l.item_id = ?",
+      [cooked.data.leftovers.itemId],
+    );
+    assert.equal(Number(lot.quantity), 3);
+    assert.equal(Number(lot.portions), 3);
+    assert.equal(lot.frozen_on, "2030-01-01");
+    assert.equal(lot.cooked_on, new Date().toISOString().slice(0, 10));
+    assert.equal(lot.source_recipe_id, recipe.data.id);
+    assert.equal(lot.expires_at, null);
+    assert.equal(Number(lot.is_freezer), 1);
+    const detail = await request(`/api/items/${cooked.data.leftovers.itemId}`);
+    assert.equal(detail.data.lots[0].effectiveExpiresAt, "2030-04-01");
+    assert.equal(detail.data.lots[0].sourceRecipeTitle, "Freezer cook test");
+    const view = await request(`/api/houses/${hid}/freezer`);
+    assert.equal(view.data.batches[0].sourceRecipeId, recipe.data.id);
+    assert.equal(view.data.batches[0].cookedOn, new Date().toISOString().slice(0, 10));
+    assert.equal(addDays("2030-01-01", 90), detail.data.lots[0].effectiveExpiresAt);
+  });
+
+  it("gives a frozen batch its portions back when a take-out is undone", async () => {
+    const house = await request("/api/houses", { method: "POST", body: { name: "Freezer undo house" } });
+    const hid = house.data.id;
+    const freezer = (await request(`/api/houses/${hid}/locations`)).data.find((place: any) => place.isFreezer);
+    const created = await request(`/api/houses/${hid}/items`, {
+      method: "POST",
+      body: { name: "Freezer stew", unit: "pcs", initialStock: { quantity: 5 } },
+    });
+    const id = created.data.id;
+    const frozen = await request(`/api/houses/${hid}/freezer/freeze`, {
+      method: "POST",
+      body: { itemId: id, lotId: created.data.lots[0].id, portions: 2, locationId: freezer.id },
+    });
+    assert.equal(frozen.status, 200, JSON.stringify(frozen.data));
+    assert.equal((await request(`/api/houses/${hid}/freezer`)).data.totals.portions, 2);
+
+    assert.equal((await request(`/api/houses/${hid}/freezer/take-out`, {
+      method: "POST",
+      body: { itemId: id, lotId: frozen.data.lotId, portions: 1 },
+    })).status, 200);
+    assert.equal((await request(`/api/houses/${hid}/freezer`)).data.totals.portions, 1);
+
+    const movements = await request(`/api/items/${id}/movements`);
+    const takeOut = movements.data.find((entry: any) => entry.type === "out");
+    assert.ok(takeOut, "the take-out was recorded");
+    const undone = await request(`/api/houses/${hid}/movements/${takeOut.id}/undo`, { method: "POST", body: {} });
+    assert.equal(undone.status, 200, JSON.stringify(undone.data));
+
+    const lot = (await request(`/api/items/${id}`)).data.lots.find((entry: any) => entry.id === frozen.data.lotId);
+    assert.equal(lot.quantity, 2);
+    assert.equal(lot.portions, 2);
+    assert.equal((await request(`/api/houses/${hid}/freezer`)).data.totals.portions, 2);
+  });
+
+  it("adds the freezer columns to an existing SQLite database and is safe to run twice", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "svault-freezer-migration-"));
+    try {
+      const script = `
+import fs from "node:fs";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+fs.mkdirSync(process.env.DATA_DIR, { recursive: true });
+const db = new DatabaseSync(path.join(process.env.DATA_DIR, "svault.db"));
+db.exec(\`
+  CREATE TABLE users (
+    id TEXT PRIMARY KEY,
+    email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    username TEXT,
+    name TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE items (
+    id TEXT PRIMARY KEY,
+    house_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    brand TEXT,
+    unit TEXT NOT NULL DEFAULT 'pcs',
+    reorder_point REAL NOT NULL DEFAULT 0,
+    target_stock REAL,
+    attributes TEXT NOT NULL DEFAULT '{}',
+    tags TEXT NOT NULL DEFAULT '[]',
+    archived INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE TABLE locations (
+    id TEXT PRIMARY KEY,
+    house_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'shelf',
+    icon TEXT,
+    parent_id TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE stock_lots (
+    id TEXT PRIMARY KEY,
+    item_id TEXT NOT NULL,
+    house_id TEXT NOT NULL,
+    location_id TEXT,
+    quantity REAL NOT NULL DEFAULT 0,
+    unit TEXT NOT NULL,
+    expires_at TEXT,
+    opened_at TEXT,
+    created_at TEXT NOT NULL
+  );
+  INSERT INTO items (id, house_id, name, created_at, updated_at)
+    VALUES ('itm_legacy', 'hse_legacy', 'Legacy soup', '2026-01-01', '2026-01-01');
+  INSERT INTO locations (id, house_id, name, kind, created_at)
+    VALUES ('loc_freezer', 'hse_legacy', 'Freezer', 'freezer', '2026-01-01');
+  INSERT INTO locations (id, house_id, name, kind, created_at)
+    VALUES ('loc_shelf', 'hse_legacy', 'Shelf', 'shelf', '2026-01-01');
+  INSERT INTO stock_lots (id, item_id, house_id, quantity, unit, created_at)
+    VALUES ('lot_legacy', 'itm_legacy', 'hse_legacy', 2, 'pcs', '2026-01-01');
+\`);
+db.close();
+const { initDb, get, closeDb } = await import("./server/db.ts");
+async function inspect() {
+  const column = async (table, name) => Number((await get("SELECT COUNT(*) AS n FROM pragma_table_info(?) WHERE name = ?", [table, name])).n);
+  const frozenPlace = await get("SELECT is_freezer FROM locations WHERE id = 'loc_freezer'");
+  const shelfPlace = await get("SELECT is_freezer FROM locations WHERE id = 'loc_shelf'");
+  const lot = await get("SELECT portions, frozen_on, thawed_on, cooked_on, source_recipe_id FROM stock_lots WHERE id = 'lot_legacy'");
+  return {
+    location: await column("locations", "is_freezer"),
+    freezer: await column("items", "freezer_shelf_life_days"),
+    thaw: await column("items", "thaw_shelf_life_days"),
+    portions: await column("stock_lots", "portions"),
+    frozenOn: await column("stock_lots", "frozen_on"),
+    index: (await get("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'lots_frozen'"))?.name ?? null,
+    frozenPlace: Number(frozenPlace.is_freezer),
+    shelfPlace: Number(shelfPlace.is_freezer),
+    legacyLot: [lot.portions, lot.frozen_on, lot.thawed_on, lot.cooked_on, lot.source_recipe_id],
+  };
+}
+await initDb();
+const first = await inspect();
+await closeDb();
+await initDb();
+const second = await inspect();
+console.log(JSON.stringify({ first, second }));
+await closeDb();
+`;
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
+        DATA_DIR: dir,
+        NODE_ENV: "test",
+        DATABASE_URL: "",
+        SV_DATABASE_KIND: "sqlite",
+      };
+      for (const key of ["PGHOST", "PGPORT", "PGUSER", "PGDATABASE", "PGPASSWORD", "SV_DATABASE_URL"]) delete env[key];
+      const output = execFileSync(
+        process.execPath,
+        ["--import", "tsx", "--disable-warning=ExperimentalWarning", "--input-type=module", "-e", script],
+        { cwd: path.resolve("."), env, encoding: "utf8" },
+      );
+      const result = JSON.parse(output.trim());
+      for (const snapshot of [result.first, result.second]) {
+        assert.equal(snapshot.location, 1);
+        assert.equal(snapshot.freezer, 1);
+        assert.equal(snapshot.thaw, 1);
+        assert.equal(snapshot.portions, 1);
+        assert.equal(snapshot.frozenOn, 1);
+        assert.equal(snapshot.index, "lots_frozen");
+        assert.equal(snapshot.frozenPlace, 1);
+        assert.equal(snapshot.shelfPlace, 0);
+        assert.deepEqual(snapshot.legacyLot, [null, null, null, null, null]);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+

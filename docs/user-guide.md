@@ -240,6 +240,25 @@ Receipt names are often shortened or shop-specific. SVault handles this in two w
   imported or synced by an instance admin under **Settings → Data → Product catalogue**. Local
   corrections always win over bundled or imported data.
 
+### Duplicate items
+
+Over time a receipt import, a CSV import or an OpenFoodFacts link can add the same product twice
+(“Milk 1L” and “Fresh milk 1 l”). **Find duplicates** (sidebar, or **More → Find duplicates**) lists
+likely pairs in groups, with chips that say why they match: shared barcode, same product link, same or
+similar name, same brand and compatible units.
+
+- Compare the items side by side and tap **Keep this one** on the item that should survive.
+- **Compare and merge** shows a dry run first: how many batches, movements, receipts, aliases,
+  barcodes, documents, photos, shopping lines, recipe links, espresso shots and reminders will move,
+  which fields will be filled and any conflict. Nothing is written until you confirm.
+- Units inside the same family are converted (1 kg becomes 1000 g). Incompatible units (pieces and
+  kilograms) refuse the merge with an explanation instead of guessing.
+- Items you do not keep are **archived**, not deleted. Their history moves to the kept item, and they
+  keep a link to it, so an old receipt name or a bookmarked page still points somewhere sensible.
+- Tap **Not a duplicate** to stop a pair from being suggested again.
+- You can also merge from an item page: **Merge into…** asks for the item to keep, then shows the same
+  dry run. Viewers can look at suggestions but cannot merge or dismiss.
+
 ### Change stock
 
 Open an item and use the stock dialog. There are five actions:
@@ -254,6 +273,38 @@ Open an item and use the stock dialog. There are five actions:
 
 Removing more than is available is rejected. Wasting or removing with a `locationId` restricts FIFO to
 that place.
+
+#### Undo a mistaken change
+
+Every successful stock change shows a short confirmation with an **Undo** button. Press it within a few
+seconds and SVault reverses the change: a used or wasted quantity goes back into the same batches, an
+added quantity is taken out again, a count is corrected back and a move returns to where it came from.
+Nothing is deleted from the history — the undo appears as its own entry marked **Undone**.
+
+The same **Undo** button appears on the newest rows of an item's **History** for your own changes from
+the last day; admins and owners can also undo other people's changes. SVault refuses (with a clear
+message) when the change can no longer be reversed safely: for example when a later change already used
+one of the same batches, or the item is archived.
+
+If the change is still waiting in the offline queue, **Undo** simply removes it from the queue instead
+of calling the server.
+### Stocktake counts
+
+A stocktake compares what the app thinks is in a place (or category) with what is actually on the shelf.
+
+1. Open **More → Stocktake**, or use **Count this place** while inventory is filtered by place.
+2. Choose a place or a category — not both — optionally add a note, and start.
+3. Count each line. **Matches** records the expected quantity; the number field records a different
+   count and saves itself as you pause and when you leave the field; **Skip** leaves the line uncounted;
+   **Scan item** jumps to a line by barcode. A note can record what you noticed.
+4. **Review** shows each variance and its value impact. Untick lines you do not want to apply.
+5. **Commit** applies every selected variance in one transaction. If stock changed while you were
+   counting, the line is flagged and you must confirm it; the difference is applied to the current
+   quantity, so a stale snapshot cannot overwrite newer stock.
+
+Only members and above can start, count or commit. Viewers can read past stocktakes. A house has one
+open stocktake at a time. Counts typed without a connection stay on that device and retry when the
+connection returns; commit needs the server.
 
 ### Shelf life after opening
 
@@ -353,12 +404,45 @@ editor (or enable **Track espresso shots** when creating it), and save. The item
 - Press the bell icon to enable browser notifications; they only arrive while SVault is open in a tab.
   Add ntfy, Apprise or a webhook under **Settings -> Reminders** to get reminders when SVault is closed.
   Secrets are masked, deliveries retry three times and failed attempts are visible in the same tab.
+- **Push on this device** in **Settings -> Reminders** turns on real Web Push, and reminders then arrive
+  with no tab open (an installed PWA on a phone works too). It needs HTTPS, the server must have VAPID
+  keys configured, and a house admin must enable a **Web push** delivery channel. Each device is enabled
+  separately; turning it off removes only that browser. Use **Send test** to check the phone.
 
 ### Search, filters and bulk actions
 
 The inventory page supports free-text search, category and place filters, low-stock and expiring
 filters, sorting by value, and inline `+/-` one-unit adjustments. The dashboard repeats the most
 useful slices: running low, use-it-up (expiring), places and recent activity.
+
+**Saved views.** Set the filters you care about, then press **Save this view** and give it a name. The
+view's chips sit above the inventory list and scroll sideways on a phone; tapping one applies its
+filters to the URL, so the link is shareable and Back returns to the previous view. Admins can share
+a view with the whole house; everyone else keeps personal views, and viewers can save them too because
+a view only stores a query. Use **Manage** to rename, reorder or delete views. If a view points at a
+category or place that has since been deleted, it stays in the list with a warning and simply returns
+nothing until you edit or delete it.
+
+**Global search.** The magnifier in the app header (or `/` on a keyboard, `Ctrl`/`Cmd`+`K` anywhere)
+opens a command palette that searches items, recipes, receipts, bills and shops in the current house at
+once. Results are grouped, ranked and limited per type; use the arrow keys and Enter to open one.
+Matching ignores Greek accents and case. The last eight searches are kept on this device only, with
+**Clear recent searches** to remove them.
+### House activity
+
+**More -> Activity** answers "who used the last milk?" with one newest-first timeline for the house.
+It reads what is already recorded: stock added, consumed, wasted, moved and counted, saved receipts,
+new items, shopping-list checkoffs and saved bills. Nothing new is written, so the list cannot drift
+from the item pages.
+
+- Grouped by day, with a chip row to show only some kinds and pickers for member and place. The
+  filters combine: for example, one member's uses from the fridge last week.
+- Tap an entry to open the item, the purchases page, the bills page or the shopping list.
+- Scroll to the end or press **Load more** to fetch older entries. Pages are stable even when several
+  events share the same timestamp.
+- Everyone in the house, including viewers, can read it. Names are shown only for current members; a
+  member who has left appears as "Former member". A checkoff has no author because SVault records
+  when a line was ticked but not who ticked it.
 
 ## 5. Recipes
 
@@ -434,6 +518,30 @@ contributed; lines without a convertible unit keep their original measure.
 The estimate is deliberately transparent. Add nutrition to the remaining items, or set a serving
 weight on count-based products, to improve the number.
 
+### Cost per recipe and portion
+
+A recipe page also shows what it costs, using the prices you already record when you add stock:
+
+- **Latest price** (default) uses the most recent unit price recorded for each ingredient.
+- **Average** uses purchases from the last 90 days, at most 20 per item.
+- **In-stock cost** uses the weighted cost of the batches you have now.
+
+Pick the basis in the cost card; the choice applies to the page you are looking at. A house can set a
+default with `settings.recipeCostBasis`. When the chosen basis has no price for an item, the next one is
+used and the breakdown says which.
+
+The big number is the cost of one portion when the recipe has servings, with the total underneath.
+Cost is only shown for ingredients that are linked to an item with a recorded price. The card says how
+many ingredients it priced and lists the rest with the reason ("not linked to an item", "no price
+recorded", "unit does not convert"). While any ingredient is uncosted the figure is marked **partial**,
+and the card and recipe-card badges show it as a minimum (`≥`), never as a complete total.
+
+Tap **Show the breakdown** to see the cost of each ingredient. Cook mode scales the cost with the
+portion count, next to the weight and calories.
+
+The recipe list can be sorted by cost per portion (cheapest or most expensive first) and filtered to
+recipes that have a cost at all.
+
 ### Cook mode
 
 Open a recipe and press **Cook mode**. Everything is scaled to the number of portions at the top:
@@ -445,7 +553,7 @@ Open a recipe and press **Cook mode**. Everything is scaled to the number of por
 - Tap ingredients and steps to tick them off while you cook. The screen stays awake where the browser
   allows it.
 
-When you finish, press **Finish cooking** to review the scaled quantities for linked ingredients. Edit or untick any line; unlinked ingredients are marked as not tracked. Optionally save leftover portions with a location and use-by date (three days ahead by default). Confirm to deduct available stock, earliest expiry first. If stock is short, the confirmation shows the amount missing. Leftovers appear in inventory and expiry reminders. The saved recipe stays untouched.
+When you finish, press **Finish cooking** to review the scaled quantities for linked ingredients. Edit or untick any line; unlinked ingredients are marked as not tracked. Optionally save leftover portions with a location and use-by date (three days ahead by default). Tick **Freeze these portions** to send them straight to a freezer place instead; the eat-by date then comes from the item's freezer shelf life. Confirm to deduct available stock, earliest expiry first. If stock is short, the confirmation shows the amount missing. Leftovers appear in inventory and expiry reminders. The saved recipe stays untouched.
 
 ### Cook from what you have
 
@@ -554,7 +662,7 @@ annotations.json        (COCO format only)
 | Attributes | Custom fields available on items (admin only) |
 | Members | Invites, roles, removal, and explicit ownership transfer |
 | AI | Provider preset, base URL, models, key, connection test |
-| Reminders | Low-stock toggle, expiry window, ntfy/Apprise/webhook channels |
+| Reminders | Low-stock toggle, expiry window, ntfy/Apprise/webhook/Web push channels and per-device push |
 | Data | Inventory CSV import/export, backup/restore, dataset import/export, data location, house deletion |
 
 **Profile** (under More) holds your name, email, password, theme and install prompt. Phones and
@@ -684,6 +792,16 @@ Docker, Loki, Grafana or another log collector.
   takes a safety copy unless you pass `--no-safety-copy`.
 - To move to another server, copy `DATA_DIR` to the new host and start the same image with the same
   `DATA_DIR`.
+- **More → Valuation report** (members and above; viewers do not see it) builds a dated record of what
+  the house owns for insurance claims or moving. Choose how values are derived (`latest purchase price` by default, `average purchase price`,
+  or `stock cost`), then filter by category, place, tag, minimum value, active warranty or archived
+  items. The preview shows the grand total, per-category and per-place subtotals and how many items
+  have no price recorded. **Download CSV** exports the same rows plus the subtotal blocks (UTF-8 with a
+  BOM, safe to open in Excel); **Print** opens the browser print dialog with a print-only layout and
+  optional thumbnails and attribute columns. An optional documents list shows the file names and types
+  of attached warranties and manuals, never the files themselves. Values are estimates from your own
+  records, not an appraisal. The report is capped at 20,000 items; narrow the filters for a larger
+  house. Everyone who can see the house's inventory can read the report.
 
 ## 10. Security, language and offline use
 
@@ -760,3 +878,62 @@ dashboard lists items expected to run out within seven days. Forecasts need at l
 events seven days apart and a positive stock balance. Waste, stock corrections and moves do not count.
 In the shopping list, turn on **Include items running out soon** and choose a horizon before using
 **Add low stock** to include forecast items as well. Existing compatible shopping lines are merged.
+
+### Printable QR labels
+
+Open **More → Print labels**, or the printer button on an item page or next to a place in
+**House settings → Places**. Tick the items and places you want (the search box filters both lists),
+choose a label size — 38 × 25 mm, 50 × 30 mm or a 70 × 37 mm A4 sheet with 24 labels — and pick what
+the label shows: name, place, unit, house name. The preview is the printable A4 sheet; **Print** opens
+the browser print dialog. For exact sizes, print at 100% and turn off headers and footers.
+
+A label's QR code contains only an app link: item labels open that item, place labels open the
+inventory filtered to that place. Neither holds stock, prices or names. Scanning a label with the
+in-app scanner (Scan, or the barcode button on an item) opens it directly; other QR codes are ignored
+with a short message. If the link is opened while signed out, sign in and you land on the target. The
+label points at the configured `PUBLIC_URL` when the server has one, otherwise at the address you are
+browsing.
+### Lending tools, books and gear
+
+Lending is for things you expect back — tools, books, camping gear — not for food that gets used.
+Open an item and press **Lend** in the **On loan** card, or use the lend action there: pick a borrower
+(name suggestions come from past borrowers and household members, but any name works), the quantity, an
+optional due date and a note. Only the name is stored; SVault does not ask for a phone number or email.
+
+**Lending does not change your stock count.** The item is still yours and still on the shelf; the item
+page and inventory card show **x on loan**, and the available quantity is the shelf quantity minus what
+is lent out. Low-stock reminders and run-out forecasts keep using the shelf quantity, because lending
+is not consumption. Taking stock out (or counting it down) below the lent quantity is refused with a
+message, so you cannot quietly use something a borrower is holding.
+
+**Loans** in the More menu lists open, overdue and returned loans. **Mark returned** records an
+overdue or partial return; enter a smaller quantity to return part of it and keep the rest on loan.
+Returning a loan never adds stock back, because lending never removed it. An overdue loan appears in
+Reminders once a day and can also be delivered to your reminder channels through the "expiring and
+warranty" preference. Delete a loan only when it was recorded by mistake — the person who recorded it,
+or an admin, can do that. Loan due dates do not appear in the calendar feed.
+### Freezer and meal-prep batches
+
+Open **More → Freezer** to see every batch you have frozen, grouped by place and ordered by the soonest eat-by date. The **Use first** strip at the top collects anything within a week. Filter by frozen/thawed, by place, or to use-soon only.
+
+Freeze food in two ways:
+
+- On an item page, press **❄️ Freeze** on a batch. Choose how many portions to freeze, the frozen date (today by default) and a place; freezer places are listed first. Freezing part of a count batch splits it, and the rest stays where it was. A weighed or liquid batch is frozen whole and the portion count only says how many equal portions it holds.
+- In cook mode, tick **Freeze these portions** when saving leftovers. The batch is linked to the recipe and records when it was cooked. Its fridge use-by is not stored, because freezing replaces it with the freezer shelf life.
+
+A frozen batch's eat-by date is the frozen date plus the item's **Freezer shelf life in days** (90 days when the item does not set one). When you press **Thaw**, the date switches to the item's **Days to eat after thawing** (2 days by default). Both fields are on the item form and are optional. Thawed batches are not frozen again.
+
+**Take out 1** removes one portion from stock immediately and records it in the movement history. Press **Thaw** first if you are defrosting the whole batch. The freezer card on the dashboard appears only while portions are frozen and shows how many should be used soon. Normal expiry reminders cover frozen and thawed batches, using the same dates.
+
+A place can be marked as a freezer with the switch in **House settings → Places**. The seeded Freezer already is one.
+### Live updates between members
+
+When two people use the same house at the same time, changes made by one appear for the other without
+a reload. Inventory quantities, item details, the shopping list, the meal plan, purchases and the
+reminder bell refresh automatically. A quiet "Updated by …" toast appears when another member changes
+the shopping list.
+
+The connection pauses while the tab is in the background, reconnects when you return, and falls back to
+refreshing every 90 seconds if streaming is blocked. It carries no inventory data: the app simply
+refetches what you are allowed to see. If you are removed from a house, the live connection closes.
+Server operators can set `LIVE_UPDATES=off`; see [deployment.md](deployment.md#configuration).
