@@ -16,6 +16,7 @@ All notable changes to SVault are documented here. The format follows
 
 - Category budgets, optional bill spending, month-end projections, budget history and threshold reminders.
 - Consumption-based run-out forecasts on items and the dashboard, with an optional shopping-list fill.
+- **Freezer and meal-prep batches.** Freeze all or part of a batch (or cook-mode leftovers) with portions, a frozen date and a freezer place. View everything frozen under **More → Freezer**, grouped by place and ordered by eat-by, with a use-first strip, filters, one-tap portion take-out and a thaw action. Items can set a freezer shelf life (90 days by default) and a thaw window (2 days by default), and frozen or thawed batches feed the existing expiry reminders and dashboard.
 
 ### Security
 

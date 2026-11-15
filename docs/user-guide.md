@@ -445,7 +445,7 @@ Open a recipe and press **Cook mode**. Everything is scaled to the number of por
 - Tap ingredients and steps to tick them off while you cook. The screen stays awake where the browser
   allows it.
 
-When you finish, press **Finish cooking** to review the scaled quantities for linked ingredients. Edit or untick any line; unlinked ingredients are marked as not tracked. Optionally save leftover portions with a location and use-by date (three days ahead by default). Confirm to deduct available stock, earliest expiry first. If stock is short, the confirmation shows the amount missing. Leftovers appear in inventory and expiry reminders. The saved recipe stays untouched.
+When you finish, press **Finish cooking** to review the scaled quantities for linked ingredients. Edit or untick any line; unlinked ingredients are marked as not tracked. Optionally save leftover portions with a location and use-by date (three days ahead by default). Tick **Freeze these portions** to send them straight to a freezer place instead; the eat-by date then comes from the item's freezer shelf life. Confirm to deduct available stock, earliest expiry first. If stock is short, the confirmation shows the amount missing. Leftovers appear in inventory and expiry reminders. The saved recipe stays untouched.
 
 ### Cook from what you have
 
@@ -760,3 +760,18 @@ dashboard lists items expected to run out within seven days. Forecasts need at l
 events seven days apart and a positive stock balance. Waste, stock corrections and moves do not count.
 In the shopping list, turn on **Include items running out soon** and choose a horizon before using
 **Add low stock** to include forecast items as well. Existing compatible shopping lines are merged.
+
+### Freezer and meal-prep batches
+
+Open **More → Freezer** to see every batch you have frozen, grouped by place and ordered by the soonest eat-by date. The **Use first** strip at the top collects anything within a week. Filter by frozen/thawed, by place, or to use-soon only.
+
+Freeze food in two ways:
+
+- On an item page, press **❄️ Freeze** on a batch. Choose how many portions to freeze, the frozen date (today by default) and a place; freezer places are listed first. Freezing part of a count batch splits it, and the rest stays where it was. A weighed or liquid batch is frozen whole and the portion count only says how many equal portions it holds.
+- In cook mode, tick **Freeze these portions** when saving leftovers. The batch is linked to the recipe and records when it was cooked. Its fridge use-by is not stored, because freezing replaces it with the freezer shelf life.
+
+A frozen batch's eat-by date is the frozen date plus the item's **Freezer shelf life in days** (90 days when the item does not set one). When you press **Thaw**, the date switches to the item's **Days to eat after thawing** (2 days by default). Both fields are on the item form and are optional. Thawed batches are not frozen again.
+
+**Take out 1** removes one portion from stock immediately and records it in the movement history. Press **Thaw** first if you are defrosting the whole batch. The freezer card on the dashboard appears only while portions are frozen and shows how many should be used soon. Normal expiry reminders cover frozen and thawed batches, using the same dates.
+
+A place can be marked as a freezer with the switch in **House settings → Places**. The seeded Freezer already is one.

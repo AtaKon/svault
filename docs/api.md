@@ -180,8 +180,8 @@ All mounted under `/api/houses/:houseId`.
 | Method | Path | Min role | Purpose |
 | --- | --- | --- | --- |
 | `GET` | `/locations` | viewer+ | List places with item counts. |
-| `POST` | `/locations` | member+ | Create a place (`name`, `kind`, `icon`, `parentId`). |
-| `PATCH` | `/locations/:locationId` | member+ | Rename or re-parent. |
+| `POST` | `/locations` | member+ | Create a place (`name`, `kind`, `icon`, `parentId`, `isFreezer`). `isFreezer` defaults to true when `kind` is `freezer`. |
+| `PATCH` | `/locations/:locationId` | member+ | Rename, re-parent or change `isFreezer`. |
 | `DELETE` | `/locations/:locationId` | admin+ | Delete a place; batches become unassigned. |
 | `GET` | `/categories` | viewer+ | List categories with item counts. |
 | `POST` | `/categories` | member+ | Create a category. |
@@ -198,7 +198,7 @@ Attribute types: `text`, `number`, `select`, `date`, `boolean`, `url`. Built-in 
 
 ## Inventory
 
-Item create and update accept `openedShelfLifeDays`, a nullable integer from 0 to 36500. Lot responses include `openedAt` and `effectiveExpiresAt`: the earlier of the printed `expiresAt` and the opening date plus shelf life, when available. Both batch endpoints require that the lot belongs to the item and its household; consumption does not mark batches opened.
+Item create and update accept `openedShelfLifeDays`, `freezerShelfLifeDays` and `thawShelfLifeDays`, nullable integers from 0 to 36500. Lot responses include `openedAt`, `portions`, `cookedOn`, `frozenOn`, `thawedOn`, `sourceRecipeId` and `effectiveExpiresAt`. Effective expiry is the earlier of the printed `expiresAt` and the opening date plus shelf life, unless the batch is frozen or thawed: then it is `frozenOn` plus the freezer shelf life (90 days when unset), or `thawedOn` plus the thaw window (2 days when unset); an opened batch still wins when its date is earlier. Both opened endpoints require that the lot belongs to the item and its household; consumption does not mark batches opened.
 
 ### Items
 
@@ -1398,6 +1398,19 @@ The rate is the total quantity in outgoing consumption movements over the last 6
 `daysLeft` is current stock divided by that rate. Waste, adjustments and transfers do not count.
 At least two consumption events spanning seven days and positive stock are required. The dashboard's
 `runningOutSoon` contains active items with at most seven days left, ordered by days left.
+
+## Freezer batches
+
+All mounted under `/api/houses/:houseId/freezer`. A batch belongs to the freezer when `frozenOn` is set; `thawedOn` switches it to the thaw window but keeps it visible until it is eaten. Freezing, thawing and taking out stock go through `server/services/stock.ts`.
+
+| Method | Path | Min role | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/` | viewer+ | Frozen and thawed batches with `totals` (`batches`, `portions`, `useSoon`) and `useSoonDays` (the house expiry window). Batches are ordered by `effectiveExpiresAt` soonest first. |
+| `POST` | `/freeze` | member+ | `{ itemId, lotId, portions?, locationId?, frozenOn? }`. A count batch (unit `pcs`) can be frozen piece by piece; `portions` defaults to its quantity. A weighed or liquid batch is frozen whole and `portions` (default 1) labels how many equal portions it holds. `frozenOn` defaults to today and `locationId` to the batch's current place. A thawed or already frozen batch is refused with 400. |
+| `POST` | `/thaw` | member+ | `{ itemId, lotId, thawedOn?, locationId? }`. Marks a frozen batch thawed and switches effective expiry to the thaw window. Thawing twice or thawing a fresh batch is 400. |
+| `POST` | `/take-out` | member+ | `{ itemId, lotId, portions?, thaw? }`. Consumes a whole portion (an equal share of the batch) from that batch, or `portions` of them, with an `out` movement; `thaw: true` also marks the rest of the batch thawed. |
+
+Cook mode accepts `leftovers.freeze: true` and an optional `leftovers.frozenOn`. A frozen leftover batch stores `cookedOn`, `portions`, `sourceRecipeId`, `frozenOn` and no `expiresAt`; if `locationId` is omitted the first freezer place is used. Lot responses include `sourceRecipeTitle` when a recipe still exists. The dashboard adds `freezer: { portions, useSoon }`, or `null` when nothing is frozen, and expiry reminders include frozen and thawed batches with the same `exp:<lotId>` dedupe key.
 
 ## Extending the API
 
