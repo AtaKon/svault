@@ -15,6 +15,7 @@ const steps = [
   [...shared, "--test", "server/tests/recipe-scan-fallbacks.test.ts"],
   [...shared, "--test", "server/tests/recipe-scan-photos.test.ts"],
   [...shared, "--test", "server/tests/api.test.ts"],
+  [...shared, "--test", "server/tests/label-links.test.ts"],
 ];
 
 let failed = false;

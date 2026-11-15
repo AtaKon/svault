@@ -78,6 +78,13 @@ export const AI_LOG_PREVIEW_CHARS = Number.isFinite(aiLogPreview)
 export const RP_ID = process.env.RP_ID ?? "";
 export const RP_ORIGIN = process.env.ORIGIN ?? process.env.RP_ORIGIN ?? "";
 
+/**
+ * Public base URL printed into QR labels, e.g. https://svault.example.com.
+ * Empty means "use the address the browser is on", which is correct for
+ * localhost and single-origin installs behind no proxy.
+ */
+export const PUBLIC_URL = (process.env.PUBLIC_URL ?? process.env.SV_PUBLIC_URL ?? "").trim();
+
 /** Optional OpenID Connect provider. Everything is server-side. */
 export const OIDC = {
   issuer: process.env.OIDC_ISSUER ?? "",
