@@ -307,29 +307,29 @@ async function moveSource(
   ]);
   const baseFactor = convert(1, source.unit, target.unit);
   for (const movement of movements) {
-    const unit = movement.unit || source.unit;
-    const factor = convert(1, unit, target.unit);
-    if (factor === null) {
-      // An old or unknown unit is kept as recorded, but the movement must
-      // still belong to the item that now holds the history.
-      await run("UPDATE stock_movements SET item_id = ? WHERE id = ?", [target.id, movement.id]);
-      continue;
-    }
+    // `delta`, `quantity`, `balance_after` and `normalized_price` are stored in
+    // the ITEM's own unit, however the user typed the change. `unit` and
+    // `unit_price` describe what was typed, so only those follow the unit the
+    // movement was entered in. Scaling `delta` by the entered unit's factor
+    // would convert it a second time (500 g on a kg item is stored as 0.5).
+    const entered = movement.unit || source.unit;
+    const enteredFactor = convert(1, entered, target.unit);
+    const scaled = (value: unknown, factor: number | null, divide = false) =>
+      value == null || factor === null
+        ? (value ?? null)
+        : round(divide ? Number(value) / factor : Number(value) * factor, 6);
     await run(
       `UPDATE stock_movements SET item_id = ?, delta = ?, unit = ?, quantity = ?, unit_price = ?,
          normalized_price = ?, balance_after = ? WHERE id = ?`,
       [
         target.id,
-        round(Number(movement.delta ?? 0) * factor, 6),
-        target.unit,
-        round(Number(movement.quantity ?? 0) * factor, 6),
-        movement.unit_price == null ? null : round(Number(movement.unit_price) / factor, 6),
-        movement.normalized_price == null || baseFactor === null
-          ? movement.normalized_price ?? null
-          : round(Number(movement.normalized_price) / baseFactor, 6),
-        movement.balance_after == null || baseFactor === null
-          ? movement.balance_after ?? null
-          : round(Number(movement.balance_after) * baseFactor, 6),
+        baseFactor === null ? Number(movement.delta ?? 0) : round(Number(movement.delta ?? 0) * baseFactor, 6),
+        // An old or unknown entered unit is kept as recorded.
+        enteredFactor === null ? movement.unit : target.unit,
+        baseFactor === null ? Number(movement.quantity ?? 0) : round(Number(movement.quantity ?? 0) * baseFactor, 6),
+        scaled(movement.unit_price, enteredFactor, true),
+        scaled(movement.normalized_price, baseFactor, true),
+        scaled(movement.balance_after, baseFactor),
         movement.id,
       ],
     );

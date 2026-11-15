@@ -354,6 +354,29 @@ describe("item merge", () => {
     assert.equal(movedLot.unitPrice, 0.01);
   });
 
+  it("keeps the ledger balanced when a movement was entered in another unit", async () => {
+    // Stock is stored in the item's own unit; the movement's unit is only the
+    // unit the user typed. Adding 500 g to a kg item records delta 0.5 and unit
+    // "g", so a merge must not scale that delta by the g -> kg factor again.
+    const target = await createItem({ name: "Merge ledger target", unit: "kg", initialStock: { quantity: 2, unit: "kg" } });
+    const source = await createItem({ name: "Merge ledger source", unit: "kg", initialStock: { quantity: 500, unit: "g" } });
+    assert.equal((await itemDetail(source.id)).quantity, 0.5);
+
+    const merged = await request(`/api/houses/${houseId}/items/${target.id}/merge`, {
+      method: "POST",
+      body: { sourceIds: [source.id] },
+    });
+    assert.equal(merged.status, 200, JSON.stringify(merged.data));
+
+    const detail = await itemDetail(target.id);
+    assert.equal(detail.quantity, 2.5);
+    const movements = await request(`/api/items/${target.id}/movements`);
+    assert.equal(movements.status, 200);
+    const total = movements.data.reduce((sum: number, entry: any) => sum + Number(entry.delta ?? 0), 0);
+    assert.equal(Math.round(total * 1000) / 1000, 2.5, "movement deltas must still add up to the stock on hand");
+    assert.ok(movements.data.some((entry: any) => Math.abs(Number(entry.delta) - 0.5) < 1e-9));
+  });
+
   it("fills empty target fields instead of overwriting set ones", async () => {
     const target = await createItem({ name: "Merge fields target", unit: "pcs", brand: "Keep me" });
     const source = await createItem({
