@@ -441,4 +441,45 @@ describe("stocktake", () => {
     const cancelled = listed.data.stocktakes.filter((entry: any) => entry.status === "cancelled");
     assert.ok(cancelled.length >= 1);
   });
+
+  it("expects the shelf quantity, so a lent unit is not booked as a shortage", async () => {
+    const house = await request("/api/houses", { method: "POST", body: { name: "Count with loans" } });
+    assert.equal(house.status, 201);
+    const hid = house.data.id;
+    const drill = await request(`/api/houses/${hid}/items`, {
+      method: "POST",
+      body: { name: "Cordless drill", unit: "pcs", initialStock: { quantity: 3 } },
+    });
+    assert.equal(drill.status, 201);
+    const drillId = drill.data.id;
+    // One of the three is lent out, so two are on the shelf.
+    const loan = await request(`/api/houses/${hid}/loans`, {
+      method: "POST",
+      body: { itemId: drillId, borrowerName: "Neighbour", quantity: 1 },
+    });
+    assert.equal(loan.status, 201, JSON.stringify(loan.data));
+
+    const created = await request(`/api/houses/${hid}/stocktakes`, { method: "POST", body: {} });
+    assert.equal(created.status, 201, JSON.stringify(created.data));
+    const stocktakeId = created.data.stocktake.id;
+    const line = created.data.stocktake.lines.find((entry: any) => entry.itemId === drillId);
+    assert.equal(line.expectedQty, 2, "expected is on-hand minus what is lent out");
+
+    // Counting the two on the shelf is no variance: stock and the loan are untouched.
+    const saved = await request(`/api/houses/${hid}/stocktakes/${stocktakeId}/lines/${line.id}`, {
+      method: "PATCH",
+      body: { countedQty: 2 },
+    });
+    assert.equal(saved.status, 200, JSON.stringify(saved.data));
+    assert.equal(saved.data.line.variance, 0);
+    const committed = await request(`/api/houses/${hid}/stocktakes/${stocktakeId}/commit`, {
+      method: "POST",
+      body: { lineIds: [line.id] },
+    });
+    assert.equal(committed.status, 200, JSON.stringify(committed.data));
+    assert.equal(committed.data.appliedDelta, 0);
+    const detail = await request(`/api/items/${drillId}`);
+    assert.equal(detail.data.quantity, 3);
+    assert.equal(detail.data.onLoan, 1);
+  });
 });

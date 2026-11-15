@@ -52,7 +52,7 @@ const LINE_SELECT = `
 `;
 
 /** Quantities for a set of items in the session scope (a place, or the house). */
-async function scopedQuantities(houseId: string, itemIds: string[], locationId: string | null): Promise<Map<string, number>> {
+async function rawScopedQuantities(houseId: string, itemIds: string[], locationId: string | null): Promise<Map<string, number>> {
   const result = new Map<string, number>();
   if (!itemIds.length) return result;
   const placeholders = itemIds.map(() => "?").join(", ");
@@ -65,6 +65,39 @@ async function scopedQuantities(houseId: string, itemIds: string[], locationId: 
   );
   for (const row of rows) result.set(String(row.item_id), round(Number(row.q ?? 0)));
   return result;
+}
+
+/**
+ * What is physically on the shelf: the counted quantity minus what is lent out.
+ * Lending does not move stock, so a lent unit is still on hand but not where the
+ * counter is looking; expecting it would book a shortage and make it vanish from
+ * the books. In a place count this only applies when all of the item's stock is
+ * in that place, since otherwise there is no telling where the lent unit came from.
+ */
+async function adjustForLoans(houseId: string, locationId: string | null, scoped: Map<string, number>): Promise<Map<string, number>> {
+  const ids = [...scoped.keys()];
+  if (!ids.length) return scoped;
+  const placeholders = ids.map(() => "?").join(", ");
+  const loanRows = await all<{ item_id: string; q: number }>(
+    `SELECT item_id, SUM(quantity - returned_quantity) AS q FROM item_loans
+      WHERE house_id = ? AND returned_at IS NULL AND item_id IN (${placeholders}) GROUP BY item_id`,
+    [houseId, ...ids],
+  );
+  if (!loanRows.length) return scoped;
+  const total = locationId ? await rawScopedQuantities(houseId, ids, null) : scoped;
+  const out = new Map(scoped);
+  for (const row of loanRows) {
+    const id = String(row.item_id);
+    const loaned = round(Number(row.q ?? 0));
+    const here = scoped.get(id) ?? 0;
+    const allHere = !locationId || here >= (total.get(id) ?? 0) - 1e-9;
+    if (loaned > 0 && allHere) out.set(id, round(Math.max(0, here - Math.min(loaned, here))));
+  }
+  return out;
+}
+
+async function scopedQuantities(houseId: string, itemIds: string[], locationId: string | null): Promise<Map<string, number>> {
+  return await adjustForLoans(houseId, locationId, await rawScopedQuantities(houseId, itemIds, locationId));
 }
 
 async function stocktakeRow(houseId: string, stocktakeId: string) {
@@ -116,6 +149,16 @@ export async function createStocktake(opts: CreateStocktakeOpts): Promise<string
         quantity: round(Number(row.q ?? 0)),
         unitCost: priced > 0 ? round(Number(row.value ?? 0) / priced, 4) : null,
       });
+    }
+    // Expect what is on the shelf, not what is lent out.
+    const shelf = await adjustForLoans(
+      opts.houseId,
+      locationId,
+      new Map([...expected].map(([id, value]) => [id, value.quantity])),
+    );
+    for (const [id, quantity] of shelf) {
+      const entry = expected.get(id);
+      if (entry) entry.quantity = quantity;
     }
 
     const id = newId("stk");
@@ -271,7 +314,11 @@ export async function commitStocktake(opts: {
         GROUP BY item_id`,
       [opts.houseId, ...itemIds, ...(row.location_id ? [row.location_id] : [])],
     );
-    const current = new Map(currentRows.map((entry) => [String(entry.item_id), round(Number(entry.q ?? 0))]));
+    const current = await adjustForLoans(
+      opts.houseId,
+      row.location_id ?? null,
+      new Map(currentRows.map((entry) => [String(entry.item_id), round(Number(entry.q ?? 0))])),
+    );
     const changed = selected.filter(
       (line) => round(Number(current.get(String(line.item_id)) ?? 0)) !== round(Number(line.expected_qty ?? 0)),
     );

@@ -6,6 +6,17 @@ All notable changes to SVault are documented here. The format follows
 
 ## [Unreleased]
 
+### Notes on how these features fit together
+
+- A stocktake expects the **shelf** quantity: on-hand minus units that are lent out. Counting what is on the
+  shelf is no variance, and a lent unit is no longer booked as a shortage. In a place count this applies when
+  all of the item's stock sits in that place.
+- Merging items also moves their loans, per-batch undo effects and closed stocktake lines (scaled to the
+  target's unit); an open count drops the merged-away item's line.
+- Undoing a take-out from a frozen batch gives the batch its portions back.
+- Stocktake, freeze, thaw and undo changes are announced to open pages like any other stock change.
+- The valuation report needs member access or above; viewers are refused.
+
 ### Fixed
 
 - **Offline reload.** Reloading SVault without a network no longer lands on the sign-in page. The last signed-in session is kept on the device and used only while the server cannot be reached; a 401 or signing out clears it. Requests that cannot reach the server now say "You are offline" instead of "Failed to fetch".
