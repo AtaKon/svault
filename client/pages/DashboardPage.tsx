@@ -7,7 +7,7 @@ import { Badge, Button, Card, PageHeader, Skeleton, Stat, cn } from "@/component
 import { ItemCard } from "@/components/ItemCard";
 import { useToast } from "@/components/toast";
 import { compactMoney, daysUntil, qty, relativeTime, shortDate } from "@/format";
-import type { Dashboard, Item, ItemDetail, Movement, Recipe, StockLot } from "@shared/types";
+import type { Dashboard, Item, ItemDetail, LoanList, Movement, Recipe, StockLot } from "@shared/types";
 
 interface DashboardData extends Omit<Dashboard, "recent"> {
   recent: (Movement & { itemName?: string })[];
@@ -22,6 +22,7 @@ export function DashboardPage() {
   const navigate = useNavigate();
   const toast = useToast();
   const [data, setData] = useState<DashboardData | null>(null);
+  const [loans, setLoans] = useState<LoanList | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -38,6 +39,20 @@ export function DashboardPage() {
     setData(null);
     void load();
   }, [load]);
+
+  // The "On loan" card only exists while something is actually lent out, so
+  // this is a separate small request rather than part of the dashboard payload.
+  useEffect(() => {
+    let cancelled = false;
+    api<LoanList>(`/api/houses/${house.id}/loans?status=open&limit=5`)
+      .then((result) => {
+        if (!cancelled) setLoans(result);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [house.id]);
 
   const onItemUpdated = (detail: ItemDetail) => {
     setData((current) =>
@@ -178,6 +193,43 @@ export function DashboardPage() {
               </div>
             )}
           </section>
+
+          {loans && loans.counts.openCount > 0 && (
+            <section>
+              <div className="mb-2.5 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                <h2 className="font-display text-xl">{t("On loan")}</h2>
+                <Link to="/loans" className="text-xs font-medium text-brand hover:underline">
+                  {t("See all")}
+                </Link>
+              </div>
+              <Card className="divide-y divide-line">
+                {loans.loans.slice(0, 4).map((loan) => (
+                  <Link
+                    key={loan.id}
+                    to={`/items/${loan.itemId}`}
+                    className="flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-raised"
+                  >
+                    <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg", loan.overdue ? "bg-danger-soft text-danger" : "bg-raised text-muted")}>
+                      <Icon name="users" size={15} />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[13px] font-medium">{loan.itemName}</span>
+                      <span className="block truncate text-[11px] text-muted">
+                        {loan.borrowerName} · {qty(loan.remaining)} {loan.itemUnit}
+                        {loan.dueAt ? ` · ${shortDate(loan.dueAt)}` : ""}
+                      </span>
+                    </span>
+                    {loan.overdue && <Badge tone="danger">{t("Overdue")}</Badge>}
+                  </Link>
+                ))}
+                {loans.counts.openCount > loans.loans.length && (
+                  <Link to="/loans" className="block px-4 py-2 text-[11px] font-medium text-brand hover:underline">
+                    {t("{count} more open loans", { count: loans.counts.openCount - loans.loans.length })}
+                  </Link>
+                )}
+              </Card>
+            </section>
+          )}
 
           <section>
             <h2 className="mb-2.5 font-display text-xl">{t("Running out soon")}</h2>
