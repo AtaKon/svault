@@ -16,6 +16,8 @@ All notable changes to SVault are documented here. The format follows
 
 - Category budgets, optional bill spending, month-end projections, budget history and threshold reminders.
 - Consumption-based run-out forecasts on items and the dashboard, with an optional shopping-list fill.
+- Cost per recipe and portion, from recorded purchase prices or the batches in stock, with an honest
+  coverage note and a per-ingredient breakdown. The recipe list can sort and filter by cost per portion.
 
 ### Security
 
