@@ -28,6 +28,7 @@ import { StockDialog } from "@/components/ItemCard";
 import { PriceChart } from "@/components/PriceChart";
 import { EspressoLogCard } from "@/components/Espresso";
 import { useToast } from "@/components/toast";
+import { useLiveRefresh } from "@/live";
 import { daysUntil, money, qty, relativeTime, shortDate, todayInput, unitPriceLabel } from "@/format";
 import { offProjectLabel } from "@/off";
 import type {
@@ -130,6 +131,8 @@ export function ItemPage() {
   useEffect(() => {
     setPriceVendor("");
   }, [itemId]);
+
+  useLiveRefresh(house.id, ["stock", "items"], load);
 
   const setOpened = async (lotId: string, opened: boolean) => {
     setOpeningBusy(lotId);

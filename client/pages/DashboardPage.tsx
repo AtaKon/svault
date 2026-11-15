@@ -6,6 +6,7 @@ import { useI18n } from "@/i18n";
 import { Badge, Button, Card, PageHeader, Skeleton, Stat, cn } from "@/components/ui";import { Icon, type IconName } from "@/components/icons";
 import { ItemCard } from "@/components/ItemCard";
 import { useToast } from "@/components/toast";
+import { useLiveRefresh } from "@/live";
 import { compactMoney, daysUntil, qty, relativeTime, shortDate } from "@/format";
 import type { Dashboard, Item, ItemDetail, Movement, Recipe, StockLot } from "@shared/types";
 
@@ -38,6 +39,8 @@ export function DashboardPage() {
     setData(null);
     void load();
   }, [load]);
+
+  useLiveRefresh(house.id, ["stock", "items", "shopping", "notifications", "plan", "receipts"], load);
 
   const onItemUpdated = (detail: ItemDetail) => {
     setData((current) =>

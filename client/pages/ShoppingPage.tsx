@@ -19,6 +19,7 @@ import {
 } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { useToast } from "@/components/toast";
+import { liveActorName, subscribeLive, useLiveRefresh } from "@/live";
 import { qty, shortDate, todayInput } from "@/format";
 import type { ExternalShoppingOffer, Item, Location, ShoppingItem, ShoppingPriceHint } from "@shared/types";
 
@@ -46,6 +47,7 @@ export function ShoppingPage() {
   const [lookupBarcodes, setLookupBarcodes] = useState<Record<string, string>>({});
   const [lookingUp, setLookingUp] = useState<string | null>(null);
   const lookupInProgress = useRef(false);
+  const lastForeignNotice = useRef(0);
 
   const load = useCallback(async () => {
     try {
@@ -69,6 +71,22 @@ export function ShoppingPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useLiveRefresh(house.id, ["shopping", "stock"], load);
+
+  // A quiet notice when another member changes the shared list. The event
+  // carries only the actor id, so the display name comes from the member list.
+  useEffect(() => {
+    return subscribeLive(["shopping"], (event, self) => {
+      if (self) return;
+      const now = Date.now();
+      if (now - lastForeignNotice.current < 5000) return;
+      lastForeignNotice.current = now;
+      void liveActorName(house.id, event.actorUserId).then((name) => {
+        toast.push(name ? t("Updated by {name}", { name }) : t("Shopping list updated by another member"));
+      });
+    });
+  }, [house?.id, toast, t]);
 
   const visible = useMemo(
     () => (showChecked ? items : items.filter((item) => !item.checked)),

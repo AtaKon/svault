@@ -2907,6 +2907,12 @@ const EL: Record<string, string> = {
   "The local image file is missing": "Λείπει το τοπικό αρχείο εικόνας.",
   "The local image is not a stored upload": "Η τοπική εικόνα δεν είναι αποθηκευμένη μεταφόρτωση.",
   "The receipt image is missing": "Λείπει η εικόνα της απόδειξης.",
+  "Updated by {name}": "Ενημερώθηκε από {name}",
+  "Shopping list updated by another member": "Η λίστα αγορών ενημερώθηκε από άλλο μέλος",
+  "Live updates are disabled": "Οι ζωντανές ενημερώσεις είναι απενεργοποιημένες",
+  "Live updates need a signed-in session": "Οι ζωντανές ενημερώσεις χρειάζονται σύνδεση με λογαριασμό",
+  "Too many live update tabs are open for this account": "Έχουν ανοίξει πάρα πολλές καρτέλες ζωντανών ενημερώσεων για αυτόν τον λογαριασμό",
+  "Too many live update connections for this house": "Πάρα πολλές συνδέσεις ζωντανών ενημερώσεων για αυτό το σπίτι",
 };
 
 const DYNAMIC_EL = Object.entries(EL).flatMap(([key, value]) => {

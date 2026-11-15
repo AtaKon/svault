@@ -7,6 +7,7 @@ import { Button, Card, EmptyState, Input, PageHeader, Select, Skeleton, Tabs, cn
 import { Icon } from "@/components/icons";
 import { ItemCard } from "@/components/ItemCard";
 import { useToast } from "@/components/toast";
+import { useLiveRefresh } from "@/live";
 import { qty } from "@/format";
 import type { Category, Item, ItemDetail, Location } from "@shared/types";
 
@@ -71,6 +72,8 @@ export function InventoryPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useLiveRefresh(house.id, ["stock", "items"], load);
 
   const setParam = (key: string, value: string | null) => {
     const next = new URLSearchParams(params);
