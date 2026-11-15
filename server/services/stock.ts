@@ -43,7 +43,8 @@ function countedUnit(unit: string): boolean {
   return ["pcs", "pc", "piece", "pieces"].includes(unit.toLowerCase());
 }
 
-function baseQuantity(item: any, quantity: number, unit?: string): number {  const from = (unit ?? item.unit).toLowerCase();
+function baseQuantity(item: any, quantity: number, unit?: string): number {
+  const from = (unit ?? item.unit).toLowerCase();
   const amount = convert(Math.abs(quantity), from, item.unit);
   if (amount == null) {
     throw new ApiError(400, `Cannot convert ${from} to ${item.unit}`);

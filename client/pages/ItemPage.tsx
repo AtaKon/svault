@@ -211,7 +211,8 @@ export function ItemPage() {
     }
   };
 
-  const quick = async (action: "add" | "remove") => {    if (!item) return;
+  const quick = async (action: "add" | "remove") => {
+    if (!item) return;
     setQuickBusy(true);
     try {
       if (isOffline() && user) {
