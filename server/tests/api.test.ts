@@ -131,6 +131,7 @@ const { createPosoKaneiClient, PosoKaneiUnavailableError } = await import("../se
 const { RateLimitError, RateLimiter, limiters } = await import("../rate-limit.js");
 const { createShoppingOffersHandler, posoKaneiUnavailableApiError } = await import("../routes/insights.js");
 const { parseCsv, parseCsvNumber } = await import("../services/csv.js");
+const { MAX_VALUATION_ITEMS, buildValuationReport, csvCell, emptyValuationFilters, valuationCsv, valueForItem } = await import("../services/valuation.js");
 const { espressoBrewedAt } = await import("../routes/inventory.js");
 const { totpCode, verifyTotp, generateTotpSecret, generateBackupCodes } = await import("../services/totp.js");
 const { backupForTest, validateBackup } = await import("../services/backup.js");
@@ -11997,5 +11998,333 @@ describe("run-out forecasts", () => {
     await request(`/api/houses/${houseId}/shopping`, { method: "POST", body: { name: "Forecast oil test", quantity: 500, unit: "ml" } });
     const result = await request(`/api/houses/${houseId}/shopping/from-low-stock`, { method: "POST", body: { includeForecast: true } });
     assert.equal(result.data.items.find((item: any) => item.itemId === id).quantity, 1500);
+  });
+});
+
+describe("valuation report", () => {
+  const valuationItem = (overrides: Record<string, unknown>) => ({
+    id: "itm_valuation",
+    name: "Item",
+    brand: null,
+    categoryId: "cat_tools",
+    categoryName: "Tools",
+    unit: "pcs",
+    quantity: 1,
+    latestPrice: null,
+    averagePrice: null,
+    pricedQuantity: 0,
+    stockValue: 0,
+    purchasedAt: null,
+    shop: null,
+    warrantyUntil: null,
+    warrantyNote: null,
+    attributes: {},
+    tags: [],
+    image: null,
+    archived: false,
+    documentCount: 0,
+    places: [],
+    ...overrides,
+  }) as any;
+
+  it("adds priced items and never counts an unpriced item as zero", () => {
+    const report = buildValuationReport({
+      house: { id: "hse_test", name: "Test House", currency: "EUR" },
+      reportDate: "2026-11-15",
+      filters: emptyValuationFilters("latest"),
+      items: [
+        valuationItem({
+          id: "itm_a",
+          name: "Drill",
+          quantity: 2,
+          latestPrice: 10,
+          averagePrice: 8,
+          places: [{ locationId: "loc_kitchen", locationName: "Kitchen", quantity: 2, value: 20 }],
+        }),
+        valuationItem({
+          id: "itm_b",
+          name: "Mystery box",
+          quantity: 3,
+          categoryId: null,
+          categoryName: null,
+          places: [{ locationId: "loc_garage", locationName: "Garage", quantity: 3, value: 0 }],
+        }),
+        valuationItem({ id: "itm_c", name: "Laptop", quantity: 1, latestPrice: 100, categoryId: null, categoryName: null }),
+      ],
+    });
+
+    assert.equal(report.grandTotal, 120);
+    assert.equal(report.itemCount, 3);
+    assert.equal(report.itemsWithoutValue, 1);
+    const mystery = report.items.find((item) => item.id === "itm_b")!;
+    assert.equal(mystery.totalValue, null);
+    assert.equal(mystery.unitValue, null);
+    assert.equal(mystery.valueSource, "none");
+    // The unpriced item is listed in its category's count but adds nothing to the total.
+    const tools = report.categoryTotals.find((entry) => entry.categoryName === "Tools")!;
+    assert.deepEqual({ itemCount: tools.itemCount, itemsWithoutValue: tools.itemsWithoutValue, total: tools.total }, {
+      itemCount: 1,
+      itemsWithoutValue: 0,
+      total: 20,
+    });
+    const uncategorised = report.categoryTotals.find((entry) => entry.categoryId === null)!;
+    assert.deepEqual(
+      { itemCount: uncategorised.itemCount, itemsWithoutValue: uncategorised.itemsWithoutValue, total: uncategorised.total },
+      { itemCount: 2, itemsWithoutValue: 1, total: 100 },
+    );
+    // Place subtotals add back up to the grand total; the unpriced place row stays at zero.
+    const kitchen = report.placeTotals.find((entry) => entry.locationName === "Kitchen")!;
+    const garage = report.placeTotals.find((entry) => entry.locationName === "Garage")!;
+    const nowhere = report.placeTotals.find((entry) => entry.locationId === null)!;
+    assert.equal(kitchen.total, 20);
+    assert.equal(garage.total, 0);
+    assert.equal(garage.itemCount, 1);
+    assert.equal(nowhere.total, 100);
+  });
+
+  it("derives latest, average and stock-cost values from the same records", () => {
+    const item = { quantity: 4, latestPrice: 120, averagePrice: 110, pricedQuantity: 4, stockValue: 460 };
+    assert.deepEqual(valueForItem(item, "latest"), { unitValue: 120, totalValue: 480, valueSource: "latest-purchase" });
+    assert.deepEqual(valueForItem(item, "average"), { unitValue: 110, totalValue: 440, valueSource: "average-purchase" });
+    assert.deepEqual(valueForItem(item, "stockCost"), { unitValue: 115, totalValue: 460, valueSource: "stock-cost" });
+    const noLotPrice = { quantity: 4, latestPrice: 120, averagePrice: 110, pricedQuantity: 0, stockValue: 0 };
+    assert.equal(valueForItem(noLotPrice, "stockCost").totalValue, null);
+    assert.equal(valueForItem({ ...noLotPrice, latestPrice: null, averagePrice: null }, "latest").totalValue, null);
+  });
+
+  it("combines category, place, tag, value, warranty and archived filters", () => {
+    const base = {
+      quantity: 1,
+      latestPrice: 50,
+      warrantyUntil: "2030-01-01",
+      places: [{ locationId: "loc_1", locationName: "Kitchen", quantity: 1, value: 50 }],
+    };
+    const items = [
+      valuationItem({ id: "itm_keep", name: "Keep", tags: ["tools"], ...base }),
+      valuationItem({ id: "itm_archived", name: "Archived", archived: true, tags: ["tools"], ...base }),
+      valuationItem({ id: "itm_other_cat", name: "Other", categoryId: "cat_food", categoryName: "Food", tags: ["tools"], ...base }),
+      valuationItem({ id: "itm_other_place", name: "Elsewhere", ...base, tags: ["tools"], places: [{ locationId: "loc_2", locationName: "Garage", quantity: 1, value: 50 }] }),
+      valuationItem({ id: "itm_food", name: "Food", categoryId: "cat_food", categoryName: "Food", tags: ["food"], ...base }),
+      valuationItem({ id: "itm_no_warranty", name: "Old", tags: ["tools"], ...base, warrantyUntil: "2020-01-01" }),
+      valuationItem({ id: "itm_cheap", name: "Cheap", tags: ["tools"], ...base, latestPrice: 2 }),
+    ];
+    const run = (filters: Record<string, unknown>) =>
+      buildValuationReport({
+        house: { id: "hse_test", name: "Test House", currency: "EUR" },
+        reportDate: "2026-11-15",
+        filters: { ...emptyValuationFilters("latest"), ...filters } as any,
+        items,
+      });
+    const ids = (report: any) => report.items.map((item: any) => item.id).sort();
+    assert.deepEqual(ids(run({})), ["itm_cheap", "itm_food", "itm_keep", "itm_no_warranty", "itm_other_cat", "itm_other_place"]);
+    assert.deepEqual(ids(run({ includeArchived: true })).includes("itm_archived"), true);
+    assert.deepEqual(ids(run({ categoryIds: ["cat_tools"] })), [
+      "itm_cheap",
+      "itm_keep",
+      "itm_no_warranty",
+      "itm_other_place",
+    ]);
+    assert.deepEqual(ids(run({ locationIds: ["loc_2"] })), ["itm_other_place"]);
+    assert.deepEqual(ids(run({ tags: ["food"] })), ["itm_food"]);
+    assert.deepEqual(ids(run({ tags: ["tools", "food"] })).length, 6);
+    assert.deepEqual(ids(run({ minValue: 10 })), ["itm_food", "itm_keep", "itm_no_warranty", "itm_other_cat", "itm_other_place"]);
+    assert.deepEqual(ids(run({ warrantyOnly: true, categoryIds: ["cat_tools"] })), ["itm_cheap", "itm_keep", "itm_other_place"]);
+  });
+
+  it("escapes CSV cells and neutralises spreadsheet formulas", () => {
+    assert.equal(csvCell("=1+1"), "\"'=1+1\"");
+    assert.equal(csvCell("+1"), "\"'+1\"");
+    assert.equal(csvCell("-5"), "\"'-5\"");
+    assert.equal(csvCell("@cmd"), "\"'@cmd\"");
+    assert.equal(csvCell("plain"), "\"plain\"");
+    assert.equal(csvCell('He said "hi"'), '"He said ""hi"""');
+    assert.equal(csvCell(12.5), "12.5");
+    assert.equal(csvCell(null), "");
+
+    const report = buildValuationReport({
+      house: { id: "hse_test", name: "Test House", currency: "EUR" },
+      reportDate: "2026-11-15",
+      filters: emptyValuationFilters("latest"),
+      items: [
+        valuationItem({
+          id: "itm_formula",
+          name: '=HYPERLINK("http://example.test","x")',
+          brand: "A, B",
+          quantity: 1,
+          latestPrice: 5,
+          attributes: { serial: "SN-1", model: "+M" },
+        }),
+      ],
+    });
+    const csv = valuationCsv(report);
+    assert.ok(!csv.startsWith("\uFEFF"), "the BOM belongs to the HTTP route");
+    assert.ok(csv.includes("\"'=HYPERLINK(\"\"http://example.test\"\",\"\"x\"\")\""));
+    assert.ok(csv.includes("\"A, B\""));
+    assert.ok(csv.includes("serial=SN-1; model=+M"));
+    assert.ok(csv.includes("Category totals"));
+    assert.ok(csv.includes("Place totals"));
+    assert.equal(MAX_VALUATION_ITEMS, 20000);
+  });
+
+  it("serves JSON and CSV to viewers, with isolated houses and archived exclusion", async () => {
+    const owner = await request("/api/auth/register", {
+      body: { name: "Valuation owner", email: "valuation-owner@example.com", password: "test password" },
+    });
+    const viewer = await request("/api/auth/register", {
+      body: { name: "Valuation viewer", email: "valuation-viewer@example.com", password: "test password" },
+    });
+    const hid = owner.data.houses[0].id;
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
+      hid,
+      viewer.data.user.id,
+      "viewer",
+      new Date().toISOString(),
+    ]);
+    const locations = await request(`/api/houses/${hid}/locations`, { auth: owner.cookie! });
+    const fridge = locations.data.find((entry: any) => entry.name === "Fridge") ?? locations.data[0];
+    await run("INSERT INTO vendors (id, house_id, name, kind, created_at) VALUES (?, ?, ?, ?, ?)", [
+      "ven_valuation_test",
+      hid,
+      "Tool Shop",
+      "shop",
+      new Date().toISOString(),
+    ]);
+    const warrantyUntil = new Date(Date.now() + 200 * 864e5).toISOString().slice(0, 10);
+    const drill = await request(`/api/houses/${hid}/items`, {
+      auth: owner.cookie!,
+      body: {
+        name: "Valuation drill",
+        unit: "pcs",
+        tags: ["tools"],
+        warrantyUntil,
+        warrantyNote: "Keep receipt",
+        attributes: { serial: "SN-1", model: "D-9" },
+        initialStock: {
+          quantity: 1,
+          unitPrice: 100,
+          locationId: fridge.id,
+          purchasedAt: "2026-01-05",
+          vendorId: "ven_valuation_test",
+        },
+      },
+    });
+    assert.equal(drill.status, 201, JSON.stringify(drill.data));
+    const secondBatch = await request(`/api/items/${drill.data.id}/stock`, {
+      auth: owner.cookie!,
+      method: "POST",
+      body: {
+        action: "add",
+        quantity: 3,
+        unitPrice: 120,
+        locationId: fridge.id,
+        purchasedAt: "2026-02-01",
+        vendorId: "ven_valuation_test",
+      },
+    });
+    assert.equal(secondBatch.status, 200, JSON.stringify(secondBatch.data));
+    const food = await request(`/api/houses/${hid}/items`, {
+      auth: owner.cookie!,
+      body: { name: "Valuation food", unit: "pcs", initialStock: { quantity: 2, locationId: fridge.id } },
+    });
+    const archivedItem = await request(`/api/houses/${hid}/items`, {
+      auth: owner.cookie!,
+      body: { name: "Valuation archived", unit: "pcs", initialStock: { quantity: 1, unitPrice: 50 } },
+    });
+    await request(`/api/items/${archivedItem.data.id}`, { auth: owner.cookie!, method: "PATCH", body: { archived: true } });
+    const formula = await request(`/api/houses/${hid}/items`, {
+      auth: owner.cookie!,
+      body: { name: "=1+1" },
+    });
+    assert.equal(formula.status, 201);
+
+    // A viewer reads the report, exactly like the inventory CSV export.
+    const latest = await request(`/api/houses/${hid}/reports/valuation`, { auth: viewer.cookie! });
+    assert.equal(latest.status, 200, JSON.stringify(latest.data));
+    assert.equal(latest.data.basis, "latest");
+    assert.equal(latest.data.itemCount, 3);
+    assert.equal(latest.data.itemsWithoutValue, 2);
+    assert.equal(latest.data.grandTotal, 480);
+    assert.equal(latest.data.houseName, owner.data.houses[0].name);
+    const drillRow = latest.data.items.find((item: any) => item.id === drill.data.id);
+    assert.equal(drillRow.unitValue, 120);
+    assert.equal(drillRow.totalValue, 480);
+    assert.equal(drillRow.valueSource, "latest-purchase");
+    assert.equal(drillRow.purchasedAt, "2026-02-01");
+    assert.equal(drillRow.shop, "Tool Shop");
+    assert.equal(drillRow.warrantyUntil, warrantyUntil);
+    assert.equal(drillRow.warrantyNote, "Keep receipt");
+    assert.equal(drillRow.attributes.serial, "SN-1");
+    assert.equal(drillRow.places.length, 1);
+    assert.equal(drillRow.places[0].locationName, fridge.name);
+    assert.equal(drillRow.places[0].quantity, 4);
+    const foodRow = latest.data.items.find((item: any) => item.id === food.data.id);
+    assert.equal(foodRow.totalValue, null);
+    assert.equal(foodRow.valueSource, "none");
+    assert.equal(latest.data.placeTotals.find((entry: any) => entry.locationId === fridge.id).total, 480);
+
+    const average = await request(`/api/houses/${hid}/reports/valuation?basis=average`, { auth: viewer.cookie! });
+    assert.equal(average.data.grandTotal, 440);
+    assert.equal(average.data.items.find((item: any) => item.id === drill.data.id).unitValue, 110);
+    const stockCost = await request(`/api/houses/${hid}/reports/valuation?basis=stockCost`, { auth: viewer.cookie! });
+    assert.equal(stockCost.data.grandTotal, 460);
+    assert.equal(stockCost.data.items.find((item: any) => item.id === drill.data.id).unitValue, 115);
+
+    // Archived items are out by default and back in when asked for.
+    const withArchived = await request(`/api/houses/${hid}/reports/valuation?archived=1`, { auth: viewer.cookie! });
+    assert.equal(withArchived.data.itemCount, 4);
+    assert.equal(withArchived.data.grandTotal, 530);
+
+    // Filter combinations.
+    assert.equal((await request(`/api/houses/${hid}/reports/valuation?tags=tools&archived=1`, { auth: viewer.cookie! })).data.itemCount, 1);
+    assert.equal((await request(`/api/houses/${hid}/reports/valuation?places=${fridge.id}&archived=1`, { auth: viewer.cookie! })).data.itemCount, 2);
+    assert.equal((await request(`/api/houses/${hid}/reports/valuation?minValue=100`, { auth: viewer.cookie! })).data.itemCount, 1);
+    assert.equal((await request(`/api/houses/${hid}/reports/valuation?warranty=1`, { auth: viewer.cookie! })).data.itemCount, 1);
+    assert.equal((await request(`/api/houses/${hid}/reports/valuation?basis=nope`, { auth: viewer.cookie! })).status, 400);
+
+    // Documents are listed by name and type only; no file contents or links.
+    const form = new FormData();
+    form.set("document", new Blob(["%PDF-1.4 valuation"], { type: "application/pdf" }), "warranty.pdf");
+    form.set("kind", "warranty");
+    assert.equal((await request(`/api/items/${drill.data.id}/documents`, { auth: owner.cookie!, body: form })).status, 201);
+    const withDocs = await request(`/api/houses/${hid}/reports/valuation?documents=1`, { auth: viewer.cookie! });
+    const documentRow = withDocs.data.items.find((item: any) => item.id === drill.data.id);
+    assert.equal(documentRow.documentCount, 1);
+    assert.equal(documentRow.documents[0].name, "warranty.pdf");
+    assert.equal(documentRow.documents[0].kind, "warranty");
+    assert.equal(documentRow.documents[0].url, undefined);
+    assert.equal(documentRow.documents[0].filename, undefined);
+
+    // Cross-house isolation and strangers.
+    const otherHouse = await request("/api/houses", {
+      auth: owner.cookie!,
+      method: "POST",
+      body: { name: "Valuation other house" },
+    });
+    await request(`/api/houses/${otherHouse.data.id}/items`, {
+      auth: owner.cookie!,
+      body: { name: "Other house item", initialStock: { quantity: 1, unitPrice: 999 } },
+    });
+    const otherReport = await request(`/api/houses/${otherHouse.data.id}/reports/valuation`, { auth: owner.cookie! });
+    assert.equal(otherReport.data.itemCount, 1);
+    assert.equal(otherReport.data.grandTotal, 999);
+    assert.ok(!otherReport.data.items.some((item: any) => item.id === drill.data.id));
+    assert.equal((await request(`/api/houses/${hid}/reports/valuation`)).status, 404);
+    assert.equal((await request(`/api/houses/${hid}/reports/valuation`, { auth: secondUserCookie })).status, 404);
+
+    // CSV: UTF-8 BOM, a spreadsheet-safe name and the totals block.
+    const csvResponse = await fetch(`${base}/api/houses/${hid}/reports/valuation?format=csv&archived=1`, {
+      headers: { cookie: viewer.cookie! },
+    });
+    assert.equal(csvResponse.status, 200);
+    assert.equal(csvResponse.headers.get("content-type"), "text/csv; charset=utf-8");
+    assert.match(csvResponse.headers.get("content-disposition") ?? "", /attachment; filename="svault-valuation-/);
+    // Fetch strips the BOM when decoding text, so check the raw bytes.
+    const csvBytes = new Uint8Array(await csvResponse.arrayBuffer());
+    assert.deepEqual([...csvBytes.slice(0, 3)], [0xef, 0xbb, 0xbf]);
+    const csvText = new TextDecoder().decode(csvBytes);
+    assert.ok(csvText.includes("\"'=1+1\""));
+    assert.ok(csvText.includes("Valuation drill"));
+    assert.ok(csvText.includes("Category totals"));
+    assert.ok(csvText.includes("Place totals"));
   });
 });
