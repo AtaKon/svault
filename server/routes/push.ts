@@ -4,6 +4,7 @@ import { requireAuth } from "../auth.js";
 import { ApiError, handler, parseBody } from "../http.js";
 import {
   DEFAULT_PUSH_URL,
+  pushEndpointProblem,
   listSubscriptions,
   pushEnabled,
   pushPublicKey,
@@ -39,7 +40,10 @@ function httpsEndpoint(raw: string): string {
   } catch {
     throw new ApiError(400, "The push endpoint is not a valid URL");
   }
-  if (parsed.protocol !== "https:") throw new ApiError(400, "The push endpoint must use https");
+  // https only, no credentials, and never a private or loopback address: the
+  // server will POST to this URL, and any signed-in user may supply it.
+  const problem = pushEndpointProblem(parsed);
+  if (problem) throw new ApiError(400, problem);
   return parsed.toString();
 }
 

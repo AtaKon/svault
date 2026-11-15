@@ -22,6 +22,9 @@ All notable changes to SVault are documented here. The format follows
 
 ### Security
 
+- Web Push endpoints are always public HTTPS hosts. A signed-in user supplies the endpoint and the
+  server posts to it, so private, loopback and link-local addresses are refused when subscribing and
+  again when sending (and re-checked at connect time), regardless of `SV_OUTBOUND_ALLOW_PRIVATE`.
 - Writing an Open Food Facts folksonomy property now needs accepted OFF consent and member access to
   at least one household. A named `houseId`/`itemId` must belong to a house the caller is a member of,
   so a signed-in user can no longer write through the instance token or name another house's item.

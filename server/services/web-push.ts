@@ -1,7 +1,11 @@
+import dns from "node:dns";
+import dnsPromises from "node:dns/promises";
+import https from "node:https";
+import net from "node:net";
 import { sendNotification, setVapidDetails } from "web-push";
 import { webPushConfig } from "../config.js";
 import { all, get, newId, now, run } from "../db.js";
-import { assertOutboundUrl } from "../lib/outbound.js";
+import { isPrivateAddress } from "../lib/outbound.js";
 
 /**
  * Web Push delivery for reminder channels.
@@ -56,6 +60,66 @@ function truncate(value: string, max: number): string {
   return String(value ?? "").slice(0, max);
 }
 
+/**
+ * Push endpoints are chosen by any signed-in user, not by a house admin, so the
+ * SV_OUTBOUND_ALLOW_PRIVATE setting that lets admins point a reminder channel
+ * at a LAN ntfy server must NOT apply here: a real push service (FCM, Mozilla,
+ * Apple, WNS) is always a public HTTPS host. Without this, any account could
+ * make the server send requests to addresses on its own network.
+ *
+ * This is the cheap, offline part (used when subscribing): scheme, credentials
+ * and literal private addresses. Names are resolved at send time.
+ */
+export function pushEndpointProblem(url: URL): string | null {
+  if (url.protocol !== "https:") return "The push endpoint must use https";
+  if (url.username || url.password) return "The push endpoint must not contain credentials";
+  const host = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  if (host === "localhost" || host.endsWith(".localhost")) return "The push endpoint must be a public address";
+  if (net.isIP(host) && isPrivateAddress(host)) return "The push endpoint must be a public address";
+  return null;
+}
+
+/** Full check before a send: the shape rules plus every resolved address must be public. */
+export async function publicEndpointProblem(raw: string): Promise<string | null> {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return "The push endpoint is not a valid URL";
+  }
+  const shape = pushEndpointProblem(url);
+  if (shape) return shape;
+  const host = url.hostname.replace(/^\[|\]$/g, "");
+  if (net.isIP(host)) return null;
+  try {
+    const addresses = await dnsPromises.lookup(host, { all: true, verbatim: true });
+    if (!addresses.length || addresses.some((entry) => isPrivateAddress(entry.address))) {
+      return "The push endpoint must be a public address";
+    }
+  } catch {
+    return "The push endpoint could not be resolved";
+  }
+  return null;
+}
+
+/**
+ * Connect-time guard. The pre-check above resolves the name once; this agent
+ * re-checks the address the socket actually uses, so DNS rebinding between the
+ * check and the connection cannot reach a private address.
+ */
+const publicOnlyAgent = new https.Agent({
+  lookup: ((hostname: string, options: any, callback: (...args: any[]) => void) => {
+    dns.lookup(hostname, options, (error: NodeJS.ErrnoException | null, address: any, family: any) => {
+      if (error) return callback(error, address, family);
+      const list: string[] = Array.isArray(address) ? address.map((entry: { address: string }) => entry.address) : [address];
+      if (list.some((entry) => isPrivateAddress(entry))) {
+        return callback(new Error("The push endpoint must be a public address"), address, family);
+      }
+      callback(null, address, family);
+    });
+  }) as any,
+});
+
 /** web-push signs the request with the VAPID key pair and encrypts the body. */
 async function networkSender(
   subscription: { endpoint: string; keys: { p256dh: string; auth: string } },
@@ -63,16 +127,11 @@ async function networkSender(
 ): Promise<PushDeliveryResult> {
   const config = webPushConfig();
   if (!config.enabled) return { ok: false, statusCode: null, expired: false, error: "Web Push is not configured" };
-  // House-independent, but still an outbound URL: refuse non-HTTPS and, when the
-  // operator disallows private targets, private addresses (see assertOutboundUrl).
-  try {
-    await assertOutboundUrl(subscription.endpoint, "The push endpoint");
-  } catch (error) {
-    return { ok: false, statusCode: null, expired: false, error: error instanceof Error ? error.message : "Invalid push endpoint" };
-  }
+  const problem = await publicEndpointProblem(subscription.endpoint);
+  if (problem) return { ok: false, statusCode: null, expired: false, error: problem };
   try {
     setVapidDetails(config.subject, config.publicKey, config.privateKey);
-    const response = await sendNotification(subscription, payload, { TTL: 60 * 60, timeout: 10_000 });
+    const response = await sendNotification(subscription, payload, { TTL: 60 * 60, timeout: 10_000, agent: publicOnlyAgent });
     return { ok: true, statusCode: response.statusCode ?? 201, expired: false, error: null };
   } catch (error: any) {
     const statusCode = Number(error?.statusCode ?? 0) || null;

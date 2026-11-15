@@ -1411,7 +1411,7 @@ cannot use them.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/api/push` | `{ enabled, publicKey, subscriptions }`. `publicKey` is `null` when the server is not configured. |
-| `POST` | `/api/push/subscribe` | Body `{ endpoint, keys: { p256dh, auth } }` from `PushSubscription.toJSON()`. `201` with `{ subscription }`. `endpoint` must be `https://`. |
+| `POST` | `/api/push/subscribe` | Body `{ endpoint, keys: { p256dh, auth } }` from `PushSubscription.toJSON()`. `201` with `{ subscription }`. `endpoint` must be `https://`, without credentials, and never a private, loopback or link-local address (`400`). |
 | `POST` | `/api/push/unsubscribe` | Body `{ endpoint }`. `{ ok, removed }`; only the owner's own row is deleted. |
 | `POST` | `/api/push/test` | Sends a test notification to the caller's devices. `{ ok, sent, failed, removed, error }`; `400` when no device is subscribed, `502` when every device refused. |
 
@@ -1422,6 +1422,12 @@ houses the user still belongs to; a subscription is deleted when the push servic
 `house.settings.notifications.channels`, so the per-channel low-stock, expiry, budget and weekly
 switches apply unchanged. With no subscribed device the channel is skipped instead of recording a
 failed delivery.
+
+Because any signed-in user supplies the endpoint and the server POSTs to it, push endpoints are held to
+a stricter rule than admin-configured reminder channels: **private, loopback and link-local targets are
+always refused, whatever `SV_OUTBOUND_ALLOW_PRIVATE` says.** Real push services are public HTTPS hosts.
+The name is resolved and checked before each send, and the connection itself re-checks the address it
+uses, so DNS rebinding cannot reach the server's own network.
 
 ## Extending the API
 

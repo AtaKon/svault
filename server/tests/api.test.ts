@@ -12151,6 +12151,28 @@ describe("web push reminders", async () => {
     assert.equal((await request("/api/push", { auth: ownerCookie })).data.subscriptions.length, 0);
   });
 
+  it("refuses push endpoints that point at private or local addresses", async () => {
+    // Any signed-in user supplies the endpoint and the server POSTs to it, so a
+    // private target is refused even though SV_OUTBOUND_ALLOW_PRIVATE defaults to true.
+    for (const url of [
+      "https://127.0.0.1/push",
+      "https://10.0.0.5/push",
+      "https://192.168.1.20:8443/push",
+      "https://169.254.169.254/latest",
+      "https://[::1]/push",
+      "https://localhost/push",
+      "https://user:secret@push.example.com/push",
+    ]) {
+      const response = await subscribe(url);
+      assert.equal(response.status, 400, url);
+    }
+    const { publicEndpointProblem } = await import("../services/web-push.js");
+    assert.match((await publicEndpointProblem("https://10.1.2.3/x")) ?? "", /public address/);
+    assert.match((await publicEndpointProblem("https://[fd00::1]/x")) ?? "", /public address/);
+    assert.equal(await publicEndpointProblem("https://8.8.8.8/x"), null);
+    assert.match((await publicEndpointProblem("http://8.8.8.8/x")) ?? "", /https/);
+  });
+
   it("sends a test push with a minimal payload", async () => {
     assert.equal((await request("/api/push/test", { method: "POST", auth: ownerCookie, body: {} })).status, 400);
     const url = endpoint("test-device");
