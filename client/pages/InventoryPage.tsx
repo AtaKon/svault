@@ -160,6 +160,15 @@ export function InventoryPage() {
             <Button variant="secondary" icon="list" onClick={() => void addLowStock()}>
               {t("Add low stock")}
             </Button>
+            {locationId && (
+              <Button
+                variant="secondary"
+                icon="check"
+                onClick={() => navigate(`/stocktake?location=${encodeURIComponent(locationId)}`)}
+              >
+                {t("Count this place")}
+              </Button>
+            )}
             <Button
               variant="secondary"
               icon="receipt"

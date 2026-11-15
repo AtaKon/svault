@@ -1449,6 +1449,50 @@ are accepted. Existing users are linked by email; new users are provisioned only
 `OIDC_AUTO_PROVISION` is on and registration is `open` (`SV_REGISTRATION`). Password login
 and the first local owner remain as the break-glass path. Errors redirect to `/login?oidc_error=...`.
 
+## Stocktake
+
+| Method | Path | Min role | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/houses/:houseId/stocktakes` | viewer+ | Open and past sessions, newest first. `?limit` 1–200, default 50. |
+| `GET` | `/api/houses/:houseId/stocktakes/:stocktakeId` | viewer+ | One session with its lines and current quantities. |
+| `POST` | `/api/houses/:houseId/stocktakes` | member+ | Start a count. Body `{ locationId?, categoryId?, note? }`. |
+| `PATCH` | `/api/houses/:houseId/stocktakes/:stocktakeId/lines/:lineId` | member+ | Save one line. Body `{ countedQty?, note? }`. |
+| `POST` | `/api/houses/:houseId/stocktakes/:stocktakeId/commit` | member+ | Apply the selected lines in one transaction. |
+| `POST` | `/api/houses/:houseId/stocktakes/:stocktakeId/cancel` | member+ | Close a draft without changing stock. |
+
+Starting a session snapshots the expected quantity per item: the batches in the chosen place, or every
+batch for a category or whole-house count. A place count lists only items that currently have stock
+there; a category or whole-house count lists every active item in scope, so a surprise find can be
+counted from zero. Only one draft may be open per house; a second start answers `409` with
+`details.stocktakeId`, pointing at the open session.
+
+Each line carries `expectedQty`, `countedQty` (null until counted), `unitCost` (weighted average batch
+cost at snapshot time, when prices are known), `variance`, `valueImpact`, `currentQty` and `changed`.
+`PATCH` sets `countedBy`/`countedAt`; sending `countedQty: null` clears the line. Lines can only be
+edited while the session is a draft (`409` otherwise).
+
+Commit body:
+
+```json
+{
+  "lineIds": ["stl_..."],
+  "confirmChangedLineIds": ["stl_..."]
+}
+```
+
+Omitted `lineIds` commits every counted line. If an item's scoped quantity differs from the snapshot,
+the request answers `409` with `details: { "code": "changed-since-snapshot", "changedLineIds": [...] }`;
+resend with those ids in `confirmChangedLineIds`. The variance (`countedQty - expectedQty`) is applied
+to the current quantity, never written blindly as an absolute count, and a shortage is capped at what
+is actually in scope. Surplus creates a batch in the counted place; shortage consumes FIFO there. Every
+applied line records a `count` movement with the note `stocktake <id>`. Committing a committed session
+answers `409`, so a retry cannot double-apply. Viewers can read sessions and history; starting,
+counting, committing and cancelling require member access.
+
+`POST …/commit` returns `{ stocktake, appliedLines, appliedDelta }`. The bundled client keeps unsent
+counts in this browser's `localStorage` while offline and replays them when the connection returns;
+commit itself always needs the server.
+
 ## Offline stock mutations
 
 `POST /api/items/:itemId/stock` accepts an optional `idempotencyKey` (8–120 chars). The response is stored
@@ -1561,7 +1605,7 @@ curl -b cookies.txt \
 | `401` | Not signed in |
 | `403` | Signed in but below the required role, registration closed, or a blocked cross-site request |
 | `404` | Resource not found or not visible to this user |
-| `409` | Conflict (duplicate email, barcode already linked) |
+| `409` | Conflict (duplicate email, barcode already linked, an already committed stocktake, or stock changed since a stocktake snapshot) |
 | `429` | Rate limited; wait for `Retry-After` seconds |
 | `413` | Reverse proxy body limit (raise `client_max_body_size`) |
 | `500` | Unexpected server error (details are logged, not returned) |

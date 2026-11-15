@@ -71,7 +71,7 @@ export async function itemQuantity(itemId: string): Promise<number> {
 
 async function recordMovement(opts: {
   item: any;
-  type: "in" | "out" | "adjust" | "waste" | "move";
+  type: "in" | "out" | "adjust" | "waste" | "move" | "count";
   delta: number;
   unit: string;
   quantity: number;
@@ -390,6 +390,93 @@ export async function setStock(opts: StockOpts & { target: number }): Promise<st
       note: opts.note ?? null,
       lots: touched,
     });
+  });
+}
+
+/**
+ * Apply the difference found by a physical count (stocktake). Positive deltas
+ * create a batch in the counted place; negative deltas consume FIFO in that
+ * place. A shortage is capped at what is actually there, so a quantity that
+ * changed during the session can never push stock below zero.
+ */
+export async function applyStockCount(opts: {
+  itemId: string;
+  houseId: string;
+  userId: string;
+  delta: number;
+  locationId?: string | null;
+  note?: string | null;
+  reason?: string | null;
+}): Promise<{ movementId: string | null; applied: number }> {
+  await validateLocation(opts.houseId, opts.locationId);
+  const delta = round(Number(opts.delta));
+  if (!Number.isFinite(delta)) throw new ApiError(400, "Count difference must be a number");
+  if (delta === 0) return { movementId: null, applied: 0 };
+  return await tx(async () => {
+    const item = await itemRow(opts.itemId, opts.houseId);
+    const reason = opts.reason ?? "Stocktake";
+    if (delta > 0) {
+      const lotId = newId("lot");
+      await run(
+        `INSERT INTO stock_lots
+          (id, item_id, house_id, location_id, quantity, unit, unit_price, currency, purchased_at, expires_at, note,
+           created_by, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, NULL, ?, ?, ?)`,
+        [
+          lotId,
+          item.id,
+          item.house_id,
+          opts.locationId ?? null,
+          delta,
+          item.unit,
+          now(),
+          opts.note ?? "Stocktake",
+          opts.userId,
+          now(),
+        ],
+      );
+      const movementId = await recordMovement({
+        item,
+        type: "count",
+        delta,
+        unit: item.unit,
+        quantity: delta,
+        locationId: opts.locationId ?? null,
+        userId: opts.userId,
+        lotId,
+        reason,
+        note: opts.note ?? null,
+      });
+      return { movementId, applied: delta };
+    }
+    const lots = await all<any>(
+      `SELECT * FROM stock_lots WHERE item_id = ? AND quantity > 0
+         ${opts.locationId ? "AND location_id = ?" : ""}
+       ORDER BY CASE WHEN expires_at IS NULL THEN 1 ELSE 0 END, expires_at ASC, created_at ASC`,
+      [opts.itemId, ...(opts.locationId ? [opts.locationId] : [])],
+    );
+    const available = round(lots.reduce((sum, lot) => sum + Number(lot.quantity), 0));
+    const requested = round(Math.min(Math.abs(delta), available));
+    if (requested <= 0) return { movementId: null, applied: 0 };
+    let remaining = requested;
+    for (const lot of lots) {
+      if (remaining <= 0) break;
+      const take = Math.min(Number(lot.quantity), remaining);
+      await run("UPDATE stock_lots SET quantity = ? WHERE id = ?", [round(Number(lot.quantity) - take), lot.id]);
+      remaining = round(remaining - take);
+    }
+    const movementId = await recordMovement({
+      item,
+      type: "count",
+      delta: -requested,
+      unit: item.unit,
+      quantity: requested,
+      locationId: opts.locationId ?? null,
+      userId: opts.userId,
+      reason,
+      note: opts.note ?? null,
+    });
+    return { movementId, applied: -requested };
   });
 }
 

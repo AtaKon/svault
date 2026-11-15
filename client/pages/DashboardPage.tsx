@@ -483,6 +483,7 @@ const MOVEMENT_META: Record<Movement["type"], { icon: IconName; label: string; t
   adjust: { icon: "pencil", label: "counted", tone: "bg-raised text-muted" },
   waste: { icon: "trash", label: "wasted", tone: "bg-danger-soft text-danger" },
   move: { icon: "mapPin", label: "moved", tone: "bg-raised text-muted" },
+  count: { icon: "check", label: "counted", tone: "bg-brand-soft text-brand" },
 };
 
 function ActivityRow({ movement }: { movement: Movement & { itemName?: string } }) {

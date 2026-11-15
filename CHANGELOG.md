@@ -22,6 +22,7 @@ All notable changes to SVault are documented here. The format follows
   with a clear message when a later change has made it unsafe. Members undo their own changes, admins
   and owners undo anyone's, and a change still waiting in the offline queue is removed from the queue
   instead of being sent.
+- **Stocktake mode.** A guided physical count per place or category. Starting a session snapshots the expected quantity per item; counting autosaves per line, supports barcode jump-to-item and works on a phone. Review shows variances and value impact, and commit applies every selected variance in one transaction as `count` movements (FIFO shortage, new batch for surplus). Lines whose stock moved during the session must be confirmed and the variance is applied to the current quantity; a second commit is refused. History lists past sessions with line and variance counts.
 - Category budgets, optional bill spending, month-end projections, budget history and threshold reminders.
 - Consumption-based run-out forecasts on items and the dashboard, with an optional shopping-list fill.
 - Printable QR labels for items and places: multi-select with search, three label sizes (including a 3 × 8 A4 sheet), live preview and a print stylesheet. Scanning a label with the in-app scanner opens the item or place, also after signing in; foreign or script QR payloads are ignored.
