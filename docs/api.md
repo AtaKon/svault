@@ -1411,7 +1411,7 @@ cannot use them.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/api/push` | `{ enabled, publicKey, subscriptions }`. `publicKey` is `null` when the server is not configured. |
-| `POST` | `/api/push/subscribe` | Body `{ endpoint, keys: { p256dh, auth } }` from `PushSubscription.toJSON()`. `201` with `{ subscription }`. `endpoint` must be `https://`, without credentials, and never a private, loopback or link-local address (`400`). |
+| `POST` | `/api/push/subscribe` | Body `{ endpoint, keys: { p256dh, auth } }` from `PushSubscription.toJSON()`. `201` with `{ subscription }`. `endpoint` must be `https://`, without credentials, and never a private, loopback or link-local address (`400`). An endpoint already registered to another account is refused with `409` unless the same `p256dh`/`auth` keys are presented (the same browser signing in as someone else). |
 | `POST` | `/api/push/unsubscribe` | Body `{ endpoint }`. `{ ok, removed }`; only the owner's own row is deleted. |
 | `POST` | `/api/push/test` | Sends a test notification to the caller's devices. `{ ok, sent, failed, removed, error }`; `400` when no device is subscribed, `502` when every device refused. |
 

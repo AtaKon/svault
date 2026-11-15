@@ -12151,6 +12151,29 @@ describe("web push reminders", async () => {
     assert.equal((await request("/api/push", { auth: ownerCookie })).data.subscriptions.length, 0);
   });
 
+  it("does not let another account take over a registered device without its keys", async () => {
+    const url = endpoint("takeover");
+    assert.equal((await subscribe(url, ownerCookie)).status, 201);
+    try {
+      const stolen = await request("/api/push/subscribe", {
+        method: "POST",
+        auth: memberCookie,
+        body: { endpoint: url, keys: { p256dh: "BCdifferentP256dhKey", auth: "different-auth" } },
+      });
+      assert.equal(stolen.status, 409);
+      assert.equal((await request("/api/push", { auth: memberCookie })).data.subscriptions.length, 0);
+      assert.equal((await request("/api/push", { auth: ownerCookie })).data.subscriptions.some((entry: any) => entry), true);
+
+      // The same browser (same keys) signing in as someone else does move it.
+      const moved = await subscribe(url, memberCookie);
+      assert.equal(moved.status, 201);
+      assert.equal((await request("/api/push", { auth: memberCookie })).data.subscriptions.length, 1);
+    } finally {
+      await unsubscribe(url, memberCookie);
+      await unsubscribe(url, ownerCookie);
+    }
+  });
+
   it("refuses push endpoints that point at private or local addresses", async () => {
     // Any signed-in user supplies the endpoint and the server POSTs to it, so a
     // private target is refused even though SV_OUTBOUND_ALLOW_PRIVATE defaults to true.
@@ -12169,6 +12192,9 @@ describe("web push reminders", async () => {
     const { publicEndpointProblem } = await import("../services/web-push.js");
     assert.match((await publicEndpointProblem("https://10.1.2.3/x")) ?? "", /public address/);
     assert.match((await publicEndpointProblem("https://[fd00::1]/x")) ?? "", /public address/);
+    assert.match((await publicEndpointProblem("https://0.0.0.0/x")) ?? "", /public address/);
+    assert.match((await publicEndpointProblem("https://[::ffff:127.0.0.1]/x")) ?? "", /public address/);
+    assert.match((await publicEndpointProblem("https://[::]/x")) ?? "", /public address/);
     assert.equal(await publicEndpointProblem("https://8.8.8.8/x"), null);
     assert.match((await publicEndpointProblem("http://8.8.8.8/x")) ?? "", /https/);
   });

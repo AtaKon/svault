@@ -5,6 +5,7 @@ import net from "node:net";
 import { sendNotification, setVapidDetails } from "web-push";
 import { webPushConfig } from "../config.js";
 import { all, get, newId, now, run } from "../db.js";
+import { ApiError } from "../http.js";
 import { isPrivateAddress } from "../lib/outbound.js";
 
 /**
@@ -177,7 +178,8 @@ export async function listSubscriptions(userId: string): Promise<PushSubscriptio
 /**
  * Store (or refresh) a browser subscription. The endpoint is unique in the
  * instance, so signing in as another user on the same browser moves the
- * subscription to that account instead of keeping a stale owner.
+ * subscription to that account instead of keeping a stale owner. Moving it
+ * requires the same keys (see below); otherwise it is refused with 409.
  */
 export async function subscribeUser(opts: {
   userId: string;
@@ -190,6 +192,13 @@ export async function subscribeUser(opts: {
   const timestamp = now();
   const existing = await get<any>("SELECT * FROM push_subscriptions WHERE endpoint = ?", [endpoint]);
   if (existing) {
+    // The endpoint is a secret only its browser knows. A row may change owner
+    // (signing in as someone else on the same browser) only when the caller
+    // presents the same keys, so a leaked endpoint string alone cannot redirect
+    // another account's device.
+    if (existing.user_id !== opts.userId && (existing.p256dh !== opts.p256dh || existing.auth !== opts.auth)) {
+      throw new ApiError(409, "This device is already registered to another account");
+    }
     await run(
       "UPDATE push_subscriptions SET user_id = ?, p256dh = ?, auth = ?, user_agent = ?, created_at = ? WHERE id = ?",
       [opts.userId, truncate(opts.p256dh, 200), truncate(opts.auth, 100), truncate(opts.userAgent ?? "", 300) || null, timestamp, existing.id],
