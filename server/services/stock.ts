@@ -918,7 +918,7 @@ async function undoStockMovementInner(opts: { houseId: string; movementId: strin
     }
 
     for (const effect of effects) {
-      const lot = await get<any>("SELECT id, quantity, location_id FROM stock_lots WHERE id = ? AND item_id = ?", [
+      const lot = await get<any>("SELECT id, quantity, location_id, portions FROM stock_lots WHERE id = ? AND item_id = ?", [
         effect.lot_id,
         item.id,
       ]);
@@ -933,7 +933,16 @@ async function undoStockMovementInner(opts: { houseId: string; movementId: strin
       }
       const restored = round(current - delta);
       if (restored < 0) throw new ApiError(409, "Undo would make stock negative");
-      await run("UPDATE stock_lots SET quantity = ? WHERE id = ?", [restored, lot.id]);
+      if (lot.portions == null) {
+        await run("UPDATE stock_lots SET quantity = ? WHERE id = ?", [restored, lot.id]);
+      } else {
+        // A portioned (frozen) batch keeps its serving count in step with its
+        // quantity, so give the restored quantity its portions back at the same
+        // rate. The original count is not recorded; a batch that was emptied has
+        // no rate left, so it comes back at one portion per unit.
+        const perUnit = current > 0 ? Number(lot.portions) / current : 1;
+        await run("UPDATE stock_lots SET quantity = ?, portions = ? WHERE id = ?", [restored, round(perUnit * restored), lot.id]);
+      }
     }
 
     const originalType = original.type as MovementType;

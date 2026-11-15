@@ -14054,6 +14054,40 @@ describe("freezer batches", () => {
     assert.equal(addDays("2030-01-01", 90), detail.data.lots[0].effectiveExpiresAt);
   });
 
+  it("gives a frozen batch its portions back when a take-out is undone", async () => {
+    const house = await request("/api/houses", { method: "POST", body: { name: "Freezer undo house" } });
+    const hid = house.data.id;
+    const freezer = (await request(`/api/houses/${hid}/locations`)).data.find((place: any) => place.isFreezer);
+    const created = await request(`/api/houses/${hid}/items`, {
+      method: "POST",
+      body: { name: "Freezer stew", unit: "pcs", initialStock: { quantity: 5 } },
+    });
+    const id = created.data.id;
+    const frozen = await request(`/api/houses/${hid}/freezer/freeze`, {
+      method: "POST",
+      body: { itemId: id, lotId: created.data.lots[0].id, portions: 2, locationId: freezer.id },
+    });
+    assert.equal(frozen.status, 200, JSON.stringify(frozen.data));
+    assert.equal((await request(`/api/houses/${hid}/freezer`)).data.totals.portions, 2);
+
+    assert.equal((await request(`/api/houses/${hid}/freezer/take-out`, {
+      method: "POST",
+      body: { itemId: id, lotId: frozen.data.lotId, portions: 1 },
+    })).status, 200);
+    assert.equal((await request(`/api/houses/${hid}/freezer`)).data.totals.portions, 1);
+
+    const movements = await request(`/api/items/${id}/movements`);
+    const takeOut = movements.data.find((entry: any) => entry.type === "out");
+    assert.ok(takeOut, "the take-out was recorded");
+    const undone = await request(`/api/houses/${hid}/movements/${takeOut.id}/undo`, { method: "POST", body: {} });
+    assert.equal(undone.status, 200, JSON.stringify(undone.data));
+
+    const lot = (await request(`/api/items/${id}`)).data.lots.find((entry: any) => entry.id === frozen.data.lotId);
+    assert.equal(lot.quantity, 2);
+    assert.equal(lot.portions, 2);
+    assert.equal((await request(`/api/houses/${hid}/freezer`)).data.totals.portions, 2);
+  });
+
   it("adds the freezer columns to an existing SQLite database and is safe to run twice", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "svault-freezer-migration-"));
     try {
