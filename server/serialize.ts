@@ -22,6 +22,8 @@ import type {
   EspressoShot,
   EspressoShotSummary,
   EspressoEquipment,
+  Stocktake,
+  StocktakeLine,
 } from "../shared/types.js";
 
 export const ITEM_SELECT = `
@@ -507,5 +509,60 @@ export async function serializeNotification(row: any, userId: string): Promise<N
     read: readBy.includes(userId),
     resolvedAt: row.resolved_at ?? null,
     createdAt: row.created_at,
+  };
+}
+
+export function serializeStocktakeLine(row: any, currentQty: number | null = null): StocktakeLine {
+  const expectedQty = round(Number(row.expected_qty ?? 0));
+  const countedQty = row.counted_qty == null ? null : round(Number(row.counted_qty));
+  const variance = countedQty == null ? null : round(countedQty - expectedQty);
+  const unitCost = row.unit_cost == null ? null : Number(row.unit_cost);
+  const current = currentQty == null ? 0 : round(currentQty);
+  return {
+    id: row.id,
+    stocktakeId: row.stocktake_id,
+    itemId: row.item_id,
+    itemName: row.item_name ?? "",
+    unit: row.item_unit ?? row.unit ?? "pcs",
+    categoryId: row.item_category_id ?? null,
+    expectedQty,
+    countedQty,
+    unitCost,
+    note: row.note ?? null,
+    countedBy: row.counted_by ?? null,
+    countedByName: row.counted_by_name ?? null,
+    countedAt: row.counted_at ?? null,
+    variance,
+    valueImpact: variance != null && unitCost != null ? round(variance * unitCost, 2) : null,
+    committedDelta: row.committed_delta == null ? null : round(Number(row.committed_delta)),
+    currentQty: current,
+    changed: currentQty != null && current !== expectedQty,
+  };
+}
+
+export function serializeStocktake(row: any, lines?: StocktakeLine[]): Stocktake {
+  return {
+    id: row.id,
+    houseId: row.house_id,
+    locationId: row.location_id ?? null,
+    locationName: row.resolved_location_name ?? row.location_name ?? null,
+    categoryId: row.category_id ?? null,
+    categoryName: row.resolved_category_name ?? row.category_name ?? null,
+    status: row.status,
+    note: row.note ?? null,
+    startedBy: row.started_by ?? null,
+    startedByName: row.started_by_name ?? null,
+    committedBy: row.committed_by ?? null,
+    committedByName: row.committed_by_name ?? null,
+    createdAt: row.created_at,
+    committedAt: row.committed_at ?? null,
+    cancelledAt: row.cancelled_at ?? null,
+    lineCount: Number(row.line_count ?? lines?.length ?? 0),
+    countedCount: Number(row.counted_count ?? lines?.filter((line) => line.countedQty != null).length ?? 0),
+    varianceCount: Number(
+      row.variance_count ?? lines?.filter((line) => line.variance != null && line.variance !== 0).length ?? 0,
+    ),
+    changedCount: lines?.filter((line) => line.changed).length ?? 0,
+    lines,
   };
 }

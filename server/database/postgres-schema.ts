@@ -813,6 +813,42 @@ CREATE INDEX IF NOT EXISTS ai_logs_house ON ai_call_logs(house_id, created_at);
 CREATE INDEX IF NOT EXISTS ai_logs_user ON ai_call_logs(user_id, created_at);
 CREATE INDEX IF NOT EXISTS ai_logs_operation ON ai_call_logs(operation);
 
+CREATE TABLE IF NOT EXISTS stocktakes (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  location_id TEXT REFERENCES locations(id) ON DELETE SET NULL,
+  category_id TEXT REFERENCES categories(id) ON DELETE SET NULL,
+  location_name TEXT,
+  category_name TEXT,
+  status TEXT NOT NULL DEFAULT 'draft',
+  note TEXT,
+  started_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  committed_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  committed_at TEXT,
+  cancelled_at TEXT
+);
+CREATE INDEX IF NOT EXISTS stocktakes_house ON stocktakes(house_id, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS stocktakes_one_draft ON stocktakes(house_id) WHERE status = 'draft';
+
+CREATE TABLE IF NOT EXISTS stocktake_lines (
+  id TEXT PRIMARY KEY,
+  stocktake_id TEXT NOT NULL REFERENCES stocktakes(id) ON DELETE CASCADE,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  expected_qty DOUBLE PRECISION NOT NULL DEFAULT 0,
+  counted_qty DOUBLE PRECISION,
+  unit_cost DOUBLE PRECISION,
+  note TEXT,
+  counted_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  counted_at TEXT,
+  committed_delta DOUBLE PRECISION,
+  created_at TEXT NOT NULL,
+  UNIQUE (stocktake_id, item_id)
+);
+CREATE INDEX IF NOT EXISTS stocktake_lines_session ON stocktake_lines(stocktake_id);
+CREATE INDEX IF NOT EXISTS stocktake_lines_item ON stocktake_lines(item_id);
+
 CREATE TABLE IF NOT EXISTS schema_meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -1001,5 +1037,7 @@ export const POSTGRES_TABLE_ORDER = [
   "photo_labels",
   "ai_cache",
   "ai_call_logs",
+  "stocktakes",
+  "stocktake_lines",
 ] as const;
 

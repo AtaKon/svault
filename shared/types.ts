@@ -447,7 +447,7 @@ export interface StockLot {
 export interface Movement {
   id: string;
   itemId: string;
-  type: "in" | "out" | "adjust" | "waste" | "move";
+  type: "in" | "out" | "adjust" | "waste" | "move" | "count";
   delta: number;
   unit: string;
   unitPrice: number | null;
@@ -1514,4 +1514,68 @@ export interface OrphanFile {
   key: string;
   size: number;
   modifiedAt: string;
+}
+
+/* ----------------------------------------------------------------- stocktake */
+
+export type StocktakeStatus = "draft" | "committed" | "cancelled";
+
+/** One item in a guided count. `expectedQty` is the snapshot taken when the
+ * session started; `currentQty` is the same scope read now (draft only). */
+export interface StocktakeLine {
+  id: string;
+  stocktakeId: string;
+  itemId: string;
+  itemName: string;
+  unit: string;
+  categoryId: string | null;
+  expectedQty: number;
+  countedQty: number | null;
+  /** Weighted-average batch cost per base unit at snapshot time, when priced. */
+  unitCost: number | null;
+  note: string | null;
+  countedBy: string | null;
+  countedByName: string | null;
+  countedAt: string | null;
+  /** Counted minus expected. Null until the line is counted. */
+  variance: number | null;
+  /** Variance multiplied by the snapshot unit cost, when both are known. */
+  valueImpact: number | null;
+  /** Delta actually applied at commit (null while the session is open). */
+  committedDelta: number | null;
+  /** Quantity in the session's scope right now (draft only; 0 otherwise). */
+  currentQty: number;
+  /** Stock moved since the snapshot, so committing needs an explicit confirmation. */
+  changed: boolean;
+}
+
+export interface Stocktake {
+  id: string;
+  houseId: string;
+  locationId: string | null;
+  locationName: string | null;
+  categoryId: string | null;
+  categoryName: string | null;
+  status: StocktakeStatus;
+  note: string | null;
+  startedBy: string | null;
+  startedByName: string | null;
+  committedBy: string | null;
+  committedByName: string | null;
+  createdAt: string;
+  committedAt: string | null;
+  cancelledAt: string | null;
+  lineCount: number;
+  countedCount: number;
+  varianceCount: number;
+  /** Lines whose current quantity differs from the snapshot (draft only). */
+  changedCount: number;
+  /** Present on the detail endpoint; omitted from history lists. */
+  lines?: StocktakeLine[];
+}
+
+export interface StocktakeCommitResult {
+  stocktake: Stocktake;
+  appliedLines: number;
+  appliedDelta: number;
 }
