@@ -163,6 +163,8 @@ test("renders a QR code that decodes back to the label link", async () => {
 
 test("GET /api/labels returns the configured public base URL", async () => {
   const dataDir = mkdtempSync(path.join(tmpdir(), "svault-labels-"));
+  const envKeys = ["DATA_DIR", "NODE_ENV", "SV_REGISTRATION", "PUBLIC_URL"] as const;
+  const previousEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
   process.env.DATA_DIR = dataDir;
   process.env.NODE_ENV = "test";
   process.env.SV_REGISTRATION = "open";
@@ -197,6 +199,10 @@ test("GET /api/labels returns the configured public base URL", async () => {
       await closeDb();
     }
   } finally {
+    for (const key of envKeys) {
+      if (previousEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = previousEnv[key];
+    }
     rmSync(dataDir, { recursive: true, force: true });
   }
 });

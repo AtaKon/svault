@@ -83,7 +83,7 @@ export const RP_ORIGIN = process.env.ORIGIN ?? process.env.RP_ORIGIN ?? "";
  * Empty means "use the address the browser is on", which is correct for
  * localhost and single-origin installs behind no proxy.
  */
-export const PUBLIC_URL = (process.env.PUBLIC_URL ?? process.env.SV_PUBLIC_URL ?? "").trim();
+export const PUBLIC_URL = (process.env.PUBLIC_URL ?? "").trim();
 
 /** Optional OpenID Connect provider. Everything is server-side. */
 export const OIDC = {
