@@ -8,6 +8,7 @@ import { Icon } from "@/components/icons";
 import { BarcodeScanner } from "@/components/BarcodeScanner";
 import { ZoomableImage } from "@/components/ZoomableImage";
 import { useToast } from "@/components/toast";
+import { useStockUndo } from "@/undo-stock";
 import { qty as formatQty } from "@/format";
 import { offProjectLabel } from "@/off";
 import type { Item, OffProduct } from "@shared/types";
@@ -42,6 +43,7 @@ export function ScanPage() {
   const { t } = useI18n();
   const navigate = useNavigate();
   const toast = useToast();
+  const undo = useStockUndo();
   const [result, setResult] = useState<ScanResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [manual, setManual] = useState("");
@@ -67,16 +69,29 @@ export function ScanPage() {
     [house.id, toast],
   );
 
+  const restock = async (itemId: string) => {
+    try {
+      const fresh = await api<Item>(`/api/items/${itemId}`);
+      setResult((current) => (current ? { ...current, item: fresh } : current));
+    } catch {
+      /* the next scan reads the server again */
+    }
+  };
+
   const adjust = async (action: "add" | "remove") => {
     if (!result?.item) return;
     setStockBusy(action);
     try {
-      const updated = await api<Item>(`/api/items/${result.item.id}/stock`, {
+      const updated = await api<Item & { lastMovementId?: string | null }>(`/api/items/${result.item.id}/stock`, {
         method: "POST",
         body: { action, quantity: 1, unit: result.item.unit },
       });
       setResult({ ...result, item: updated as unknown as Item });
-      toast.success(t(action === "add" ? "Added one {item}" : "Removed one {item}", { item: updated.name }));
+      undo.notify(t(action === "add" ? "Added one {item}" : "Removed one {item}", { item: updated.name }), {
+        itemId: updated.id,
+        movementId: updated.lastMovementId,
+        onUndone: () => void restock(updated.id),
+      });
       window.dispatchEvent(new Event("sv:refresh-badges"));
     } catch (err) {
       toast.error(err instanceof Error ? t(err.message) : t("Could not update stock"));
