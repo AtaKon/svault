@@ -16,6 +16,10 @@ All notable changes to SVault are documented here. The format follows
 
 - Category budgets, optional bill spending, month-end projections, budget history and threshold reminders.
 - Consumption-based run-out forecasts on items and the dashboard, with an optional shopping-list fill.
+- Duplicate item finder: deterministic groups with reason chips, a side-by-side comparison, a dry-run
+  merge summary and a merge that moves every reference, converts compatible units, archives the
+  sources with `merged_into` and remembers dismissed pairs. A **Merge into…** action on the item page
+  uses the same flow.
 
 ### Security
 
