@@ -926,3 +926,14 @@ A frozen batch's eat-by date is the frozen date plus the item's **Freezer shelf 
 **Take out 1** removes one portion from stock immediately and records it in the movement history. Press **Thaw** first if you are defrosting the whole batch. The freezer card on the dashboard appears only while portions are frozen and shows how many should be used soon. Normal expiry reminders cover frozen and thawed batches, using the same dates.
 
 A place can be marked as a freezer with the switch in **House settings → Places**. The seeded Freezer already is one.
+### Live updates between members
+
+When two people use the same house at the same time, changes made by one appear for the other without
+a reload. Inventory quantities, item details, the shopping list, the meal plan, purchases and the
+reminder bell refresh automatically. A quiet "Updated by …" toast appears when another member changes
+the shopping list.
+
+The connection pauses while the tab is in the background, reconnects when you return, and falls back to
+refreshing every 90 seconds if streaming is blocked. It carries no inventory data: the app simply
+refetches what you are allowed to see. If you are removed from a house, the live connection closes.
+Server operators can set `LIVE_UPDATES=off`; see [deployment.md](deployment.md#configuration).

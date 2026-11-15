@@ -7,6 +7,7 @@ import { useI18n } from "@/i18n";
 import { Badge, Button, Card, EmptyState, Field, PageHeader, Select, Sheet, Skeleton } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { useToast } from "@/components/toast";
+import { useLiveRefresh } from "@/live";
 import { qty } from "@/format";
 import { MEAL_SLOTS, type FoodIdea, type MealPlanEntry, type MealPlanWeek, type MealSlot, type Recipe } from "@shared/types";
 
@@ -75,6 +76,8 @@ export function PlanPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useLiveRefresh(house.id, ["plan", "recipes"], load);
 
   const days = useMemo(() => {
     const start = mondayOf(weekStart);

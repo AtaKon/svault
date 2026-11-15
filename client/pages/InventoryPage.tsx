@@ -8,6 +8,7 @@ import { Icon } from "@/components/icons";
 import { ItemCard } from "@/components/ItemCard";
 import { SavedViews } from "@/components/SavedViews";
 import { useToast } from "@/components/toast";
+import { useLiveRefresh } from "@/live";
 import { qty } from "@/format";
 import type { Category, Item, ItemDetail, InventorySort, Location, SavedView, SavedViewFilters } from "@shared/types";
 
@@ -77,6 +78,8 @@ export function InventoryPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useLiveRefresh(house.id, ["stock", "items"], load);
 
   const setParam = (key: string, value: string | null) => {
     const next = new URLSearchParams(params);

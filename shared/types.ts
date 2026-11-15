@@ -2021,3 +2021,26 @@ export interface ItemMergeResult {
   target: ItemMergeTarget;
   archived: string[];
 }
+
+/**
+ * Minimal invalidation signal pushed to household members over Server-Sent
+ * Events. It intentionally carries no household payload: clients refetch the
+ * data they are allowed to see through the normal API.
+ */
+export type LiveEventType =
+  | "stock"
+  | "shopping"
+  | "items"
+  | "recipes"
+  | "plan"
+  | "notifications"
+  | "receipts"
+  | "bills";
+
+export interface LiveEvent {
+  type: LiveEventType;
+  /** Entity id when the emitter knows it (for example an item or shopping line). */
+  id?: string;
+  actorUserId: string;
+  at: string;
+}

@@ -138,6 +138,7 @@ Docker Compose reads `.env` next to `docker-compose.yml`.
 | `VAPID_PUBLIC_KEY` | empty | Server | Public key for Web Push; with the two below, enables push reminders. Generate with `npm run vapid:generate`. |
 | `VAPID_PRIVATE_KEY` | empty | Server | Private key for Web Push. Keep it secret; changing it invalidates every subscription. |
 | `VAPID_SUBJECT` | empty | Server | Contact for the push service, `mailto:you@example.com` or an `https://` URL. |
+| `LIVE_UPDATES` | `on` | Server | Server-Sent Events stream at `/api/houses/:houseId/events` for live updates between members. `off` disables it and the client falls back to polling every 90 s. Each account may hold 5 streams and each house 100. |
 | `NODE_ENV` | `production` in Docker | Server | Enables production caching, disables request logs. |
 
 See [Bring your own database](database.md) for PostgreSQL setup, migration and the example Compose
@@ -292,6 +293,28 @@ server {
 By default the server trusts one proxy hop (`SV_TRUST_PROXY=1`), so `X-Forwarded-*` headers are
 respected. Set `SV_TRUST_PROXY` to the number of hops for chained proxies, or `false` if the container
 is ever reached without a proxy in front of it.
+
+### Live updates and streaming proxies
+
+`GET /api/houses/:houseId/events` is a Server-Sent Events stream used for live updates between
+household members. It is plain chunked `text/event-stream`, sends a heartbeat comment every 25 seconds
+and must not be buffered or compressed:
+
+- **Nginx:** add `proxy_buffering off; proxy_cache off;` to the API location. The existing
+  `proxy_read_timeout 180s` is enough; the app also sends `X-Accel-Buffering: no`.
+- **Traefik:** streaming works with the default HTTP/1.1 backend. Do not enable response compression
+  for `/api`, or exclude the event path.
+- **Nginx Proxy Manager:** put `proxy_buffering off; proxy_read_timeout 180s; proxy_send_timeout 180s;`
+  in the Advanced tab.
+- **Caddy:** the `encode` directive compresses responses; the app's `Cache-Control: no-transform`
+  usually prevents it, but on older Caddy versions exclude the path explicitly:
+  `encode zstd gzip { not path /api/houses/*/events }`.
+- **Cloudflare:** caching is not used for `/api`, but some plans buffer streamed responses. If events
+  arrive only when the connection closes, set `LIVE_UPDATES=off`; the client then falls back to
+  polling every 90 seconds.
+
+The client holds one stream per tab, pauses it while the tab is hidden and reconnects with backoff.
+Removing a member closes their stream within a minute.
 
 ### Nginx Proxy Manager
 

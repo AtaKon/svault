@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { DATABASE_KIND } from "./config.js";
 import { createDatabase } from "./database/index.js";
 import type { DatabaseDriver, DatabaseKind, DatabaseSession, DatabaseTransactionOptions, RunResult } from "./database/types.js";
@@ -71,9 +72,40 @@ export function exec(sql: string): Promise<void> {
   return active().exec(sql);
 }
 
-/** Run `fn` inside a transaction; nested calls use savepoints. */
+/**
+ * Run `fn` inside a transaction; nested calls use savepoints.
+ *
+ * Side effects that must never describe rolled-back data can be queued with
+ * `afterCommit()`: they run once the outermost transaction commits and are
+ * dropped when it rolls back. Outside a transaction the callback runs at once.
+ */
+const afterCommitStorage = new AsyncLocalStorage<Array<() => void>>();
+
+export function afterCommit(callback: () => void): void {
+  const queue = afterCommitStorage.getStore();
+  if (queue) queue.push(callback);
+  else callback();
+}
+
 export function tx<T>(fn: (session: DatabaseSession) => Promise<T>, options?: DatabaseTransactionOptions): Promise<T> {
-  return active().tx(fn, options);
+  // A nested call shares the outermost queue, so the callback still waits for
+  // the real commit rather than a savepoint release.
+  if (afterCommitStorage.getStore()) return active().tx(fn, options);
+  const queue: Array<() => void> = [];
+  return (async () => {
+    const result = await active().tx(
+      (session) => afterCommitStorage.run(queue, () => fn(session)),
+      options,
+    );
+    for (const callback of queue) {
+      try {
+        callback();
+      } catch (error) {
+        console.error("Post-commit callback failed:", error);
+      }
+    }
+    return result;
+  })();
 }
 
 /**

@@ -48,6 +48,8 @@ import { labelRoutes } from "./routes/labels.js";
 import { reportRoutes } from "./routes/reports.js";
 import { pushRoutes } from "./routes/push.js";
 import { freezerRoutes } from "./routes/freezer.js";
+import { liveRoutes } from "./routes/live.js";
+import { liveRecordEvents, liveWriteEvents } from "./services/live.js";
 import { inMaintenance } from "./maintenance.js";
 import { stripQuery } from "./lib/redact.js";
 import { assertAiBudget } from "./services/ai-budget.js";
@@ -249,6 +251,29 @@ app.post(
   limitRequests(limiters.insights, userOrIp, "Too many price checks. Wait a few minutes and try again."),
 );
 
+/* Live updates: push a minimal invalidation after a successful write. The
+   event is attached at the path prefix, so the routers below need no extra
+   code. Reads and failed requests emit nothing; stock changes are emitted by
+   the stock service so background and composed writes are covered too. */
+app.use("/api/houses/:houseId/items", liveWriteEvents("items"));
+app.use("/api/houses/:houseId/locations", liveWriteEvents("items"));
+app.use("/api/houses/:houseId/categories", liveWriteEvents("items"));
+app.use("/api/houses/:houseId/attributes", liveWriteEvents("items"));
+app.use("/api/houses/:houseId/espresso-shots", liveWriteEvents("items"));
+app.use("/api/houses/:houseId/espresso-equipment", liveWriteEvents("items"));
+app.use("/api/houses/:houseId/intake", liveWriteEvents("items"));
+app.use("/api/houses/:houseId/imports", liveWriteEvents("items"));
+app.use("/api/houses/:houseId/shopping", liveWriteEvents("shopping"));
+app.use("/api/houses/:houseId/plan", liveWriteEvents("plan"));
+app.use("/api/houses/:houseId/recipes", liveWriteEvents("recipes"));
+app.use("/api/houses/:houseId/notifications", liveWriteEvents("notifications"));
+app.use("/api/houses/:houseId/receipts", liveWriteEvents("receipts"));
+app.use("/api/houses/:houseId/bills", liveWriteEvents("bills"));
+app.use("/api/items/:itemId", liveRecordEvents("items", { param: "itemId", table: "items" }));
+app.use("/api/recipes/:recipeId", liveRecordEvents("recipes", { param: "recipeId", table: "recipes" }));
+app.use("/api/receipts/:receiptId", liveRecordEvents("receipts", { param: "receiptId", table: "receipts" }));
+app.use("/api/bills/:billId", liveRecordEvents("bills", { param: "billId", table: "bills" }));
+
 app.use("/api/auth", authRoutes);
 app.use("/api/auth", passkeyRoutes);
 app.use("/api/auth", twoFactorRoutes);
@@ -281,6 +306,7 @@ app.use("/api/houses", recipeCostRoutes);
 app.use("/api/houses", reportRoutes);
 app.use("/api/houses", activityRoutes);
 app.use("/api/houses", freezerRoutes);
+app.use("/api/houses", liveRoutes);
 app.use("/api/notifications", globalNotificationRoutes);
 app.use("/api/push", pushRoutes);
 app.use("/api/admin", adminRoutes);

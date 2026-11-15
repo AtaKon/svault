@@ -10,6 +10,7 @@ import { OfflineQueueBar } from "@/components/OfflineQueueBar";
 import { useLabelHouseBinding } from "@/components/LabelDeepLink";
 import { GlobalSearch } from "@/components/GlobalSearch";
 import { currentTheme, toggleTheme } from "@/theme";
+import { setLiveContext, useLiveRefresh } from "@/live";
 import type { House, Notification } from "@shared/types";
 
 const NAV: { to: string; label: string; icon: IconName; end?: boolean }[] = [
@@ -109,15 +110,30 @@ export function AppShell() {
       }
     };
     void load();
-    const timer = window.setInterval(load, 90_000);
     const onBadge = () => void load();
     window.addEventListener("sv:refresh-badges", onBadge);
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
       window.removeEventListener("sv:refresh-badges", onBadge);
     };
   }, [user]);
+
+  // One live connection per tab. The reminder badge and every page share it,
+  // and the hook below refetches the badge through the existing event so this
+  // effect stays the only place that knows how notifications load.
+  useEffect(() => {
+    setLiveContext(house && user ? { houseId: house.id, userId: user.id } : null);
+    return () => setLiveContext(null);
+  }, [house?.id, user?.id]);
+
+  useLiveRefresh(
+    house?.id ?? null,
+    ["notifications", "stock", "items"],
+    () => {
+      window.dispatchEvent(new Event("sv:refresh-badges"));
+    },
+    { enabled: Boolean(user) },
+  );
 
   useEffect(() => {
     window.scrollTo({ top: 0 });

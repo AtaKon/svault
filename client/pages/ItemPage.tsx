@@ -32,6 +32,7 @@ import { EspressoLogCard } from "@/components/Espresso";
 import { MergeIntoSheet } from "@/components/ItemMerge";
 import { useToast } from "@/components/toast";
 import { useStockUndo } from "@/undo-stock";
+import { useLiveRefresh } from "@/live";
 import { daysUntil, money, qty, relativeTime, shortDate, todayInput, unitPriceLabel } from "@/format";
 import { offProjectLabel } from "@/off";
 import type {
@@ -146,6 +147,8 @@ export function ItemPage() {
   useEffect(() => {
     setPriceVendor("");
   }, [itemId]);
+
+  useLiveRefresh(house.id, ["stock", "items"], load);
 
   const setOpened = async (lotId: string, opened: boolean) => {
     setOpeningBusy(lotId);

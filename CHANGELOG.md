@@ -316,6 +316,12 @@ All notable changes to SVault are documented here. The format follows
   recipe cards show a `kcal / portion` badge.
 - Shopping list and a weekly meal planner are still proposed in the [roadmap](docs/roadmap.md); no code
   has landed for them yet.
+- **Live updates between members.** Inventory, item details, the shopping list, the meal plan,
+  purchases and the reminder bell now refresh when another member changes them, delivered as minimal
+  Server-Sent Events that carry no household data. The stream has a heartbeat, backed-off reconnection,
+  pauses while the tab is hidden and falls back to 90-second polling when it is unavailable. Removing a
+  member closes their stream. `LIVE_UPDATES=off` disables it, and reverse-proxy notes are in
+  [docs/deployment.md](docs/deployment.md#live-updates-and-streaming-proxies).
 
 ### Changed
 

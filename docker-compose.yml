@@ -43,6 +43,9 @@ services:
       VAPID_PUBLIC_KEY: "${VAPID_PUBLIC_KEY:-}"
       VAPID_PRIVATE_KEY: "${VAPID_PRIVATE_KEY:-}"
       VAPID_SUBJECT: "${VAPID_SUBJECT:-}"
+      # Live updates between members (Server-Sent Events). Set "off" if a proxy
+      # cannot stream; the browser then falls back to polling.
+      LIVE_UPDATES: "${LIVE_UPDATES:-on}"
     healthcheck:
       test:
         [

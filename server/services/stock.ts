@@ -3,6 +3,7 @@ import { ApiError } from "../http.js";
 import { convert, pricePerUnit, round } from "../units.js";
 import { syncItemLowStock } from "./notifications.js";
 import { itemAvailableToUse } from "./loans.js";
+import { publishLive } from "./live.js";
 
 export interface StockOpts {
   itemId: string;
@@ -145,7 +146,7 @@ export async function addStock(opts: StockOpts): Promise<string> {
   if (!Number.isFinite(opts.quantity) || opts.quantity <= 0) {
     throw new ApiError(400, "Quantity must be greater than zero");
   }
-  return await tx(async () => {
+  const movementId = await tx(async () => {
     const item = await itemRow(opts.itemId, opts.houseId);
     const qty = baseQuantity(item, opts.quantity, opts.unit);
     const price =
@@ -201,6 +202,8 @@ export async function addStock(opts: StockOpts): Promise<string> {
     });
     return movementId;
   });
+  publishLive(opts.houseId, { type: "stock", id: opts.itemId, actorUserId: opts.userId });
+  return movementId;
 }
 
 /** Consume stock FIFO (oldest expiry first, then oldest purchase). */
@@ -213,7 +216,7 @@ export async function removeStock(opts: StockOpts & { waste?: boolean }): Promis
   );
   if (requested <= 0) throw new ApiError(400, "Quantity must be greater than zero");
 
-  return await tx(async () => {
+  const movementId = await tx(async () => {
     const item = await itemRow(opts.itemId, opts.houseId);
     const onHand = await itemQuantity(item.id);
     const available = Math.max(0, await itemAvailableToUse(item.id));
@@ -287,6 +290,8 @@ export async function removeStock(opts: StockOpts & { waste?: boolean }): Promis
       lots: touched,
     });
   });
+  publishLive(opts.houseId, { type: "stock", id: opts.itemId, actorUserId: opts.userId });
+  return movementId;
 }
 
 /** Set an absolute quantity (stock count correction). */
@@ -311,7 +316,7 @@ export async function setStock(opts: StockOpts & { target: number }): Promise<st
       );
     }
   }
-  return await tx(async () => {
+  const movementId = await tx(async () => {
     if (delta > 0) {
       const price =
         opts.unitPrice != null && Number.isFinite(opts.unitPrice) && opts.unitPrice > 0
@@ -391,6 +396,8 @@ export async function setStock(opts: StockOpts & { target: number }): Promise<st
       lots: touched,
     });
   });
+  publishLive(opts.houseId, { type: "stock", id: opts.itemId, actorUserId: opts.userId });
+  return movementId;
 }
 
 /**
@@ -399,7 +406,7 @@ export async function setStock(opts: StockOpts & { target: number }): Promise<st
  * place. A shortage is capped at what is actually there, so a quantity that
  * changed during the session can never push stock below zero.
  */
-export async function applyStockCount(opts: {
+async function applyStockCountInner(opts: {
   itemId: string;
   houseId: string;
   userId: string;
@@ -487,7 +494,7 @@ export async function moveStock(opts: { itemId: string; houseId: string; userId:
   }
   await validateLocation(opts.houseId, opts.fromLocationId);
   await validateLocation(opts.houseId, opts.toLocationId);
-  return await tx(async () => {
+  const movementId = await tx(async () => {
     const item = await itemRow(opts.itemId, opts.houseId);
     const requested = baseQuantity(item, opts.quantity, opts.unit);
     if (requested <= 0) throw new ApiError(400, "Quantity must be greater than zero");
@@ -550,6 +557,8 @@ export async function moveStock(opts: { itemId: string; houseId: string; userId:
       lots: touched,
     });
   });
+  publishLive(opts.houseId, { type: "stock", id: opts.itemId, actorUserId: opts.userId });
+  return movementId;
 }
 
 /**
@@ -557,7 +566,7 @@ export async function moveStock(opts: { itemId: string; houseId: string; userId:
  * price, vendor and receipt provenance on both halves, and records one `move`
  * movement. Freezing is refused on a thawed batch: refreezing is not offered.
  */
-export async function freezeStock(opts: {
+async function freezeStockInner(opts: {
   itemId: string;
   houseId: string;
   userId: string;
@@ -653,7 +662,7 @@ export async function freezeStock(opts: {
 }
 
 /** Mark a frozen batch thawed so the short thaw window drives expiry. */
-export async function thawStock(opts: {
+async function thawStockInner(opts: {
   itemId: string;
   houseId: string;
   userId: string;
@@ -758,7 +767,7 @@ export async function revertReceiptStock(opts: {
   userId: string;
   reason?: string;
 }): Promise<{ itemId: string; itemName: string; unit: string; added: number; reverted: number; consumed: number }[]> {
-  return await tx(async () => {
+  const results = await tx(async () => {
     const lots = await all<any>(
       "SELECT * FROM stock_lots WHERE receipt_id = ? AND house_id = ? ORDER BY created_at ASC",
       [opts.receiptId, opts.houseId],
@@ -808,6 +817,10 @@ export async function revertReceiptStock(opts: {
     }
     return results;
   });
+  for (const entry of results) {
+    publishLive(opts.houseId, { type: "stock", id: entry.itemId, actorUserId: opts.userId });
+  }
+  return results;
 }
 
 export async function afterStockChange(itemId: string) {
@@ -868,7 +881,7 @@ export async function undoableMovements(itemId: string): Promise<Set<string>> {
  * one of the same batches, the batch created by the movement is no longer
  * untouched, the item is archived, or the movement is itself an undo.
  */
-export async function undoStockMovement(opts: { houseId: string; movementId: string; userId: string }): Promise<UndoStockResult> {
+async function undoStockMovementInner(opts: { houseId: string; movementId: string; userId: string }): Promise<UndoStockResult> {
   return await tx(async () => {
     const original = await get<any>("SELECT * FROM stock_movements WHERE id = ? AND house_id = ?", [
       opts.movementId,
@@ -959,4 +972,32 @@ export async function undoStockMovement(opts: { houseId: string; movementId: str
       quantity: await itemQuantity(item.id),
     };
   });
+}
+
+/** applyStockCount, announced to open pages once the change has committed. */
+export async function applyStockCount(opts: Parameters<typeof applyStockCountInner>[0]): ReturnType<typeof applyStockCountInner> {
+  const result = await applyStockCountInner(opts);
+  publishLive(opts.houseId, { type: "stock", id: opts.itemId, actorUserId: opts.userId });
+  return result;
+}
+
+/** freezeStock, announced to open pages once the change has committed. */
+export async function freezeStock(opts: Parameters<typeof freezeStockInner>[0]): ReturnType<typeof freezeStockInner> {
+  const result = await freezeStockInner(opts);
+  publishLive(opts.houseId, { type: "stock", id: opts.itemId, actorUserId: opts.userId });
+  return result;
+}
+
+/** thawStock, announced to open pages once the change has committed. */
+export async function thawStock(opts: Parameters<typeof thawStockInner>[0]): ReturnType<typeof thawStockInner> {
+  const result = await thawStockInner(opts);
+  publishLive(opts.houseId, { type: "stock", id: opts.itemId, actorUserId: opts.userId });
+  return result;
+}
+
+/** undoStockMovement, announced to open pages once the change has committed. */
+export async function undoStockMovement(opts: Parameters<typeof undoStockMovementInner>[0]): ReturnType<typeof undoStockMovementInner> {
+  const result = await undoStockMovementInner(opts);
+  publishLive(opts.houseId, { type: "stock", id: result.itemId, actorUserId: opts.userId });
+  return result;
 }
