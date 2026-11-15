@@ -75,6 +75,12 @@ export function useStockUndo(): StockUndo {
 
   const notify = useCallback(
     (message: string, action: StockUndoAction) => {
+      // Nothing was recorded and nothing is queued (for example a count that
+      // changed nothing): there is nothing to undo, so offer no button.
+      if (!action.movementId && !action.queuedId) {
+        toast.push(message, "success");
+        return;
+      }
       toast.push(message, "success", {
         duration: 9000,
         action: { label: t("Undo"), onClick: () => void run(action) },
