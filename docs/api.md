@@ -1399,6 +1399,42 @@ The rate is the total quantity in outgoing consumption movements over the last 6
 At least two consumption events spanning seven days and positive stock are required. The dashboard's
 `runningOutSoon` contains active items with at most seven days left, ordered by days left.
 
+### Valuation and insurance export
+
+`GET /api/houses/:houseId/reports/valuation` returns a dated valuation report for the house. Any
+role with access to the house (viewer+) can read it, matching the existing inventory CSV export,
+which is built from the viewer-readable item list.
+
+Query parameters:
+
+| Parameter | Default | Meaning |
+| --- | --- | --- |
+| `format` | `json` | `json` or `csv` (UTF-8 with a BOM, comma delimiter, spreadsheet-formula guard). |
+| `basis` | `latest` | `latest` (latest incoming purchase price), `average` (average incoming purchase price) or `stockCost` (what the stock on hand cost). |
+| `categories` | all | Comma-separated category IDs, matched exactly (children are not implied). |
+| `places` | all | Comma-separated location IDs; an item matches when it has stock in one of them. |
+| `tags` | all | Comma-separated tags; an item matches any of them, case-insensitively. |
+| `minValue` | none | Minimum item total. Items without a price never pass this filter. |
+| `warranty` | `0` | `1` keeps only items whose warranty end date is today or later. |
+| `archived` | `0` | `1` includes archived items. |
+| `documents` | `0` | `1` adds the attached-document names and types to each item. Contents and download links are never included. |
+
+The JSON body carries `houseName`, `currency`, `reportDate`, `generatedAt`, `basis`, `itemCount`,
+`itemsWithoutValue`, `grandTotal`, `truncated`, the item rows and the `categoryTotals` /
+`placeTotals` subtotal blocks. Each item has its name, brand, category, places, quantity and unit,
+unit and total value, `valueSource` (`latest-purchase`, `average-purchase`, `stock-cost` or `none`),
+the latest purchase date and shop, warranty fields, custom attributes, image reference and document
+count. Totals use the current stock quantity. An item with no recorded price has `null` values, is
+listed with `no value recorded` and is excluded from every total rather than counted as zero. Purchase
+dates and shops come from the most recent batch that recorded a purchase date. Place subtotals add back
+up to the grand total; stock without a place appears under `No place`.
+
+The report is capped at 20,000 matching items (ordered by name) and sets `truncated: true` when the cap
+was hit; the CSV shows the same rows. The CSV begins with a metadata line, then the item table, then
+category and place subtotal blocks. Cells whose text starts with `=`, `+`, `-` or `@` are prefixed with
+a single quote so spreadsheets do not execute them. There is no server-side PDF generation; the client
+prints the HTML report with `window.print()`.
+
 ## Extending the API
 
 If you add an endpoint:

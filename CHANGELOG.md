@@ -16,6 +16,7 @@ All notable changes to SVault are documented here. The format follows
 
 - Category budgets, optional bill spending, month-end projections, budget history and threshold reminders.
 - Consumption-based run-out forecasts on items and the dashboard, with an optional shopping-list fill.
+- **Valuation and insurance report.** **More → Valuation report** builds a dated record of what the house owns, with per-item values from the latest purchase price, the average purchase price or the stock cost. Filter by category, place, tag, minimum value, active warranty and archived items; see the grand total, category and place subtotals and the items with no recorded value. Download the report as CSV (formula-injection safe, UTF-8 BOM) or print it from the browser with optional photos and attribute columns and an optional list of attached warranty documents. Unpriced items are listed but never counted as zero.
 
 ### Security
 
