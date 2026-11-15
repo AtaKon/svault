@@ -350,9 +350,14 @@ export function DashboardPage() {
           <section>
             <div className="mb-2.5 flex items-center justify-between">
               <h2 className="font-display text-xl">{t("Recent activity")}</h2>
-              <button onClick={() => void load()} className="-my-2 -mr-2 flex h-10 w-10 items-center justify-center rounded-lg text-muted transition-colors hover:text-ink" aria-label={t("Refresh activity")}>
-                <Icon name="refresh" size={15} />
-              </button>
+              <div className="flex items-center gap-2">
+                <Link to="/activity" className="-my-2 rounded-lg px-2 py-1 text-[12px] text-muted transition-colors hover:text-ink">
+                  {t("See all")}
+                </Link>
+                <button onClick={() => void load()} className="-my-2 -mr-2 flex h-10 w-10 items-center justify-center rounded-lg text-muted transition-colors hover:text-ink" aria-label={t("Refresh activity")}>
+                  <Icon name="refresh" size={15} />
+                </button>
+              </div>
             </div>
             {!data ? (
               <Skeleton className="h-32" />
