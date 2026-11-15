@@ -30,6 +30,7 @@ const EXTRA: { to: string; label: string; icon: IconName }[] = [
   { to: "/bills", label: "Bills & splitting", icon: "receipt" },
   { to: "/photos", label: "Photo library", icon: "image" },
   { to: "/notifications", label: "Reminders", icon: "bell" },
+  { to: "/items/duplicates", label: "Find duplicates", icon: "grid" },
   { to: "/settings", label: "House settings", icon: "settings" },
 ];
 

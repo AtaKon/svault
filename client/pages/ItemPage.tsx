@@ -27,6 +27,7 @@ import { ZoomableImage } from "@/components/ZoomableImage";
 import { StockDialog } from "@/components/ItemCard";
 import { PriceChart } from "@/components/PriceChart";
 import { EspressoLogCard } from "@/components/Espresso";
+import { MergeIntoSheet } from "@/components/ItemMerge";
 import { useToast } from "@/components/toast";
 import { daysUntil, money, qty, relativeTime, shortDate, todayInput, unitPriceLabel } from "@/format";
 import { offProjectLabel } from "@/off";
@@ -83,6 +84,7 @@ export function ItemPage() {
   const [stockOpen, setStockOpen] = useState(false);
   const [stockAction, setStockAction] = useState<"add" | "remove">("add");
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [mergeOpen, setMergeOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [quickBusy, setQuickBusy] = useState(false);
   const [openingDates, setOpeningDates] = useState<Record<string, string>>({});
@@ -350,6 +352,9 @@ export function ItemPage() {
         subtitle={item.description || undefined}
         actions={
           <>
+            {can("member") && !item.archived && !item.mergedInto && (
+              <IconButton icon="grid" label={t("Merge into…")} onClick={() => setMergeOpen(true)} />
+            )}
             {can("member") && (
               <IconButton icon="pencil" label={t("Edit item")} onClick={() => navigate(`/items/${item.id}/edit`)} />
             )}
@@ -357,6 +362,18 @@ export function ItemPage() {
           </>
         }
       />
+
+      {item.mergedInto && (
+        <Card className="flex flex-wrap items-center gap-2 border-warn/30 bg-warn-soft/50 p-3 text-sm">
+          <Icon name="alert" size={15} className="text-warn" />
+          <span className="min-w-0 flex-1">
+            {t("This item was merged into another one and is archived.")}
+          </span>
+          <Link to={`/items/${item.mergedInto}`} className="font-medium text-brand hover:underline">
+            {t("Open the item that kept the history")}
+          </Link>
+        </Card>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-[1.15fr_1fr]">
         <div className="space-y-4">
@@ -946,6 +963,18 @@ export function ItemPage() {
             <Spinner size={14} /> {t("Saving barcode…")}</div>
         )}
       </Sheet>
+
+      <MergeIntoSheet
+        open={mergeOpen}
+        houseId={item.houseId}
+        source={{ id: item.id, name: item.name, unit: item.unit }}
+        onClose={() => setMergeOpen(false)}
+        onMerged={(result) => {
+          setMergeOpen(false);
+          window.dispatchEvent(new Event("sv:refresh-badges"));
+          navigate(`/items/${result.target.id}`);
+        }}
+      />
 
       <ConfirmDialog
         open={deleteOpen}

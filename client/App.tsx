@@ -7,6 +7,7 @@ import { Spinner } from "@/components/ui";
 import { AuthPage, JoinPage, NoHousePage } from "@/pages/AuthPages";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { InventoryPage } from "@/pages/InventoryPage";
+import { DuplicatesPage } from "@/pages/DuplicatesPage";
 import { ItemPage } from "@/pages/ItemPage";
 import { ItemFormPage } from "@/pages/ItemFormPage";
 import { ScanPage } from "@/pages/ScanPage";
@@ -52,6 +53,7 @@ export function App() {
       >
         <Route index element={<DashboardPage />} />
         <Route path="/items" element={<InventoryPage />} />
+        <Route path="/items/duplicates" element={<DuplicatesPage />} />
         <Route path="/items/new" element={<ItemFormPage />} />
         <Route path="/items/:itemId" element={<ItemPage />} />
         <Route path="/items/:itemId/edit" element={<ItemFormPage />} />
