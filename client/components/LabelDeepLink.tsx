@@ -15,10 +15,18 @@ export function useLabelHouseBinding() {
 
   useEffect(() => {
     if (!wanted) return;
-    if (!houses.some((entry) => entry.id === wanted)) return;
-    if (house?.id !== wanted) selectHouse(wanted);
-    const next = new URLSearchParams(params);
-    next.delete("house");
-    setParams(next, { replace: true });
-  }, [wanted, houses, house?.id, params, selectHouse, setParams]);
+    // Wait for the house list; an empty list means it has not loaded yet.
+    if (houses.length === 0) return;
+    // Consume the parameter whether or not the house is known, so a stale
+    // `?house=` cannot linger in the URL and switch houses on a later update.
+    if (houses.some((entry) => entry.id === wanted) && house?.id !== wanted) selectHouse(wanted);
+    setParams(
+      (current) => {
+        const next = new URLSearchParams(current);
+        next.delete("house");
+        return next;
+      },
+      { replace: true },
+    );
+  }, [wanted, houses, house?.id, selectHouse, setParams]);
 }

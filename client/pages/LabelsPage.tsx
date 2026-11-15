@@ -22,6 +22,8 @@ import type { Item, ItemDetail, Location } from "@shared/types";
 
 /** CSS defines 1mm as 96/25.4 px; the preview uses the same value to scale an A4 sheet. */
 const PX_PER_MM = 96 / 25.4;
+/** Items fetched up front; larger houses fall back to server-side search. */
+const ITEM_PAGE = 500;
 
 interface SelectedLabel {
   kind: LabelKind;
@@ -36,6 +38,11 @@ export function LabelsPage() {
   const [params, setParams] = useSearchParams();
 
   const [items, setItems] = useState<Item[] | null>(null);
+  // The first page holds at most ITEM_PAGE items. When the house has more, the
+  // picker says so and searches on the server, so every item stays reachable.
+  const [itemTotal, setItemTotal] = useState(0);
+  const [searchHits, setSearchHits] = useState<Item[] | null>(null);
+  const [extraItems, setExtraItems] = useState<Record<string, Item>>({});
   const [locations, setLocations] = useState<Location[] | null>(null);
   const [publicBase, setPublicBase] = useState("");
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -53,13 +60,14 @@ export function LabelsPage() {
   useEffect(() => {
     let live = true;
     Promise.all([
-      api<{ items: Item[]; total: number }>(`/api/houses/${house.id}/items${qs({ sort: "name", limit: 500 })}`),
+      api<{ items: Item[]; total: number }>(`/api/houses/${house.id}/items${qs({ sort: "name", limit: ITEM_PAGE })}`),
       api<Location[]>(`/api/houses/${house.id}/locations`),
       api<{ baseUrl: string | null }>("/api/labels"),
     ])
       .then(([list, places, config]) => {
         if (!live) return;
         setItems(list.items);
+        setItemTotal(list.total);
         setLocations(places);
         setPublicBase(config.baseUrl ?? "");
       })
@@ -80,17 +88,68 @@ export function LabelsPage() {
     if (!params.has("item") && !params.has("place")) return;
     const wantedItems = params.getAll("item").filter((id) => items.some((item) => item.id === id));
     const wantedPlaces = params.getAll("place").filter((id) => locations.some((place) => place.id === id));
+    // In a house with more items than the first page, a linked item may sit
+    // beyond it: load it by id so the deep link still preselects it.
+    if (itemTotal > items.length) {
+      const beyond = params.getAll("item").filter((id) => !items.some((item) => item.id === id));
+      if (beyond.length) {
+        void Promise.all(beyond.map((id) => api<ItemDetail>(`/api/items/${id}`).catch(() => null))).then((details) => {
+          const found = details.filter((detail): detail is ItemDetail => Boolean(detail) && detail!.houseId === house.id);
+          if (!found.length) return;
+          setExtraItems((current) => {
+            const next = { ...current };
+            for (const detail of found) next[detail.id] = detail;
+            return next;
+          });
+          setSelected((current) => [
+            ...current,
+            ...found
+              .filter((detail) => !current.some((entry) => entry.kind === "item" && entry.id === detail.id))
+              .map((detail) => ({ kind: "item" as const, id: detail.id })),
+          ]);
+        });
+      }
+    }
     if (wantedItems.length || wantedPlaces.length) {
-      setSelected([
-        ...wantedItems.map((id) => ({ kind: "item" as const, id })),
-        ...wantedPlaces.map((id) => ({ kind: "place" as const, id })),
-      ]);
+      // Merge, never replace: the user may already have ticked other labels.
+      setSelected((current) => {
+        const additions = [
+          ...wantedItems.map((id) => ({ kind: "item" as const, id })),
+          ...wantedPlaces.map((id) => ({ kind: "place" as const, id })),
+        ].filter((add) => !current.some((entry) => entry.kind === add.kind && entry.id === add.id));
+        return [...current, ...additions];
+      });
     }
     const next = new URLSearchParams(params);
     next.delete("item");
     next.delete("place");
     setParams(next, { replace: true });
-  }, [items, locations, params, setParams]);
+  }, [items, itemTotal, locations, params, setParams, house.id]);
+
+  const capped = items !== null && itemTotal > items.length;
+  useEffect(() => {
+    if (!capped || query.length < 2) {
+      setSearchHits(null);
+      return;
+    }
+    let live = true;
+    api<{ items: Item[] }>(`/api/houses/${house.id}/items${qs({ q: query, sort: "name", limit: 100 })}`)
+      .then((result) => {
+        if (!live) return;
+        setSearchHits(result.items);
+        setExtraItems((current) => {
+          const next = { ...current };
+          for (const item of result.items) next[item.id] = item;
+          return next;
+        });
+      })
+      .catch(() => {
+        if (live) setSearchHits(null);
+      });
+    return () => {
+      live = false;
+    };
+  }, [capped, query, house.id]);
 
   // "Show place" needs the batch location, which only the item detail carries.
   const selectedItemIds = useMemo(
@@ -129,8 +188,9 @@ export function LabelsPage() {
   const filteredItems = useMemo(() => {
     if (!items) return [];
     if (!query) return items;
+    if (capped && searchHits) return searchHits;
     return items.filter((item) => `${item.name} ${item.brand ?? ""}`.toLocaleLowerCase().includes(query));
-  }, [items, query]);
+  }, [items, query, capped, searchHits]);
   const filteredPlaces = useMemo(() => {
     if (!locations) return [];
     if (!query) return locations;
@@ -150,7 +210,7 @@ export function LabelsPage() {
     () =>
       selected.flatMap((choice): LabelEntry[] => {
         if (choice.kind === "item") {
-          const item = items?.find((entry) => entry.id === choice.id);
+          const item = items?.find((entry) => entry.id === choice.id) ?? extraItems[choice.id];
           if (!item) return [];
           return [
             {
@@ -176,7 +236,7 @@ export function LabelsPage() {
           },
         ];
       }),
-    [selected, items, locations, itemPlaces, house.id, publicBase],
+    [selected, items, extraItems, locations, itemPlaces, house.id, publicBase],
   );
 
   const qr = useQrMatrices(entries.map((entry) => entry.url));
@@ -255,8 +315,16 @@ export function LabelsPage() {
             <section className="mt-4" aria-labelledby="sv-label-items">
               <h3 id="sv-label-items" className="mb-1.5 flex items-center justify-between text-[11px] font-semibold uppercase tracking-[0.12em] text-muted">
                 <span>{t("Items")}</span>
-                <span>{filteredItems.length}</span>
+                <span>{capped && !(query && searchHits) ? `${filteredItems.length} / ${itemTotal}` : filteredItems.length}</span>
               </h3>
+              {capped && (
+                <p className="mb-1.5 text-[11px] text-muted" role="status">
+                  {t("Showing the first {shown} of {total} items. Type at least 2 letters to search all of them.", {
+                    shown: items.length,
+                    total: itemTotal,
+                  })}
+                </p>
+              )}
               <div className="max-h-56 divide-y divide-line overflow-y-auto rounded-xl border border-line">
                 {filteredItems.map((item) => (
                   <label key={item.id} className="flex cursor-pointer items-center gap-3 px-3 py-2 transition-colors hover:bg-raised">

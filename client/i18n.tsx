@@ -2921,6 +2921,7 @@ const EL: Record<string, string> = {
   "Choose what to label": "Διάλεξε τι θα μπει σε ετικέτα",
   "Search items and places": "Αναζήτηση σε αντικείμενα και τοποθεσίες",
   "No items match this search.": "Κανένα αντικείμενο δεν ταιριάζει με την αναζήτηση.",
+  "Showing the first {shown} of {total} items. Type at least 2 letters to search all of them.": "Εμφανίζονται τα πρώτα {shown} από {total} αντικείμενα. Γράψε τουλάχιστον 2 γράμματα για αναζήτηση σε όλα.",
   "No places match this search.": "Καμία τοποθεσία δεν ταιριάζει με την αναζήτηση.",
   "Label options": "Επιλογές ετικέτας",
   "Label size": "Μέγεθος ετικέτας",

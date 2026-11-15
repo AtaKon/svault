@@ -110,6 +110,29 @@ test("rejects foreign origins, script URLs and non-label routes", () => {
   assert.equal(parseLabelScan("", BASE), null);
 });
 
+test("scan parsing ignores extra params, drops a malformed house and treats base path forms alike", () => {
+  const extra = parseLabelScan(`${BASE}/items/${ITEM}?house=${HOUSE}&foo=bar`, BASE);
+  assert.equal(extra?.path, `/items/${ITEM}?house=${HOUSE}`);
+
+  const badHouse = parseLabelScan(`${BASE}/items/${ITEM}?house=../../etc`, BASE);
+  assert.equal(badHouse?.houseId, null);
+  assert.equal(badHouse?.path, `/items/${ITEM}`);
+
+  const withSlash = parseLabelScan(`${BASE}/svault/items/${ITEM}`, `${BASE}/svault/`);
+  const withoutSlash = parseLabelScan(`${BASE}/svault/items/${ITEM}`, `${BASE}/svault`);
+  assert.deepEqual(withSlash, withoutSlash);
+  assert.equal(parseLabelScan(`${BASE}/svault`, `${BASE}/svault`), null);
+  assert.equal(parseLabelScan(`${BASE}/other/items/${ITEM}`, `${BASE}/svault`), null);
+});
+
+test("public base normalisation rejects queries, fragments and credentials", () => {
+  assert.equal(normalisePublicBase("https://host/svault?x=1"), "");
+  assert.equal(normalisePublicBase("https://host/svault#frag"), "");
+  assert.equal(normalisePublicBase("https://user:pw@host"), "");
+  assert.equal(normalisePublicBase("javascript:alert(1)"), "");
+  assert.equal(normalisePublicBase("https://host/"), "https://host");
+});
+
 test("draws one SVG square per dark module", () => {
   const size = 3;
   const grid = [
