@@ -360,6 +360,20 @@ The inventory page supports free-text search, category and place filters, low-st
 filters, sorting by value, and inline `+/-` one-unit adjustments. The dashboard repeats the most
 useful slices: running low, use-it-up (expiring), places and recent activity.
 
+**Saved views.** Set the filters you care about, then press **Save this view** and give it a name. The
+view's chips sit above the inventory list and scroll sideways on a phone; tapping one applies its
+filters to the URL, so the link is shareable and Back returns to the previous view. Admins can share
+a view with the whole house; everyone else keeps personal views, and viewers can save them too because
+a view only stores a query. Use **Manage** to rename, reorder or delete views. If a view points at a
+category or place that has since been deleted, it stays in the list with a warning and simply returns
+nothing until you edit or delete it.
+
+**Global search.** The magnifier in the app header (or `/` on a keyboard, `Ctrl`/`Cmd`+`K` anywhere)
+opens a command palette that searches items, recipes, receipts, bills and shops in the current house at
+once. Results are grouped, ranked and limited per type; use the arrow keys and Enter to open one.
+Matching ignores Greek accents and case. The last eight searches are kept on this device only, with
+**Clear recent searches** to remove them.
+
 ## 5. Recipes
 
 ### Add a recipe manually

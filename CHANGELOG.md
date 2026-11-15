@@ -20,6 +20,8 @@ All notable changes to SVault are documented here. The format follows
 - Printable QR labels for items and places: multi-select with search, three label sizes (including a 3 × 8 A4 sheet), live preview and a print stylesheet. Scanning a label with the in-app scanner opens the item or place, also after signing in; foreign or script QR payloads are ignored.
 - Cost per recipe and portion, from recorded purchase prices or the batches in stock, with an honest
   coverage note and a per-ingredient breakdown. The recipe list can sort and filter by cost per portion.
+- Saved inventory views: name the current filters, keep personal views, let house admins share one with everyone, and apply a view from a linkable URL. Views whose category or place was deleted stay visible with a warning.
+- Global search in the app header (`/` or `Ctrl`/`Cmd`+`K`) across items, recipes, receipts, bills and shops, with Greek accent-insensitive matching, grouped ranked results and recent searches kept on the device.
 
 ### Security
 

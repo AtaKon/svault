@@ -8,6 +8,7 @@ import { Icon, LogoMark, type IconName } from "@/components/icons";
 import { useToast } from "@/components/toast";
 import { OfflineQueueBar } from "@/components/OfflineQueueBar";
 import { useLabelHouseBinding } from "@/components/LabelDeepLink";
+import { GlobalSearch } from "@/components/GlobalSearch";
 import { currentTheme, toggleTheme } from "@/theme";
 import type { House, Notification } from "@shared/types";
 
@@ -42,6 +43,7 @@ export function AppShell() {
   const { t } = useI18n();
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [unread, setUnread] = useState(0);
   const toast = useToast();
   const location = useLocation();
@@ -118,6 +120,30 @@ export function AppShell() {
     window.scrollTo({ top: 0 });
   }, [location.pathname]);
 
+  // "/" or Ctrl/Cmd+K opens global search, except while typing in a field.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const typing =
+        target instanceof HTMLElement &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT" ||
+          target.isContentEditable);
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setSearchOpen((current) => !current);
+        return;
+      }
+      if (!typing && event.key === "/") {
+        event.preventDefault();
+        setSearchOpen(true);
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+
   if (!house) return null;
 
   return (
@@ -147,6 +173,14 @@ export function AppShell() {
         </button>
 
         <nav className="mt-5 flex flex-col gap-0.5">
+          <button
+            onClick={() => setSearchOpen(true)}
+            className="mb-1 flex items-center gap-2.5 rounded-lg border border-line bg-bg px-2.5 py-2 text-sm text-muted transition-colors hover:bg-raised hover:text-ink"
+          >
+            <Icon name="search" size={16} />
+            <span className="flex-1 text-left">{t("Search")}</span>
+            <kbd className="rounded border border-line bg-raised px-1.5 py-0.5 text-[10px] font-medium">Ctrl K</kbd>
+          </button>
           {NAV.filter((item) => item.to !== "/more").map((item) => (
             <SideLink key={item.to} {...item} label={t(item.label)} />
           ))}
@@ -198,6 +232,13 @@ export function AppShell() {
               <span className="block text-[10px] uppercase tracking-[0.14em] text-muted">{t(house.role)}</span>
             </span>
             <Icon name="chevronDown" size={14} className="ml-0.5 shrink-0 text-muted" />
+          </button>
+          <button
+            onClick={() => setSearchOpen(true)}
+            className="flex h-10 w-10 items-center justify-center rounded-xl text-muted hover:bg-raised hover:text-ink"
+            aria-label={t("Search")}
+          >
+            <Icon name="search" size={19} />
           </button>
           <button
             onClick={() => navigate("/notifications")}
@@ -274,6 +315,8 @@ export function AppShell() {
           })}
         </div>
       </nav>
+
+      <GlobalSearch open={searchOpen} onClose={() => setSearchOpen(false)} />
 
       <HouseSwitcher
         open={switcherOpen}
