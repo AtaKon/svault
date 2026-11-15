@@ -255,6 +255,24 @@ Open an item and use the stock dialog. There are five actions:
 Removing more than is available is rejected. Wasting or removing with a `locationId` restricts FIFO to
 that place.
 
+### Stocktake counts
+
+A stocktake compares what the app thinks is in a place (or category) with what is actually on the shelf.
+
+1. Open **More → Stocktake**, or use **Count this place** while inventory is filtered by place.
+2. Choose a place or a category — not both — optionally add a note, and start.
+3. Count each line. **Matches** records the expected quantity; the number field records a different
+   count and saves itself as you pause and when you leave the field; **Skip** leaves the line uncounted;
+   **Scan item** jumps to a line by barcode. A note can record what you noticed.
+4. **Review** shows each variance and its value impact. Untick lines you do not want to apply.
+5. **Commit** applies every selected variance in one transaction. If stock changed while you were
+   counting, the line is flagged and you must confirm it; the difference is applied to the current
+   quantity, so a stale snapshot cannot overwrite newer stock.
+
+Only members and above can start, count or commit. Viewers can read past stocktakes. A house has one
+open stocktake at a time. Counts typed without a connection stay on that device and retry when the
+connection returns; commit needs the server.
+
 ### Shelf life after opening
 
 Set **Keeps for N days after opening** on an item, then use **Mark opened** on a batch and select its opening date. SVault shows the opening date and use-by date. **Not opened** clears the date. The use-by date is the earlier of the printed expiry and the opening date plus the shelf life; it drives expiry reminders, the dashboard, expiring filter and Use it up. Moving stock preserves its opening date. Consuming stock does not automatically mark a batch opened.

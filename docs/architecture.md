@@ -102,6 +102,7 @@ exports readable. Timestamps are ISO-8601 strings; dates (`expires_at`, `purchas
 | Reference data | `vendor_catalog` (seeded shops by country) |
 | Reminders | `notifications` |
 | Cooking | `recipes`, `recipe_ingredients`, `food_ideas` |
+| Stocktake | `stocktakes`, `stocktake_lines` |
 | Vision | `photo_collections`, `photos`, `photo_labels` |
 | AI | `ai_cache` (reserved; not currently used), `ai_call_logs` (provider audit trail) |
 
