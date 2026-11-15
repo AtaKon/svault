@@ -846,7 +846,14 @@ singleRecipeRoutes.post(
       portions: z.number().positive().max(1000),
       idempotencyKey: z.string().min(8).max(120),
       lines: z.array(z.object({ ingredientId: z.string().min(1), itemId: z.string().min(1), quantity: z.number().positive().max(1e9), unit: z.string().trim().min(1).max(20) })).max(150),
-      leftovers: z.object({ portions: z.number().positive().max(1000), locationId: z.string().min(1).max(60).nullable(), useBy: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }).optional(),
+      leftovers: z.object({
+        portions: z.number().positive().max(1000),
+        locationId: z.string().min(1).max(60).nullable(),
+        useBy: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        /** Put the leftover batch straight into the freezer instead of the fridge. */
+        freeze: z.boolean().optional(),
+        frozenOn: z.iso.date().optional(),
+      }).optional(),
     }), req.body);
     const result = await tx(async (session) => {
       // Serialise cooks per house, including the idempotency check and stock reads.
@@ -883,12 +890,35 @@ singleRecipeRoutes.post(
           item = { id: newId("itm") };
           await run("INSERT INTO items (id, house_id, name, unit, created_by, created_at, updated_at) VALUES (?, ?, ?, 'pcs', ?, ?, ?)", [item.id, houseId, name, req.user!.id, now(), now()]);
         }
+        const today = new Date().toISOString().slice(0, 10);
         const defaultDate = new Date();
         defaultDate.setUTCDate(defaultDate.getUTCDate() + 3);
-        const useBy = body.leftovers.useBy ?? defaultDate.toISOString().slice(0, 10);
-        await addStock({ itemId: item.id, houseId, userId: req.user!.id, quantity: body.leftovers.portions, unit: "pcs", locationId: body.leftovers.locationId, expiresAt: useBy, reason: `Cooked: ${recipe.title}`, note: `Cooked: ${recipe.title}` });
+        const frozenOn = body.leftovers.freeze ? body.leftovers.frozenOn ?? today : null;
+        // A frozen batch takes its eat-by from the freezer shelf life, so the
+        // fridge use-by is not stored. It would otherwise always win.
+        const useBy = frozenOn ? null : body.leftovers.useBy ?? defaultDate.toISOString().slice(0, 10);
+        let locationId = body.leftovers.locationId;
+        if (frozenOn && !locationId) {
+          const freezerPlace = await get<{ id: string }>("SELECT id FROM locations WHERE house_id = ? AND is_freezer = 1 ORDER BY lower(name) LIMIT 1", [houseId]);
+          locationId = freezerPlace?.id ?? null;
+        }
+        await addStock({
+          itemId: item.id,
+          houseId,
+          userId: req.user!.id,
+          quantity: body.leftovers.portions,
+          unit: "pcs",
+          locationId,
+          expiresAt: useBy,
+          portions: body.leftovers.portions,
+          cookedOn: today,
+          frozenOn,
+          sourceRecipeId: recipe.id,
+          reason: `Cooked: ${recipe.title}`,
+          note: `Cooked: ${recipe.title}`,
+        });
         changed.add(item.id);
-        leftovers = { itemId: item.id, portions: body.leftovers.portions, locationId: body.leftovers.locationId, useBy };
+        leftovers = { itemId: item.id, portions: body.leftovers.portions, locationId, useBy, frozenOn };
       }
       const response = { portions: body.portions, lines, leftovers };
       await run("INSERT INTO stock_mutations (id, house_id, idempotency_key, user_id, response, created_at) VALUES (?, ?, ?, ?, ?, ?)", [newId("mut"), houseId, body.idempotencyKey, req.user!.id, JSON.stringify(response), now()]);

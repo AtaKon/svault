@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, qs } from "@/api";
 import { useHouse } from "@/state";
 import { useI18n } from "@/i18n";
@@ -220,6 +220,13 @@ export function InventoryPage() {
               </button>
             ))}
           </div>
+        )}
+
+        {locations.find((location) => location.id === locationId)?.isFreezer && (
+          <Link to="/freezer" className="inline-flex items-center gap-1.5 rounded-full bg-brand-soft px-2.5 py-1 text-[11px] font-medium text-brand hover:bg-brand-soft/80">
+            ❄️ {t("Open the freezer")}
+            <Icon name="chevronRight" size={11} />
+          </Link>
         )}
       </div>
 

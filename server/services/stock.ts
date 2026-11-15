@@ -19,6 +19,11 @@ export interface StockOpts {
   reason?: string | null;
   vendorId?: string | null;
   receiptId?: string | null;
+  portions?: number | null;
+  cookedOn?: string | null;
+  frozenOn?: string | null;
+  thawedOn?: string | null;
+  sourceRecipeId?: string | null;
 }
 
 async function itemRow(itemId: string, houseId: string) {
@@ -33,8 +38,12 @@ async function validateLocation(houseId: string, locationId?: string | null) {
   }
 }
 
-function baseQuantity(item: any, quantity: number, unit?: string): number {
-  const from = (unit ?? item.unit).toLowerCase();
+/** Units that are counted one by one, where a portion is one unit. */
+function countedUnit(unit: string): boolean {
+  return ["pcs", "pc", "piece", "pieces"].includes(unit.toLowerCase());
+}
+
+function baseQuantity(item: any, quantity: number, unit?: string): number {  const from = (unit ?? item.unit).toLowerCase();
   const amount = convert(Math.abs(quantity), from, item.unit);
   if (amount == null) {
     throw new ApiError(400, `Cannot convert ${from} to ${item.unit}`);
@@ -115,8 +124,8 @@ export async function addStock(opts: StockOpts): Promise<string> {
     await run(
       `INSERT INTO stock_lots
         (id, item_id, house_id, location_id, quantity, unit, unit_price, currency, purchased_at, expires_at, note,
-         vendor_id, receipt_id, created_by, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         vendor_id, receipt_id, portions, cooked_on, frozen_on, thawed_on, source_recipe_id, created_by, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         lotId,
         item.id,
@@ -131,6 +140,11 @@ export async function addStock(opts: StockOpts): Promise<string> {
         opts.note ?? null,
         opts.vendorId ?? null,
         opts.receiptId ?? null,
+        opts.portions ?? null,
+        opts.cookedOn ?? null,
+        opts.frozenOn ?? null,
+        opts.thawedOn ?? null,
+        opts.sourceRecipeId ?? null,
         opts.userId,
         now(),
       ],
@@ -199,7 +213,17 @@ export async function removeStock(opts: StockOpts & { waste?: boolean }): Promis
         priced += take;
         value += take * Number(lot.unit_price);
       }
-      await run("UPDATE stock_lots SET quantity = ? WHERE id = ?", [round(Number(lot.quantity) - take), lot.id]);
+      const before = Number(lot.quantity);
+      const after = round(before - take);
+      if (lot.portions == null) {
+        await run("UPDATE stock_lots SET quantity = ? WHERE id = ?", [after, lot.id]);
+      } else {
+        // Portions are a serving count, not the item unit. Shrink them in the
+        // same proportion as the quantity so a frozen batch never claims more
+        // portions than it still holds.
+        const portions = before > 0 ? round((Number(lot.portions) * after) / before) : 0;
+        await run("UPDATE stock_lots SET quantity = ?, portions = ? WHERE id = ?", [after, portions, lot.id]);
+      }
       remaining = round(remaining - take);
     }
     const normalizedPrice = priced > 0 ? round(value / priced, 4) : null;
@@ -285,7 +309,14 @@ export async function setStock(opts: StockOpts & { target: number }): Promise<st
     for (const lot of lots) {
       if (remaining <= 0) break;
       const take = Math.min(Number(lot.quantity), remaining);
-      await run("UPDATE stock_lots SET quantity = ? WHERE id = ?", [round(Number(lot.quantity) - take), lot.id]);
+      const before = Number(lot.quantity);
+      const after = round(before - take);
+      if (lot.portions == null) {
+        await run("UPDATE stock_lots SET quantity = ? WHERE id = ?", [after, lot.id]);
+      } else {
+        const portions = before > 0 ? round((Number(lot.portions) * after) / before) : 0;
+        await run("UPDATE stock_lots SET quantity = ?, portions = ? WHERE id = ?", [after, portions, lot.id]);
+      }
       remaining = round(remaining - take);
     }
     return await recordMovement({
@@ -326,8 +357,8 @@ export async function moveStock(opts: { itemId: string; houseId: string; userId:
       await run(
         `INSERT INTO stock_lots
           (id, item_id, house_id, location_id, quantity, unit, unit_price, currency, purchased_at, expires_at, opened_at, note,
-           vendor_id, receipt_id, created_by, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           vendor_id, receipt_id, portions, cooked_on, frozen_on, thawed_on, source_recipe_id, created_by, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           newId("lot"),
           item.id,
@@ -343,6 +374,11 @@ export async function moveStock(opts: { itemId: string; houseId: string; userId:
           lot.note,
           lot.vendor_id ?? null,
           lot.receipt_id ?? null,
+          lot.portions == null ? null : round((Number(lot.portions) * take) / Number(lot.quantity)),
+          lot.cooked_on ?? null,
+          lot.frozen_on ?? null,
+          lot.thawed_on ?? null,
+          lot.source_recipe_id ?? null,
           opts.userId,
           now(),
         ],
@@ -360,6 +396,199 @@ export async function moveStock(opts: { itemId: string; houseId: string; userId:
       reason: "Moved between locations",
       note: opts.note ?? null,
     });
+  });
+}
+
+/**
+ * Freeze all or part of a batch. A partial freeze splits the lot, keeping the
+ * price, vendor and receipt provenance on both halves, and records one `move`
+ * movement. Freezing is refused on a thawed batch: refreezing is not offered.
+ */
+export async function freezeStock(opts: {
+  itemId: string;
+  houseId: string;
+  userId: string;
+  lotId: string;
+  portions?: number | null;
+  locationId?: string | null;
+  frozenOn?: string | null;
+  cookedOn?: string | null;
+  sourceRecipeId?: string | null;
+  note?: string | null;
+}): Promise<string> {
+  await validateLocation(opts.houseId, opts.locationId);
+  return await tx(async () => {
+    const item = await itemRow(opts.itemId, opts.houseId);
+    const lot = await get<any>("SELECT * FROM stock_lots WHERE id = ? AND item_id = ? AND house_id = ?", [opts.lotId, item.id, item.house_id]);
+    if (!lot) throw new ApiError(404, "Batch not found");
+    if (Number(lot.quantity) <= 0) throw new ApiError(400, "This batch is empty");
+    if (lot.thawed_on) throw new ApiError(400, "A thawed batch cannot be frozen again");
+    if (lot.frozen_on) throw new ApiError(400, "This batch is already frozen");
+    const available = Number(lot.quantity);
+    const portions = round(opts.portions ?? (countedUnit(item.unit) ? available : 1));
+    if (!Number.isFinite(portions) || portions <= 0) throw new ApiError(400, "Portions must be greater than zero");
+    // A count batch is frozen piece by piece, so the portion count is also the
+    // quantity moved. A weighed batch is frozen whole and the count only labels
+    // how many equal portions it holds.
+    const counted = countedUnit(item.unit);
+    if (counted && portions > available + 1e-9) throw new ApiError(400, `Only ${round(available)} ${item.unit} in this batch`);
+    const quantityToFreeze = counted ? portions : available;
+    const frozenOn = opts.frozenOn ?? new Date().toISOString().slice(0, 10);
+    const locationId = opts.locationId === undefined ? lot.location_id : opts.locationId;
+    const cookedOn = opts.cookedOn ?? lot.cooked_on ?? null;
+    const sourceRecipeId = opts.sourceRecipeId ?? lot.source_recipe_id ?? null;
+    const note = opts.note ?? lot.note ?? null;
+    const remaining = round(available - quantityToFreeze);
+
+    let frozenLotId = lot.id;
+    if (remaining <= 0) {
+      await run(
+        `UPDATE stock_lots SET location_id = ?, frozen_on = ?, thawed_on = NULL, portions = ?, cooked_on = ?,
+           source_recipe_id = ?, note = ? WHERE id = ?`,
+        [locationId ?? null, frozenOn, portions, cookedOn, sourceRecipeId, note, lot.id],
+      );
+    } else {
+      const leftPortions = lot.portions == null
+        ? (counted ? remaining : null)
+        : round((Number(lot.portions) * remaining) / available);
+      await run("UPDATE stock_lots SET quantity = ?, portions = ? WHERE id = ?", [remaining, leftPortions, lot.id]);
+      frozenLotId = newId("lot");
+      await run(
+        `INSERT INTO stock_lots
+          (id, item_id, house_id, location_id, quantity, unit, unit_price, currency, purchased_at, expires_at,
+           opened_at, note, vendor_id, receipt_id, portions, cooked_on, frozen_on, thawed_on, source_recipe_id,
+           created_by, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
+        [
+          frozenLotId,
+          item.id,
+          item.house_id,
+          locationId ?? null,
+          quantityToFreeze,
+          item.unit,
+          lot.unit_price,
+          lot.currency,
+          lot.purchased_at,
+          lot.expires_at,
+          lot.opened_at,
+          note,
+          lot.vendor_id ?? null,
+          lot.receipt_id ?? null,
+          portions,
+          cookedOn,
+          frozenOn,
+          sourceRecipeId,
+          opts.userId,
+          now(),
+        ],
+      );
+    }
+    await recordMovement({
+      item,
+      type: "move",
+      delta: 0,
+      unit: item.unit,
+      quantity: quantityToFreeze,
+      locationId: locationId ?? null,
+      userId: opts.userId,
+      lotId: frozenLotId,
+      reason: "Frozen",
+      note: note ?? null,
+    });
+    return frozenLotId;
+  });
+}
+
+/** Mark a frozen batch thawed so the short thaw window drives expiry. */
+export async function thawStock(opts: {
+  itemId: string;
+  houseId: string;
+  userId: string;
+  lotId: string;
+  thawedOn?: string | null;
+  locationId?: string | null;
+}): Promise<void> {
+  await validateLocation(opts.houseId, opts.locationId);
+  await tx(async () => {
+    const item = await itemRow(opts.itemId, opts.houseId);
+    const lot = await get<any>("SELECT * FROM stock_lots WHERE id = ? AND item_id = ? AND house_id = ?", [opts.lotId, item.id, item.house_id]);
+    if (!lot) throw new ApiError(404, "Batch not found");
+    if (!lot.frozen_on) throw new ApiError(400, "This batch is not frozen");
+    if (lot.thawed_on) throw new ApiError(400, "This batch is already thawed");
+    if (Number(lot.quantity) <= 0) throw new ApiError(400, "This batch is empty");
+    const thawedOn = opts.thawedOn ?? new Date().toISOString().slice(0, 10);
+    await run(
+      "UPDATE stock_lots SET thawed_on = ?, location_id = ? WHERE id = ?",
+      [thawedOn, opts.locationId === undefined ? lot.location_id : opts.locationId, lot.id],
+    );
+    await recordMovement({
+      item,
+      type: "move",
+      delta: 0,
+      unit: item.unit,
+      quantity: Number(lot.quantity),
+      locationId: opts.locationId === undefined ? lot.location_id : opts.locationId,
+      userId: opts.userId,
+      lotId: lot.id,
+      reason: "Thawed",
+      note: "Thawed",
+    });
+  });
+}
+
+/**
+ * Take portions out of a frozen batch. Consumption goes through removeStock so
+ * the ledger and value stay consistent. `thaw` also marks what is left in the
+ * batch thawed, for the common "take the whole box out to defrost" case.
+ */
+export async function takeOutPortions(opts: {
+  itemId: string;
+  houseId: string;
+  userId: string;
+  lotId: string;
+  portions?: number;
+  thaw?: boolean;
+}): Promise<void> {
+  await tx(async () => {
+    const item = await itemRow(opts.itemId, opts.houseId);
+    const lot = await get<any>("SELECT * FROM stock_lots WHERE id = ? AND item_id = ? AND house_id = ?", [opts.lotId, item.id, item.house_id]);
+    if (!lot) throw new ApiError(404, "Batch not found");
+    if (!lot.frozen_on) throw new ApiError(400, "This batch is not frozen");
+    const portions = round(opts.portions ?? 1);
+    if (!Number.isFinite(portions) || portions <= 0) throw new ApiError(400, "Portions must be greater than zero");
+    const available = Number(lot.quantity);
+    if (available <= 0) throw new ApiError(400, "This batch is empty");
+    const totalPortions = lot.portions == null ? available : Number(lot.portions);
+    if (portions > totalPortions + 1e-9) throw new ApiError(400, `Only ${round(totalPortions)} portions in this batch`);
+    // One portion is an equal share of the batch, so a 500 g batch frozen as
+    // five portions takes out 100 g rather than one gram.
+    const quantity = round(Math.min(available, (available / totalPortions) * portions));
+    await removeStock({
+      itemId: item.id,
+      houseId: item.house_id,
+      userId: opts.userId,
+      quantity,
+      unit: item.unit,
+      lotId: lot.id,
+      reason: "Taken out of the freezer",
+    });
+    if (opts.thaw) {
+      const after = await get<any>("SELECT quantity, thawed_on FROM stock_lots WHERE id = ?", [lot.id]);
+      if (!after || Number(after.quantity) <= 0 || after.thawed_on) return;
+      await run("UPDATE stock_lots SET thawed_on = ? WHERE id = ?", [new Date().toISOString().slice(0, 10), lot.id]);
+      await recordMovement({
+        item,
+        type: "move",
+        delta: 0,
+        unit: item.unit,
+        quantity: Number(after.quantity),
+        locationId: lot.location_id ?? null,
+        userId: opts.userId,
+        lotId: lot.id,
+        reason: "Thawed",
+        note: "Taken out of the freezer to thaw",
+      });
+    }
   });
 }
 

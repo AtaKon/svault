@@ -113,6 +113,22 @@ export function DashboardPage() {
         />
       </div>
 
+      {data?.freezer && data.freezer.portions > 0 && (
+        <Link to="/freezer" className="block">
+          <Card className="flex items-center gap-3 p-3.5 transition-colors hover:bg-raised">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-soft text-brand text-lg" aria-hidden="true">❄️</span>
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-medium">{t("Freezer")}</div>
+              <div className="text-[11px] text-muted">
+                {t("{count} portions", { count: qty(data.freezer.portions) })}
+                {data.freezer.useSoon > 0 ? ` · ${t("{count} to use soon", { count: qty(data.freezer.useSoon) })}` : ` · ${t("nothing to rush")}`}
+              </div>
+            </div>
+            <Icon name="chevronRight" size={15} className="shrink-0 text-muted" />
+          </Card>
+        </Link>
+      )}
+
       {data && data.itemCount === 0 && (
         <Card className="overflow-hidden">
           <div className="relative bg-brand px-5 py-6 text-brand-ink">

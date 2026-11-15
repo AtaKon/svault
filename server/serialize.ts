@@ -105,6 +105,8 @@ export function serializeItem(row: any, barcodes: { id: string; code: string; fo
     id: row.id,
     houseId: row.house_id,
     openedShelfLifeDays: row.opened_shelf_life_days == null ? null : Number(row.opened_shelf_life_days),
+    freezerShelfLifeDays: row.freezer_shelf_life_days == null ? null : Number(row.freezer_shelf_life_days),
+    thawShelfLifeDays: row.thaw_shelf_life_days == null ? null : Number(row.thaw_shelf_life_days),
     name: row.name,
     description: row.description ?? null,
     warrantyUntil: row.warranty_until ?? null,
@@ -173,6 +175,12 @@ export function serializeLot(row: any): StockLot {
     expiresAt: row.expires_at ?? null,
     openedAt: row.opened_at ?? null,
     effectiveExpiresAt: effectiveExpiry(row, row),
+    portions: row.portions == null ? null : Number(row.portions),
+    cookedOn: row.cooked_on ?? null,
+    frozenOn: row.frozen_on ?? null,
+    thawedOn: row.thawed_on ?? null,
+    sourceRecipeId: row.source_recipe_id ?? null,
+    sourceRecipeTitle: row.source_recipe_title ?? null,
     note: row.note ?? null,
     vendorId: row.vendor_id ?? null,
     vendorName: row.vendor_name ?? null,
@@ -371,6 +379,7 @@ export function serializeLocation(row: any): Location {
     icon: row.icon ?? null,
     parentId: row.parent_id ?? null,
     itemCount: row.item_count == null ? undefined : Number(row.item_count),
+    isFreezer: Number(row.is_freezer ?? 0) === 1,
   };
 }
 

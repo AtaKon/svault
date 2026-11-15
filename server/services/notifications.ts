@@ -213,7 +213,9 @@ export async function syncHouseExpiry(houseId: string, expiryDays?: number) {
   }
   const horizon = new Date(Date.now() + expiryDays * DAY).toISOString().slice(0, 10);
   const lots = await all<any>(
-    `SELECT l.*, i.name AS item_name, i.house_id, i.opened_shelf_life_days FROM stock_lots l
+    `SELECT l.*, i.name AS item_name, i.house_id, i.opened_shelf_life_days,
+            i.freezer_shelf_life_days, i.thaw_shelf_life_days
+       FROM stock_lots l
      JOIN items i ON i.id = l.item_id
      WHERE l.house_id = ? AND l.quantity > 0 AND i.archived = 0`,
     [houseId],
@@ -229,7 +231,7 @@ export async function syncHouseExpiry(houseId: string, expiryDays?: number) {
       type: "expiring",
       title: expired ? `${lot.item_name} has expired` : `${lot.item_name} expires soon`,
       body: `${Math.round(lot.quantity * 1000) / 1000} ${lot.unit} with expiry ${expiry}${
-        lot.location_id ? "" : ""
+        lot.frozen_on && !lot.thawed_on ? " in the freezer" : lot.thawed_on ? " after thawing" : ""
       }.`,
       data: { itemId: lot.item_id, lotId: lot.id, expiresAt: expiry, expired },
       dedupeKey: `exp:${lot.id}`,

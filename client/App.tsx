@@ -35,6 +35,7 @@ import { InsightsPage } from "@/pages/InsightsPage";
 import { ContributionsPage } from "@/pages/ContributionsPage";
 import { EspressoPage } from "@/pages/EspressoPage";
 import { AdminPage } from "@/pages/AdminPage";
+import { FreezerPage } from "@/pages/FreezerPage";
 import { useI18n } from "@/i18n";
 
 export function App() {
@@ -75,6 +76,7 @@ export function App() {
         <Route path="/insights" element={<InsightsPage />} />
         <Route path="/contribute" element={<ContributionsPage />} />
         <Route path="/espresso" element={<EspressoPage />} />
+        <Route path="/freezer" element={<FreezerPage />} />
         <Route path="/admin" element={<AdminPage />} />
         <Route path="/photos" element={<PhotosPage />} />
         <Route path="/notifications" element={<NotificationsPage />} />

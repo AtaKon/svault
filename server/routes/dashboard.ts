@@ -1,4 +1,5 @@
 import { effectiveExpiry } from "../services/effective-expiry.js";
+import { freezerSummary } from "../services/freezer.js";
 import { forecastsForHouse } from "../services/forecast.js";
 import { Router } from "express";
 import { all, get } from "../db.js";
@@ -51,8 +52,9 @@ dashboardRoutes.get(
     // Count expiry the way the dashboard and reminders do: an opened batch with a
     // shelf life can expire before its printed date.
     const datedLots = await all<any>(
-      `SELECT l.expires_at, l.opened_at, i.opened_shelf_life_days FROM stock_lots l JOIN items i ON i.id = l.item_id
-       WHERE l.house_id = ? AND l.quantity > 0 AND (l.expires_at IS NOT NULL OR l.opened_at IS NOT NULL)`,
+      `SELECT l.expires_at, l.opened_at, l.frozen_on, l.thawed_on, i.opened_shelf_life_days,
+              i.freezer_shelf_life_days, i.thaw_shelf_life_days FROM stock_lots l JOIN items i ON i.id = l.item_id
+       WHERE l.house_id = ? AND l.quantity > 0 AND (l.expires_at IS NOT NULL OR l.opened_at IS NOT NULL OR l.frozen_on IS NOT NULL)`,
       [houseId],
     );
     let expiringSoonCount = 0;
@@ -115,7 +117,8 @@ dashboardRoutes.get(
 
     const horizon = new Date(Date.now() + 14 * 864e5).toISOString().slice(0, 10);
     const expiring = (await all<any>(
-      `SELECT l.*, i.name AS item_name, i.opened_shelf_life_days, loc.name AS location_name FROM stock_lots l
+      `SELECT l.*, i.name AS item_name, i.opened_shelf_life_days, i.freezer_shelf_life_days,
+              i.thaw_shelf_life_days, loc.name AS location_name FROM stock_lots l
        JOIN items i ON i.id = l.item_id
        LEFT JOIN locations loc ON loc.id = l.location_id AND loc.house_id = ?
        WHERE l.house_id = ? AND l.quantity > 0`,
@@ -226,6 +229,7 @@ dashboardRoutes.get(
         [houseId],
       )).map(serializeLocation),
       counts,
+      freezer: await freezerSummary(houseId),
       barcodes: { total: (await all<any>("SELECT 1 FROM item_barcodes WHERE house_id = ?", [houseId])).length },
     });
   }),

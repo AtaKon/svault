@@ -105,6 +105,8 @@ export interface Location {
   icon: string | null;
   parentId: string | null;
   itemCount?: number;
+  /** A freezer place: frozen batches are grouped here and the "Freeze" sheet lists it first. */
+  isFreezer: boolean;
 }
 
 export interface Category {
@@ -442,6 +444,13 @@ export interface StockLot {
   vendorName?: string | null;
   receiptId: string | null;
   createdAt: string;
+  /** Portion count for cooked/frozen batches; kept in step with quantity on consumption. */
+  portions: number | null;
+  cookedOn: string | null;
+  frozenOn: string | null;
+  thawedOn: string | null;
+  sourceRecipeId: string | null;
+  sourceRecipeTitle?: string | null;
 }
 
 export interface Movement {
@@ -490,6 +499,10 @@ export interface Forecast { dailyRate: number; daysLeft: number; windowDays: num
 
 export interface Item {
   openedShelfLifeDays: number | null;
+  /** Days a frozen batch keeps after `frozenOn`; null uses the 90-day default. */
+  freezerShelfLifeDays: number | null;
+  /** Days a thawed batch keeps after `thawedOn`; null uses the 2-day default. */
+  thawShelfLifeDays: number | null;
   id: string;
   houseId: string;
   name: string;
@@ -1049,6 +1062,8 @@ export interface Dashboard {
     unlabeledPhotos: number;
     unreadNotifications: number;
   };
+  /** Only present when the house has frozen batches. */
+  freezer?: { portions: number; useSoon: number } | null;
 }
 
 /* --------------------------------------------------------------- shopping list */
@@ -1514,4 +1529,28 @@ export interface OrphanFile {
   key: string;
   size: number;
   modifiedAt: string;
+}
+
+/* -------------------------------------------------------------------- freezer */
+
+/** Default freezer shelf life when an item does not set its own. */
+export const DEFAULT_FREEZER_SHELF_LIFE_DAYS = 90;
+/** Default window to eat a thawed batch when an item does not set its own. */
+export const DEFAULT_THAW_SHELF_LIFE_DAYS = 2;
+
+export interface FreezerBatch extends StockLot {
+  itemName: string;
+  itemUnit: string;
+  categoryId: string | null;
+  locationName: string | null;
+  /** True when the current place is marked as a freezer. */
+  inFreezerPlace: boolean;
+  sourceRecipeTitle: string | null;
+}
+
+export interface FreezerView {
+  batches: FreezerBatch[];
+  totals: { batches: number; portions: number; useSoon: number };
+  /** Days used to decide "use soon"; mirrors the house expiry reminder window. */
+  useSoonDays: number;
 }
