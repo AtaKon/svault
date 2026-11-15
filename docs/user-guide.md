@@ -255,6 +255,21 @@ Open an item and use the stock dialog. There are five actions:
 Removing more than is available is rejected. Wasting or removing with a `locationId` restricts FIFO to
 that place.
 
+#### Undo a mistaken change
+
+Every successful stock change shows a short confirmation with an **Undo** button. Press it within a few
+seconds and SVault reverses the change: a used or wasted quantity goes back into the same batches, an
+added quantity is taken out again, a count is corrected back and a move returns to where it came from.
+Nothing is deleted from the history — the undo appears as its own entry marked **Undone**.
+
+The same **Undo** button appears on the newest rows of an item's **History** for your own changes from
+the last day; admins and owners can also undo other people's changes. SVault refuses (with a clear
+message) when the change can no longer be reversed safely: for example when a later change already used
+one of the same batches, or the item is archived.
+
+If the change is still waiting in the offline queue, **Undo** simply removes it from the queue instead
+of calling the server.
+
 ### Shelf life after opening
 
 Set **Keeps for N days after opening** on an item, then use **Mark opened** on a batch and select its opening date. SVault shows the opening date and use-by date. **Not opened** clears the date. The use-by date is the earlier of the printed expiry and the opening date plus the shelf life; it drives expiry reminders, the dashboard, expiring filter and Use it up. Moving stock preserves its opening date. Consuming stock does not automatically mark a batch opened.

@@ -14,6 +14,13 @@ All notable changes to SVault are documented here. The format follows
 
 ### Added
 
+- Undo for the last stock action: a short toast with an **Undo** button after any successful add, use,
+  waste, count or move, plus an **Undo** action on the newest rows of an item's history. Undo appends a
+  compensating movement to the ledger (nothing is edited or deleted), restores the exact batches a FIFO
+  consume or a move touched, reverses both parts of a cross-batch action in one transaction, and refuses
+  with a clear message when a later change has made it unsafe. Members undo their own changes, admins
+  and owners undo anyone's, and a change still waiting in the offline queue is removed from the queue
+  instead of being sent.
 - Category budgets, optional bill spending, month-end projections, budget history and threshold reminders.
 - Consumption-based run-out forecasts on items and the dashboard, with an optional shopping-list fill.
 
