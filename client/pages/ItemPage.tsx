@@ -25,6 +25,7 @@ import { NutritionRows, basisLabel } from "@/components/Nutrition";
 import { OffProductPicker } from "@/components/OffProductPicker";
 import { ZoomableImage } from "@/components/ZoomableImage";
 import { StockDialog } from "@/components/ItemCard";
+import { ItemLoansCard } from "@/components/Loans";
 import { PriceChart } from "@/components/PriceChart";
 import { EspressoLogCard } from "@/components/Espresso";
 import { useToast } from "@/components/toast";
@@ -426,11 +427,18 @@ export function ItemPage() {
                   <div className="mt-1.5 text-xs text-muted">
                     {lotValue > 0 ? t("{amount} on the shelf", { amount: money(lotValue, house.currency) }) : t("No purchase price recorded")}
                   </div>
+                  {item.onLoan > 0 && (
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-warn">
+                      <Icon name="users" size={12} />
+                      {t("{count} {unit} on loan", { count: qty(item.onLoan), unit: item.unit })}
+                      <span className="text-muted">· {qty(item.available)} {t("available")}</span>
+                    </div>
+                  )}
                 </div>
                 <div className="flex shrink-0 items-center gap-1.5">
                   <button
                     onClick={() => void quick("remove")}
-                    disabled={quickBusy || item.quantity <= 0}
+                    disabled={quickBusy || item.available <= 0}
                     aria-busy={quickBusy || undefined}
                     aria-label={t("Remove one")}
                     className="flex h-11 w-11 items-center justify-center rounded-xl border border-line bg-surface text-muted transition-colors hover:border-danger/40 hover:text-danger disabled:opacity-40"
@@ -465,11 +473,13 @@ export function ItemPage() {
               <div className="mt-4 grid grid-cols-2 gap-2">
                 <Button icon="plus" onClick={() => openStock("add")} disabled={!can("member")}>
                   {t("Add stock ")}</Button>
-                <Button variant="secondary" icon="minus" onClick={() => openStock("remove")} disabled={!can("member") || item.quantity <= 0}>
+                <Button variant="secondary" icon="minus" onClick={() => openStock("remove")} disabled={!can("member") || item.available <= 0}>
                   {t("Take out ")}</Button>
               </div>
             </div>
           </Card>
+
+          <ItemLoansCard item={item} canWrite={can("member")} onChanged={() => void load()} />
 
           <Card className="p-4">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">

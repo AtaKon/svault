@@ -16,6 +16,7 @@ const TYPE_META: Record<Notification["type"], { icon: IconName; tone: string }> 
   system: { icon: "bell", tone: "bg-raised text-muted" },
   invite: { icon: "users", tone: "bg-brand-soft text-brand" },
   house: { icon: "users", tone: "bg-brand-soft text-brand" },
+  loan_overdue: { icon: "arrowUpRight", tone: "bg-warn-soft text-warn" },
 };
 
 export function NotificationsPage() {

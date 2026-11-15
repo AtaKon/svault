@@ -1098,6 +1098,8 @@ See the [user guide](user-guide.md#export-a-dataset) for the archive layout.
 Joining a house — by accepting an invite or being added by an admin — creates a `house` notification
 addressed to that user only. Other members do not see it.
 
+Overdue loans add a `loan_overdue` reminder, at most once per loan per day. See [Lending](#lending).
+
 ### House summary
 
 `GET /api/houses/:houseId/summary` is a small, stable snapshot meant for a five-minute poll from Home
@@ -1668,6 +1670,40 @@ a stricter rule than admin-configured reminder channels: **private, loopback and
 always refused, whatever `SV_OUTBOUND_ALLOW_PRIVATE` says.** Real push services are public HTTPS hosts.
 The name is resolved and checked before each send, and the connection itself re-checks the address it
 uses, so DNS rebinding cannot reach the server's own network.
+## Lending
+
+A loan records who has borrowed a non-consumable item (a tool, a book, gear). It is deliberately not a
+stock movement: the item still belongs to the house, and lending never changes the on-hand quantity or
+the ledger. Only a free-text borrower name (up to 80 characters) is stored — no phone number or email.
+
+| Method | Path | Min role | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/houses/:houseId/loans` | viewer+ | List loans. `status` is `open` (default in the UI), `overdue`, `returned` or `all`; optional `itemId`, `limit` 1-500. Returns `{ loans, counts }`. |
+| `GET` | `/api/houses/:houseId/loans/borrowers` | viewer+ | Suggested borrowers: household members first, then names from past loans, each with `loanCount` and `member`. |
+| `POST` | `/api/houses/:houseId/loans` | member+ | Record `{ itemId, borrowerName, quantity?, lentAt?, dueAt?, note?, borrowerUserId? }`. `quantity` defaults to 1 and may not exceed the available quantity. |
+| `PATCH` | `/api/loans/:loanId` | member+ | Change `dueAt` (YYYY-MM-DD or null) and/or `note`. |
+| `POST` | `/api/loans/:loanId/return` | member+ | Mark returned. Empty body returns everything still out; `{ "quantity": 1 }` returns part of it and keeps the loan open. |
+| `DELETE` | `/api/loans/:loanId` | member+ | Delete a loan recorded by mistake. Only the person who recorded it, or an admin+, may do this. |
+
+A loan is `{ id, houseId, itemId, itemName, itemUnit, borrowerName, borrowerUserId, quantity,
+returnedQuantity, remaining, lentAt, dueAt, returnedAt, note, createdBy, createdByName, open, overdue,
+createdAt }`. `open` is false once the entire quantity is back; `overdue` compares `dueAt` with today as
+calendar dates (YYYY-MM-DD), so time zones do not move the line.
+
+**Available quantity.** Item responses gain `onLoan` and `available`, where
+`available = on-hand quantity - open loans` (never below zero). The item list, item detail and the lend
+sheet use the same numbers. Low-stock reminders and run-out forecasts intentionally keep using the
+on-hand quantity: lending is not consumption, and the house still owns the item. Consuming stock
+(`POST /api/items/:itemId/stock` with `remove`, `waste` or a lowering `set`) is refused when it would go
+below the open loans, so FIFO can never silently take units promised to a borrower.
+
+**Reminders.** An overdue loan (open, with a `dueAt` before today) creates one `loan_overdue`
+notification per loan per day; the dedupe key carries the date, so the 30-minute scan does not repeat
+it. Returning the loan, or deleting it, resolves the reminder. Overdue reminders are delivered through
+the existing `expiring` channel preference, alongside expiry and warranty reminders.
+
+Loan due dates are not added to the calendar feed: that would need a new per-feed toggle and a
+migration on `calendar_feeds`, so it is left out of this change.
 
 ## Extending the API
 

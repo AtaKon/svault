@@ -149,6 +149,11 @@ export function ItemCard({
             {unitPriceLabel(item.priceStats?.latest ?? item.latestPrice, item.unit, house?.currency)}
           </div>
         )}
+        {current.onLoan > 0 && (
+          <div className="mt-0.5 min-w-0 truncate text-[11px] text-warn">
+            {t("{count} {unit} on loan", { count: formatQty(current.onLoan), unit: item.unit })}
+          </div>
+        )}
       </div>
 
       <div className="flex max-w-[45%] min-w-0 shrink-0 flex-col items-end gap-1.5" onClick={(event) => event.stopPropagation()}>

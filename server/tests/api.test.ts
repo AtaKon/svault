@@ -13585,3 +13585,265 @@ describe("undo stock action", () => {
     assert.equal((await undo(mine.data.lastMovementId, member.cookie, rolesHouseId)).status, 200);
   });
 });
+
+describe("lending tracker", () => {
+  const future = (days: number) => new Date(Date.now() + days * 864e5).toISOString().slice(0, 10);
+  const past = (days: number) => new Date(Date.now() - days * 864e5).toISOString().slice(0, 10);
+
+  it("records loans without moving stock, guards the quantity and returns in parts", async () => {
+    const house = await request("/api/houses", { method: "POST", body: { name: "Lending stock test" } });
+    const hid = house.data.id;
+    const created = await request(`/api/houses/${hid}/items`, {
+      method: "POST",
+      body: { name: "Cordless drill", unit: "pcs", reorderPoint: 2, initialStock: { quantity: 3 } },
+    });
+    assert.equal(created.status, 201);
+    const id = created.data.id;
+    assert.equal(created.data.onLoan, 0);
+    assert.equal(created.data.available, 3);
+
+    const lent = await request(`/api/houses/${hid}/loans`, {
+      method: "POST",
+      body: { itemId: id, borrowerName: "Nikos", quantity: 2, dueAt: future(3), note: "Blue case" },
+    });
+    assert.equal(lent.status, 201);
+    assert.equal(lent.data.loan.open, true);
+    assert.equal(lent.data.loan.remaining, 2);
+    assert.equal(lent.data.loan.overdue, false);
+    const loanId = lent.data.loan.id;
+
+    // A loan is a record, not a stock movement: the shelf quantity is unchanged.
+    const detail = await request(`/api/items/${id}`);
+    assert.equal(detail.data.quantity, 3);
+    assert.equal(detail.data.onLoan, 2);
+    assert.equal(detail.data.available, 1);
+    assert.equal(detail.data.loans.length, 1);
+    assert.equal(detail.data.loans[0].borrowerName, "Nikos");
+    assert.equal(detail.data.movements.filter((movement: any) => movement.type === "out").length, 0);
+    // Low stock keeps using the on-hand quantity: lending is not consumption,
+    // so 3 on the shelf with 2 lent out is not "running low".
+    assert.equal(detail.data.isLow, false);
+
+    const tooMany = await request(`/api/houses/${hid}/loans`, {
+      method: "POST",
+      body: { itemId: id, borrowerName: "Mina", quantity: 2 },
+    });
+    assert.equal(tooMany.status, 400);
+    assert.match(tooMany.data.error, /available to lend/);
+
+    // FIFO cannot silently consume units that are promised to a borrower.
+    const blocked = await request(`/api/items/${id}/stock`, {
+      method: "POST",
+      body: { action: "remove", quantity: 2 },
+    });
+    assert.equal(blocked.status, 400);
+    assert.match(blocked.data.error, /out on loan/);
+    assert.equal(
+      (await request(`/api/items/${id}/stock`, { method: "POST", body: { action: "remove", quantity: 1 } })).status,
+      200,
+    );
+    assert.equal(
+      (await request(`/api/items/${id}/stock`, { method: "POST", body: { action: "remove", quantity: 1 } })).status,
+      400,
+    );
+    // A count correction cannot fall below the loaned quantity either.
+    const count = await request(`/api/items/${id}/stock`, { method: "POST", body: { action: "set", target: 1 } });
+    assert.equal(count.status, 400);
+    assert.match(count.data.error, /out on loan/);
+
+    const partial = await request(`/api/loans/${loanId}/return`, { method: "POST", body: { quantity: 1 } });
+    assert.equal(partial.status, 200);
+    assert.equal(partial.data.loan.open, true);
+    assert.equal(partial.data.loan.returnedQuantity, 1);
+    assert.equal(partial.data.loan.remaining, 1);
+    assert.equal((await request(`/api/loans/${loanId}/return`, { method: "POST", body: { quantity: 5 } })).status, 400);
+    const rest = await request(`/api/loans/${loanId}/return`, { method: "POST", body: {} });
+    assert.equal(rest.status, 200);
+    assert.equal(rest.data.loan.open, false);
+    assert.equal(rest.data.loan.remaining, 0);
+    assert.ok(rest.data.loan.returnedAt);
+    assert.equal((await request(`/api/loans/${loanId}/return`, { method: "POST", body: {} })).status, 400);
+    // Returning the loan never added stock back, because lending never removed it.
+    assert.equal((await request(`/api/items/${id}`)).data.quantity, 2);
+  });
+
+  it("finds overdue loans by calendar date and reminds once a day", async () => {
+    const house = await request("/api/houses", { method: "POST", body: { name: "Overdue lending test" } });
+    const hid = house.data.id;
+    const created = await request(`/api/houses/${hid}/items`, {
+      method: "POST",
+      body: { name: "Ladder", unit: "pcs", initialStock: { quantity: 2 } },
+    });
+    const id = created.data.id;
+    const late = await request(`/api/houses/${hid}/loans`, {
+      method: "POST",
+      body: { itemId: id, borrowerName: "Anna", quantity: 1, dueAt: past(1) },
+    });
+    assert.equal(late.status, 201);
+    assert.equal(late.data.loan.overdue, true);
+    const soon = await request(`/api/houses/${hid}/loans`, {
+      method: "POST",
+      body: { itemId: id, borrowerName: "Kostas", quantity: 1, dueAt: future(2) },
+    });
+    assert.equal(soon.status, 201);
+    assert.equal(soon.data.loan.overdue, false);
+
+    const overdue = await request(`/api/houses/${hid}/loans?status=overdue`);
+    assert.equal(overdue.status, 200);
+    assert.deepEqual(overdue.data.loans.map((loan: any) => loan.id), [late.data.loan.id]);
+    assert.equal(overdue.data.counts.overdueCount, 1);
+    assert.equal(overdue.data.counts.openCount, 2);
+    assert.equal((await request(`/api/houses/${hid}/loans?status=open`)).data.loans.length, 2);
+    assert.equal((await request(`/api/houses/${hid}/loans?status=returned`)).data.loans.length, 0);
+    assert.equal((await request(`/api/houses/${hid}/loans?status=nonsense`)).status, 400);
+
+    // The scheduled scan creates one reminder per loan per day, not one per scan.
+    assert.equal((await request(`/api/houses/${hid}/notifications/scan`, { method: "POST", body: {} })).status, 200);
+    assert.equal((await request(`/api/houses/${hid}/notifications/scan`, { method: "POST", body: {} })).status, 200);
+    const today = new Date().toISOString().slice(0, 10);
+    const rows = await all<any>("SELECT * FROM notifications WHERE house_id = ? AND type = 'loan_overdue'", [hid]);
+    const forLate = rows.filter((row) => JSON.parse(row.data).loanId === late.data.loan.id);
+    assert.equal(forLate.length, 1);
+    assert.equal(forLate[0].dedupe_key, `loan:${late.data.loan.id}:${today}`);
+    assert.equal(forLate[0].resolved_at, null);
+    assert.ok(rows.every((row) => JSON.parse(row.data).loanId !== soon.data.loan.id));
+    const feed = await request(`/api/houses/${hid}/notifications`);
+    assert.ok(feed.data.notifications.some((entry: any) => entry.type === "loan_overdue" && entry.data.loanId === late.data.loan.id));
+
+    // Returning it resolves the reminder without waiting for the next scan.
+    assert.equal((await request(`/api/loans/${late.data.loan.id}/return`, { method: "POST", body: {} })).status, 200);
+    const after = await all<any>("SELECT * FROM notifications WHERE house_id = ? AND type = 'loan_overdue'", [hid]);
+    assert.ok(after.every((row) => row.resolved_at));
+    assert.ok(
+      !(await request(`/api/houses/${hid}/notifications`)).data.notifications.some(
+        (entry: any) => entry.type === "loan_overdue",
+      ),
+    );
+  });
+
+  it("enforces the role matrix and keeps houses apart", async () => {
+    const house = await request("/api/houses", { method: "POST", body: { name: "Lending roles test" } });
+    const hid = house.data.id;
+    const created = await request(`/api/houses/${hid}/items`, {
+      method: "POST",
+      body: { name: "Extension cord", unit: "pcs", initialStock: { quantity: 2 } },
+    });
+    const id = created.data.id;
+    const lent = await request(`/api/houses/${hid}/loans`, {
+      method: "POST",
+      body: { itemId: id, borrowerName: "Petros", quantity: 1 },
+    });
+    const loanId = lent.data.loan.id;
+    // The lend sheet suggests past borrowers next to household members.
+    const borrowers = await request(`/api/houses/${hid}/loans/borrowers`);
+    assert.equal(borrowers.status, 200);
+    assert.ok(borrowers.data.borrowers.some((entry: any) => entry.name === "Petros" && entry.loanCount === 1));
+    assert.ok(borrowers.data.borrowers.some((entry: any) => entry.name === "Test Owner" && entry.member === true));
+
+    const viewer = await request("/api/auth/register", {
+      method: "POST",
+      body: { name: "Loan viewer", email: "loan-viewer@example.com", password: "test password" },
+    });
+    const member = await request("/api/auth/register", {
+      method: "POST",
+      body: { name: "Loan member", email: "loan-member@example.com", password: "test password" },
+    });
+    const outsider = await request("/api/auth/register", {
+      method: "POST",
+      body: { name: "Loan outsider", email: "loan-outsider@example.com", password: "test password" },
+    });
+    const joinedAt = new Date().toISOString();
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
+      hid,
+      viewer.data.user.id,
+      "viewer",
+      joinedAt,
+    ]);
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
+      hid,
+      member.data.user.id,
+      "member",
+      joinedAt,
+    ]);
+
+    assert.equal((await request(`/api/houses/${hid}/loans`, { auth: viewer.cookie! })).status, 200);
+    assert.equal(
+      (await request(`/api/houses/${hid}/loans`, { auth: viewer.cookie!, body: { itemId: id, borrowerName: "X" } })).status,
+      403,
+    );
+    assert.equal(
+      (await request(`/api/loans/${loanId}`, { method: "PATCH", auth: viewer.cookie!, body: { note: "nope" } })).status,
+      403,
+    );
+    assert.equal(
+      (await request(`/api/loans/${loanId}/return`, { method: "POST", auth: viewer.cookie!, body: {} })).status,
+      403,
+    );
+    assert.equal((await request(`/api/loans/${loanId}`, { method: "DELETE", auth: viewer.cookie! })).status, 403);
+
+    // A member may edit the due date and record their own loan, but may not
+    // delete someone else's.
+    const edited = await request(`/api/loans/${loanId}`, {
+      method: "PATCH",
+      auth: member.cookie!,
+      body: { dueAt: future(5), note: "Back on Sunday" },
+    });
+    assert.equal(edited.status, 200);
+    assert.equal(edited.data.loan.note, "Back on Sunday");
+    assert.equal((await request(`/api/loans/${loanId}`, { method: "DELETE", auth: member.cookie! })).status, 403);
+    const own = await request(`/api/houses/${hid}/loans`, {
+      method: "POST",
+      auth: member.cookie!,
+      body: { itemId: id, borrowerName: "Sofia", quantity: 1 },
+    });
+    assert.equal(own.status, 201);
+    assert.equal((await request(`/api/loans/${own.data.loan.id}`, { method: "DELETE", auth: member.cookie! })).status, 200);
+    // A viewer cannot record a loan even when they are the borrower.
+    assert.equal(
+      (await request(`/api/houses/${hid}/loans`, { method: "POST", auth: viewer.cookie!, body: { itemId: id, borrowerName: "Viewer" } })).status,
+      403,
+    );
+
+    // Another house cannot read or touch these loans.
+    assert.equal((await request(`/api/houses/${hid}/loans`, { auth: outsider.cookie! })).status, 404);
+    assert.equal(
+      (await request(`/api/loans/${loanId}`, { method: "PATCH", auth: outsider.cookie!, body: { note: "hi" } })).status,
+      404,
+    );
+    assert.equal((await request(`/api/loans/${loanId}/return`, { method: "POST", auth: outsider.cookie!, body: {} })).status, 404);
+    assert.equal((await request(`/api/loans/${loanId}`, { method: "DELETE", auth: outsider.cookie! })).status, 404);
+
+    // A borrower must be a member of this house when a user id is named.
+    const foreign = await request(`/api/houses/${hid}/loans`, {
+      method: "POST",
+      body: { itemId: id, borrowerName: "Stranger", borrowerUserId: outsider.data.user.id },
+    });
+    assert.equal(foreign.status, 400);
+
+    // A named member is recorded under their own name, whatever name was typed.
+    const named = await request(`/api/houses/${hid}/loans`, {
+      method: "POST",
+      body: { itemId: id, borrowerName: "Somebody Else Entirely", borrowerUserId: member.data.user.id, quantity: 1 },
+    });
+    assert.equal(named.status, 201);
+    assert.equal(named.data.loan.borrowerName, "Loan member");
+    assert.equal(named.data.loan.borrowerUserId, member.data.user.id);
+  });
+
+  it("declares the loan table for SQLite, PostgreSQL and restore order", async () => {
+    const { POSTGRES_SCHEMA, POSTGRES_MIGRATIONS, POSTGRES_TABLE_ORDER } = await import(
+      "../database/postgres-schema.js"
+    );
+    assert.match(POSTGRES_SCHEMA, /CREATE TABLE IF NOT EXISTS item_loans/);
+    assert.ok(POSTGRES_MIGRATIONS.some((statement) => /CREATE TABLE IF NOT EXISTS item_loans/.test(statement)));
+    assert.ok(POSTGRES_MIGRATIONS.includes("CREATE INDEX IF NOT EXISTS loans_house ON item_loans(house_id, returned_at, due_at)"));
+    assert.ok(POSTGRES_MIGRATIONS.includes("CREATE INDEX IF NOT EXISTS loans_item ON item_loans(item_id, returned_at)"));
+    assert.ok(POSTGRES_TABLE_ORDER.indexOf("item_loans") > POSTGRES_TABLE_ORDER.indexOf("items"));
+    assert.ok(POSTGRES_TABLE_ORDER.indexOf("item_loans") > POSTGRES_TABLE_ORDER.indexOf("users"));
+    assert.ok(POSTGRES_TABLE_ORDER.indexOf("item_loans") < POSTGRES_TABLE_ORDER.indexOf("notifications"));
+    const sqliteSource = readFileSync(path.resolve("server/database/sqlite.ts"), "utf8");
+    assert.match(sqliteSource, /CREATE TABLE IF NOT EXISTS item_loans/);
+    // The live database has the table too, whichever driver is in use.
+    assert.ok(Number((await get<any>("SELECT COUNT(*) AS n FROM item_loans"))?.n) >= 0);
+  });
+});

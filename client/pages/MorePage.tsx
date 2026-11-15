@@ -12,6 +12,7 @@ const LINKS: { to: string; label: string; description: string; icon: IconName; t
   { to: "/insights", label: "Insights", description: "Spending, prices, waste and use-it-up", icon: "price", tint: "bg-warn-soft text-warn" },
   { to: "/contribute", label: "Contribute", description: "Share missing product data with Open Food Facts", icon: "sparkles", tint: "bg-brand-soft text-brand" },
   { to: "/espresso", label: "Espresso log", description: "Ratings, grind and extraction history", icon: "cup", tint: "bg-warn-soft text-warn" },
+  { to: "/loans", label: "Loans", description: "Who borrowed what, and what is due back", icon: "users", tint: "bg-brand-soft text-brand" },
   { to: "/shopping", label: "Shopping list", description: "From recipes, low stock and the plan", icon: "list", tint: "bg-brand-soft text-brand" },
   { to: "/plan", label: "Meal plan", description: "Seven days, scaled servings", icon: "calendar", tint: "bg-warn-soft text-warn" },
   { to: "/intake", label: "Bulk intake", description: "A receipt or a queue of barcodes", icon: "upload", tint: "bg-brand-soft text-brand" },

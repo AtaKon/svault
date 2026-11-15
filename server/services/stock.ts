@@ -2,6 +2,7 @@ import { all, get, now, newId, run, tx } from "../db.js";
 import { ApiError } from "../http.js";
 import { convert, pricePerUnit, round } from "../units.js";
 import { syncItemLowStock } from "./notifications.js";
+import { itemAvailableToUse } from "./loans.js";
 
 export interface StockOpts {
   itemId: string;
@@ -199,9 +200,18 @@ export async function removeStock(opts: StockOpts & { waste?: boolean }): Promis
 
   return await tx(async () => {
     const item = await itemRow(opts.itemId, opts.houseId);
-    const available = await itemQuantity(item.id);
+    const onHand = await itemQuantity(item.id);
+    const available = Math.max(0, await itemAvailableToUse(item.id));
+    // Lending does not move stock, so consuming beyond on-hand minus open loans
+    // would silently take units that are promised to a borrower.
+    const loaned = round(onHand - available);
     if (available < requested) {
-      throw new ApiError(400, `Only ${available} ${item.unit} of ${item.name} in stock`);
+      throw new ApiError(
+        400,
+        loaned > 0
+          ? `Only ${available} ${item.unit} of ${item.name} can be taken — ${loaned} ${item.unit} is out on loan`
+          : `Only ${available} ${item.unit} of ${item.name} in stock`,
+      );
     }
     let remaining = requested;
     const lots = await all<any>(
@@ -264,6 +274,17 @@ export async function setStock(opts: StockOpts & { target: number }): Promise<st
   const delta = round(target - current);
   if (delta === 0) {
     throw new ApiError(400, "Stock already matches that count");
+  }
+  if (delta < 0) {
+    // A count correction lowers the on-hand quantity; it must not drop below
+    // the units that are currently out on loan.
+    const loaned = round(current - Math.max(0, await itemAvailableToUse(item.id)));
+    if (loaned > 0 && target < loaned) {
+      throw new ApiError(
+        400,
+        `Cannot count below ${loaned} ${item.unit} — ${loaned} of ${item.name} is out on loan`,
+      );
+    }
   }
   return await tx(async () => {
     if (delta > 0) {

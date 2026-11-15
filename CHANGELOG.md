@@ -34,6 +34,9 @@ All notable changes to SVault are documented here. The format follows
 - Optional Web Push reminders. With VAPID keys configured, an installed PWA receives low-stock, expiry
   and budget reminders while SVault is closed; each device is enabled separately under
   **Settings → Reminders**.
+- Lending tracker: record who borrowed a tool, book or piece of gear, see "x on loan" on items and the
+  dashboard, return loans fully or in parts, and get one overdue reminder per loan per day. Lending
+  never changes stock; consuming below the lent quantity is refused.
 
 ### Security
 

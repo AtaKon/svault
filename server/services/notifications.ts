@@ -48,7 +48,7 @@ export async function createNotification(opts: {
     ],
   );
   const event: DeliveryEvent | null =
-    opts.type === "low_stock" ? "low_stock" : opts.type === "expiring" ? "expiring" : opts.type === "budget_alert" ? "budget_alert" : opts.type === "warranty" ? "warranty" : null;
+    opts.type === "low_stock" ? "low_stock" : opts.type === "expiring" ? "expiring" : opts.type === "budget_alert" ? "budget_alert" : opts.type === "warranty" ? "warranty" : opts.type === "loan_overdue" ? "expiring" : null;
   if (event && !opts.userId) {
     await queueDeliveries(
       {
@@ -278,6 +278,8 @@ export async function scanAllHouses() {
     const { scanBudgetAlerts } = await import("./insights.js");
     await scanBudgetAlerts(house.id);
     await syncHouseWarranties(house.id, warrantyDays);
+    const { syncHouseLoans } = await import("./loans.js");
+    await syncHouseLoans(house.id);
   }
   await maybeSendWeeklySummaries();
 }
