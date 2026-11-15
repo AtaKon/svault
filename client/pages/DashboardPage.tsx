@@ -15,6 +15,9 @@ interface DashboardData extends Omit<Dashboard, "recent"> {
   recentRecipe: Recipe | null;
 }
 
+/** Loans listed on the dashboard card; the rest are counted in "N more". */
+const LOAN_CARD_ROWS = 4;
+
 export function DashboardPage() {
   const { house, can } = useHouse();
   const { user } = useAuth();
@@ -203,7 +206,7 @@ export function DashboardPage() {
                 </Link>
               </div>
               <Card className="divide-y divide-line">
-                {loans.loans.slice(0, 4).map((loan) => (
+                {loans.loans.slice(0, LOAN_CARD_ROWS).map((loan) => (
                   <Link
                     key={loan.id}
                     to={`/items/${loan.itemId}`}
@@ -222,9 +225,9 @@ export function DashboardPage() {
                     {loan.overdue && <Badge tone="danger">{t("Overdue")}</Badge>}
                   </Link>
                 ))}
-                {loans.counts.openCount > loans.loans.length && (
+                {loans.counts.openCount > Math.min(LOAN_CARD_ROWS, loans.loans.length) && (
                   <Link to="/loans" className="block px-4 py-2 text-[11px] font-medium text-brand hover:underline">
-                    {t("{count} more open loans", { count: loans.counts.openCount - loans.loans.length })}
+                    {t("{count} more open loans", { count: loans.counts.openCount - Math.min(LOAN_CARD_ROWS, loans.loans.length) })}
                   </Link>
                 )}
               </Card>
