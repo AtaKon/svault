@@ -81,7 +81,8 @@ export function MorePage() {
       </Card>
 
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-        {LINKS.map((link) => (
+        {/* The valuation report lists prices for the whole house: members and above only. */}
+        {LINKS.filter((link) => link.to !== "/reports/valuation" || house?.role !== "viewer").map((link) => (
           <button
             key={link.to}
             onClick={() => navigate(link.to)}

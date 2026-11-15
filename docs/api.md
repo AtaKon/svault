@@ -1684,9 +1684,9 @@ signed out returns to the target after sign-in (`state.from` keeps the query str
 opens an item link gets the usual `404` and never sees the item's name.
 ### Valuation and insurance export
 
-`GET /api/houses/:houseId/reports/valuation` returns a dated valuation report for the house. Any
-role with access to the house (viewer+) can read it, matching the existing inventory CSV export,
-which is built from the viewer-readable item list.
+`GET /api/houses/:houseId/reports/valuation` returns a dated valuation report for the house. It
+needs member access or above: it lists prices and purchase history for everything the house owns,
+so viewers (who can browse stock) get `403`. Admins and owners are included.
 
 Query parameters:
 

@@ -792,8 +792,8 @@ Docker, Loki, Grafana or another log collector.
   takes a safety copy unless you pass `--no-safety-copy`.
 - To move to another server, copy `DATA_DIR` to the new host and start the same image with the same
   `DATA_DIR`.
-- **More → Valuation report** builds a dated record of what the house owns for insurance claims or
-  moving. Choose how values are derived (`latest purchase price` by default, `average purchase price`,
+- **More → Valuation report** (members and above; viewers do not see it) builds a dated record of what
+  the house owns for insurance claims or moving. Choose how values are derived (`latest purchase price` by default, `average purchase price`,
   or `stock cost`), then filter by category, place, tag, minimum value, active warranty or archived
   items. The preview shows the grand total, per-category and per-place subtotals and how many items
   have no price recorded. **Download CSV** exports the same rows plus the subtotal blocks (UTF-8 with a

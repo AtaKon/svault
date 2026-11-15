@@ -12612,18 +12612,18 @@ describe("valuation report", () => {
     assert.equal(MAX_VALUATION_ITEMS, 20000);
   });
 
-  it("serves JSON and CSV to viewers, with isolated houses and archived exclusion", async () => {
+  it("serves JSON and CSV to members but not viewers, with isolated houses and archived exclusion", async () => {
     const owner = await request("/api/auth/register", {
       body: { name: "Valuation owner", email: "valuation-owner@example.com", password: "test password" },
     });
-    const viewer = await request("/api/auth/register", {
-      body: { name: "Valuation viewer", email: "valuation-viewer@example.com", password: "test password" },
+    const member = await request("/api/auth/register", {
+      body: { name: "Valuation member", email: "valuation-member@example.com", password: "test password" },
     });
     const hid = owner.data.houses[0].id;
     await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
       hid,
-      viewer.data.user.id,
-      "viewer",
+      member.data.user.id,
+      "member",
       new Date().toISOString(),
     ]);
     const locations = await request(`/api/houses/${hid}/locations`, { auth: owner.cookie! });
@@ -12683,11 +12683,23 @@ describe("valuation report", () => {
     });
     assert.equal(formula.status, 201);
 
-    // A viewer reads the report, exactly like the inventory CSV export.
-    const latest = await request(`/api/houses/${hid}/reports/valuation`, { auth: viewer.cookie! });
+    // A member reads the report; viewers may not (it lists prices and purchase history).
+    const latest = await request(`/api/houses/${hid}/reports/valuation`, { auth: member.cookie! });
     assert.equal(latest.status, 200, JSON.stringify(latest.data));
     assert.equal(latest.data.basis, "latest");
     assert.equal(latest.data.itemCount, 3);
+
+    const viewer = await request("/api/auth/register", {
+      body: { name: "Valuation viewer", email: "valuation-viewer@example.com", password: "test password" },
+    });
+    await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
+      hid,
+      viewer.data.user.id,
+      "viewer",
+      new Date().toISOString(),
+    ]);
+    assert.equal((await request(`/api/houses/${hid}/reports/valuation`, { auth: viewer.cookie! })).status, 403);
+    assert.equal((await request(`/api/houses/${hid}/reports/valuation?format=csv`, { auth: viewer.cookie! })).status, 403);
     assert.equal(latest.data.itemsWithoutValue, 2);
     assert.equal(latest.data.grandTotal, 480);
     assert.equal(latest.data.houseName, owner.data.houses[0].name);
@@ -12708,31 +12720,31 @@ describe("valuation report", () => {
     assert.equal(foodRow.valueSource, "none");
     assert.equal(latest.data.placeTotals.find((entry: any) => entry.locationId === fridge.id).total, 480);
 
-    const average = await request(`/api/houses/${hid}/reports/valuation?basis=average`, { auth: viewer.cookie! });
+    const average = await request(`/api/houses/${hid}/reports/valuation?basis=average`, { auth: member.cookie! });
     assert.equal(average.data.grandTotal, 440);
     assert.equal(average.data.items.find((item: any) => item.id === drill.data.id).unitValue, 110);
-    const stockCost = await request(`/api/houses/${hid}/reports/valuation?basis=stockCost`, { auth: viewer.cookie! });
+    const stockCost = await request(`/api/houses/${hid}/reports/valuation?basis=stockCost`, { auth: member.cookie! });
     assert.equal(stockCost.data.grandTotal, 460);
     assert.equal(stockCost.data.items.find((item: any) => item.id === drill.data.id).unitValue, 115);
 
     // Archived items are out by default and back in when asked for.
-    const withArchived = await request(`/api/houses/${hid}/reports/valuation?archived=1`, { auth: viewer.cookie! });
+    const withArchived = await request(`/api/houses/${hid}/reports/valuation?archived=1`, { auth: member.cookie! });
     assert.equal(withArchived.data.itemCount, 4);
     assert.equal(withArchived.data.grandTotal, 530);
 
     // Filter combinations.
-    assert.equal((await request(`/api/houses/${hid}/reports/valuation?tags=tools&archived=1`, { auth: viewer.cookie! })).data.itemCount, 1);
-    assert.equal((await request(`/api/houses/${hid}/reports/valuation?places=${fridge.id}&archived=1`, { auth: viewer.cookie! })).data.itemCount, 2);
-    assert.equal((await request(`/api/houses/${hid}/reports/valuation?minValue=100`, { auth: viewer.cookie! })).data.itemCount, 1);
-    assert.equal((await request(`/api/houses/${hid}/reports/valuation?warranty=1`, { auth: viewer.cookie! })).data.itemCount, 1);
-    assert.equal((await request(`/api/houses/${hid}/reports/valuation?basis=nope`, { auth: viewer.cookie! })).status, 400);
+    assert.equal((await request(`/api/houses/${hid}/reports/valuation?tags=tools&archived=1`, { auth: member.cookie! })).data.itemCount, 1);
+    assert.equal((await request(`/api/houses/${hid}/reports/valuation?places=${fridge.id}&archived=1`, { auth: member.cookie! })).data.itemCount, 2);
+    assert.equal((await request(`/api/houses/${hid}/reports/valuation?minValue=100`, { auth: member.cookie! })).data.itemCount, 1);
+    assert.equal((await request(`/api/houses/${hid}/reports/valuation?warranty=1`, { auth: member.cookie! })).data.itemCount, 1);
+    assert.equal((await request(`/api/houses/${hid}/reports/valuation?basis=nope`, { auth: member.cookie! })).status, 400);
 
     // Documents are listed by name and type only; no file contents or links.
     const form = new FormData();
     form.set("document", new Blob(["%PDF-1.4 valuation"], { type: "application/pdf" }), "warranty.pdf");
     form.set("kind", "warranty");
     assert.equal((await request(`/api/items/${drill.data.id}/documents`, { auth: owner.cookie!, body: form })).status, 201);
-    const withDocs = await request(`/api/houses/${hid}/reports/valuation?documents=1`, { auth: viewer.cookie! });
+    const withDocs = await request(`/api/houses/${hid}/reports/valuation?documents=1`, { auth: member.cookie! });
     const documentRow = withDocs.data.items.find((item: any) => item.id === drill.data.id);
     assert.equal(documentRow.documentCount, 1);
     assert.equal(documentRow.documents[0].name, "warranty.pdf");
@@ -12759,7 +12771,7 @@ describe("valuation report", () => {
 
     // CSV: UTF-8 BOM, a spreadsheet-safe name and the totals block.
     const csvResponse = await fetch(`${base}/api/houses/${hid}/reports/valuation?format=csv&archived=1`, {
-      headers: { cookie: viewer.cookie! },
+      headers: { cookie: member.cookie! },
     });
     assert.equal(csvResponse.status, 200);
     assert.equal(csvResponse.headers.get("content-type"), "text/csv; charset=utf-8");

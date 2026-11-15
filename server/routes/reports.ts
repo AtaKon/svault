@@ -242,7 +242,9 @@ reportRoutes.get(
   handler(async (req, res) => {
     // Viewer+, mirroring the existing inventory CSV export, which is built from
     // the viewer-readable item list. No extra role is invented here.
-    const { houseId } = await requireHouse(req);
+    // The report lists prices and purchase history for the whole house, so it is
+    // for members and above; viewers can browse stock but not its value.
+    const { houseId } = await requireHouse(req, "member");
     const query = parseBody(valuationQuerySchema, req.query ?? {});
     const filters: ValuationFilters = {
       basis: query.basis as ValuationBasis,
