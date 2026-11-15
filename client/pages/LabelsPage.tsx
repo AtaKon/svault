@@ -240,7 +240,9 @@ export function LabelsPage() {
   );
 
   const qr = useQrMatrices(entries.map((entry) => entry.url));
-  const canPrint = entries.length > 0 && !qr.loading && !qr.failed;
+  // Print only when every selected label has its QR code; right after the
+  // selection changes the codes are briefly missing while `loading` is still false.
+  const canPrint = entries.length > 0 && !qr.loading && !qr.failed && entries.every((entry) => Boolean(qr.matrices[entry.url]));
 
   useEffect(() => {
     const element = previewRef.current;
