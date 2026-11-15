@@ -1399,6 +1399,19 @@ The rate is the total quantity in outgoing consumption movements over the last 6
 At least two consumption events spanning seven days and positive stock are required. The dashboard's
 `runningOutSoon` contains active items with at most seven days left, ordered by days left.
 
+### Printable QR labels
+
+`GET /api/labels` returns `{ "baseUrl": string | null }`, the configured `PUBLIC_URL` used to build
+printed label links; `null` means the client falls back to its own origin. Any signed-in user may read
+it and it carries no household data.
+
+A label is a deep link, never a copy of the inventory: `/items/:itemId?house=:houseId` for an item and
+`/items?location=:locationId&house=:houseId` for a place. QR codes are produced in the browser with the
+ZXing encoder the camera scanner already ships (no network, no new storage). The `house` parameter only
+selects the house after a scan and is ignored when the user is not a member. Opening a label while
+signed out returns to the target after sign-in (`state.from` keeps the query string). A non-member who
+opens an item link gets the usual `404` and never sees the item's name.
+
 ## Extending the API
 
 If you add an endpoint:

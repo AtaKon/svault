@@ -11,11 +11,13 @@ All notable changes to SVault are documented here. The format follows
 - **Offline reload.** Reloading SVault without a network no longer lands on the sign-in page. The last signed-in session is kept on the device and used only while the server cannot be reached; a 401 or signing out clears it. Requests that cannot reach the server now say "You are offline" instead of "Failed to fetch".
 - **PostgreSQL: replacing a bill document.** Uploading a new PDF for an existing bill failed with 500 on PostgreSQL ("could not determine data type of parameter").
 - **PostgreSQL test suite.** `npm run test:postgres` passes in full. Four tests used SQLite-only SQL (`PRAGMA`, trigger syntax, text in a numeric column, a hard-coded database name) and now run, or skip only the SQLite-specific part, on PostgreSQL. CI runs the PostgreSQL suite on every pull request.
+- **Sign-in after a deep link.** Opening a protected page while signed out returned to Home after signing in. It now returns to the page and query string that was requested, which is what printable labels and filtered inventory links rely on.
 
 ### Added
 
 - Category budgets, optional bill spending, month-end projections, budget history and threshold reminders.
 - Consumption-based run-out forecasts on items and the dashboard, with an optional shopping-list fill.
+- Printable QR labels for items and places: multi-select with search, three label sizes (including a 3 × 8 A4 sheet), live preview and a print stylesheet. Scanning a label with the in-app scanner opens the item or place, also after signing in; foreign or script QR payloads are ignored.
 
 ### Security
 
