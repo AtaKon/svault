@@ -246,6 +246,23 @@ describe("stocktake", () => {
     assert.equal(saved.data.line.countedByName, "Owner");
     assert.ok(saved.data.line.countedAt);
 
+    // A save writes only the fields it carries: a count-only autosave must not
+    // wipe the note, and a note-only edit must not touch the count.
+    const countOnly = await request(`/api/houses/${houseId}/stocktakes/${stocktakeId}/lines/${line.id}`, {
+      method: "PATCH",
+      body: { countedQty: 8 },
+    });
+    assert.equal(countOnly.status, 200);
+    assert.equal(countOnly.data.line.note, "One bag open");
+    const noteOnly = await request(`/api/houses/${houseId}/stocktakes/${stocktakeId}/lines/${line.id}`, {
+      method: "PATCH",
+      body: { note: "Two bags open" },
+    });
+    assert.equal(noteOnly.status, 200);
+    assert.equal(noteOnly.data.line.countedQty, 8);
+    assert.equal(noteOnly.data.line.note, "Two bags open");
+    assert.equal(noteOnly.data.line.countedByName, "Owner");
+
     const detail = await request(`/api/houses/${houseId}/stocktakes/${stocktakeId}`);
     assert.equal(detail.data.stocktake.countedCount, 1);
 

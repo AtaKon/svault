@@ -201,12 +201,25 @@ export async function updateStocktakeLine(opts: {
       countedAt = now();
     }
   }
-  const note = opts.note === undefined ? line.note ?? null : opts.note;
+  // Write only what this request carries. Rewriting every column from the row
+  // read above would let a count save overwrite a note saved a moment earlier
+  // by another request (and the other way round).
+  const sets: string[] = [];
+  const values: unknown[] = [];
+  if (opts.countedQty !== undefined) {
+    sets.push("counted_qty = ?", "counted_by = ?", "counted_at = ?");
+    values.push(counted, countedBy, countedAt);
+  }
+  if (opts.note !== undefined) {
+    sets.push("note = ?");
+    values.push(opts.note);
+  }
+  if (!sets.length) throw new ApiError(400, "Nothing to update");
   const updated = await run(
-    `UPDATE stocktake_lines SET counted_qty = ?, counted_by = ?, counted_at = ?, note = ?
+    `UPDATE stocktake_lines SET ${sets.join(", ")}
       WHERE id = ? AND stocktake_id = ? AND house_id = ?
         AND EXISTS (SELECT 1 FROM stocktakes s WHERE s.id = ? AND s.status = 'draft')`,
-    [counted, countedBy, countedAt, note, opts.lineId, opts.stocktakeId, opts.houseId, opts.stocktakeId],
+    [...values, opts.lineId, opts.stocktakeId, opts.houseId, opts.stocktakeId],
   );
   if (!updated.changes) throw new ApiError(409, "This stocktake is no longer open");
   const quantities = await scopedQuantities(opts.houseId, [String(line.item_id)], session.location_id ?? null);

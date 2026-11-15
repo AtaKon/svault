@@ -74,6 +74,9 @@ export function clearPendingCount(houseId: string, stocktakeId: string, lineId: 
 
 /** Replay queued counts in order. Stops on a transport failure; drops a queued
  * line the server refuses permanently (the session closed or the line is gone). */
+/** HTTP statuses after which retrying the same count can never succeed. */
+const PERMANENT_REJECTIONS = new Set([400, 404, 409, 410, 422]);
+
 export async function flushPendingCounts(
   houseId: string,
   stocktakeId: string,
@@ -96,9 +99,10 @@ export async function flushPendingCounts(
       if (error instanceof ApiError && error.status === 0) {
         return { synced, remaining: entries.length - synced };
       }
-      // A 4xx means the server will never accept this line now (session closed,
-      // line deleted); keeping it would block every later count.
-      if (error instanceof ApiError && error.status >= 400 && error.status < 500) {
+      // Only a permanent rejection (bad value, line gone, session closed) may
+      // drop a queued count. 401/403/408/425/429 can pass, so the count stays
+      // queued and replay stops here rather than silently losing it.
+      if (error instanceof ApiError && PERMANENT_REJECTIONS.has(error.status)) {
         clearPendingCount(houseId, stocktakeId, entry.lineId);
         synced++;
         continue;

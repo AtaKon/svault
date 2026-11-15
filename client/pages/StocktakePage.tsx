@@ -341,8 +341,8 @@ export function StocktakeSessionPage() {
   }, []);
 
   const saveLine = useCallback(
-    async (line: StocktakeLine, countedQty: number | null, note?: string | null) => {
-      if (!detail) return;
+    async (line: StocktakeLine, countedQty: number | null, note?: string | null): Promise<boolean> => {
+      if (!detail) return false;
       setSaving((previous) => ({ ...previous, [line.id]: true }));
       try {
         const result = await api<{ line: StocktakeLine }>(
@@ -360,6 +360,7 @@ export function StocktakeSessionPage() {
           delete next[line.id];
           return next;
         });
+        return true;
       } catch (err) {
         if (err instanceof ApiError && err.status === 0) {
           queuePendingCount(house.id, detail.id, line.id, countedQty, note);
@@ -370,9 +371,10 @@ export function StocktakeSessionPage() {
             note: note === undefined ? line.note : note,
             countedAt: new Date().toISOString(),
           });
-          return;
+          return true;
         }
         toast.error(err instanceof Error ? t(err.message) : t("Could not save this count"));
+        return false;
       } finally {
         setSaving((previous) => {
           const next = { ...previous };
@@ -754,7 +756,8 @@ function CountRow({
   focused: boolean;
   saving: boolean;
   pending: boolean;
-  onSave: (line: StocktakeLine, countedQty: number | null, note?: string | null) => Promise<void>;
+  /** Resolves true when the count reached the server or the offline queue. */
+  onSave: (line: StocktakeLine, countedQty: number | null, note?: string | null) => Promise<boolean>;
   onSkip: () => void;
   onFocus: () => void;
 }) {
@@ -780,7 +783,11 @@ function CountRow({
     const timer = setTimeout(() => {
       if (parsed === lastSaved.current) return;
       lastSaved.current = parsed;
-      void onSave(line, parsed, undefined);
+      // A refused save must stay retryable: fall back to what the server holds
+      // so the next edit or blur sends the count again.
+      void onSave(line, parsed, undefined).then((saved) => {
+        if (!saved) lastSaved.current = line.countedQty;
+      });
     }, 900);
     return () => clearTimeout(timer);
   }, [value, line, onSave]);
@@ -831,7 +838,9 @@ function CountRow({
               if (parsed != null && (!Number.isFinite(parsed) || parsed < 0)) return;
               if (parsed === line.countedQty) return;
               lastSaved.current = parsed;
-              void onSave(line, parsed, undefined);
+              void onSave(line, parsed, undefined).then((saved) => {
+                if (!saved) lastSaved.current = line.countedQty;
+              });
             }}
             onKeyDown={(event) => {
               if (event.key !== "Enter") return;
