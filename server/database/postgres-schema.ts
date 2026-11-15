@@ -817,6 +817,20 @@ CREATE TABLE IF NOT EXISTS schema_meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+/* Saved inventory filters. user_id NULL marks a view an admin shared with the
+   whole house; otherwise it is personal to one member. */
+CREATE TABLE IF NOT EXISTS saved_views (
+  id TEXT PRIMARY KEY,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  filters TEXT NOT NULL DEFAULT '{}',
+  sort TEXT NOT NULL DEFAULT 'name',
+  position INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS saved_views_house ON saved_views(house_id, user_id, position);
 `;
 
 /**
@@ -961,6 +975,7 @@ export const POSTGRES_TABLE_ORDER = [
   "house_members",
   "member_diet_profiles",
   "house_invites",
+  "saved_views",
   "locations",
   "categories",
   "attribute_defs",

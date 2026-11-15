@@ -14,6 +14,8 @@ import { oidcRoutes } from "./routes/oidc.js";
 import { houseRoutes } from "./routes/houses.js";
 import { itemDocumentRoutes } from "./routes/item-documents.js";
 import { inventoryRoutes, itemRoutes } from "./routes/inventory.js";
+import { savedViewRoutes } from "./routes/saved-views.js";
+import { searchRoutes } from "./routes/search.js";
 import { receiptRoutes, singleReceiptRoutes } from "./routes/receipts.js";
 import { billRoutes, singleBillRoutes } from "./routes/bills.js";
 import { receiptTemplateRoutes } from "./routes/receipt-templates.js";
@@ -226,6 +228,10 @@ app.post("/api/houses/:houseId/recipes/scan", aiLimit, aiBudgetGuard);
 app.post("/api/houses/:houseId/recipes/import", aiLimit, aiBudgetGuard);
 app.post("/api/houses/:houseId/intake/parse", aiLimit, aiBudgetGuard);
 app.post("/api/houses/:houseId/ideas", aiLimit, aiBudgetGuard);
+app.get(
+  "/api/houses/:houseId/search",
+  limitRequests(limiters.search, userOrIp, "Too many searches. Wait a moment and try again."),
+);
 app.post("/api/houses/:houseId/ai/test", aiLimit, aiBudgetGuard);
 app.post("/api/recipes/:recipeId/ai", aiLimit, aiBudgetGuard);
 app.post(
@@ -240,6 +246,8 @@ app.use("/api/auth", oidcRoutes);
 app.use("/api/houses", houseRoutes);
 app.use("/api/houses", aiLogRoutes);
 app.use("/api/houses", inventoryRoutes);
+app.use("/api/houses", savedViewRoutes);
+app.use("/api/houses", searchRoutes);
 app.use("/api/houses", receiptRoutes);
 app.use("/api/houses", billRoutes);
 app.use("/api/houses", receiptTemplateRoutes);

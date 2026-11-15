@@ -1515,3 +1515,55 @@ export interface OrphanFile {
   size: number;
   modifiedAt: string;
 }
+
+/* --------------------------------------------------------- saved views/search */
+
+/** Inventory list filters that a saved view can carry. Matches the item list query. */
+export interface SavedViewFilters {
+  q?: string;
+  categoryId?: string | null;
+  locationId?: string | null;
+  tag?: string | null;
+  low?: boolean;
+  expiring?: boolean;
+  archived?: boolean;
+}
+
+export type InventorySort = "name" | "recent" | "quantity" | "value";
+
+/** A personal view (shared: false) or one an admin shared with the whole house. */
+export interface SavedView {
+  id: string;
+  name: string;
+  shared: boolean;
+  filters: SavedViewFilters;
+  sort: InventorySort;
+  position: number;
+  /** True when the caller may rename, move, reshape or delete the view. */
+  canEdit: boolean;
+  /** Referenced filters whose category/place no longer exists in the house. */
+  missingFilters: ("category" | "location")[];
+  createdAt: string;
+}
+
+export type SearchType = "items" | "recipes" | "receipts" | "bills" | "shops";
+
+export interface SearchHit {
+  type: SearchType;
+  id: string;
+  title: string;
+  subtitle: string | null;
+  /** Client route that opens the result. */
+  route: string;
+}
+
+export interface SearchGroup {
+  type: SearchType;
+  hits: SearchHit[];
+}
+
+export interface SearchResponse {
+  query: string;
+  groups: SearchGroup[];
+  total: number;
+}
