@@ -36,6 +36,7 @@ import { adminRoutes } from "./routes/admin.js";
 import { calendarRoutes } from "./routes/calendar.js";
 import { calendarFeedRoutes } from "./routes/calendar-feed.js";
 import { apiTokenRoutes } from "./routes/api-tokens.js";
+import { labelRoutes } from "./routes/labels.js";
 import { inMaintenance } from "./maintenance.js";
 import { stripQuery } from "./lib/redact.js";
 import { assertAiBudget } from "./services/ai-budget.js";
@@ -269,6 +270,7 @@ app.use("/api/receipts", singleReceiptRoutes);
 app.use("/api/bills", singleBillRoutes);
 app.use("/api/ideas", singleIdeaRoutes);
 app.use("/api/photos", singlePhotoRoutes);
+app.use("/api/labels", labelRoutes);
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, version: 1, database: databaseKind(), time: new Date().toISOString() });

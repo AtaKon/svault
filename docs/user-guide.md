@@ -760,3 +760,18 @@ dashboard lists items expected to run out within seven days. Forecasts need at l
 events seven days apart and a positive stock balance. Waste, stock corrections and moves do not count.
 In the shopping list, turn on **Include items running out soon** and choose a horizon before using
 **Add low stock** to include forecast items as well. Existing compatible shopping lines are merged.
+
+### Printable QR labels
+
+Open **More → Print labels**, or the printer button on an item page or next to a place in
+**House settings → Places**. Tick the items and places you want (the search box filters both lists),
+choose a label size — 38 × 25 mm, 50 × 30 mm or a 70 × 37 mm A4 sheet with 24 labels — and pick what
+the label shows: name, place, unit, house name. The preview is the printable A4 sheet; **Print** opens
+the browser print dialog. For exact sizes, print at 100% and turn off headers and footers.
+
+A label's QR code contains only an app link: item labels open that item, place labels open the
+inventory filtered to that place. Neither holds stock, prices or names. Scanning a label with the
+in-app scanner (Scan, or the barcode button on an item) opens it directly; other QR codes are ignored
+with a short message. If the link is opened while signed out, sign in and you land on the target. The
+label points at the configured `PUBLIC_URL` when the server has one, otherwise at the address you are
+browsing.

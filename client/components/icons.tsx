@@ -48,7 +48,8 @@ export type IconName =
   | "star"
   | "wifi"
   | "receipt"
-  | "store";
+  | "store"
+  | "printer";
 
 const PATHS: Record<IconName, ReactNode> = {
   home: (
@@ -271,6 +272,13 @@ const PATHS: Record<IconName, ReactNode> = {
       <path d="M3 10 5 4h14l2 6" />
       <path d="M3 10a3 3 0 0 0 6 0 3 3 0 0 0 6 0 3 3 0 0 0 6 0" />
       <path d="M9 20v-6h6v6" />
+    </>
+  ),
+  printer: (
+    <>
+      <path d="M7 9V3h10v6" />
+      <path d="M7 17H5a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2" />
+      <path d="M7 14h10v7H7z" />
     </>
   ),
 };

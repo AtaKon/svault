@@ -16,6 +16,19 @@ const FEATURES = [
   { icon: "chef", title: "Cook what you have", body: "Recipes and AI ideas built from your actual pantry." },
 ] as const;
 
+/**
+ * Where to go after signing in: the protected route that sent us here, but only
+ * as an in-app path. Anything else (an absolute URL, `//host`, `/login`) falls
+ * back to the home page, so router state can never steer a sign-in off-site.
+ */
+function returnPath(state: unknown): string {
+  const from = (state as { from?: unknown } | null)?.from;
+  if (typeof from !== "string") return "/";
+  if (!from.startsWith("/") || from.startsWith("//") || from.startsWith("/\\")) return "/";
+  if (from === "/login" || from.startsWith("/login?")) return "/";
+  return from;
+}
+
 export function AuthPage({ mode }: { mode: "login" | "register" }) {
   const { setSession, user } = useAuth();
   const { t } = useI18n();
@@ -60,8 +73,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
       const refreshed = await api<{ user: User; houses: House[] }>("/api/auth/me");
       setSession(refreshed);
     }
-    const from = (location.state as { from?: string } | null)?.from;
-    navigate(from && from !== "/login" ? from : "/", { replace: true });
+    navigate(returnPath(location.state), { replace: true });
   };
 
   const submit = async (event: FormEvent) => {
@@ -138,7 +150,10 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
   };
 
   if (user) {
-    return <Navigate to="/" replace />;
+    // Keep the target a protected route asked for: the login form already
+    // navigates there, but this guard also covers passkey, 2FA and invite
+    // sign-ins. Without it the guard races the form and lands on Home.
+    return <Navigate to={returnPath(location.state)} replace />;
   }
 
   return (

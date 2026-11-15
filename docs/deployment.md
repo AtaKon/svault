@@ -93,6 +93,7 @@ Docker Compose reads `.env` next to `docker-compose.yml`.
 | `SV_CATALOG_URL` | empty | Server | Optional shared OpenFoodFacts receipt-name catalogue (JSON) for **Settings → Data → Sync catalogue**. |
 | `RP_ID` | request host | Server | WebAuthn relying-party domain, e.g. `svault.example.com`. |
 | `ORIGIN` | request origin | Server | Public HTTPS origin for passkeys, e.g. `https://svault.example.com`. |
+| `PUBLIC_URL` | browser origin | Server | Public base URL printed into QR labels (e.g. `https://svault.example.com`). Set it when a printed label should point at a different hostname than the browser used, for example a public domain behind a reverse proxy. Empty uses the browser's own origin. |
 | `OIDC_ISSUER` | empty | Server | OpenID Connect issuer URL; empty disables SSO. |
 | `OIDC_CLIENT_ID` | empty | Server | OIDC client id. |
 | `OIDC_CLIENT_SECRET` | empty | Server | OIDC client secret (never sent to the browser). |
