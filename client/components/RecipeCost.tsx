@@ -49,7 +49,7 @@ export function RecipeCostCard({
 
       {cost && cost.total != null ? (
         <>
-          <div className="flex items-end justify-between gap-3">
+          <div className="flex flex-wrap items-end justify-between gap-3">
             <div className="min-w-0">
               <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">
                 {cost.perPortion != null ? t("Per portion") : t("Whole recipe")}
