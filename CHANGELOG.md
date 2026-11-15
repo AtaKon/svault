@@ -19,6 +19,7 @@ All notable changes to SVault are documented here. The format follows
 
 ### Fixed
 
+- **PostgreSQL upgrade.** The release that added item merging failed to start on an existing PostgreSQL database (`column "merged_into" does not exist`): an index on the new column was created before the migration that adds it, and the startup transaction aborted. The index is now created after the column. A test fails if the base schema ever indexes a column that existing databases only get from a migration.
 - **Offline reload.** Reloading SVault without a network no longer lands on the sign-in page. The last signed-in session is kept on the device and used only while the server cannot be reached; a 401 or signing out clears it. Requests that cannot reach the server now say "You are offline" instead of "Failed to fetch".
 - **PostgreSQL: replacing a bill document.** Uploading a new PDF for an existing bill failed with 500 on PostgreSQL ("could not determine data type of parameter").
 - **PostgreSQL test suite.** `npm run test:postgres` passes in full. Four tests used SQLite-only SQL (`PRAGMA`, trigger syntax, text in a numeric column, a hard-coded database name) and now run, or skip only the SQLite-specific part, on PostgreSQL. CI runs the PostgreSQL suite on every pull request.

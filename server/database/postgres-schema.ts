@@ -241,7 +241,6 @@ CREATE TABLE IF NOT EXISTS items (
 CREATE INDEX IF NOT EXISTS items_house ON items(house_id);
 CREATE INDEX IF NOT EXISTS items_house_created ON items(house_id, created_at);
 CREATE INDEX IF NOT EXISTS items_off ON items(off_code);
-CREATE INDEX IF NOT EXISTS items_merged_into ON items(merged_into);
 
 CREATE TABLE IF NOT EXISTS item_documents (
   id TEXT PRIMARY KEY,
