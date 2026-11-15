@@ -35,6 +35,7 @@ import { InsightsPage } from "@/pages/InsightsPage";
 import { ContributionsPage } from "@/pages/ContributionsPage";
 import { EspressoPage } from "@/pages/EspressoPage";
 import { AdminPage } from "@/pages/AdminPage";
+import { ValuationPage } from "@/pages/ValuationPage";
 import { useI18n } from "@/i18n";
 
 export function App() {
@@ -82,6 +83,7 @@ export function App() {
         <Route path="/profile" element={<ProfilePage />} />
         <Route path="/developer" element={<DeveloperPage />} />
         <Route path="/more" element={<MorePage />} />
+        <Route path="/reports/valuation" element={<ValuationPage />} />
         <Route path="*" element={<ExtraPages />} />
       </Route>
     </Routes>
