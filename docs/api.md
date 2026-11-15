@@ -386,6 +386,51 @@ OpenFoodFacts product (`code`, `project`, `productType`, `name`, `brand`, `gener
 `packaging`, `servingSize`, `nutrition`) and `item` is null. `nutrition` is the parsed per-100 panel,
 or null when the product has no nutrition data.
 
+## Saved views and global search
+
+Saved views store a named inventory filter set for one house. Global search is one ranked query across
+items, recipes, receipts, bills and shops.
+
+### Saved views
+
+| Method | Path | Min role | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/houses/:houseId/saved-views` | viewer+ | The caller's personal views and every shared view in the house, ordered by position. |
+| `POST` | `/api/houses/:houseId/saved-views` | viewer+ | Create `{ name, filters, sort, position?, shared? }`. Viewers may create personal views. |
+| `PATCH` | `/api/houses/:houseId/saved-views/:viewId` | viewer+ / admin+ | Rename, reshape, move or (un)share a view. Personal views are owner-only; shared views need an admin. |
+| `DELETE` | `/api/houses/:houseId/saved-views/:viewId` | viewer+ / admin+ | Delete a view under the same rules. |
+
+`filters` is validated with the same strict schema as the item list: `q`, `categoryId`, `locationId`,
+`tag`, `low`, `expiring`, `archived`. Unknown keys are rejected with `400` rather than ignored, and a
+category/place id must belong to the house. `sort` is one of `name`, `recent`, `quantity` or `value`.
+`shared: true` writes a house-wide view (`user_id` NULL) and requires `admin+`. A personal view that is
+shared can be un-shared only by an admin; it becomes that admin's personal view. There is a cap of 25
+personal views per user per house and 25 shared views per house.
+
+Responses are `{ views: SavedView[] }` where a view carries `id`, `name`, `shared`, `filters`, `sort`,
+`position`, `canEdit`, `createdAt` and `missingFilters`. `missingFilters` lists `category` or
+`location` when the stored id no longer exists; the view is still returned so the client can show a
+hint instead of failing. Owners can rename, reorder and delete their views; `canEdit` reflects the
+caller's rights.
+
+### Search
+
+`GET /api/houses/:houseId/search?q=...&types=items,recipes,receipts,bills,shops&limit=6` is available
+to `viewer+` and always scoped to one house. `q` must be 2–120 characters after trimming; `types`
+defaults to all five and rejects unknown values; `limit` is 1–20 per type (default 6). The response is
+`{ query, groups: [{ type, hits: [SearchHit] }], total }`, with only non-empty groups. A hit is
+`{ type, id, title, subtitle, route }`; `route` is the client path that opens it.
+
+Matching is accent-, case- and punctuation-insensitive for Greek and Latin text, so `ρεβανι` finds
+`Ρεβάνι` and `ΡΕΒΑΝΊ`. `%` and `_` are ordinary characters, not wildcards. Items match name, brand,
+description, tags and barcodes; recipes match title, description and tags; receipts match shop, notes
+and product lines; bills match name, type, notes and due date; shops match name, kind and notes.
+Results are ranked by exact/prefix/substring title match, then recency. Each type scans a bounded
+recent window (1500 items; 500 recipes; 400 receipts, bills and 300 shops) so one query stays cheap
+on a long-lived house. Each type keeps its existing visibility rule: house membership is required and
+every query filters on `house_id`, so another house's records never appear. The endpoint shares the
+in-memory rate limiter (`SV_RATE_LIMIT_SEARCH`, default 120 per minute per user).
+
 ## OpenFoodFacts catalogue
 
 SVault reads four Open Food Facts databases: Open Food Facts (`off`), Open Beauty Facts (`obf`), Open

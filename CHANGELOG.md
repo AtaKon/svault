@@ -16,6 +16,8 @@ All notable changes to SVault are documented here. The format follows
 
 - Category budgets, optional bill spending, month-end projections, budget history and threshold reminders.
 - Consumption-based run-out forecasts on items and the dashboard, with an optional shopping-list fill.
+- Saved inventory views: name the current filters, keep personal views, let house admins share one with everyone, and apply a view from a linkable URL. Views whose category or place was deleted stay visible with a warning.
+- Global search in the app header (`/` or `Ctrl`/`Cmd`+`K`) across items, recipes, receipts, bills and shops, with Greek accent-insensitive matching, grouped ranked results and recent searches kept on the device.
 
 ### Security
 
