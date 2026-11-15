@@ -22,6 +22,7 @@ import type {
   EspressoShot,
   EspressoShotSummary,
   EspressoEquipment,
+  ActivityEvent,
 } from "../shared/types.js";
 
 export const ITEM_SELECT = `
@@ -507,5 +508,33 @@ export async function serializeNotification(row: any, userId: string): Promise<N
     read: readBy.includes(userId),
     resolvedAt: row.resolved_at ?? null,
     createdAt: row.created_at,
+  };
+}
+
+/**
+ * One house-activity row. Producer names are joined through `house_members`, so
+ * an actor who has left the house keeps the id but loses the display name; the
+ * client renders that case as "Former member".
+ */
+export function serializeActivityEvent(row: any): ActivityEvent {
+  const number = (value: unknown) => (value == null ? null : Number(value));
+  return {
+    id: row.source_id,
+    kind: row.kind,
+    at: row.occurred_at,
+    actorId: row.actor_id ?? null,
+    actorName: row.actor_name ?? null,
+    itemId: row.item_id ?? null,
+    itemName: row.item_name ?? null,
+    locationId: row.location_id ?? null,
+    locationName: row.location_name ?? null,
+    quantity: number(row.quantity),
+    unit: row.unit ?? null,
+    amount: number(row.amount),
+    currency: row.currency ?? null,
+    title: row.title ?? null,
+    receiptId: row.receipt_id ?? null,
+    billId: row.bill_id ?? null,
+    shoppingItemId: row.shopping_item_id ?? null,
   };
 }

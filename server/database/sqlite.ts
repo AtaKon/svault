@@ -616,6 +616,8 @@ CREATE TABLE IF NOT EXISTS items (
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS items_house ON items(house_id);
+/* The activity feed reads the newest item creations in a house. */
+CREATE INDEX IF NOT EXISTS items_house_created ON items(house_id, created_at);
 
 CREATE TABLE IF NOT EXISTS item_documents (
   id TEXT PRIMARY KEY,
@@ -731,6 +733,8 @@ CREATE TABLE IF NOT EXISTS stock_movements (
 );
 CREATE INDEX IF NOT EXISTS movements_item ON stock_movements(item_id, created_at);
 CREATE INDEX IF NOT EXISTS movements_house ON stock_movements(house_id, created_at);
+/* Filtering the activity feed by kind narrows this index to one movement type. */
+CREATE INDEX IF NOT EXISTS movements_house_type ON stock_movements(house_id, type, created_at);
 
 CREATE TABLE IF NOT EXISTS stock_mutations (
   id TEXT PRIMARY KEY,
@@ -820,6 +824,7 @@ CREATE TABLE IF NOT EXISTS bills (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS bills_house ON bills(house_id, due_date, created_at);
+CREATE INDEX IF NOT EXISTS bills_house_created ON bills(house_id, created_at);
 
 CREATE TABLE IF NOT EXISTS household_settlements (
   id TEXT PRIMARY KEY,
@@ -1043,6 +1048,7 @@ CREATE TABLE IF NOT EXISTS shopping_list_items (
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS shopping_house ON shopping_list_items(house_id, checked, created_at);
+CREATE INDEX IF NOT EXISTS shopping_checked_at ON shopping_list_items(house_id, checked_at);
 
 /* Remembers which source (a recipe line, a low-stock item, a whole week of
    planned meals) produced a shopping-list line, so adding it twice is a no-op. */

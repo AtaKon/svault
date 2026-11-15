@@ -234,6 +234,7 @@ CREATE TABLE IF NOT EXISTS items (
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS items_house ON items(house_id);
+CREATE INDEX IF NOT EXISTS items_house_created ON items(house_id, created_at);
 CREATE INDEX IF NOT EXISTS items_off ON items(off_code);
 
 CREATE TABLE IF NOT EXISTS item_documents (
@@ -361,6 +362,7 @@ CREATE TABLE IF NOT EXISTS bills (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS bills_house ON bills(house_id, due_date, created_at);
+CREATE INDEX IF NOT EXISTS bills_house_created ON bills(house_id, created_at);
 
 CREATE TABLE IF NOT EXISTS household_settlements (
   id TEXT PRIMARY KEY,
@@ -429,6 +431,7 @@ CREATE TABLE IF NOT EXISTS stock_movements (
 );
 CREATE INDEX IF NOT EXISTS movements_item ON stock_movements(item_id, created_at);
 CREATE INDEX IF NOT EXISTS movements_house ON stock_movements(house_id, created_at);
+CREATE INDEX IF NOT EXISTS movements_house_type ON stock_movements(house_id, type, created_at);
 
 CREATE TABLE IF NOT EXISTS receipt_lines (
   id TEXT PRIMARY KEY,
@@ -648,6 +651,7 @@ CREATE TABLE IF NOT EXISTS shopping_list_items (
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS shopping_house ON shopping_list_items(house_id, checked, created_at);
+CREATE INDEX IF NOT EXISTS shopping_checked_at ON shopping_list_items(house_id, checked_at);
 
 CREATE TABLE IF NOT EXISTS shopping_list_sources (
   house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
