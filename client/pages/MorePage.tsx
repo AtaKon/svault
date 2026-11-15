@@ -26,6 +26,7 @@ const LINKS: { to: string; label: string; description: string; icon: IconName; t
   { to: "/labels", label: "Print labels", description: "QR labels for items and places", icon: "printer", tint: "bg-brand-soft text-brand" },
   { to: "/reports/valuation", label: "Valuation report", description: "Insurance and moving checklist with totals", icon: "price", tint: "bg-brand-soft text-brand" },
   { to: "/activity", label: "Activity", description: "Who added, used, moved or saved what", icon: "clock", tint: "bg-brand-soft text-brand" },
+  { to: "/freezer", label: "Freezer", description: "Frozen portions, thawing and use-first dates", icon: "clock", tint: "bg-brand-soft text-brand" },
 ];
 
 export function MorePage() {

@@ -37,6 +37,7 @@ All notable changes to SVault are documented here. The format follows
 - Lending tracker: record who borrowed a tool, book or piece of gear, see "x on loan" on items and the
   dashboard, return loans fully or in parts, and get one overdue reminder per loan per day. Lending
   never changes stock; consuming below the lent quantity is refused.
+- **Freezer and meal-prep batches.** Freeze all or part of a batch (or cook-mode leftovers) with portions, a frozen date and a freezer place. View everything frozen under **More → Freezer**, grouped by place and ordered by eat-by, with a use-first strip, filters, one-tap portion take-out and a thaw action. Items can set a freezer shelf life (90 days by default) and a thaw window (2 days by default), and frozen or thawed batches feed the existing expiry reminders and dashboard.
 
 ### Security
 

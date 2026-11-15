@@ -351,7 +351,7 @@ function PlacesTab({ house }: { house: House }) {
     void load();
   }, [load]);
 
-  const save = async (data: { name: string; kind: string; icon: string }) => {
+  const save = async (data: { name: string; kind: string; icon: string; isFreezer: boolean }) => {
     setBusy(true);
     try {
       if (editing) {
@@ -415,7 +415,9 @@ function PlacesTab({ house }: { house: House }) {
               <div className="min-w-0 flex-1">
                 <div className="text-sm font-medium">{location.name}</div>
                 <div className="text-[11px] capitalize text-muted">
-                  {t(location.kind)} · {location.itemCount ?? 0} {t("items")}</div>
+                  {t(location.kind)} · {location.itemCount ?? 0} {t("items")}
+                  {location.isFreezer ? ` · ❄️ ${t("freezer")}` : ""}
+                </div>
               </div>
               <IconButton icon="printer" label={t("Print label")} onClick={() => navigate(`/labels?place=${location.id}`)} />
               {can("member") && (
@@ -462,18 +464,20 @@ function PlaceSheet({
   onClose: () => void;
   location: HouseLocation | null;
   busy: boolean;
-  onSave: (data: { name: string; kind: string; icon: string }) => void;
+  onSave: (data: { name: string; kind: string; icon: string; isFreezer: boolean }) => void;
 }) {
   const { t } = useI18n();
   const [name, setName] = useState("");
   const [kind, setKind] = useState("shelf");
   const [icon, setIcon] = useState("📦");
+  const [isFreezer, setIsFreezer] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     setName(location?.name ?? "");
     setKind(location?.kind ?? "shelf");
     setIcon(location?.icon ?? "📦");
+    setIsFreezer(location?.isFreezer ?? location?.kind === "freezer");
   }, [open, location]);
 
   return (
@@ -482,7 +486,7 @@ function PlaceSheet({
       onClose={onClose}
       title={location ? t("Edit place") : t("New place")}
       footer={
-        <Button block loading={busy} disabled={!name.trim()} onClick={() => onSave({ name: name.trim(), kind, icon })}>
+        <Button block loading={busy} disabled={!name.trim()} onClick={() => onSave({ name: name.trim(), kind, icon, isFreezer })}>
           {location ? t("Save place") : t("Add place")}
         </Button>
       }
@@ -497,6 +501,7 @@ function PlaceSheet({
             onChange={(event) => {
               setKind(event.target.value);
               setIcon(LOCATION_ICONS[event.target.value] ?? "📦");
+              if (event.target.value === "freezer") setIsFreezer(true);
             }}
           >
             {LOCATION_KINDS.map((entry) => (
@@ -509,6 +514,12 @@ function PlaceSheet({
         <Field label={t("Icon")} hint={t("any emoji")}>
           <Input value={icon} onChange={(event) => setIcon(event.target.value)} maxLength={8} className="w-24" />
         </Field>
+        <Switch
+          checked={isFreezer}
+          onChange={setIsFreezer}
+          label={t("This place is a freezer")}
+          description={t("Frozen batches are grouped here and this place is offered first when freezing.")}
+        />
       </div>
     </Sheet>
   );

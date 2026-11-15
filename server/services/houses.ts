@@ -65,8 +65,8 @@ export async function createHouse(opts: {
     ]);
     for (const loc of DEFAULT_LOCATIONS) {
       await run(
-        "INSERT INTO locations (id, house_id, name, kind, icon, parent_id, created_at) VALUES (?, ?, ?, ?, ?, NULL, ?)",
-        [newId("loc"), id, loc.name, loc.kind, loc.icon, stamp],
+        "INSERT INTO locations (id, house_id, name, kind, icon, parent_id, is_freezer, created_at) VALUES (?, ?, ?, ?, ?, NULL, ?, ?)",
+        [newId("loc"), id, loc.name, loc.kind, loc.icon, loc.kind === "freezer" ? 1 : 0, stamp],
       );
     }
     for (const cat of DEFAULT_CATEGORIES) {

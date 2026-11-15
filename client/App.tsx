@@ -39,6 +39,7 @@ import { LoansPage } from "@/pages/LoansPage";
 import { AdminPage } from "@/pages/AdminPage";
 import { ValuationPage } from "@/pages/ValuationPage";
 import { ActivityPage } from "@/pages/ActivityPage";
+import { FreezerPage } from "@/pages/FreezerPage";
 import { useI18n } from "@/i18n";
 
 export function App() {
@@ -80,6 +81,7 @@ export function App() {
         <Route path="/contribute" element={<ContributionsPage />} />
         <Route path="/espresso" element={<EspressoPage />} />
         <Route path="/loans" element={<LoansPage />} />
+        <Route path="/freezer" element={<FreezerPage />} />
         <Route path="/admin" element={<AdminPage />} />
         <Route path="/photos" element={<PhotosPage />} />
         <Route path="/notifications" element={<NotificationsPage />} />

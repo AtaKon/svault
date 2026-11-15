@@ -88,7 +88,22 @@ export class SqliteDriver implements DatabaseDriver {
     ensureColumn("login_challenges", "attempts", "INTEGER NOT NULL DEFAULT 0");
     ensureColumn("notifications", "user_id", "TEXT REFERENCES users(id) ON DELETE CASCADE");
     ensureColumn("items", "opened_shelf_life_days", "INTEGER");
+    ensureColumn("items", "freezer_shelf_life_days", "INTEGER");
+    ensureColumn("items", "thaw_shelf_life_days", "INTEGER");
+    // Places created before the freezer flag existed are recognised once by
+    // their old kind; later user edits are never overwritten on boot.
+    if (ensureColumn("locations", "is_freezer", "INTEGER NOT NULL DEFAULT 0")) {
+      runLocal("UPDATE locations SET is_freezer = 1 WHERE kind = 'freezer'");
+    }
     ensureColumn("stock_lots", "opened_at", "TEXT");
+    ensureColumn("stock_lots", "portions", "REAL");
+    ensureColumn("stock_lots", "cooked_on", "TEXT");
+    ensureColumn("stock_lots", "frozen_on", "TEXT");
+    ensureColumn("stock_lots", "thawed_on", "TEXT");
+    // No foreign key: stock_lots is created before recipes, and a deleted
+    // recipe should not take a batch of food with it.
+    ensureColumn("stock_lots", "source_recipe_id", "TEXT");
+    conn.exec("CREATE INDEX IF NOT EXISTS lots_frozen ON stock_lots(house_id, frozen_on)");
     ensureColumn("stock_lots", "vendor_id", "TEXT REFERENCES vendors(id) ON DELETE SET NULL");
     ensureColumn("stock_lots", "receipt_id", "TEXT REFERENCES receipts(id) ON DELETE SET NULL");
     ensureColumn("stock_movements", "vendor_id", "TEXT REFERENCES vendors(id) ON DELETE SET NULL");
@@ -569,6 +584,7 @@ CREATE TABLE IF NOT EXISTS locations (
   kind TEXT NOT NULL DEFAULT 'shelf',
   icon TEXT,
   parent_id TEXT REFERENCES locations(id) ON DELETE CASCADE,
+  is_freezer INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS locations_house ON locations(house_id);
@@ -609,6 +625,8 @@ CREATE TABLE IF NOT EXISTS items (
   reorder_point REAL NOT NULL DEFAULT 0,
   target_stock REAL,
   opened_shelf_life_days INTEGER,
+  freezer_shelf_life_days INTEGER,
+  thaw_shelf_life_days INTEGER,
   attributes TEXT NOT NULL DEFAULT '{}',
   tags TEXT NOT NULL DEFAULT '[]',
   image TEXT,
@@ -712,6 +730,11 @@ CREATE TABLE IF NOT EXISTS stock_lots (
   purchased_at TEXT,
   expires_at TEXT,
   opened_at TEXT,
+  portions REAL,
+  cooked_on TEXT,
+  frozen_on TEXT,
+  thawed_on TEXT,
+  source_recipe_id TEXT,
   note TEXT,
   created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL

@@ -5,7 +5,7 @@ import { api } from "@/api";
 import { Badge, Button, Card, EmptyState, LoadingBlock, Sheet, cn } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { useToast } from "@/components/toast";
-import { minutesLabel, money, plural, qty } from "@/format";
+import { minutesLabel, money, plural, qty, todayInput } from "@/format";
 import {
   estimateIngredientGrams,
   gramsLabel,
@@ -35,6 +35,9 @@ export function RecipeCookPage() {
   const [locations, setLocations] = useState<Location[]>([]);
   const [reviewLines, setReviewLines] = useState<{ ingredientId: string; itemId: string; name: string; quantity: string; unit: string; enabled: boolean }[]>([]);
   const [saveLeftovers, setSaveLeftovers] = useState(false);
+  const [freezeLeftovers, setFreezeLeftovers] = useState(false);
+  // Local calendar date: the UTC date is yesterday for a few hours after local midnight.
+  const [frozenOn, setFrozenOn] = useState(() => todayInput());
   const [leftoverPortions, setLeftoverPortions] = useState("1");
   const [locationId, setLocationId] = useState("");
   const [useBy, setUseBy] = useState(() => { const d = new Date(); d.setDate(d.getDate() + 3); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; });
@@ -157,8 +160,12 @@ export function RecipeCookPage() {
   };
   const confirmCook = async () => {
     const selected = reviewLines.filter((line) => line.enabled);
+    if (saveLeftovers && freezeLeftovers && !frozenOn) {
+      toast.error(t("Choose the date you froze the leftovers."));
+      return;
+    }
     if (selected.some((line) => !line.unit.trim() || !Number.isFinite(Number(line.quantity)) || Number(line.quantity) <= 0) ||
-        (saveLeftovers && (!Number.isFinite(Number(leftoverPortions)) || Number(leftoverPortions) <= 0 || !useBy))) {
+        (saveLeftovers && (!Number.isFinite(Number(leftoverPortions)) || Number(leftoverPortions) <= 0 || (!freezeLeftovers && !useBy) || (freezeLeftovers && !frozenOn)))) {
       toast.error(t("Enter a positive quantity and unit for each selected ingredient."));
       return;
     }
@@ -167,7 +174,7 @@ export function RecipeCookPage() {
       const response = await api<{ lines: { name: string; shortfall: number; unit: string }[] }>(`/api/recipes/${recipe.id}/cook`, { body: {
         portions, idempotencyKey: cookKey,
         lines: selected.map(({ ingredientId, itemId, quantity, unit }) => ({ ingredientId, itemId, quantity: Number(quantity), unit })),
-        ...(saveLeftovers ? { leftovers: { portions: Number(leftoverPortions), locationId: locationId || null, useBy } } : {}),
+        ...(saveLeftovers ? { leftovers: { portions: Number(leftoverPortions), locationId: locationId || null, useBy: freezeLeftovers ? undefined : useBy, freeze: freezeLeftovers, ...(freezeLeftovers ? { frozenOn } : {}) } } : {}),
       } });
       setResult(response);
     } catch (err) { toast.error(err instanceof Error ? t(err.message) : t("Could not finish cooking")); }
@@ -425,7 +432,25 @@ export function RecipeCookPage() {
           <p className="text-sm text-muted">{t("Review the amounts used for {count} portions.", { count: portions })}</p>
           {reviewLines.map((line, index) => <div key={line.ingredientId} className="rounded-xl border border-line p-3"><label className="flex items-center gap-2"><input type="checkbox" checked={line.enabled} onChange={(e) => setReviewLines((lines) => lines.map((entry, i) => i === index ? { ...entry, enabled: e.target.checked } : entry))} /><span className="min-w-0 break-words font-medium">{line.name}</span></label><div className="mt-2 flex gap-2"><input aria-label={t("Quantity")} type="number" min="0" step="any" disabled={!line.enabled} value={line.quantity} onChange={(e) => setReviewLines((lines) => lines.map((entry, i) => i === index ? { ...entry, quantity: e.target.value } : entry))} className="w-1/2 min-w-0 rounded-xl border border-line bg-bg p-2" /><input aria-label={t("Unit")} disabled={!line.enabled} value={line.unit} onChange={(e) => setReviewLines((lines) => lines.map((entry, i) => i === index ? { ...entry, unit: e.target.value } : entry))} className="w-1/2 min-w-0 rounded-xl border border-line bg-bg p-2" /></div></div>)}
           {recipe.ingredients.filter((ingredient) => !ingredient.itemId).map((ingredient, index) => <p key={index} className="text-sm text-muted">{ingredient.name} · {t("Not tracked")}</p>)}
-          <div className="space-y-3 rounded-xl border border-line p-3"><label className="flex items-center gap-2 font-medium"><input type="checkbox" checked={saveLeftovers} onChange={(e) => setSaveLeftovers(e.target.checked)} />{t("Save leftovers")}</label>{saveLeftovers && <><label className="block text-sm">{t("Portions")}<input type="number" min="0.001" step="any" value={leftoverPortions} onChange={(e) => setLeftoverPortions(e.target.value)} className="mt-1 w-full rounded-xl border border-line bg-bg p-2" /></label><label className="block text-sm">{t("Location")}<select value={locationId} onChange={(e) => setLocationId(e.target.value)} className="mt-1 w-full rounded-xl border border-line bg-bg p-2"><option value="">{t("No location")}</option>{locations.map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}</select></label><label className="block text-sm">{t("Use by")}<input type="date" value={useBy} onChange={(e) => setUseBy(e.target.value)} className="mt-1 w-full rounded-xl border border-line bg-bg p-2" /></label></>}</div>
+          <div className="space-y-3 rounded-xl border border-line p-3">
+            <label className="flex items-center gap-2 font-medium"><input type="checkbox" checked={saveLeftovers} onChange={(e) => setSaveLeftovers(e.target.checked)} />{t("Save leftovers")}</label>
+            {saveLeftovers && <>
+              <label className="block text-sm">{t("Portions")}<input type="number" min="0.001" step="any" value={leftoverPortions} onChange={(e) => setLeftoverPortions(e.target.value)} className="mt-1 w-full rounded-xl border border-line bg-bg p-2" /></label>
+              <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={freezeLeftovers} onChange={(e) => {
+                const checked = e.target.checked;
+                setFreezeLeftovers(checked);
+                if (checked && !locations.find((place) => place.id === locationId)?.isFreezer) {
+                  const preferred = locations.find((place) => place.isFreezer);
+                  if (preferred) setLocationId(preferred.id);
+                }
+              }} />{t("Freeze these portions")}</label>
+              <label className="block text-sm">{t("Location")}<select value={locationId} onChange={(e) => setLocationId(e.target.value)} className="mt-1 w-full rounded-xl border border-line bg-bg p-2"><option value="">{t("No location")}</option>{[...locations].sort((a, b) => Number(b.isFreezer) - Number(a.isFreezer) || a.name.localeCompare(b.name)).map((location) => <option key={location.id} value={location.id}>{location.isFreezer ? `❄️ ${location.name}` : location.name}</option>)}</select></label>
+              {freezeLeftovers
+                ? <label className="block text-sm">{t("Frozen on")}<input type="date" value={frozenOn} onChange={(e) => setFrozenOn(e.target.value)} className="mt-1 w-full rounded-xl border border-line bg-bg p-2" /></label>
+                : <label className="block text-sm">{t("Use by")}<input type="date" value={useBy} onChange={(e) => setUseBy(e.target.value)} className="mt-1 w-full rounded-xl border border-line bg-bg p-2" /></label>}
+              {freezeLeftovers && <p className="text-[11px] text-muted">{t("The eat-by date comes from the item's freezer shelf life (90 days by default) and switches to the thaw window when you take it out.")}</p>}
+            </>}
+          </div>
         </div>}
       </Sheet>
     </div>

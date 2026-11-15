@@ -165,6 +165,7 @@ CREATE TABLE IF NOT EXISTS locations (
   kind TEXT NOT NULL DEFAULT 'shelf',
   icon TEXT,
   parent_id TEXT REFERENCES locations(id) ON DELETE CASCADE,
+  is_freezer INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS locations_house ON locations(house_id);
@@ -216,6 +217,8 @@ CREATE TABLE IF NOT EXISTS items (
   reorder_point DOUBLE PRECISION NOT NULL DEFAULT 0,
   target_stock DOUBLE PRECISION,
   opened_shelf_life_days INTEGER,
+  freezer_shelf_life_days INTEGER,
+  thaw_shelf_life_days INTEGER,
   attributes TEXT NOT NULL DEFAULT '{}',
   tags TEXT NOT NULL DEFAULT '[]',
   image TEXT,
@@ -402,6 +405,11 @@ CREATE TABLE IF NOT EXISTS stock_lots (
   purchased_at TEXT,
   expires_at TEXT,
   opened_at TEXT,
+  portions DOUBLE PRECISION,
+  cooked_on TEXT,
+  frozen_on TEXT,
+  thawed_on TEXT,
+  source_recipe_id TEXT,
   note TEXT,
   created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL
@@ -913,7 +921,26 @@ export const POSTGRES_MIGRATIONS: string[] = [
   FOREIGN KEY (house_id, user_id) REFERENCES house_members(house_id, user_id) ON DELETE CASCADE
 );`,
   "ALTER TABLE items ADD COLUMN IF NOT EXISTS opened_shelf_life_days INTEGER",
+  "ALTER TABLE items ADD COLUMN IF NOT EXISTS freezer_shelf_life_days INTEGER",
+  "ALTER TABLE items ADD COLUMN IF NOT EXISTS thaw_shelf_life_days INTEGER",
+  // Mark places that predate the freezer flag once, by their old kind. User
+  // edits to the flag are preserved on later boots.
+  `DO $$ BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM information_schema.columns
+       WHERE table_name = 'locations' AND column_name = 'is_freezer'
+     ) THEN
+       ALTER TABLE locations ADD COLUMN is_freezer INTEGER NOT NULL DEFAULT 0;
+       UPDATE locations SET is_freezer = 1 WHERE kind = 'freezer';
+     END IF;
+   END $$;`,
   "ALTER TABLE stock_lots ADD COLUMN IF NOT EXISTS opened_at TEXT",
+  "ALTER TABLE stock_lots ADD COLUMN IF NOT EXISTS portions DOUBLE PRECISION",
+  "ALTER TABLE stock_lots ADD COLUMN IF NOT EXISTS cooked_on TEXT",
+  "ALTER TABLE stock_lots ADD COLUMN IF NOT EXISTS frozen_on TEXT",
+  "ALTER TABLE stock_lots ADD COLUMN IF NOT EXISTS thawed_on TEXT",
+  "ALTER TABLE stock_lots ADD COLUMN IF NOT EXISTS source_recipe_id TEXT",
+  "CREATE INDEX IF NOT EXISTS lots_frozen ON stock_lots(house_id, frozen_on)",
   "ALTER TABLE users ADD COLUMN IF NOT EXISTS developer_mode INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE users ADD COLUMN IF NOT EXISTS password_set INTEGER NOT NULL DEFAULT 1",
   "ALTER TABLE user_totp ADD COLUMN IF NOT EXISTS last_used_step BIGINT",

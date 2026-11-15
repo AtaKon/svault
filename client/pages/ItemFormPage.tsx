@@ -51,6 +51,8 @@ export function ItemFormPage() {
   const [reorderPoint, setReorderPoint] = useState("");
   const [targetStock, setTargetStock] = useState("");
   const [openedShelfLifeDays, setOpenedShelfLifeDays] = useState("");
+  const [freezerShelfLifeDays, setFreezerShelfLifeDays] = useState("");
+  const [thawShelfLifeDays, setThawShelfLifeDays] = useState("");
   const [tags, setTags] = useState("");
   const [espresso, setEspresso] = useState(params.get("espresso") === "1");
   const [values, setValues] = useState<Record<string, unknown>>({});
@@ -104,6 +106,8 @@ export function ItemFormPage() {
           setReorderPoint(item.reorderPoint ? String(item.reorderPoint) : "");
           setTargetStock(item.targetStock != null ? String(item.targetStock) : "");
           setOpenedShelfLifeDays(item.openedShelfLifeDays != null ? String(item.openedShelfLifeDays) : "");
+          setFreezerShelfLifeDays(item.freezerShelfLifeDays != null ? String(item.freezerShelfLifeDays) : "");
+          setThawShelfLifeDays(item.thawShelfLifeDays != null ? String(item.thawShelfLifeDays) : "");
           setTags(item.tags.join(", "));
           setEspresso(item.espresso);
           setValues(item.attributes ?? {});
@@ -159,6 +163,8 @@ export function ItemFormPage() {
         reorderPoint: reorderPoint ? Number(reorderPoint) : 0,
         targetStock: targetStock ? Number(targetStock) : null,
         openedShelfLifeDays: openedShelfLifeDays === "" ? null : Number(openedShelfLifeDays),
+        freezerShelfLifeDays: freezerShelfLifeDays === "" ? null : Number(freezerShelfLifeDays),
+        thawShelfLifeDays: thawShelfLifeDays === "" ? null : Number(thawShelfLifeDays),
         attributes: values,
         tags,
         espresso,
@@ -267,6 +273,14 @@ export function ItemFormPage() {
             <Field label={t("Keeps for N days after opening")} hint={t("optional")} >
               <Input type="number" min="0" max="36500" step="1" inputMode="numeric" value={openedShelfLifeDays} onChange={(e) => setOpenedShelfLifeDays(e.target.value)} />
             </Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label={t("Freezer shelf life in days")} hint={t("90 = default")}>
+                <Input type="number" min="0" max="36500" step="1" inputMode="numeric" value={freezerShelfLifeDays} onChange={(e) => setFreezerShelfLifeDays(e.target.value)} placeholder="90" />
+              </Field>
+              <Field label={t("Days to eat after thawing")} hint={t("2 = default")}>
+                <Input type="number" min="0" max="36500" step="1" inputMode="numeric" value={thawShelfLifeDays} onChange={(e) => setThawShelfLifeDays(e.target.value)} placeholder="2" />
+              </Field>
+            </div>
             <Field label={t("Description")} hint={t("optional")}>
               <Textarea rows={3} value={description} onChange={(e) => setDescription(e.target.value)} placeholder={t("Notes, size, flavour, where it lives…")} maxLength={2000} />
             </Field>

@@ -10,6 +10,7 @@ import {
   Card,
   ConfirmDialog,
   EmptyState,
+  Field,
   IconButton,
   Input,
   LoadingBlock,
@@ -93,6 +94,12 @@ export function ItemPage() {
   const [undoBusy, setUndoBusy] = useState<string | null>(null);
   const [openingDates, setOpeningDates] = useState<Record<string, string>>({});
   const [openingBusy, setOpeningBusy] = useState<string | null>(null);
+  const [freezeLot, setFreezeLot] = useState<{ id: string; quantity: number; unit: string } | null>(null);
+  const [freezePortions, setFreezePortions] = useState("");
+  const [freezeDate, setFreezeDate] = useState(todayInput());
+  const [freezeLocation, setFreezeLocation] = useState("");
+  const [freezeBusy, setFreezeBusy] = useState(false);
+  const [thawBusy, setThawBusy] = useState<string | null>(null);
   const [barcodeInput, setBarcodeInput] = useState("");
   const [barcodeBusy, setBarcodeBusy] = useState(false);
   const [scanOpen, setScanOpen] = useState(false);
@@ -149,6 +156,64 @@ export function ItemPage() {
       toast.error(err instanceof Error ? t(err.message) : t("Could not update batch"));
     } finally {
       setOpeningBusy(null);
+    }
+  };
+
+  const openFreeze = (lot: { id: string; quantity: number; unit: string }) => {
+    setFreezeLot(lot);
+    setFreezePortions(["pcs", "pc", "piece", "pieces"].includes(lot.unit.toLowerCase()) ? String(lot.quantity) : "1");
+    setFreezeDate(todayInput());
+    const preferred = locations.find((place) => place.isFreezer);
+    setFreezeLocation(preferred?.id ?? "");
+  };
+
+  const freezeBatch = async () => {
+    if (!item || !freezeLot) return;
+    const portions = Number(freezePortions);
+    if (!Number.isFinite(portions) || portions <= 0) {
+      toast.error(t("Enter a positive number of portions"));
+      return;
+    }
+    setFreezeBusy(true);
+    try {
+      await api(`/api/houses/${house.id}/freezer/freeze`, {
+        method: "POST",
+        body: {
+          itemId: item.id,
+          lotId: freezeLot.id,
+          portions,
+          locationId: freezeLocation || null,
+          frozenOn: freezeDate || undefined,
+        },
+      });
+      const detail = await api<ItemDetail>(`/api/items/${item.id}`);
+      setItem(detail);
+      setFreezeLot(null);
+      toast.success(t("Batch frozen"));
+      window.dispatchEvent(new Event("sv:refresh-badges"));
+    } catch (err) {
+      toast.error(err instanceof Error ? t(err.message) : t("Could not freeze the batch"));
+    } finally {
+      setFreezeBusy(false);
+    }
+  };
+
+  const thawBatch = async (lotId: string) => {
+    if (!item) return;
+    setThawBusy(lotId);
+    try {
+      await api(`/api/houses/${house.id}/freezer/thaw`, {
+        method: "POST",
+        body: { itemId: item.id, lotId },
+      });
+      const detail = await api<ItemDetail>(`/api/items/${item.id}`);
+      setItem(detail);
+      toast.success(t("Batch thawed"));
+      window.dispatchEvent(new Event("sv:refresh-badges"));
+    } catch (err) {
+      toast.error(err instanceof Error ? t(err.message) : t("Could not thaw the batch"));
+    } finally {
+      setThawBusy(null);
     }
   };
 
@@ -589,11 +654,28 @@ export function ItemPage() {
                             {lot.openedAt ? t("opened {date}", { date: shortDate(lot.openedAt) }) : t("Not opened")}
                             {lot.openedAt && lot.effectiveExpiresAt ? t(" · use by {date}", { date: shortDate(lot.effectiveExpiresAt) }) : ""}
                           </div>
+                          {lot.frozenOn && (
+                            <div className="mt-1 text-xs text-brand">
+                              ❄️ {lot.thawedOn
+                                ? t("thawed {ago} · eat by {date}", { ago: relativeTime(lot.thawedOn), date: shortDate(lot.effectiveExpiresAt) })
+                                : t("frozen {ago} · {count} portions", { ago: relativeTime(lot.frozenOn), count: qty(lot.portions ?? lot.quantity) })}
+                            </div>
+                          )}
                           {can("member") && <div className="mt-2 flex flex-wrap items-center gap-2">
                             {!lot.openedAt && <Input aria-label={t("Opened date")} className="w-auto max-w-full" type="date" value={openingDates[lot.id] || todayInput()} onChange={(e) => setOpeningDates((dates) => ({ ...dates, [lot.id]: e.target.value }))} />}
                             <button type="button" disabled={openingBusy === lot.id} onClick={() => void setOpened(lot.id, !lot.openedAt)} className="rounded-md px-2 py-1 text-xs font-medium text-brand hover:bg-raised disabled:opacity-50">
                               {lot.openedAt ? t("Mark as not opened") : t("Mark opened")}
                             </button>
+                            {!lot.frozenOn && !lot.thawedOn && (
+                              <button type="button" onClick={() => openFreeze({ id: lot.id, quantity: lot.quantity, unit: lot.unit })} className="rounded-md px-2 py-1 text-xs font-medium text-brand hover:bg-raised">
+                                ❄️ {t("Freeze")}
+                              </button>
+                            )}
+                            {lot.frozenOn && !lot.thawedOn && (
+                              <button type="button" disabled={thawBusy === lot.id} onClick={() => void thawBatch(lot.id)} className="rounded-md px-2 py-1 text-xs font-medium text-brand hover:bg-raised disabled:opacity-50">
+                                {thawBusy === lot.id ? t("Thawing…") : t("Thaw")}
+                              </button>
+                            )}
                           </div>}
                         </div>
                         {lot.effectiveExpiresAt && (
@@ -1006,6 +1088,34 @@ export function ItemPage() {
           <div role="status" className="mt-3 flex items-center justify-center gap-2 text-xs text-muted">
             <Spinner size={14} /> {t("Saving barcode…")}</div>
         )}
+      </Sheet>
+
+      <Sheet
+        open={Boolean(freezeLot)}
+        onClose={() => { if (!freezeBusy) setFreezeLot(null); }}
+        title={t("Freeze this batch")}
+        description={t("Move all or part of a batch to a freezer. The eat-by date comes from the freezer shelf life.")}
+        footer={<Button block loading={freezeBusy} onClick={() => void freezeBatch()}>{t("Freeze batch")}</Button>}
+      >
+        <div className="space-y-3">
+          <Field label={t("Portions to freeze")} hint={freezeLot ? t("of {count} {unit}", { count: qty(freezeLot.quantity), unit: freezeLot.unit }) : undefined}>
+            <Input type="number" min="0.001" step="any" inputMode="decimal" value={freezePortions} onChange={(e) => setFreezePortions(e.target.value)} />
+          </Field>
+          <Field label={t("Frozen on")}>
+            <Input type="date" value={freezeDate} onChange={(e) => setFreezeDate(e.target.value)} />
+          </Field>
+          <Field label={t("Place")} hint={t("freezer places first")}>
+            <Select value={freezeLocation} onChange={(e) => setFreezeLocation(e.target.value)}>
+              <option value="">{t("No location")}</option>
+              {[...locations].sort((a, b) => Number(b.isFreezer) - Number(a.isFreezer) || a.name.localeCompare(b.name)).map((place) => (
+                <option key={place.id} value={place.id}>{place.isFreezer ? `❄️ ${place.name}` : place.name}</option>
+              ))}
+            </Select>
+          </Field>
+          <p className="text-[11px] leading-relaxed text-muted">
+            {t("Freezing replaces a short fridge use-by with the freezer shelf life. Thawed batches are not frozen again.")}
+          </p>
+        </div>
       </Sheet>
 
       <ConfirmDialog
