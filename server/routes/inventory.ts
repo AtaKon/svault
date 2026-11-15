@@ -21,7 +21,7 @@ import {
   serializeLot,
   serializeMovement,
 } from "../serialize.js";
-import { addStock, afterStockChange, itemQuantity, moveStock, removeStock, setStock } from "../services/stock.js";
+import { addStock, afterStockChange, itemQuantity, moveStock, removeStock, setStock, undoableMovements } from "../services/stock.js";
 import { clearItemNotifications, syncHouseExpiry } from "../services/notifications.js";
 import { normaliseNutrition } from "../services/nutrition.js";
 import { learnProductAlias } from "../services/product-aliases.js";
@@ -319,13 +319,16 @@ async function itemDetail(itemId: string, userId: string) {
     [row.house_id, itemId],
   )).map(serializeLot);
   const movements = (await all<any>(
-    `SELECT m.*, loc.name AS location_name, u.name AS user_name, v.name AS vendor_name FROM stock_movements m
+    `SELECT m.*, (SELECT 1 FROM stock_movements r WHERE r.reverses_movement_id = m.id LIMIT 1) AS reversed,
+       loc.name AS location_name, u.name AS user_name, v.name AS vendor_name FROM stock_movements m
      LEFT JOIN locations loc ON loc.id = m.location_id AND loc.house_id = ?
      LEFT JOIN users u ON u.id = m.user_id
      LEFT JOIN vendors v ON v.id = m.vendor_id
      WHERE m.item_id = ? ORDER BY m.created_at DESC LIMIT 80`,
     [row.house_id, itemId],
   )).map(serializeMovement);
+  const undoable = await undoableMovements(itemId);
+  for (const movement of movements) movement.undoable = undoable.has(movement.id);
   const priceHistory = (await all<any>(
     `SELECT m.normalized_price AS price, m.created_at AS at, m.unit, m.quantity, m.unit_price,
        m.vendor_id, v.name AS vendor_name, m.receipt_id, m.note
@@ -1215,12 +1218,13 @@ itemRoutes.post(
       vendorId: body.vendorId ?? null,
     };
     const detail = await tx(async () => {
-      if (body.action === "add") await addStock(base);
-      else if (body.action === "remove") await removeStock(base);
-      else if (body.action === "waste") await removeStock({ ...base, waste: true });
-      else if (body.action === "set") await setStock({ ...base, target: body.target ?? 0 });
+      let movementId: string | null = null;
+      if (body.action === "add") movementId = await addStock(base);
+      else if (body.action === "remove") movementId = await removeStock(base);
+      else if (body.action === "waste") movementId = await removeStock({ ...base, waste: true });
+      else if (body.action === "set") movementId = await setStock({ ...base, target: body.target ?? 0 });
       else
-        await moveStock({
+        movementId = await moveStock({
           itemId: item.id,
           houseId: item.house_id,
           userId: req.user!.id,
@@ -1230,7 +1234,7 @@ itemRoutes.post(
           toLocationId: body.toLocationId ?? "",
           note: body.note ?? undefined,
         });
-      const result = await itemDetail(item.id, req.user!.id);
+      const result = { ...(await itemDetail(item.id, req.user!.id)), lastMovementId: movementId };
       if (body.idempotencyKey) {
         await run(
           "INSERT INTO stock_mutations (id, house_id, idempotency_key, user_id, response, created_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
@@ -1250,14 +1254,20 @@ itemRoutes.get(
     const { item } = await itemAccess(req);
     const limit = intParam(req.query.limit, 50, 300);
     const rows = await all<any>(
-      `SELECT m.*, loc.name AS location_name, u.name AS user_name, v.name AS vendor_name FROM stock_movements m
+      `SELECT m.*, (SELECT 1 FROM stock_movements r WHERE r.reverses_movement_id = m.id LIMIT 1) AS reversed,
+         loc.name AS location_name, u.name AS user_name, v.name AS vendor_name FROM stock_movements m
        LEFT JOIN locations loc ON loc.id = m.location_id AND loc.house_id = ?
        LEFT JOIN users u ON u.id = m.user_id
        LEFT JOIN vendors v ON v.id = m.vendor_id
        WHERE m.item_id = ? ORDER BY m.created_at DESC LIMIT ?`,
       [item.house_id, item.id, limit],
     );
-    res.json(rows.map(serializeMovement));
+    const undoable = await undoableMovements(item.id);
+    res.json(rows.map((row) => {
+      const movement = serializeMovement(row);
+      movement.undoable = undoable.has(movement.id);
+      return movement;
+    }));
   }),
 );
 

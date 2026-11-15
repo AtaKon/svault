@@ -131,6 +131,10 @@ Key constraints:
 - **Move** removes from one place and creates/updates a lot in another without changing the total.
 - Every mutation runs in a transaction. `tx()` uses `BEGIN` at the top level and `SAVEPOINT` for nested
   calls, so a multi-step recipe/AI save can compose safely.
+- Each movement also records the batches it changed (`stock_movement_lots`). This is what allows an undo
+  to restore the exact batches a FIFO consume or a move touched. Undo never edits the ledger: it appends
+  a compensating movement that points back through `reverses_movement_id`, and a unique index makes a
+  movement reversible at most once.
 - `afterStockChange()` re-evaluates low-stock and expiry reminders for the item/house.
 
 Prices are normalised with `pricePerUnit(price, enteredUnit, baseUnit)`. Incompatible units are

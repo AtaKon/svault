@@ -93,6 +93,12 @@ export class SqliteDriver implements DatabaseDriver {
     ensureColumn("stock_lots", "receipt_id", "TEXT REFERENCES receipts(id) ON DELETE SET NULL");
     ensureColumn("stock_movements", "vendor_id", "TEXT REFERENCES vendors(id) ON DELETE SET NULL");
     ensureColumn("stock_movements", "receipt_id", "TEXT REFERENCES receipts(id) ON DELETE SET NULL");
+    // Undo never updates or deletes a movement: the compensating movement points
+    // back at the one it reverses, and a movement can be reversed only once.
+    ensureColumn("stock_movements", "reverses_movement_id", "TEXT REFERENCES stock_movements(id) ON DELETE SET NULL");
+    conn.exec(
+      "CREATE UNIQUE INDEX IF NOT EXISTS movements_reverses ON stock_movements(reverses_movement_id) WHERE reverses_movement_id IS NOT NULL",
+    );
     ensureColumn("receipts", "subtotal", "REAL");
     ensureColumn("receipts", "tax", "REAL");
     ensureColumn("receipts", "tax_breakdown", "TEXT NOT NULL DEFAULT '[]'");
@@ -729,12 +735,29 @@ CREATE TABLE IF NOT EXISTS stock_movements (
   reason TEXT,
   note TEXT,
   balance_after REAL,
+  reverses_movement_id TEXT REFERENCES stock_movements(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS movements_item ON stock_movements(item_id, created_at);
 CREATE INDEX IF NOT EXISTS movements_house ON stock_movements(house_id, created_at);
 /* Filtering the activity feed by kind narrows this index to one movement type. */
 CREATE INDEX IF NOT EXISTS movements_house_type ON stock_movements(house_id, type, created_at);
+
+/* Which batch each movement changed and by how much. Additive audit detail:
+   it is what makes an undo able to restore the exact batches a FIFO consume or
+   a move touched, instead of guessing. The movement ledger stays append-only. */
+CREATE TABLE IF NOT EXISTS stock_movement_lots (
+  id TEXT PRIMARY KEY,
+  movement_id TEXT NOT NULL REFERENCES stock_movements(id) ON DELETE CASCADE,
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  lot_id TEXT REFERENCES stock_lots(id) ON DELETE SET NULL,
+  created_lot INTEGER NOT NULL DEFAULT 0,
+  delta REAL NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS movement_lots_movement ON stock_movement_lots(movement_id);
+CREATE INDEX IF NOT EXISTS movement_lots_lot ON stock_movement_lots(lot_id);
 
 CREATE TABLE IF NOT EXISTS stock_mutations (
   id TEXT PRIMARY KEY,

@@ -216,7 +216,8 @@ Item create and update accept `openedShelfLifeDays`, a nullable integer from 0 t
 | `DELETE` | `/api/items/:itemId/documents/:documentId` | member+ | Delete a document and its file. |
 | `PUT` | `/api/items/:itemId/lots/:lotId/opened` | member+ | Mark a batch opened; optional `{ "openedAt": "YYYY-MM-DD" }` defaults to today. |
 | `DELETE` | `/api/items/:itemId/lots/:lotId/opened` | member+ | Clear the opening date. |
-| `POST` | `/api/items/:itemId/stock` | member+ | Add, remove, waste, set or move stock. |
+| `POST` | `/api/items/:itemId/stock` | member+ | Add, remove, waste, set or move stock. The response also carries `lastMovementId`, the ledger row the action appended. |
+| `POST` | `/api/houses/:houseId/movements/:movementId/undo` | member+ | Reverse one stock change by appending a compensating movement. |
 | `GET` | `/api/items/:itemId/movements` | viewer+ | Movement ledger (`limit` 1-300, default 50). |
 | `POST` | `/api/items/:itemId/image` | member+ | `multipart/form-data` field `image`. |
 | `POST` | `/api/items/:itemId/barcodes` | member+ | Attach `{ "code": "...", "format": "ean13" }`. |
@@ -237,6 +238,28 @@ Item create and update accept `openedShelfLifeDays`, a nullable integer from 0 t
 | `POST` | `/api/houses/:houseId/espresso-equipment` | member+ | Save `{ "kind": "machine" \\| "grinder", "name": "...", "brand": "..." }`. Names are unique per kind. |
 | `PATCH` | `/api/houses/:houseId/espresso-equipment/:equipmentId` | member+ | Rename or edit `name`, `brand` or `notes`. Existing shot snapshots follow the new name. |
 | `DELETE` | `/api/houses/:houseId/espresso-equipment/:equipmentId` | member+ | Delete saved equipment. Shots keep the recorded name. |
+
+### Undo a stock change
+
+`POST /api/houses/:houseId/movements/:movementId/undo` appends a **compensating** movement. The
+original ledger row is never edited or deleted.
+
+- Consume and waste come back as an `in` movement on the same batches, a count stays an `adjust`, and
+  a move moves the quantity back to its original place. A FIFO consume that spanned several batches is
+  reversed in one transaction, so every batch it touched is restored together.
+- A batch that the movement created is emptied only while it is untouched.
+- The compensating movement carries `reverses_movement_id`, so a movement can be undone at most once
+  and an undo cannot itself be undone. `GET /api/items/:itemId` marks each movement with `reversed`
+  and `undoable` and includes `userId`, which is what the client uses to offer Undo on the author's
+  movements from the last 24 hours.
+- Members undo their own movements; admins and owners undo anyone's. A viewer gets `403`.
+- `409` when undo is no longer safe: a later movement touched one of the same batches, the batch the
+  movement created was used, the item is archived, the movement is itself an undo, or the movement
+  predates the per-batch effects this endpoint needs.
+- Response: `{ itemId, itemName, quantity, movementId, reversesMovementId, type, delta }`. Low-stock and
+  expiry reminders are re-evaluated before the response is sent.
+- While a change is still in the offline queue there is nothing on the server to reverse; the client
+  cancels the queued entry instead of calling this endpoint.
 
 List query parameters:
 

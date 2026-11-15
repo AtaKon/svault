@@ -13366,3 +13366,222 @@ describe("web push reminders", async () => {
     await request(`/api/houses/${houseId}`, { method: "DELETE", auth: ownerCookie });
   });
 });
+
+describe("undo stock action", () => {
+  /** Batches with stock left, so a round trip can be compared exactly. */
+  const openBatches = async (itemId: string) =>
+    (await all<any>("SELECT id, quantity FROM stock_lots WHERE item_id = ? AND quantity > 0 ORDER BY id", [itemId])).map(
+      (row) => ({ id: row.id as string, quantity: Number(row.quantity) }),
+    );
+
+  async function itemWithBatches(name: string, locationId?: string) {
+    const created = await request(`/api/houses/${houseId}/items`, {
+      method: "POST",
+      body: {
+        name,
+        unit: "pcs",
+        initialStock: { quantity: 2, expiresAt: "2030-01-01", unitPrice: 1, locationId },
+      },
+    });
+    assert.equal(created.status, 201);
+    const second = await request(`/api/items/${created.data.id}/stock`, {
+      method: "POST",
+      body: { action: "add", quantity: 3, expiresAt: "2031-01-01", unitPrice: 2, locationId },
+    });
+    assert.equal(second.status, 200);
+    return created.data.id as string;
+  }
+
+  const undo = (movementId: string, auth?: string, house = houseId) =>
+    request(`/api/houses/${house}/movements/${movementId}/undo`, {
+      method: "POST",
+      ...(auth ? { auth } : {}),
+    });
+
+  it("round-trips every movement type and restores the batches exactly", async () => {
+    const locations = (await request(`/api/houses/${houseId}/locations`)).data;
+    const from = locations[0].id;
+    const to = locations[1].id;
+    const id = await itemWithBatches("Undo round trip", from);
+    const steps: { label: string; body: Record<string, unknown> }[] = [
+      { label: "add", body: { action: "add", quantity: 2, unitPrice: 1.5, expiresAt: "2029-05-05", locationId: from } },
+      { label: "remove", body: { action: "remove", quantity: 3 } },
+      { label: "waste", body: { action: "waste", quantity: 1 } },
+      { label: "move", body: { action: "move", quantity: 1, fromLocationId: from, toLocationId: to } },
+      { label: "count up", body: { action: "set", target: 8 } },
+      { label: "count down", body: { action: "set", target: 1 } },
+    ];
+    for (const step of steps) {
+      const before = await openBatches(id);
+      const detail = await request(`/api/items/${id}/stock`, { method: "POST", body: step.body });
+      assert.equal(detail.status, 200, `${step.label}: ${JSON.stringify(detail.data)}`);
+      assert.ok(detail.data.lastMovementId, `${step.label} returns the movement it recorded`);
+      const undone = await undo(detail.data.lastMovementId);
+      assert.equal(undone.status, 200, `${step.label}: ${JSON.stringify(undone.data)}`);
+      assert.equal(undone.data.reversesMovementId, detail.data.lastMovementId);
+      assert.deepEqual(await openBatches(id), before, `${step.label} restores the batches exactly`);
+    }
+  });
+
+  it("undoes a FIFO consume that spanned several batches atomically", async () => {
+    const id = await itemWithBatches("Undo composite");
+    const before = await openBatches(id);
+    const removed = await request(`/api/items/${id}/stock`, { method: "POST", body: { action: "remove", quantity: 4 } });
+    assert.equal(removed.status, 200);
+    assert.equal(removed.data.quantity, 1);
+    const effects = await all<any>(
+      "SELECT lot_id, delta FROM stock_movement_lots WHERE movement_id = ? ORDER BY delta ASC",
+      [removed.data.lastMovementId],
+    );
+    assert.equal(effects.length, 2);
+    assert.deepEqual(effects.map((effect) => Number(effect.delta)), [-2, -2]);
+    const undone = await undo(removed.data.lastMovementId);
+    assert.equal(undone.status, 200, JSON.stringify(undone.data));
+    assert.equal(undone.data.quantity, 5);
+    assert.deepEqual(await openBatches(id), before);
+  });
+
+  it("refuses a second undo and refuses to undo an undo", async () => {
+    const id = await itemWithBatches("Undo twice");
+    const removed = await request(`/api/items/${id}/stock`, { method: "POST", body: { action: "remove", quantity: 1 } });
+    const first = await undo(removed.data.lastMovementId);
+    assert.equal(first.status, 200);
+    const second = await undo(removed.data.lastMovementId);
+    assert.equal(second.status, 409);
+    assert.match(second.data.error, /already been undone/);
+    const third = await undo(first.data.movementId);
+    assert.equal(third.status, 409);
+    assert.match(third.data.error, /cannot itself be undone/);
+    const linked = await all<any>("SELECT id FROM stock_movements WHERE reverses_movement_id = ?", [removed.data.lastMovementId]);
+    assert.equal(linked.length, 1);
+  });
+
+  it("refuses undo once a later change has touched the same batch", async () => {
+    const id = await itemWithBatches("Undo superseded");
+    const first = await request(`/api/items/${id}/stock`, { method: "POST", body: { action: "remove", quantity: 1 } });
+    const second = await request(`/api/items/${id}/stock`, { method: "POST", body: { action: "remove", quantity: 1 } });
+    assert.equal(second.status, 200);
+    const refused = await undo(first.data.lastMovementId);
+    assert.equal(refused.status, 409);
+    assert.match(refused.data.error, /no longer safe/);
+    // The newest change is still reversible.
+    assert.equal((await undo(second.data.lastMovementId)).status, 200);
+  });
+
+  it("refuses undo on an archived item", async () => {
+    const id = await itemWithBatches("Undo archived");
+    const removed = await request(`/api/items/${id}/stock`, { method: "POST", body: { action: "remove", quantity: 1 } });
+    assert.equal((await request(`/api/items/${id}`, { method: "PATCH", body: { archived: true } })).status, 200);
+    const refused = await undo(removed.data.lastMovementId);
+    assert.equal(refused.status, 409);
+    assert.match(refused.data.error, /archived/);
+    await request(`/api/items/${id}`, { method: "PATCH", body: { archived: false } });
+  });
+
+  it("keeps the movement ledger append-only", async () => {
+    const id = await itemWithBatches("Undo append only");
+    const removed = await request(`/api/items/${id}/stock`, { method: "POST", body: { action: "remove", quantity: 1 } });
+    const before = await all<any>("SELECT * FROM stock_movements WHERE item_id = ? ORDER BY created_at, id", [id]);
+    const undone = await undo(removed.data.lastMovementId);
+    assert.equal(undone.status, 200);
+    const after = await all<any>("SELECT * FROM stock_movements WHERE item_id = ? ORDER BY created_at, id", [id]);
+    assert.equal(after.length, before.length + 1);
+    for (const row of before) {
+      assert.deepEqual(after.find((entry) => entry.id === row.id), row);
+    }
+    const compensating = after.find((entry) => entry.id === undone.data.movementId);
+    assert.equal(compensating.reverses_movement_id, removed.data.lastMovementId);
+  });
+
+  it("marks movements undoable and undone on the item history", async () => {
+    const id = await itemWithBatches("Undo history");
+    const owner = await get<{ id: string }>("SELECT id FROM users WHERE email = ?", ["owner@example.com"]);
+    const removed = await request(`/api/items/${id}/stock`, { method: "POST", body: { action: "remove", quantity: 1 } });
+    const movementId = removed.data.lastMovementId as string;
+    let item = await request(`/api/items/${id}`);
+    let row = item.data.movements.find((entry: any) => entry.id === movementId);
+    assert.equal(row.undoable, true);
+    assert.equal(row.reversed, false);
+    assert.equal(row.userId, owner?.id);
+    assert.equal(row.reversesMovementId, null);
+    assert.equal((await undo(movementId)).status, 200);
+    item = await request(`/api/items/${id}`);
+    row = item.data.movements.find((entry: any) => entry.id === movementId);
+    assert.equal(row.reversed, true);
+    assert.equal(row.undoable, false);
+    const compensating = item.data.movements.find((entry: any) => entry.reversesMovementId === movementId);
+    assert.ok(compensating);
+    assert.equal(compensating.undoable, false);
+    assert.equal(compensating.type, "in");
+    assert.equal(compensating.delta, 1);
+    assert.equal(compensating.reason, "Undone");
+  });
+
+  it("re-evaluates low-stock reminders after undo", async () => {
+    const created = await request(`/api/houses/${houseId}/items`, {
+      method: "POST",
+      body: { name: "Undo reminders", unit: "pcs", reorderPoint: 5, initialStock: { quantity: 6 } },
+    });
+    const id = created.data.id;
+    const removed = await request(`/api/items/${id}/stock`, { method: "POST", body: { action: "remove", quantity: 4 } });
+    let feed = await request(`/api/houses/${houseId}/notifications`);
+    assert.ok(feed.data.notifications.some((entry: any) => entry.type === "low_stock" && entry.data.itemId === id));
+    assert.equal((await undo(removed.data.lastMovementId)).status, 200);
+    feed = await request(`/api/houses/${houseId}/notifications`);
+    assert.ok(!feed.data.notifications.some((entry: any) => entry.type === "low_stock" && entry.data.itemId === id));
+  });
+
+  it("lets members undo their own changes and admins undo anyone's", async () => {
+    const house = await request("/api/houses", { method: "POST", body: { name: "Undo roles house" } });
+    assert.equal(house.status, 201);
+    const rolesHouseId = house.data.id as string;
+    const created = await request(`/api/houses/${rolesHouseId}/items`, {
+      method: "POST",
+      body: { name: "Undo roles item", unit: "pcs", initialStock: { quantity: 1 } },
+    });
+    assert.equal(created.status, 201);
+    const id = created.data.id as string;
+
+    const signUp = async (email: string) => {
+      const registered = await request("/api/auth/register", {
+        method: "POST",
+        auth: "",
+        body: { name: email, email, password: "test password" },
+      });
+      assert.equal(registered.status, 201);
+      return { id: registered.data.user.id as string, cookie: registered.cookie! };
+    };
+    const member = await signUp("undo.member@example.com");
+    const other = await signUp("undo.other@example.com");
+    const viewer = await signUp("undo.viewer@example.com");
+    const admin = await signUp("undo.admin@example.com");
+    const joinedAt = new Date().toISOString();
+    for (const [userId, role] of [
+      [member.id, "member"],
+      [other.id, "member"],
+      [viewer.id, "viewer"],
+      [admin.id, "admin"],
+    ] as const) {
+      await run("INSERT INTO house_members (house_id, user_id, role, created_at) VALUES (?, ?, ?, ?)", [
+        rolesHouseId,
+        userId,
+        role,
+        joinedAt,
+      ]);
+    }
+
+    const own = await request(`/api/items/${id}/stock`, { method: "POST", auth: member.cookie, body: { action: "add", quantity: 1 } });
+    assert.equal(own.status, 200);
+    assert.equal((await undo(own.data.lastMovementId, viewer.cookie, rolesHouseId)).status, 403);
+    const foreign = await undo(own.data.lastMovementId, other.cookie, rolesHouseId);
+    assert.equal(foreign.status, 403);
+    assert.match(foreign.data.error, /only undo your own/);
+    assert.equal((await undo(own.data.lastMovementId, secondUserCookie, rolesHouseId)).status, 404);
+    // The admin may undo the member's change.
+    assert.equal((await undo(own.data.lastMovementId, admin.cookie, rolesHouseId)).status, 200);
+
+    const mine = await request(`/api/items/${id}/stock`, { method: "POST", auth: member.cookie, body: { action: "remove", quantity: 1 } });
+    assert.equal(mine.status, 200);
+    assert.equal((await undo(mine.data.lastMovementId, member.cookie, rolesHouseId)).status, 200);
+  });
+});

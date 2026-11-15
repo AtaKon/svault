@@ -196,10 +196,14 @@ export function serializeMovement(row: any): Movement {
     locationId: row.location_id ?? null,
     locationName: row.location_name ?? null,
     userName: row.user_name ?? null,
+    userId: row.user_id ?? null,
     vendorId: row.vendor_id ?? null,
     vendorName: row.vendor_name ?? null,
     receiptId: row.receipt_id ?? null,
     balanceAfter: row.balance_after == null ? null : round(Number(row.balance_after ?? 0)),
+    reversesMovementId: row.reverses_movement_id ?? null,
+    reversed: row.reversed == null ? false : Boolean(row.reversed),
+    undoable: row.undoable == null ? undefined : Boolean(row.undoable),
     createdAt: row.created_at,
   };
 }

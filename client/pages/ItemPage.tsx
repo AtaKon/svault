@@ -28,6 +28,7 @@ import { StockDialog } from "@/components/ItemCard";
 import { PriceChart } from "@/components/PriceChart";
 import { EspressoLogCard } from "@/components/Espresso";
 import { useToast } from "@/components/toast";
+import { useStockUndo } from "@/undo-stock";
 import { daysUntil, money, qty, relativeTime, shortDate, todayInput, unitPriceLabel } from "@/format";
 import { offProjectLabel } from "@/off";
 import type {
@@ -51,6 +52,8 @@ const MOVEMENT_LABELS: Record<Movement["type"], { label: string; icon: IconName;
   move: { label: "Moved", icon: "mapPin", tone: "bg-raised text-muted" },
 };
 
+/** History offers Undo for the last day only; the API still has the last word. */
+const RECENT_UNDO_MS = 24 * 60 * 60 * 1000;
 
 /** Document kinds as stored by the API, with their display labels. */
 const DOCUMENT_KIND_LABELS: Record<string, string> = { other: "Other", manual: "Manual", receipt: "Purchase receipt", warranty: "Warranty card" };
@@ -72,6 +75,7 @@ export function ItemPage() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const toast = useToast();
+  const undo = useStockUndo();
   const [documents, setDocuments] = useState<{ id: string; originalName: string; kind: string }[]>([]);
   const [documentKind, setDocumentKind] = useState("other");
   const [documentBusy, setDocumentBusy] = useState(false);
@@ -85,6 +89,7 @@ export function ItemPage() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [quickBusy, setQuickBusy] = useState(false);
+  const [undoBusy, setUndoBusy] = useState<string | null>(null);
   const [openingDates, setOpeningDates] = useState<Record<string, string>>({});
   const [openingBusy, setOpeningBusy] = useState<string | null>(null);
   const [barcodeInput, setBarcodeInput] = useState("");
@@ -151,7 +156,7 @@ export function ItemPage() {
     setQuickBusy(true);
     try {
       if (isOffline() && user) {
-        await enqueueStockAction({
+        const queued = await enqueueStockAction({
           userId: user.id,
           houseId: house.id,
           itemId: item.id,
@@ -165,7 +170,17 @@ export function ItemPage() {
             ? { ...previous, quantity: Math.max(0, previous.quantity + (action === "add" ? 1 : -1)) }
             : previous,
         );
-        toast.push(t("Queued offline — it will sync when you reconnect"));
+        undo.notify(t("Queued offline — it will sync when you reconnect"), {
+          itemId: item.id,
+          queuedId: queued.id,
+          onQueuedCancelled: () =>
+            setItem((previous) =>
+              previous
+                ? { ...previous, quantity: Math.max(0, previous.quantity + (action === "add" ? -1 : 1)) }
+                : previous,
+            ),
+          onUndone: () => void load(),
+        });
         return;
       }
       const detail = await api<ItemDetail>(`/api/items/${item.id}/stock`, {
@@ -174,10 +189,25 @@ export function ItemPage() {
       });
       setItem(detail);
       window.dispatchEvent(new Event("sv:refresh-badges"));
+      undo.notify(t(action === "add" ? "Added one {item}" : "Removed one {item}", { item: item.name }), {
+        itemId: item.id,
+        movementId: detail.lastMovementId,
+        onUndone: () => void load(),
+      });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t("Could not update stock"));
     } finally {
       setQuickBusy(false);
+    }
+  };
+
+  const undoMovement = async (movementId: string) => {
+    if (!item) return;
+    setUndoBusy(movementId);
+    try {
+      await undo.run({ itemId: item.id, movementId, onUndone: () => void load() });
+    } finally {
+      setUndoBusy(null);
     }
   };
 
@@ -315,6 +345,13 @@ export function ItemPage() {
   if (!item) return <LoadingBlock label={t("Loading item")} />;
 
   const lotValue = item.lots.reduce((sum, lot) => sum + lot.quantity * (lot.unitPrice ?? 0), 0);
+  const movementCanBeUndone = (movement: Movement) =>
+    can("member") &&
+    movement.undoable === true &&
+    !movement.reversed &&
+    !movement.reversesMovementId &&
+    Date.now() - Date.parse(movement.createdAt) <= RECENT_UNDO_MS &&
+    (can("admin") || movement.userId === user?.id);
   const openStock = (action: "add" | "remove") => {
     setStockAction(action);
     setStockOpen(true);
@@ -571,6 +608,7 @@ export function ItemPage() {
               <div className="divide-y divide-line">
                 {item.movements.slice(0, 20).map((movement) => {
                   const meta = MOVEMENT_LABELS[movement.type];
+                  const canUndo = movementCanBeUndone(movement);
                   return (
                     <div key={movement.id} className="flex items-start gap-3 py-2.5">
                       <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg", meta.tone)}>
@@ -582,7 +620,7 @@ export function ItemPage() {
                             {movement.delta > 0 ? "+" : ""}
                             {qty(movement.delta)} {movement.unit}
                           </span>
-                          <span className="text-[11px] text-muted">{relativeTime(movement.createdAt)}</span>
+                          <span className="shrink-0 text-[11px] text-muted">{relativeTime(movement.createdAt)}</span>
                         </div>
                         <div className="text-[11px] text-muted">
                           {t(meta.label)}
@@ -590,9 +628,21 @@ export function ItemPage() {
                           {movement.vendorName ? ` · ${movement.vendorName}` : ""}
                           {movement.userName ? ` · ${movement.userName}` : ""}
                           {movement.locationName ? ` · ${movement.locationName}` : ""}
+                          {movement.reversed ? ` · ${t("Undone")}` : ""}
                         </div>
                         {movement.note && <div className="mt-0.5 text-[11px] italic text-muted">“{movement.note}”</div>}
                       </div>
+                      {canUndo && (
+                        <button
+                          type="button"
+                          onClick={() => void undoMovement(movement.id)}
+                          disabled={undoBusy === movement.id}
+                          aria-label={t("Undo this stock change")}
+                          className="shrink-0 rounded-lg px-2 py-1 text-[11px] font-semibold text-brand transition-colors hover:bg-raised disabled:opacity-50"
+                        >
+                          {undoBusy === movement.id ? <Spinner size={12} /> : t("Undo")}
+                        </button>
+                      )}
                     </div>
                   );
                 })}

@@ -127,6 +127,7 @@ export type AttributeType =
   | "boolean"
   | "url";
 
+
 export interface AttributeDef {
   id: string;
   houseId: string;
@@ -460,10 +461,17 @@ export interface Movement {
   locationId: string | null;
   locationName?: string | null;
   userName?: string | null;
+  userId?: string | null;
   vendorId: string | null;
   vendorName?: string | null;
   receiptId: string | null;
   balanceAfter: number | null;
+  /** Set on the compensating movement that an undo appended. */
+  reversesMovementId?: string | null;
+  /** True once a compensating movement has undone this one. */
+  reversed?: boolean;
+  /** True while Undo is still structurally possible; the API can still refuse. */
+  undoable?: boolean;
   createdAt: string;
 }
 
@@ -632,6 +640,8 @@ export interface ItemDetail extends Item {
   movements: Movement[];
   priceHistory: PricePoint[];
   recipes: { id: string; title: string }[];
+  /** The movement created by the stock action that produced this response. */
+  lastMovementId?: string | null;
 }
 
 export interface DietWarning { ingredient: string; allergen: string; members: string[] }
@@ -1690,6 +1700,7 @@ export type ActivityKind =
   | "shopping.checked"
   | "bill.saved";
 
+
 export interface ActivityEvent {
   /** Source row id (`mov_`, `rcp_`, `itm_`, `shp_`, `bil_`). Unique across kinds. */
   id: string;
@@ -1737,4 +1748,17 @@ export interface WebPushStatus {
   /** Only present when the server is configured; the browser needs it to subscribe. */
   publicKey: string | null;
   subscriptions: PushSubscriptionSummary[];
+}
+
+/** Response of `POST /api/houses/:houseId/movements/:movementId/undo`. */
+export interface UndoStockResult {
+  itemId: string;
+  itemName: string;
+  /** Quantity in stock after the compensating movement. */
+  quantity: number;
+  /** The compensating movement that was appended to the ledger. */
+  movementId: string;
+  reversesMovementId: string;
+  type: Movement["type"];
+  delta: number;
 }
