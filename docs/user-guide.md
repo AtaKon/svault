@@ -722,6 +722,16 @@ Docker, Loki, Grafana or another log collector.
   takes a safety copy unless you pass `--no-safety-copy`.
 - To move to another server, copy `DATA_DIR` to the new host and start the same image with the same
   `DATA_DIR`.
+- **More → Valuation report** builds a dated record of what the house owns for insurance claims or
+  moving. Choose how values are derived (`latest purchase price` by default, `average purchase price`,
+  or `stock cost`), then filter by category, place, tag, minimum value, active warranty or archived
+  items. The preview shows the grand total, per-category and per-place subtotals and how many items
+  have no price recorded. **Download CSV** exports the same rows plus the subtotal blocks (UTF-8 with a
+  BOM, safe to open in Excel); **Print** opens the browser print dialog with a print-only layout and
+  optional thumbnails and attribute columns. An optional documents list shows the file names and types
+  of attached warranties and manuals, never the files themselves. Values are estimates from your own
+  records, not an appraisal. The report is capped at 20,000 items; narrow the filters for a larger
+  house. Everyone who can see the house's inventory can read the report.
 
 ## 10. Security, language and offline use
 

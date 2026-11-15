@@ -149,7 +149,7 @@ export function AppShell() {
   return (
     <div className="min-h-dvh bg-bg">
       {/* desktop sidebar */}
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-[260px] flex-col border-r border-line bg-surface/70 px-4 py-5 backdrop-blur lg:flex">
+      <aside className="fixed inset-y-0 left-0 z-30 hidden w-[260px] flex-col border-r border-line bg-surface/70 px-4 py-5 backdrop-blur lg:flex print:hidden">
         <div className="flex items-center gap-2.5 px-1">
           <LogoMark size={34} />
           <div>
@@ -220,7 +220,7 @@ export function AppShell() {
       </aside>
 
       {/* mobile top bar */}
-      <header ref={mobileHeaderRef} className="safe-top sticky top-0 z-30 border-b border-line bg-bg/90 backdrop-blur lg:hidden">
+      <header ref={mobileHeaderRef} className="safe-top sticky top-0 z-30 border-b border-line bg-bg/90 backdrop-blur lg:hidden print:hidden">
         <div className="flex items-center gap-2 px-4 py-2.5">
           <button
             onClick={() => setSwitcherOpen(true)}
@@ -265,7 +265,7 @@ export function AppShell() {
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-5xl px-4 pb-28 pt-4 sm:px-6 lg:ml-[260px] lg:w-[calc(100%-260px)] lg:max-w-none lg:px-10 lg:pb-14 lg:pt-8">
+      <main className="mx-auto w-full max-w-5xl px-4 pb-28 pt-4 sm:px-6 lg:ml-[260px] lg:w-[calc(100%-260px)] lg:max-w-none lg:px-10 lg:pb-14 lg:pt-8 print:ml-0 print:w-full print:max-w-none print:p-0">
         <div className="mx-auto w-full max-w-[1120px]">
           <OfflineQueueBar />
           <Outlet />
@@ -273,7 +273,7 @@ export function AppShell() {
       </main>
 
       {/* mobile bottom nav */}
-      <nav className="safe-bottom fixed inset-x-0 bottom-0 z-30 border-t border-line bg-surface/95 backdrop-blur lg:hidden">
+      <nav className="safe-bottom fixed inset-x-0 bottom-0 z-30 border-t border-line bg-surface/95 backdrop-blur lg:hidden print:hidden">
         <div className="mx-auto grid max-w-md grid-cols-5 px-2 pb-1 pt-1.5">
           {NAV.map((item) => {
             const moreActive =

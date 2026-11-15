@@ -23,6 +23,7 @@ const LINKS: { to: string; label: string; description: string; icon: IconName; t
   { to: "/notifications", label: "Reminders", description: "Low stock and expiry", icon: "bell", tint: "bg-raised text-muted" },
   { to: "/settings", label: "House settings", description: "Places, categories, attributes, members", icon: "settings", tint: "bg-raised text-muted" },
   { to: "/labels", label: "Print labels", description: "QR labels for items and places", icon: "printer", tint: "bg-brand-soft text-brand" },
+  { to: "/reports/valuation", label: "Valuation report", description: "Insurance and moving checklist with totals", icon: "price", tint: "bg-brand-soft text-brand" },
 ];
 
 export function MorePage() {

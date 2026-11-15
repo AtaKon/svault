@@ -144,6 +144,13 @@ const PATHS: Record<IconName, ReactNode> = {
       <path d="m7 10 5 5 5-5M12 15V3" />
     </>
   ),
+  printer: (
+    <>
+      <path d="M6 9V3h12v6" />
+      <path d="M6 18H4a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2" />
+      <rect x="6" y="14" width="12" height="8" rx="1" />
+    </>
+  ),
   users: (
     <>
       <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
@@ -272,13 +279,6 @@ const PATHS: Record<IconName, ReactNode> = {
       <path d="M3 10 5 4h14l2 6" />
       <path d="M3 10a3 3 0 0 0 6 0 3 3 0 0 0 6 0 3 3 0 0 0 6 0" />
       <path d="M9 20v-6h6v6" />
-    </>
-  ),
-  printer: (
-    <>
-      <path d="M7 9V3h10v6" />
-      <path d="M7 17H5a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2" />
-      <path d="M7 14h10v7H7z" />
     </>
   ),
 };

@@ -1585,3 +1585,90 @@ export interface SearchResponse {
   groups: SearchGroup[];
   total: number;
 }
+/* ------------------------------------------------------- valuation report */
+
+/** How a unit value is derived for the valuation report. */
+export type ValuationBasis = "latest" | "average" | "stockCost";
+
+/** Where a single item's value came from. `none` means no price is recorded. */
+export type ValuationValueSource = "latest-purchase" | "average-purchase" | "stock-cost" | "none";
+
+export interface ValuationPlace {
+  locationId: string | null;
+  locationName: string | null;
+  quantity: number;
+}
+
+/** A warranty or manual document attached to an item, by name and type only. */
+export interface ValuationDocumentRef {
+  name: string;
+  kind: string;
+  mime: string;
+  size: number;
+}
+
+export interface ValuationItem {
+  id: string;
+  name: string;
+  brand: string | null;
+  categoryId: string | null;
+  categoryName: string | null;
+  unit: string;
+  quantity: number;
+  places: ValuationPlace[];
+  /** Unit value in the house currency; null when no price is recorded. */
+  unitValue: number | null;
+  /** quantity × unit value (or the priced stock cost); null when no price is recorded. */
+  totalValue: number | null;
+  valueSource: ValuationValueSource;
+  /** Purchase date of the most recent batch that recorded one. */
+  purchasedAt: string | null;
+  /** Shop of that same latest batch. */
+  shop: string | null;
+  warrantyUntil: string | null;
+  warrantyNote: string | null;
+  /** Custom attributes, so the print view can show the ones the user picks. */
+  attributes: Record<string, unknown>;
+  image: string | null;
+  tags: string[];
+  /** Number of attached documents (warranties, manuals, receipts). */
+  documentCount: number;
+  /** Present only when the report asked for the documents list. */
+  documents?: ValuationDocumentRef[];
+  archived: boolean;
+}
+
+export interface ValuationCategoryTotal {
+  categoryId: string | null;
+  categoryName: string | null;
+  itemCount: number;
+  itemsWithoutValue: number;
+  total: number;
+}
+
+export interface ValuationPlaceTotal {
+  locationId: string | null;
+  locationName: string | null;
+  itemCount: number;
+  total: number;
+}
+
+export interface ValuationReport {
+  houseId: string;
+  houseName: string;
+  currency: string;
+  /** YYYY-MM-DD the report was produced for. */
+  reportDate: string;
+  generatedAt: string;
+  basis: ValuationBasis;
+  itemCount: number;
+  /** Items with no recorded price. They are listed but never counted as zero. */
+  itemsWithoutValue: number;
+  grandTotal: number;
+  /** True when the house had more matches than the report cap. */
+  truncated: boolean;
+  includeDocuments: boolean;
+  items: ValuationItem[];
+  categoryTotals: ValuationCategoryTotal[];
+  placeTotals: ValuationPlaceTotal[];
+}
