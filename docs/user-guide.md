@@ -760,3 +760,15 @@ dashboard lists items expected to run out within seven days. Forecasts need at l
 events seven days apart and a positive stock balance. Waste, stock corrections and moves do not count.
 In the shopping list, turn on **Include items running out soon** and choose a horizon before using
 **Add low stock** to include forecast items as well. Existing compatible shopping lines are merged.
+
+### Live updates between members
+
+When two people use the same house at the same time, changes made by one appear for the other without
+a reload. Inventory quantities, item details, the shopping list, the meal plan, purchases and the
+reminder bell refresh automatically. A quiet "Updated by …" toast appears when another member changes
+the shopping list.
+
+The connection pauses while the tab is in the background, reconnects when you return, and falls back to
+refreshing every 90 seconds if streaming is blocked. It carries no inventory data: the app simply
+refetches what you are allowed to see. If you are removed from a house, the live connection closes.
+Server operators can set `LIVE_UPDATES=off`; see [deployment.md](deployment.md#configuration).

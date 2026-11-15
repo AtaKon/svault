@@ -307,6 +307,11 @@ food ideas. What never does: stock, prices, barcodes, reminders, photo labelling
   a cached shell fallback.
 - `/api` and `/uploads` are **never** cached. Inventory and stock are always read from the server so
   the UI cannot present stale quantities as current.
+- Live updates use one `text/event-stream` connection per tab (`server/routes/live.ts`), subscribed
+  through `server/services/live.ts`. The fan-out is in-process because SVault runs as one container;
+  the publish/subscribe surface is small enough for a PostgreSQL `LISTEN`/`NOTIFY` backend later.
+  Events carry only `{ type, id?, actorUserId, at }`, never household data, and are emitted after the
+  writing transaction commits. A 90-second poll remains as the fallback when streaming is unavailable.
 - Offline stock mutations are not queued yet; see the [roadmap](roadmap.md).
 
 ## Security posture

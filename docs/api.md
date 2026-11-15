@@ -1410,3 +1410,42 @@ If you add an endpoint:
 5. Add a test in `server/tests/api.test.ts` and update this page.
 
 See [development.md](development.md) for the workflow.
+
+## Live updates (Server-Sent Events)
+
+`GET /api/houses/:houseId/events` opens a `text/event-stream` for a house. It is the only streaming
+endpoint and it requires the normal `sv_session` cookie: read-only API tokens (`Authorization: Bearer
+svt_...`) get `403`, and callers who are not members of the house get `404` like every other house
+route. Set `LIVE_UPDATES=off` to disable the endpoint (`404`) when a proxy cannot stream; the bundled
+client then falls back to polling every 90 seconds.
+
+Every event is a minimal invalidation hint, never household data:
+
+```
+id: 42
+data: {"type":"shopping","actorUserId":"usr_...","at":"2026-11-15T10:04:11.283Z"}
+
+```
+
+`type` is one of `stock`, `shopping`, `items`, `recipes`, `plan`, `notifications`, `receipts` or
+`bills`. `id` is optional and identifies the affected entity when the emitter knows it. Events carry
+no item names, quantities or prices; clients refetch the data they are already allowed to read.
+
+- Events are emitted **after** the write commits. A transaction that rolls back, or a request that
+  fails with `4xx`/`5xx`, never produces an event.
+- The server sends `retry: 5000`, a `: connected` comment, and a `: heartbeat` comment every 25
+  seconds. `Cache-Control: no-cache, no-transform`, `Connection: keep-alive` and
+  `X-Accel-Buffering: no` keep proxies and compression middleware from buffering the stream.
+- Membership is re-checked every minute; a removed member's stream is closed.
+- A single account may hold 5 open streams and a house 100. Above that the endpoint answers `429` with
+  `Retry-After: 30`.
+- Event ids are per process and there is no replay. After a reconnect the client refetches instead of
+  asking for missed events, so no payload history is stored anywhere.
+
+The fan-out is an in-process bus (`server/services/live.ts`), which fits SVault's single-container
+deployment. The publish/subscribe surface is deliberately small so a PostgreSQL `LISTEN`/`NOTIFY`
+backend could replace it later without changing routes or clients.
+
+Browser notes: `/api` is never cached by the service worker, and the client pauses the stream while the
+tab is hidden, reconnects with exponential backoff (capped at 30 seconds) and refetches on visibility.
+See [deployment.md](deployment.md#live-updates-and-streaming-proxies) for reverse-proxy settings.
