@@ -34,6 +34,8 @@ interface ToastApi {
 const ToastContext = createContext<ToastApi | null>(null);
 
 const DEFAULT_DURATION = 4200;
+/** How long a held toast stays once the pointer or focus leaves it. */
+const RESUME_DURATION = 2500;
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -56,6 +58,15 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     window.clearTimeout(timer);
     timers.current.delete(id);
   }, []);
+
+  /** Start the countdown again once the pointer or focus leaves a held toast. */
+  const release = useCallback(
+    (id: number) => {
+      if (timers.current.has(id)) return;
+      timers.current.set(id, window.setTimeout(() => dismiss(id), RESUME_DURATION));
+    },
+    [dismiss],
+  );
 
   const push = useCallback(
     (message: string, tone: ToastTone = "info", options?: ToastOptions) => {
@@ -95,8 +106,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             key={toast.id}
             role="status"
             aria-live="polite"
-            onMouseEnter={() => hold(toast.id)}
-            onFocus={() => hold(toast.id)}
+            onMouseEnter={toast.action ? () => hold(toast.id) : undefined}
+            onFocus={toast.action ? () => hold(toast.id) : undefined}
+            onMouseLeave={toast.action ? () => release(toast.id) : undefined}
+            onBlur={toast.action ? () => release(toast.id) : undefined}
             className={cn(
               "pointer-events-auto flex max-w-sm items-start gap-2.5 rounded-2xl border px-3.5 py-2.5 text-sm shadow-soft rise-in",
               toast.tone === "error"
