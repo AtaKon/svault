@@ -250,7 +250,7 @@ export function FreezerPage() {
                                       ? t("Eat today")
                                       : tone.label === "soon"
                                         ? t("Eat in {count} days", { count: days ?? 0 })
-                                        : tone.label === "this week"
+                                        : tone.label === "this week" || days != null
                                           ? t("Eat in {count} days", { count: days ?? 0 })
                                           : t("no date")}
                                 </Badge>
