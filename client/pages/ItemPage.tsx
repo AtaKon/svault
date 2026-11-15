@@ -350,6 +350,7 @@ export function ItemPage() {
         subtitle={item.description || undefined}
         actions={
           <>
+            <IconButton icon="printer" label={t("Print label")} onClick={() => navigate(`/labels?item=${item.id}`)} />
             {can("member") && (
               <IconButton icon="pencil" label={t("Edit item")} onClick={() => navigate(`/items/${item.id}/edit`)} />
             )}

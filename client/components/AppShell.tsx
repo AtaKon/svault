@@ -7,6 +7,7 @@ import { Button, Field, Input, Select, Sheet, cn } from "@/components/ui";
 import { Icon, LogoMark, type IconName } from "@/components/icons";
 import { useToast } from "@/components/toast";
 import { OfflineQueueBar } from "@/components/OfflineQueueBar";
+import { useLabelHouseBinding } from "@/components/LabelDeepLink";
 import { currentTheme, toggleTheme } from "@/theme";
 import type { House, Notification } from "@shared/types";
 
@@ -31,6 +32,7 @@ const EXTRA: { to: string; label: string; icon: IconName }[] = [
   { to: "/photos", label: "Photo library", icon: "image" },
   { to: "/notifications", label: "Reminders", icon: "bell" },
   { to: "/settings", label: "House settings", icon: "settings" },
+  { to: "/labels", label: "Print labels", icon: "printer" },
 ];
 
 const CURRENCIES = ["EUR", "USD", "GBP", "CHF", "SEK", "NOK", "DKK", "PLN", "CZK", "CAD", "AUD", "JPY"];
@@ -45,6 +47,8 @@ export function AppShell() {
   const location = useLocation();
   const navigate = useNavigate();
   const [theme, setTheme] = useState(currentTheme());
+
+  useLabelHouseBinding();
 
   const knownNotifications = useRef<Set<string>>(new Set());
   const notificationsPrimed = useRef(false);

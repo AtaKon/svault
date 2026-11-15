@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { BrowserMultiFormatReader, type IScannerControls } from "@zxing/browser";
 import { BarcodeFormat } from "@zxing/library";
 import { Button, Spinner, cn } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { useI18n } from "@/i18n";
+import { parseLabelScan } from "@shared/label-links";
 
 function friendlyCameraError(error: unknown, t: (key: string) => string): string {
   const name = (error as { name?: string } | null)?.name ?? "";
@@ -27,13 +29,16 @@ export function BarcodeScanner({
   className?: string;
 }) {
   const { t } = useI18n();
+  const navigate = useNavigate();
   const videoRef = useRef<HTMLVideoElement>(null);
   const controlsRef = useRef<IScannerControls | null>(null);
   const callbackRef = useRef(onDetected);
   callbackRef.current = onDetected;
   const lastRef = useRef<{ code: string; at: number }>({ code: "", at: 0 });
+  const noticeTimer = useRef<number | null>(null);
   const [starting, setStarting] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [facingMode, setFacingMode] = useState<"environment" | "user">("environment");
   const [attempt, setAttempt] = useState(0);
 
@@ -57,6 +62,22 @@ export function BarcodeScanner({
         } catch {
           /* ignore */
         }
+        // A QR code is never a product barcode. SVault labels open in the app;
+        // any other QR payload is ignored with a short message. Camera hints
+        // include QR_CODE by default (MultiFormatReader), so no format setup is
+        // needed here.
+        if (result.getBarcodeFormat() === BarcodeFormat.QR_CODE) {
+          const target = parseLabelScan(text, window.location.origin);
+          if (target) {
+            controlsRef.current?.stop();
+            navigate(target.path);
+            return;
+          }
+          setNotice(t("That QR code is not an SVault label."));
+          if (noticeTimer.current) window.clearTimeout(noticeTimer.current);
+          noticeTimer.current = window.setTimeout(() => setNotice(null), 4000);
+          return;
+        }
         const formatName = BarcodeFormat[result.getBarcodeFormat() as unknown as keyof typeof BarcodeFormat];
         callbackRef.current(text, typeof formatName === "string" ? formatName : undefined);
       })
@@ -76,6 +97,7 @@ export function BarcodeScanner({
 
     return () => {
       cancelled = true;
+      if (noticeTimer.current) window.clearTimeout(noticeTimer.current);
       controlsRef.current?.stop();
       controlsRef.current = null;
       if (element.srcObject instanceof MediaStream) {
@@ -83,7 +105,7 @@ export function BarcodeScanner({
         element.srcObject = null;
       }
     };
-  }, [facingMode, attempt, t]);
+  }, [facingMode, attempt, t, navigate]);
 
   return (
     <div className={cn("overflow-hidden rounded-3xl border border-line bg-black shadow-soft", className)}>
@@ -123,8 +145,17 @@ export function BarcodeScanner({
             ))}
             <div className="absolute left-[12%] right-[12%] top-1/2 h-px bg-brand/70 shadow-[0_0_12px_2px_rgba(79,191,148,0.6)]" />
             <div className="absolute inset-x-0 bottom-3 text-center text-[11px] font-medium text-white/70">
-              {t("Point the camera at a barcode")}
+              {t("Point the camera at a barcode or an SVault label")}
             </div>
+          </div>
+        )}
+
+        {notice && (
+          <div
+            role="status"
+            className="pointer-events-none absolute inset-x-3 top-14 rounded-xl bg-black/75 px-3 py-2 text-center text-[11px] leading-relaxed text-white shadow-soft"
+          >
+            {notice}
           </div>
         )}
 

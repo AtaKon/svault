@@ -330,6 +330,7 @@ function PlacesTab({ house }: { house: House }) {
   const { t } = useI18n();
   const toast = useToast();
   const { can } = useHouse();
+  const navigate = useNavigate();
   const [locations, setLocations] = useState<HouseLocation[] | null>(null);
   const [editing, setEditing] = useState<HouseLocation | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -414,6 +415,7 @@ function PlacesTab({ house }: { house: House }) {
                 <div className="text-[11px] capitalize text-muted">
                   {t(location.kind)} · {location.itemCount ?? 0} {t("items")}</div>
               </div>
+              <IconButton icon="printer" label={t("Print label")} onClick={() => navigate(`/labels?place=${location.id}`)} />
               {can("member") && (
                 <>
                   <IconButton

@@ -27,6 +27,7 @@ import { SettingsPage } from "@/pages/SettingsPage";
 import { ProfilePage } from "@/pages/ProfilePage";
 import { DeveloperPage } from "@/pages/DeveloperPage";
 import { MorePage } from "@/pages/MorePage";
+import { LabelsPage } from "@/pages/LabelsPage";
 import { ExtraPages } from "@/pages/ExtraPages";
 import { ShoppingPage } from "@/pages/ShoppingPage";
 import { PlanPage } from "@/pages/PlanPage";
@@ -82,6 +83,7 @@ export function App() {
         <Route path="/profile" element={<ProfilePage />} />
         <Route path="/developer" element={<DeveloperPage />} />
         <Route path="/more" element={<MorePage />} />
+        <Route path="/labels" element={<LabelsPage />} />
         <Route path="*" element={<ExtraPages />} />
       </Route>
     </Routes>
@@ -104,7 +106,7 @@ function RequireAuth({ children }: { children: ReactNode }) {
       </div>
     );
   }
-  if (!user) return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+  if (!user) return <Navigate to="/login" replace state={{ from: location.pathname + location.search }} />;
   if (!house) return <NoHousePage />;
   return <>{children}</>;
 }
