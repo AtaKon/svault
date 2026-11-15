@@ -9,6 +9,18 @@ export type Row = Record<string, any>;
 let driver: DatabaseDriver | null = null;
 let initPromise: Promise<void> | null = null;
 
+/* Counts `all`/`get`/`run` calls so tests can assert a handler does not run a
+   query per row. It is a plain increment, not timing or tracing. */
+let queryCount = 0;
+
+export function resetQueryCount(): void {
+  queryCount = 0;
+}
+
+export function databaseQueryCount(): number {
+  return queryCount;
+}
+
 function active(): DatabaseDriver {
   if (!driver) throw new Error("The database has not been initialised. Call initDb() before serving requests.");
   return driver;
@@ -40,14 +52,17 @@ export function databaseKind(): DatabaseKind {
 }
 
 export function all<T = Row>(sql: string, params: unknown[] = []): Promise<T[]> {
+  queryCount += 1;
   return active().all<T>(sql, params);
 }
 
 export function get<T = Row>(sql: string, params: unknown[] = []): Promise<T | undefined> {
+  queryCount += 1;
   return active().get<T>(sql, params);
 }
 
 export function run(sql: string, params: unknown[] = []): Promise<RunResult> {
+  queryCount += 1;
   return active().run(sql, params);
 }
 

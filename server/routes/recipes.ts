@@ -19,6 +19,7 @@ import type { OffProduct, Role, Recipe } from "../../shared/types.js";
 import { addStock, afterStockChange, itemQuantity, removeStock } from "../services/stock.js";
 import { convert, round } from "../units.js";
 import { readableWordRatio } from "../../shared/notebook-scan.js";
+import { recipeCosts } from "../services/recipe-cost.js";
 
 export const recipeRoutes = Router();
 export const singleRecipeRoutes = Router();
@@ -904,7 +905,14 @@ singleRecipeRoutes.get(
   handler(async (req, res) => {
     const { recipe, houseId } = await recipeAccess(req);
     const serialized = serializeRecipe(recipe, await ingredientsFor(recipe.id));
-    res.json({ ...decorateRecipe(serialized, await stockMaps(houseId), await nutritionItems(houseId)), ...await recipeDietWarnings(houseId, recipe.id) });
+    // Additive: the cost is derived at read time like nutrition, so an older
+    // client that ignores it sees an unchanged recipe.
+    const cost = (await recipeCosts(houseId, { requestedBasis: req.query.basis, recipeIds: [recipe.id] })).costs.get(recipe.id) ?? null;
+    res.json({
+      ...decorateRecipe(serialized, await stockMaps(houseId), await nutritionItems(houseId)),
+      ...await recipeDietWarnings(houseId, recipe.id),
+      cost,
+    });
   }),
 );
 

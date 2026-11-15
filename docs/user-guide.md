@@ -434,6 +434,30 @@ contributed; lines without a convertible unit keep their original measure.
 The estimate is deliberately transparent. Add nutrition to the remaining items, or set a serving
 weight on count-based products, to improve the number.
 
+### Cost per recipe and portion
+
+A recipe page also shows what it costs, using the prices you already record when you add stock:
+
+- **Latest price** (default) uses the most recent unit price recorded for each ingredient.
+- **Average** uses purchases from the last 90 days, at most 20 per item.
+- **In-stock cost** uses the weighted cost of the batches you have now.
+
+Pick the basis in the cost card; the choice applies to the page you are looking at. A house can set a
+default with `settings.recipeCostBasis`. When the chosen basis has no price for an item, the next one is
+used and the breakdown says which.
+
+The big number is the cost of one portion when the recipe has servings, with the total underneath.
+Cost is only shown for ingredients that are linked to an item with a recorded price. The card says how
+many ingredients it priced and lists the rest with the reason ("not linked to an item", "no price
+recorded", "unit does not convert"). While any ingredient is uncosted the figure is marked **partial**,
+and the card and recipe-card badges show it as a minimum (`≥`), never as a complete total.
+
+Tap **Show the breakdown** to see the cost of each ingredient. Cook mode scales the cost with the
+portion count, next to the weight and calories.
+
+The recipe list can be sorted by cost per portion (cheapest or most expensive first) and filtered to
+recipes that have a cost at all.
+
 ### Cook mode
 
 Open a recipe and press **Cook mode**. Everything is scaled to the number of portions at the top:

@@ -765,7 +765,8 @@ matched item's category; unlinked lines are reported as `Uncategorised`.
 | `POST` | `/api/houses/:houseId/recipes/upload` | member+ | Upload a source image (`field: image`) and get `{ path }`. |
 | `POST` | `/api/houses/:houseId/recipes/scan` | member+ | Parse OCR text and/or an image into a draft, optionally save. |
 | `POST` | `/api/houses/:houseId/recipes/import` | member+ | Import a recipe from a URL (schema.org JSON-LD, text fallback, optional AI clean-up), optionally save. |
-| `GET` | `/api/recipes/:recipeId` | viewer+ | Recipe detail with `match` (available/total/missing) and `nutrition`. |
+| `GET` | `/api/houses/:houseId/recipes/costs` | viewer+ | Cost per portion for every recipe in one query set. Optional `basis`. |
+| `GET` | `/api/recipes/:recipeId` | viewer+ | Recipe detail with `match` (available/total/missing), `nutrition` and `cost`. Optional `basis`. |
 | `PATCH` | `/api/recipes/:recipeId` | member+ | Partial update. |
 | `DELETE` | `/api/recipes/:recipeId` | member+ | Delete a recipe. |
 | `POST` | `/api/recipes/:recipeId/cook` | member+ | Consume linked stock and optionally record leftovers. |
@@ -879,6 +880,85 @@ Mass units convert exactly. Volume is multiplied by a typical density for the in
 countable units (`pcs`, `clove`, `slice`…) use a typical piece weight. Lines that cannot be converted
 are left out, so `covered`/`coverage` describe how much of the recipe the estimate represents. Cook
 mode uses the same shared helpers in `shared/recipe-grams.ts`.
+
+### Recipe cost
+
+The recipe detail carries `cost`, and `GET /api/houses/:houseId/recipes/costs` returns the same
+figure for every recipe at once:
+
+```json
+{
+  "basis": "latest",
+  "currency": "EUR",
+  "recipes": [
+    {
+      "recipeId": "rcp_...",
+      "title": "Gemista",
+      "servings": 4,
+      "total": 7.42,
+      "perPortion": 1.86,
+      "priced": 7,
+      "ingredients": 9,
+      "coverage": 0.78,
+      "partial": true
+    }
+  ]
+}
+```
+
+The detail `cost` object adds the per-line breakdown:
+
+```json
+{
+  "basis": "latest",
+  "total": 7.42,
+  "perPortion": 1.86,
+  "servings": 4,
+  "priced": 7,
+  "ingredients": 9,
+  "coverage": 0.78,
+  "partial": true,
+  "lines": [
+    {
+      "id": "rin_...",
+      "name": "rice",
+      "quantity": 200,
+      "unit": "g",
+      "itemId": "itm_...",
+      "pricedQuantity": 0.2,
+      "itemUnit": "kg",
+      "unitPrice": 1.95,
+      "basis": "latest",
+      "cost": 0.39,
+      "reason": null
+    }
+  ],
+  "unpriced": [{ "name": "tomatoes", "reason": "unlinked" }]
+}
+```
+
+`basis` selects the unit price:
+
+| Basis | Price used |
+| --- | --- |
+| `latest` (default) | The latest recorded unit price on an incoming stock movement. |
+| `average` | Average of the item's purchases in the last 90 days, at most 20 of them. |
+| `stock` | Weighted cost of the batches currently in stock. |
+
+The basis comes from `?basis=` on the request, or `settings.recipeCostBasis` on the house (set with
+`PATCH /api/houses/:houseId`), or `latest`. An unknown basis is rejected with `400`. A line whose
+basis has no price falls back through `latest` → `average` → `stock` and reports the basis it used in
+`lines[].basis`.
+
+An ingredient line is converted to the item's own unit with the same tables the stock engine uses, so
+`200 g` of an item priced per kg costs `0.2 × unitPrice`. A line without a unit is treated as already
+written in the item's unit. A line that is not linked to an item (`unlinked`), has no quantity
+(`quantity`), has no price (`unpriced`) or cannot be converted (`unconverted`) keeps `cost: null` and
+is listed in `unpriced`. `coverage` is `priced / ingredients`, and `partial` is true while any line is
+uncosted: a partial `total` is only ever the cost of the priced lines, never presented as the whole
+recipe. `perPortion` is null when the recipe has no servings. Both endpoints run a fixed set of
+house-wide aggregate queries, so the list costs the same number of queries for one recipe as for
+fifty.
 
 ## Food ideas
 

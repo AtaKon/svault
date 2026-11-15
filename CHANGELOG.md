@@ -18,6 +18,8 @@ All notable changes to SVault are documented here. The format follows
 - Category budgets, optional bill spending, month-end projections, budget history and threshold reminders.
 - Consumption-based run-out forecasts on items and the dashboard, with an optional shopping-list fill.
 - Printable QR labels for items and places: multi-select with search, three label sizes (including a 3 × 8 A4 sheet), live preview and a print stylesheet. Scanning a label with the in-app scanner opens the item or place, also after signing in; foreign or script QR payloads are ignored.
+- Cost per recipe and portion, from recorded purchase prices or the batches in stock, with an honest
+  coverage note and a per-ingredient breakdown. The recipe list can sort and filter by cost per portion.
 
 ### Security
 
