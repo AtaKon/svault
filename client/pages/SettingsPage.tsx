@@ -21,7 +21,9 @@ import {
 } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { useToast } from "@/components/toast";
-import { qty } from "@/format";import { LOCATION_ICONS, LOCATION_KINDS } from "@/units";
+import { WebPushCard } from "@/components/WebPushCard";
+import { qty } from "@/format";
+import { LOCATION_ICONS, LOCATION_KINDS } from "@/units";
 import { normaliseRecipeReasoning, type RecipeReasoningMode } from "@shared/ai-reasoning";
 import type {
   AttributeDef,
@@ -1521,12 +1523,14 @@ function RemindersTab({ house, onSave }: { house: House; onSave: (patch: Record<
           {t("Save reminders")}</Button>
       </Card>
 
+      <WebPushCard channelEnabled={channels.some((channel) => channel.type === "webpush" && channel.enabled)} />
+
       <Card className="space-y-3 p-4">
         <div className="flex items-start justify-between gap-3">
           <div>
             <h2 className="font-display text-lg">{t("Delivery channels")}</h2>
             <p className="text-[11px] text-muted">
-              {t("Send reminders to ntfy, Apprise or any webhook. Failures retry three times with backoff.")}</p>
+              {t("Send reminders to ntfy, Apprise, a webhook, or Web Push to this device. Failures retry three times with backoff.")}</p>
           </div>
           <Button size="sm" variant="secondary" icon="plus" onClick={addChannel} disabled={!can("admin")}>
             {t("Add")}</Button>
@@ -1549,6 +1553,7 @@ function RemindersTab({ house, onSave }: { house: House; onSave: (patch: Record<
                 <option value="ntfy">{t("ntfy")}</option>
                 <option value="apprise">{t("Apprise")}</option>
                 <option value="webhook">{t("Webhook")}</option>
+                <option value="webpush">{t("Web push")}</option>
               </Select>
               <div className="min-w-[140px] flex-1">
                 <Input
@@ -1575,14 +1580,20 @@ function RemindersTab({ house, onSave }: { house: House; onSave: (patch: Record<
               />
             </div>
 
-            <Field label={channel.type === "ntfy" ? t("Server URL") : channel.type === "apprise" ? t("Apprise endpoint") : t("Webhook URL")}>
-              <Input
-                value={channel.url}
-                onChange={(event) => patchChannel(channel.id, { url: event.target.value })}
-                placeholder={channel.type === "ntfy" ? "https://ntfy.sh" : "https://example.com/notify"}
-                type="url"
-                className="h-9 text-[13px]"
-              />
+            <Field label={channel.type === "ntfy" ? t("Server URL") : channel.type === "apprise" ? t("Apprise endpoint") : channel.type === "webpush" ? t("Web push") : t("Webhook URL")}>
+              {channel.type === "webpush" ? (
+                <p className="rounded-xl border border-line bg-bg px-3 py-2 text-[11px] text-muted">
+                  {t("No URL: reminders go to the devices each member enabled above.")}
+                </p>
+              ) : (
+                <Input
+                  value={channel.url}
+                  onChange={(event) => patchChannel(channel.id, { url: event.target.value })}
+                  placeholder={channel.type === "ntfy" ? "https://ntfy.sh" : "https://example.com/notify"}
+                  type="url"
+                  className="h-9 text-[13px]"
+                />
+              )}
             </Field>
 
             {channel.type === "ntfy" && (

@@ -57,3 +57,58 @@ self.addEventListener("fetch", (event) => {
     );
   }
 });
+
+/* Web Push. The payload is deliberately small: a title, a short body and the
+   in-app path to open. Nothing else is trusted or displayed. */
+/**
+ * A notification may only open a page of this app: one leading slash, never
+ * `//host` (which resolves to another origin) or `/\\host`.
+ */
+function inAppPath(value) {
+  return typeof value === "string" && value.startsWith("/") && !value.startsWith("//") && !value.startsWith("/\\");
+}
+
+self.addEventListener("push", (event) => {
+  let payload = {};
+  try {
+    payload = event.data ? event.data.json() : {};
+  } catch {
+    payload = { body: event.data ? event.data.text() : "" };
+  }
+  const title = typeof payload.title === "string" && payload.title ? payload.title.slice(0, 120) : "SVault";
+  const body = typeof payload.body === "string" ? payload.body.slice(0, 240) : "";
+  const url = inAppPath(payload.url) ? payload.url : "/notifications";
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body,
+      icon: "/icon-192.png",
+      data: { url },
+    }),
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const stored = event.notification.data && event.notification.data.url;
+  const target = new URL(inAppPath(stored) ? stored : "/notifications", self.location.origin).href;
+  event.waitUntil(
+    (async () => {
+      const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+      for (const client of windows) {
+        if (new URL(client.url).origin !== self.location.origin) continue;
+        await client.focus();
+        // Reuse the open tab and point it at the reminder. navigate() is not in
+        // every engine, so fall back to focusing the tab that is already there.
+        if ("navigate" in client) {
+          try {
+            await client.navigate(target);
+          } catch {
+            /* keep the focused tab */
+          }
+        }
+        return;
+      }
+      await self.clients.openWindow(target);
+    })(),
+  );
+});

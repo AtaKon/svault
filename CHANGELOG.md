@@ -24,9 +24,15 @@ All notable changes to SVault are documented here. The format follows
 - Global search in the app header (`/` or `Ctrl`/`Cmd`+`K`) across items, recipes, receipts, bills and shops, with Greek accent-insensitive matching, grouped ranked results and recent searches kept on the device.
 - **Valuation and insurance report.** **More → Valuation report** builds a dated record of what the house owns, with per-item values from the latest purchase price, the average purchase price or the stock cost. Filter by category, place, tag, minimum value, active warranty and archived items; see the grand total, category and place subtotals and the items with no recorded value. Download the report as CSV (formula-injection safe, UTF-8 BOM) or print it from the browser with optional photos and attribute columns and an optional list of attached warranty documents. Unpriced items are listed but never counted as zero.
 - House activity feed: a read-only, newest-first timeline at **More → Activity** (`GET /api/houses/:houseId/activity`) that merges stock movements, saved receipts, new items, shopping checkoffs and bills, with cursor pagination and member, kind, item, place and date filters.
+- Optional Web Push reminders. With VAPID keys configured, an installed PWA receives low-stock, expiry
+  and budget reminders while SVault is closed; each device is enabled separately under
+  **Settings → Reminders**.
 
 ### Security
 
+- Web Push endpoints are always public HTTPS hosts. A signed-in user supplies the endpoint and the
+  server posts to it, so private, loopback and link-local addresses are refused when subscribing and
+  again when sending (and re-checked at connect time), regardless of `SV_OUTBOUND_ALLOW_PRIVATE`.
 - Writing an Open Food Facts folksonomy property now needs accepted OFF consent and member access to
   at least one household. A named `houseId`/`itemId` must belong to a house the caller is a member of,
   so a signed-in user can no longer write through the instance token or name another house's item.

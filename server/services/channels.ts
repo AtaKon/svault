@@ -1,6 +1,7 @@
 import { createHmac } from "node:crypto";
 import { all, get, newId, now, parseJson, run } from "../db.js";
 import { assertOutboundUrl, outboundFetch, outboundRedirectMode } from "../lib/outbound.js";
+import { sendPushToSubscriptions, subscriptionsForHouse, type PushSubscriptionRecord } from "./web-push.js";
 import type { NotificationChannel, NotificationChannelEvents, NotificationChannelType } from "../../shared/types.js";
 
 export type DeliveryEvent = "low_stock" | "expiring" | "budget_alert" | "warranty" | "weekly_summary" | "test";
@@ -21,7 +22,7 @@ export function channelsFromSettings(settings: Record<string, any> | null | unde
     .filter((entry: any) => entry && typeof entry === "object")
     .map((entry: any) => ({
       id: String(entry.id ?? `ch_${Math.random().toString(36).slice(2)}`),
-      type: (["ntfy", "apprise", "webhook"].includes(entry.type) ? entry.type : "webhook") as NotificationChannelType,
+      type: (["ntfy", "apprise", "webhook", "webpush"].includes(entry.type) ? entry.type : "webhook") as NotificationChannelType,
       name: String(entry.name ?? entry.type ?? "Reminder channel").slice(0, 80),
       enabled: entry.enabled !== false,
       url: String(entry.url ?? "").slice(0, 500),
@@ -71,7 +72,9 @@ export function mergeChannels(current: NotificationChannel[], incoming: Notifica
 
 function eventEnabled(channel: NotificationChannel, event: DeliveryEvent): boolean {
   if (event === "test") return true;
-  if (!channel.enabled || !channel.url) return false;
+  if (!channel.enabled) return false;
+  // Web Push has no URL: the devices themselves are the destination.
+  if (channel.type !== "webpush" && !channel.url) return false;
   if (event === "low_stock") return channel.events.lowStock;
   if (event === "expiring" || event === "warranty") return channel.events.expiring;
   if (event === "budget_alert") return channel.events.budget;
@@ -105,6 +108,9 @@ function asciiHeader(value: string) {
 
 /** Send one message synchronously. Used by the Test button and by delivery runs. */
 export async function sendChannelMessage(channel: NotificationChannel, message: ChannelMessage): Promise<DeliveryResult> {
+  if (channel.type === "webpush") {
+    return { ok: false, status: null, error: "Web Push is delivered per device; use a device subscriber" };
+  }
   if (!channel.url) return { ok: false, status: null, error: "No URL configured" };
   try {
     await assertOutboundUrl(channel.url, "The channel URL");
@@ -214,6 +220,34 @@ async function runDelivery(id: string, channel: NotificationChannel, message: Ch
   timer.unref?.();
 }
 
+/**
+ * A reminder tap opens the item that triggered it when there is one, otherwise
+ * the reminders page. Paths only: the payload must not carry item data beyond
+ * what the bell already shows.
+ */
+export function pushClickPath(message: ChannelMessage): string {
+  const itemId = typeof message.data?.itemId === "string" ? message.data.itemId : "";
+  return itemId ? `/items/${encodeURIComponent(itemId)}` : "/notifications";
+}
+
+/**
+ * Phones are the point of Web Push: a transient failure is retried once by the
+ * browser's own push service, so fan out once and record the aggregate outcome
+ * (one delivery row per house/channel/dedupe key, as for every other channel).
+ */
+async function runPushDelivery(id: string, subscriptions: PushSubscriptionRecord[], message: ChannelMessage) {
+  const result = await sendPushToSubscriptions(subscriptions, {
+    title: message.title,
+    body: message.body,
+    url: pushClickPath(message),
+  });
+  if (result.sent > 0) {
+    await updateDelivery(id, "sent", 1, result.statusCode, null);
+    return;
+  }
+  await updateDelivery(id, "failed", 1, result.statusCode, result.error ?? "No device accepted the push");
+}
+
 /** Queue one delivery per configured channel, deduped by key. Network work is
  * detached from the request that triggered it. */
 export async function queueDeliveries(message: ChannelMessage, dedupeKey: string): Promise<number> {
@@ -223,6 +257,23 @@ export async function queueDeliveries(message: ChannelMessage, dedupeKey: string
   let queued = 0;
   for (const channel of channels) {
     if (!eventEnabled(channel, message.event)) continue;
+    if (channel.type === "webpush") {
+      // Nobody subscribed yet: skip quietly instead of recording a failure for
+      // every reminder. Membership is re-checked here, at send time.
+      const subscriptions = await subscriptionsForHouse(house.id);
+      if (!subscriptions.length) continue;
+      if (await deliveryRow(house.id, channel.id, dedupeKey)) continue;
+      const id = newId("dlv");
+      await run(
+        `INSERT INTO notification_deliveries
+          (id, house_id, channel_id, dedupe_key, event, status, attempts, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?)`,
+        [id, house.id, channel.id, dedupeKey, message.event, now(), now()],
+      );
+      queued++;
+      void await runPushDelivery(id, subscriptions, { ...message, houseName: house.name });
+      continue;
+    }
     if (await deliveryRow(house.id, channel.id, dedupeKey)) continue;
     const id = newId("dlv");
     await run(
