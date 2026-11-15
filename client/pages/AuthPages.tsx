@@ -138,7 +138,11 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
   };
 
   if (user) {
-    return <Navigate to="/" replace />;
+    // Keep the target a protected route asked for: the login form already
+    // navigates there, but this guard also covers passkey, 2FA and invite
+    // sign-ins. Without it the guard races the form and lands on Home.
+    const from = (location.state as { from?: string } | null)?.from;
+    return <Navigate to={from && from !== "/login" ? from : "/"} replace />;
   }
 
   return (
