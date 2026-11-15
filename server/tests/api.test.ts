@@ -11999,3 +11999,276 @@ describe("run-out forecasts", () => {
     assert.equal(result.data.items.find((item: any) => item.itemId === id).quantity, 1500);
   });
 });
+
+describe("web push reminders", async () => {
+  const { setPushSenderForTests } = await import("../services/web-push.js");
+  const { generateVAPIDKeys } = await import("web-push");
+  const vapid = generateVAPIDKeys();
+  const calls: { endpoint: string; payload: any }[] = [];
+  let senderMode: "ok" | "expired" = "ok";
+
+  // Config reads the environment lazily, so the keys only need to exist for the
+  // duration of this suite. The sender is replaced: no test talks to a real
+  // push service.
+  process.env.VAPID_PUBLIC_KEY = vapid.publicKey;
+  process.env.VAPID_PRIVATE_KEY = vapid.privateKey;
+  process.env.VAPID_SUBJECT = "mailto:push@example.com";
+  setPushSenderForTests(async (subscription, payload) => {
+    calls.push({ endpoint: subscription.endpoint, payload: JSON.parse(payload) });
+    if (senderMode === "expired") return { ok: false, statusCode: 410, expired: true, error: "Gone" };
+    return { ok: true, statusCode: 201, expired: false, error: null };
+  });
+
+  let ownerCookie = "";
+  let memberCookie = "";
+  let pushHouse = "";
+  let memberUserId = "";
+
+  const endpoint = (suffix: string) => `https://push.example.com/${suffix}`;
+  const subscribe = (url: string, auth: string = ownerCookie) =>
+    request("/api/push/subscribe", {
+      method: "POST",
+      auth,
+      body: { endpoint: url, keys: { p256dh: "BCplaceholderP256dhKey", auth: "auth-secret" } },
+    });
+  const unsubscribe = (url: string, auth: string) =>
+    request("/api/push/unsubscribe", { method: "POST", auth, body: { endpoint: url } });
+  const saveChannels = (lowStock: boolean) =>
+    request(`/api/houses/${pushHouse}`, {
+      method: "PATCH",
+      auth: ownerCookie,
+      body: {
+        settings: {
+          notifications: {
+            channels: [
+              {
+                id: "ch_push",
+                type: "webpush",
+                name: "Phones",
+                enabled: true,
+                events: { lowStock, expiring: true, weeklySummary: false, budget: true },
+              },
+            ],
+          },
+        },
+      },
+    });
+  const addLowItem = (name: string) =>
+    request(`/api/houses/${pushHouse}/items`, {
+      method: "POST",
+      auth: ownerCookie,
+      body: { name, unit: "pcs", reorderPoint: 5, initialStock: { quantity: 1 } },
+    });
+
+  before(async () => {
+    const owner = await request("/api/auth/register", {
+      method: "POST",
+      body: { name: "Push Owner", email: "push-owner@example.com", password: "test password" },
+    });
+    ownerCookie = owner.cookie!;
+    pushHouse = owner.data.houses[0].id;
+    const member = await request("/api/auth/register", {
+      method: "POST",
+      body: { name: "Push Member", email: "push-member@example.com", password: "test password" },
+    });
+    memberCookie = member.cookie!;
+    const invite = await request(`/api/houses/${pushHouse}/members`, {
+      method: "POST",
+      auth: ownerCookie,
+      body: { email: "push-member@example.com", role: "member" },
+    });
+    assert.equal(invite.status, 201);
+    await request(`/api/auth/invites/${invite.data.invite.code}/accept`, { method: "POST", auth: memberCookie });
+    const detail = await request(`/api/houses/${pushHouse}`, { auth: ownerCookie });
+    memberUserId = detail.data.members.find((entry: any) => entry.email === "push-member@example.com").id;
+  });
+
+  after(async () => {
+    setPushSenderForTests();
+    delete process.env.VAPID_PUBLIC_KEY;
+    delete process.env.VAPID_PRIVATE_KEY;
+    delete process.env.VAPID_SUBJECT;
+  });
+
+  it("stays off and refuses subscriptions until VAPID keys are configured", async () => {
+    const saved = {
+      publicKey: process.env.VAPID_PUBLIC_KEY,
+      privateKey: process.env.VAPID_PRIVATE_KEY,
+      subject: process.env.VAPID_SUBJECT,
+    };
+    delete process.env.VAPID_PUBLIC_KEY;
+    delete process.env.VAPID_PRIVATE_KEY;
+    delete process.env.VAPID_SUBJECT;
+    try {
+      const status = await request("/api/push", { auth: ownerCookie });
+      assert.equal(status.status, 200);
+      assert.equal(status.data.enabled, false);
+      assert.equal(status.data.publicKey, null);
+      const refused = await subscribe(endpoint("unconfigured"));
+      assert.equal(refused.status, 400);
+      assert.match(refused.data.error, /not configured/i);
+      assert.equal((await request("/api/push/test", { method: "POST", auth: ownerCookie, body: {} })).status, 400);
+    } finally {
+      process.env.VAPID_PUBLIC_KEY = saved.publicKey;
+      process.env.VAPID_PRIVATE_KEY = saved.privateKey;
+      process.env.VAPID_SUBJECT = saved.subject;
+    }
+  });
+
+  it("requires a session and validates the subscription", async () => {
+    assert.equal((await request("/api/push", { auth: "" })).status, 401);
+    assert.equal((await subscribe(endpoint("anonymous"), "")).status, 401);
+    const insecure = await subscribe("http://push.example.com/insecure");
+    assert.equal(insecure.status, 400);
+    assert.match(insecure.data.error, /https/);
+    const invalid = await subscribe("not a url");
+    assert.equal(invalid.status, 400);
+    const missingKeys = await request("/api/push/subscribe", {
+      method: "POST",
+      auth: ownerCookie,
+      body: { endpoint: endpoint("nokeys") },
+    });
+    assert.equal(missingKeys.status, 400);
+  });
+
+  it("stores one subscription per user and only its owner can remove it", async () => {
+    const url = endpoint("device-one");
+    const created = await subscribe(url);
+    assert.equal(created.status, 201);
+    const status = await request("/api/push", { auth: ownerCookie });
+    assert.equal(status.data.enabled, true);
+    assert.equal(status.data.publicKey, vapid.publicKey);
+    assert.equal(status.data.subscriptions.length, 1);
+    assert.equal((await request("/api/push", { auth: memberCookie })).data.subscriptions.length, 0);
+
+    const foreignRemoval = await unsubscribe(url, memberCookie);
+    assert.equal(foreignRemoval.status, 200);
+    assert.equal(foreignRemoval.data.removed, false);
+    assert.equal((await request("/api/push", { auth: ownerCookie })).data.subscriptions.length, 1);
+
+    const removed = await unsubscribe(url, ownerCookie);
+    assert.equal(removed.data.removed, true);
+    assert.equal((await request("/api/push", { auth: ownerCookie })).data.subscriptions.length, 0);
+  });
+
+  it("sends a test push with a minimal payload", async () => {
+    assert.equal((await request("/api/push/test", { method: "POST", auth: ownerCookie, body: {} })).status, 400);
+    const url = endpoint("test-device");
+    assert.equal((await subscribe(url)).status, 201);
+    calls.length = 0;
+    const sent = await request("/api/push/test", { method: "POST", auth: ownerCookie, body: {} });
+    assert.equal(sent.status, 200);
+    assert.equal(sent.data.sent, 1);
+    assert.equal(calls.length, 1);
+    assert.deepEqual(Object.keys(calls[0].payload).sort(), ["body", "title", "url"]);
+    assert.equal(calls[0].payload.url, "/notifications");
+    await unsubscribe(url, ownerCookie);
+  });
+
+  it("delivers to house members only, respects the channel switch and drops expired devices", async () => {
+    const ownerEndpoint = endpoint("owner-phone");
+    const memberEndpoint = endpoint("member-phone");
+    assert.equal((await subscribe(ownerEndpoint)).status, 201);
+    assert.equal((await subscribe(memberEndpoint, memberCookie)).status, 201);
+    assert.equal((await saveChannels(true)).status, 200);
+
+    calls.length = 0;
+    const first = await addLowItem("Push water");
+    assert.equal(first.status, 201);
+    assert.deepEqual(
+      calls.map((entry) => entry.endpoint).sort(),
+      [memberEndpoint, ownerEndpoint].sort(),
+    );
+    assert.ok(calls.every((entry) => entry.payload.url === `/items/${first.data.id}`));
+    const log = await request(`/api/houses/${pushHouse}/reminder-deliveries`, { auth: ownerCookie });
+    const firstDeliveries = log.data.deliveries.filter((entry: any) => entry.dedupeKey === `low:${first.data.id}`);
+    assert.equal(firstDeliveries.length, 1);
+    assert.equal(firstDeliveries[0].status, "sent");
+
+    // The per-channel low-stock switch turns push off for this house.
+    assert.equal((await saveChannels(false)).status, 200);
+    calls.length = 0;
+    await addLowItem("Push bread");
+    assert.equal(calls.length, 0);
+
+    // Re-enable, then remove the member: their device must not be pushed again.
+    assert.equal((await saveChannels(true)).status, 200);
+    const kicked = await request(`/api/houses/${pushHouse}/members/${memberUserId}`, {
+      method: "DELETE",
+      auth: ownerCookie,
+    });
+    assert.equal(kicked.status, 200);
+    calls.length = 0;
+    await addLowItem("Push rice");
+    assert.deepEqual(calls.map((entry) => entry.endpoint), [ownerEndpoint]);
+
+    // A 410 from the push service deletes the device instead of retrying forever.
+    senderMode = "expired";
+    calls.length = 0;
+    const gone = await addLowItem("Push salt");
+    assert.equal(gone.status, 201);
+    assert.ok(calls.length >= 1);
+    senderMode = "ok";
+    assert.equal((await request("/api/push", { auth: ownerCookie })).data.subscriptions.length, 0);
+    const afterExpiry = await request(`/api/houses/${pushHouse}/reminder-deliveries`, { auth: ownerCookie });
+    const failed = afterExpiry.data.deliveries.filter((entry: any) => entry.dedupeKey === `low:${gone.data.id}`);
+    assert.equal(failed.length, 1);
+    assert.equal(failed[0].status, "failed");
+
+    // With no subscribed device the channel is skipped quietly, not logged as failed.
+    calls.length = 0;
+    const quiet = await addLowItem("Push pepper");
+    assert.equal(quiet.status, 201);
+    assert.equal(calls.length, 0);
+    const quietLog = await request(`/api/houses/${pushHouse}/reminder-deliveries`, { auth: ownerCookie });
+    assert.equal(quietLog.data.deliveries.filter((entry: any) => entry.dedupeKey === `low:${quiet.data.id}`).length, 0);
+
+    await unsubscribe(memberEndpoint, memberCookie);
+    await request(`/api/houses/${pushHouse}`, { method: "DELETE", auth: ownerCookie });
+  });
+
+  it("tests the web push channel from the house settings without ringing other devices", async () => {
+    const house = await request("/api/houses", { method: "POST", auth: ownerCookie, body: { name: "Push settings house" } });
+    const houseId = house.data.id;
+    const saved = await request(`/api/houses/${houseId}`, {
+      method: "PATCH",
+      auth: ownerCookie,
+      body: {
+        settings: {
+          notifications: {
+            channels: [
+              {
+                id: "ch_push",
+                type: "webpush",
+                name: "Phones",
+                enabled: true,
+                events: { lowStock: true, expiring: true, weeklySummary: false, budget: true },
+              },
+            ],
+          },
+        },
+      },
+    });
+    assert.equal(saved.status, 200);
+    assert.equal(saved.data.settings.notifications.channels[0].type, "webpush");
+    assert.equal(
+      (await request(`/api/houses/${houseId}/notifications/test`, { method: "POST", auth: ownerCookie, body: { channelId: "ch_push" } })).status,
+      400,
+      "no device subscribed yet",
+    );
+    const url = endpoint("settings-device");
+    assert.equal((await subscribe(url)).status, 201);
+    calls.length = 0;
+    const tested = await request(`/api/houses/${houseId}/notifications/test`, {
+      method: "POST",
+      auth: ownerCookie,
+      body: { channelId: "ch_push" },
+    });
+    assert.equal(tested.status, 200);
+    assert.equal(tested.data.ok, true);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].endpoint, url);
+    await unsubscribe(url, ownerCookie);
+    await request(`/api/houses/${houseId}`, { method: "DELETE", auth: ownerCookie });
+  });
+});
