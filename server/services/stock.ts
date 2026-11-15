@@ -2,6 +2,7 @@ import { all, get, now, newId, run, tx } from "../db.js";
 import { ApiError } from "../http.js";
 import { convert, pricePerUnit, round } from "../units.js";
 import { syncItemLowStock } from "./notifications.js";
+import { publishLive } from "./live.js";
 
 export interface StockOpts {
   itemId: string;
@@ -103,7 +104,7 @@ export async function addStock(opts: StockOpts): Promise<string> {
   if (!Number.isFinite(opts.quantity) || opts.quantity <= 0) {
     throw new ApiError(400, "Quantity must be greater than zero");
   }
-  return await tx(async () => {
+  const movementId = await tx(async () => {
     const item = await itemRow(opts.itemId, opts.houseId);
     const qty = baseQuantity(item, opts.quantity, opts.unit);
     const price =
@@ -153,6 +154,8 @@ export async function addStock(opts: StockOpts): Promise<string> {
     });
     return movementId;
   });
+  publishLive(opts.houseId, { type: "stock", id: opts.itemId, actorUserId: opts.userId });
+  return movementId;
 }
 
 /** Consume stock FIFO (oldest expiry first, then oldest purchase). */
@@ -165,7 +168,7 @@ export async function removeStock(opts: StockOpts & { waste?: boolean }): Promis
   );
   if (requested <= 0) throw new ApiError(400, "Quantity must be greater than zero");
 
-  return await tx(async () => {
+  const movementId = await tx(async () => {
     const item = await itemRow(opts.itemId, opts.houseId);
     const available = await itemQuantity(item.id);
     if (available < requested) {
@@ -217,6 +220,8 @@ export async function removeStock(opts: StockOpts & { waste?: boolean }): Promis
       note: opts.note ?? null,
     });
   });
+  publishLive(opts.houseId, { type: "stock", id: opts.itemId, actorUserId: opts.userId });
+  return movementId;
 }
 
 /** Set an absolute quantity (stock count correction). */
@@ -230,7 +235,7 @@ export async function setStock(opts: StockOpts & { target: number }): Promise<st
   if (delta === 0) {
     throw new ApiError(400, "Stock already matches that count");
   }
-  return await tx(async () => {
+  const movementId = await tx(async () => {
     if (delta > 0) {
       const price =
         opts.unitPrice != null && Number.isFinite(opts.unitPrice) && opts.unitPrice > 0
@@ -299,6 +304,8 @@ export async function setStock(opts: StockOpts & { target: number }): Promise<st
       note: opts.note ?? null,
     });
   });
+  publishLive(opts.houseId, { type: "stock", id: opts.itemId, actorUserId: opts.userId });
+  return movementId;
 }
 
 /** Move stock between locations inside the same house. */
@@ -308,7 +315,7 @@ export async function moveStock(opts: { itemId: string; houseId: string; userId:
   }
   await validateLocation(opts.houseId, opts.fromLocationId);
   await validateLocation(opts.houseId, opts.toLocationId);
-  return await tx(async () => {
+  const movementId = await tx(async () => {
     const item = await itemRow(opts.itemId, opts.houseId);
     const requested = baseQuantity(item, opts.quantity, opts.unit);
     if (requested <= 0) throw new ApiError(400, "Quantity must be greater than zero");
@@ -361,6 +368,8 @@ export async function moveStock(opts: { itemId: string; houseId: string; userId:
       note: opts.note ?? null,
     });
   });
+  publishLive(opts.houseId, { type: "stock", id: opts.itemId, actorUserId: opts.userId });
+  return movementId;
 }
 
 /**
@@ -376,7 +385,7 @@ export async function revertReceiptStock(opts: {
   userId: string;
   reason?: string;
 }): Promise<{ itemId: string; itemName: string; unit: string; added: number; reverted: number; consumed: number }[]> {
-  return await tx(async () => {
+  const results = await tx(async () => {
     const lots = await all<any>(
       "SELECT * FROM stock_lots WHERE receipt_id = ? AND house_id = ? ORDER BY created_at ASC",
       [opts.receiptId, opts.houseId],
@@ -426,6 +435,10 @@ export async function revertReceiptStock(opts: {
     }
     return results;
   });
+  for (const entry of results) {
+    publishLive(opts.houseId, { type: "stock", id: entry.itemId, actorUserId: opts.userId });
+  }
+  return results;
 }
 
 export async function afterStockChange(itemId: string) {
