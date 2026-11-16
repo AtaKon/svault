@@ -36,6 +36,9 @@ import { uploader } from "../upload.js";
 import { removeUnreferencedUploads } from "../services/upload-cleanup.js";
 import { assertImageReference, UploadOwnershipError } from "../services/receipt-scans.js";
 import { RESERVED_ATTRIBUTE_KEYS, type Role } from "../../shared/types.js";
+import { searchPosoKanei, PosoKaneiUnavailableError } from "../services/posokanei.js";
+import { limitRequests, limiters, userOrIp } from "../rate-limit.js";
+import { posoKaneiUnavailableApiError } from "./insights.js";
 
 export const inventoryRoutes = Router();
 inventoryRoutes.use(requireAuth);
@@ -1494,6 +1497,41 @@ itemRoutes.delete(
 );
 
 /* ------------------------------------------------------ OpenFoodFacts links */
+
+itemRoutes.get("/:itemId/posokanei", handler(async (req, res) => {
+  const { item, houseId } = await itemAccess(req);
+  const mapping = item.off_code ? await get<any>("SELECT product_id, product_name FROM posokanei_mappings WHERE house_id = ? AND off_project = ? AND off_code = ?", [houseId, item.off_project ?? "off", item.off_code]) : null;
+  res.json({ mapping: mapping ? { id: mapping.product_id, name: mapping.product_name } : null });
+}));
+
+itemRoutes.get("/:itemId/posokanei/search", limitRequests(limiters.posokaneiRequests, userOrIp, "Too many price lookup requests. Try again later."), handler(async (req, res) => {
+  const { item, houseId } = await itemAccess(req, "member");
+  const house = await get<any>("SELECT settings FROM houses WHERE id = ?", [houseId]);
+  if (parseJson<Record<string, any>>(house?.settings, {}).priceLookup?.enabled !== true) throw new ApiError(404, "External price lookup is disabled");
+  if (!item.off_code) throw new ApiError(400, "Link an OpenFoodFacts product first");
+  const query = String(req.query.q ?? "").trim();
+  if (query.length < 2 || query.length > 120) throw new ApiError(400, "Enter a search of 2 to 120 characters");
+  const page = intParam(req.query.page, 1, 100);
+  try { res.json(await searchPosoKanei(query, page, req.user!.id)); }
+  catch (error) { if (error instanceof PosoKaneiUnavailableError) throw posoKaneiUnavailableApiError(error, res); throw error; }
+}));
+
+itemRoutes.put("/:itemId/posokanei", handler(async (req, res) => {
+  const { item, houseId } = await itemAccess(req, "member");
+  const house = await get<any>("SELECT settings FROM houses WHERE id = ?", [houseId]);
+  if (parseJson<Record<string, any>>(house?.settings, {}).priceLookup?.enabled !== true) throw new ApiError(404, "External price lookup is disabled");
+  if (!item.off_code) throw new ApiError(400, "Link an OpenFoodFacts product first");
+  const body = parseBody(z.object({ id: z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/), name: z.string().trim().min(1).max(180) }), req.body);
+  await run(`INSERT INTO posokanei_mappings (house_id, off_project, off_code, product_id, product_name) VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT (house_id, off_project, off_code) DO UPDATE SET product_id = excluded.product_id, product_name = excluded.product_name`, [houseId, item.off_project ?? "off", item.off_code, body.id, body.name]);
+  res.json({ mapping: body });
+}));
+
+itemRoutes.delete("/:itemId/posokanei", handler(async (req, res) => {
+  const { item, houseId } = await itemAccess(req, "member");
+  if (item.off_code) await run("DELETE FROM posokanei_mappings WHERE house_id = ? AND off_project = ? AND off_code = ?", [houseId, item.off_project ?? "off", item.off_code]);
+  res.json({ ok: true });
+}));
 
 itemRoutes.get(
   "/:itemId/off",

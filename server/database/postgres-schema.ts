@@ -533,6 +533,15 @@ CREATE TABLE IF NOT EXISTS catalog_products (
   PRIMARY KEY (project, code)
 );
 
+CREATE TABLE IF NOT EXISTS posokanei_mappings (
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  off_project TEXT NOT NULL,
+  off_code TEXT NOT NULL,
+  product_id TEXT NOT NULL,
+  product_name TEXT NOT NULL,
+  PRIMARY KEY (house_id, off_project, off_code)
+);
+
 CREATE TABLE IF NOT EXISTS catalog_mappings (
   id TEXT PRIMARY KEY,
   house_id TEXT NOT NULL DEFAULT '',
@@ -1161,6 +1170,7 @@ export const POSTGRES_TABLE_ORDER = [
   "vendor_catalog",
   "product_aliases",
   "catalog_products",
+  "posokanei_mappings",
   "catalog_mappings",
   "user_off_accounts",
   "off_consents",

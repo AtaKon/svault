@@ -45,6 +45,7 @@ export function ShoppingPage() {
   const [priceHints, setPriceHints] = useState<Record<string, ShoppingPriceHint>>({});
   const [externalOffers, setExternalOffers] = useState<Record<string, ExternalShoppingOffer[]>>({});
   const [lookupBarcodes, setLookupBarcodes] = useState<Record<string, string>>({});
+  const [lookedUp, setLookedUp] = useState<Record<string, boolean>>({});
   const [lookingUp, setLookingUp] = useState<string | null>(null);
   const lookupInProgress = useRef(false);
   const lastForeignNotice = useRef(0);
@@ -128,6 +129,7 @@ export function ShoppingPage() {
       await api(`/api/houses/${house.id}/shopping?checked=1`, { method: "DELETE" });
       setExternalOffers({});
       setLookupBarcodes({});
+      setLookedUp({});
       await load();
     } catch (err) {
       toast.error(err instanceof Error ? t(err.message) : t("Could not clear checked lines"));
@@ -142,6 +144,7 @@ export function ShoppingPage() {
       return;
     }
     await api(`/api/houses/${house.id}/shopping/${item.id}`, { method: "PATCH", body: { checked: false } });
+    setLookedUp((current) => { const next = { ...current }; delete next[item.id]; return next; });
     setExternalOffers((current) => {
       const next = { ...current };
       delete next[item.id];
@@ -157,6 +160,7 @@ export function ShoppingPage() {
 
   const remove = async (item: ShoppingItem) => {
     await api(`/api/houses/${house.id}/shopping/${item.id}`, { method: "DELETE" });
+    setLookedUp((current) => { const next = { ...current }; delete next[item.id]; return next; });
     setExternalOffers((current) => {
       const next = { ...current };
       delete next[item.id];
@@ -175,11 +179,12 @@ export function ShoppingPage() {
     lookupInProgress.current = true;
     setLookingUp(line.id);
     try {
-      const result = await api<{ barcode: string; offers: ExternalShoppingOffer[] }>(
+      const result = await api<{ barcode: string | null; offers: ExternalShoppingOffer[] }>(
         `/api/houses/${house.id}/insights/shopping-offers/${line.id}`,
       );
       setExternalOffers((current) => ({ ...current, [line.id]: result.offers }));
-      setLookupBarcodes((current) => ({ ...current, [line.id]: result.barcode }));
+      setLookupBarcodes((current) => ({ ...current, [line.id]: result.barcode ?? "" }));
+      setLookedUp((current) => ({ ...current, [line.id]: true }));
       if (!result.offers.length) toast.push(t("No matching retailer offers were found"), "info");
     } catch (err) {
       toast.error(err instanceof Error ? t(err.message) : t("Could not check prices"));
@@ -289,6 +294,9 @@ export function ShoppingPage() {
                             {t("Check offers")}
                           </Button>
                         )}
+                        {!item.checked && item.itemId && house.settings?.priceLookup?.enabled === true && can("member") && (
+                          <Link to={`/items/${item.itemId}`} className="text-brand underline">{t("Manage product match")}</Link>
+                        )}
                       </div>
                       {!item.checked && externalOffers[item.id]?.length ? (
                         <div className="mt-1 space-y-1">
@@ -317,9 +325,9 @@ export function ShoppingPage() {
                           </div>
                         </div>
                       ) : null}
-                      {!item.checked && lookupBarcodes[item.id] && !externalOffers[item.id]?.length ? (
+                      {!item.checked && lookedUp[item.id] && !externalOffers[item.id]?.length ? (
                         <div className="mt-1 text-[10px] text-muted">
-                          {t("Barcode queried: {barcode}", { barcode: lookupBarcodes[item.id] })} · {t("No matching retailer offers were found")}
+                          {lookupBarcodes[item.id] && <>{t("Barcode queried: {barcode}", { barcode: lookupBarcodes[item.id] })} · </>}{t("No matching retailer offers were found")}
                         </div>
                       ) : null}
                     </div>

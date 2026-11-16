@@ -1,10 +1,28 @@
 import type { ExternalShoppingOffer } from "../../shared/types.js";
 import { RateLimitError, limiters } from "../rate-limit.js";
+import { Impit, type RequestInit as ImpitRequestInit } from "impit";
 
 const API_BASE = "https://api.posokanei.gov.gr";
 const CACHE_MS = 30 * 60_000;
 const MAX_BODY_BYTES = 1_000_000;
 const TIMEOUT_MS = 6_000;
+const browserClient = new Impit({ browser: "chrome", timeout: TIMEOUT_MS, followRedirects: false });
+const POSOKANEI_HEADERS = {
+  accept: "application/json",
+  "accept-language": "en-GB,en-US;q=0.9,en;q=0.8",
+  origin: "https://posokanei.gov.gr",
+  referer: "https://posokanei.gov.gr/",
+  "x-app-version": "1.0.0",
+  "x-platform": "flutter-web",
+};
+
+// Impit supplies Chrome's TLS and HTTP fingerprint. Adapt its streaming
+// response to the Fetch API so the existing size and timeout checks apply.
+const browserFetch: typeof fetch = async (input, init) => {
+  const response = await browserClient.fetch(input, init as ImpitRequestInit);
+  const body = [204, 205, 304].includes(response.status) ? null : response.body;
+  return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+};
 
 interface CachedLookup {
   expiresAt: number;
@@ -15,6 +33,16 @@ export class PosoKaneiUnavailableError extends Error {
   constructor(message: string, readonly retryAfterSeconds?: number) {
     super(message);
   }
+}
+
+export interface PosoKaneiProduct {
+  id: string;
+  name: string;
+  brand: string | null;
+  category: string | null;
+  unit: string | null;
+  quantity: number | null;
+  offers: ExternalShoppingOffer[];
 }
 
 function finitePositive(value: unknown): number | null {
@@ -186,7 +214,7 @@ function consumeDefaultGlobalRateLimit() {
 /** A factory keeps the HTTP client deterministic and lets unit tests supply a
  * fake fetcher without changing process-wide network behavior. */
 export function createPosoKaneiClient(
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = browserFetch,
   consumeRateLimit: ConsumeRateLimit = consumeDefaultRateLimit,
   consumeGlobalRateLimit: ConsumeGlobalRateLimit = consumeDefaultGlobalRateLimit,
   timeoutMs = TIMEOUT_MS,
@@ -218,11 +246,11 @@ export function createPosoKaneiClient(
 
   /** Fetch a product only by an exact barcode. The destination is a fixed,
    * HTTPS-only upstream; callers cannot provide URLs, query strings or headers. */
-  async function lookupPosoKaneiBarcode(barcode: string, userId: string): Promise<ExternalShoppingOffer[]> {
-    const code = barcode.trim();
-    if (!/^\d{8,14}$/.test(code)) return [];
+  async function lookupProduct(value: string, userId: string, mode: "barcode" | "product"): Promise<ExternalShoppingOffer[]> {
+    const code = value.trim();
+    if (mode === "barcode" ? !/^\d{8,14}$/.test(code) : !/^[a-zA-Z0-9_-]{1,64}$/.test(code)) return [];
     const now = Date.now();
-    const requestKey = JSON.stringify([userId, code]);
+    const requestKey = JSON.stringify([userId, mode, code]);
     const cached = cache.get(requestKey);
     if (cached && cached.expiresAt > now) return cached.offers;
     if (upstreamBlockedUntil > now) {
@@ -257,14 +285,11 @@ export function createPosoKaneiClient(
 
       try {
         const timeoutSignal = AbortSignal.timeout(timeoutMs);
-        const url = new URL(`/products/barcode/${encodeURIComponent(code)}`, API_BASE);
+        const url = new URL(mode === "barcode" ? `/products/barcode/${encodeURIComponent(code)}` : `/products/${encodeURIComponent(code)}`, API_BASE);
         url.searchParams.set("countries", "GR");
         const response = await fetcher(url, {
           method: "GET",
-          headers: {
-            accept: "application/json",
-            "user-agent": "SVault/1.2 (self-hosted household inventory; https://github.com/AtaKon/svault)",
-          },
+          headers: POSOKANEI_HEADERS,
           redirect: "error",
           signal: timeoutSignal,
         });
@@ -297,6 +322,9 @@ export function createPosoKaneiClient(
           if (error instanceof PosoKaneiUnavailableError) throw error;
           throw new PosoKaneiUnavailableError("PosoKanei returned an invalid response body");
         }
+        if (mode === "product" && (!payload || typeof payload !== "object" || (payload as Record<string, unknown>).id !== code)) {
+          throw new PosoKaneiUnavailableError("PosoKanei returned an unexpected product");
+        }
         const fetchedAt = new Date().toISOString();
         const offers = parseOffers(payload, fetchedAt);
         cacheResult(requestKey, { expiresAt: Date.now() + CACHE_MS, offers });
@@ -317,8 +345,55 @@ export function createPosoKaneiClient(
     return request;
   }
 
-  return { lookupPosoKaneiBarcode };
+  const lookupPosoKaneiBarcode = (barcode: string, userId: string) => lookupProduct(barcode, userId, "barcode");
+  const lookupPosoKaneiProduct = (id: string, userId: string) => lookupProduct(id, userId, "product");
+
+  async function searchPosoKanei(query: string, page: number, userId: string): Promise<{ products: PosoKaneiProduct[]; hasNext: boolean }> {
+    if (upstreamBlockedUntil > Date.now()) throw new PosoKaneiUnavailableError("PosoKanei asked SVault to slow down. Try again later.", Math.ceil((upstreamBlockedUntil - Date.now()) / 1000));
+    const userKey = `user:${userId}`;
+    const userWait = limiters.posokaneiSearch.hit(userKey);
+    if (userWait) throw new RateLimitError(userWait, "Price lookup limit reached. Try again later.");
+    const globalWait = limiters.posokaneiSearchGlobal.hit("all");
+    if (globalWait) { limiters.posokaneiSearch.refund(userKey); throw new RateLimitError(globalWait, "Price lookup limit reached. Try again later."); }
+    let throttled = false;
+    try {
+      const timeoutSignal = AbortSignal.timeout(timeoutMs);
+      const response = await fetcher(new URL("/products/search", API_BASE), {
+        method: "POST",
+        headers: { ...POSOKANEI_HEADERS, "content-type": "application/json" },
+        body: JSON.stringify({ title: query, page, page_size: 20, sort_by: "name", sort_order: "asc" }),
+        redirect: "error", signal: timeoutSignal,
+      });
+      if (response.status === 429) {
+        throttled = true;
+        const wait = retryAfter(response);
+        upstreamBlockedUntil = Date.now() + wait * 1000;
+        await cancelBody(response);
+        throw new PosoKaneiUnavailableError("PosoKanei asked SVault to slow down. Try again later.", wait);
+      }
+      if (!response.ok || !(response.headers.get("content-type") ?? "").toLowerCase().includes("application/json")) {
+        await cancelBody(response);
+        throw new PosoKaneiUnavailableError("PosoKanei returned an unexpected response");
+      }
+      const payload = JSON.parse(await readBoundedBody(response, timeoutSignal));
+      if (!payload || !Array.isArray(payload.products)) throw new PosoKaneiUnavailableError("PosoKanei returned an unexpected response");
+      const fetchedAt = new Date().toISOString();
+      const products: PosoKaneiProduct[] = payload.products.slice(0, 20).flatMap((raw: any) => {
+        if (!raw || typeof raw !== "object" || !/^[a-zA-Z0-9_-]{1,64}$/.test(raw.id ?? "") || !safeString(raw.name, 180)) return [];
+        return [{ id: raw.id, name: safeString(raw.name, 180)!, brand: safeString(raw.brand), category: safeString(raw.category), unit: safeString(raw.unit, 20), quantity: finitePositive(raw.unit_quantity), offers: Array.isArray(raw.retailer_prices) ? parseOffers(raw, fetchedAt).slice(0, 3) : [] }];
+      });
+      return { products, hasNext: payload.has_next === true };
+    } catch (error) {
+      if (!throttled) { limiters.posokaneiSearch.refund(userKey); limiters.posokaneiSearchGlobal.refund("all"); }
+      if (error instanceof PosoKaneiUnavailableError) throw error;
+      throw new PosoKaneiUnavailableError("PosoKanei could not be reached. Try again later.");
+    }
+  }
+
+  return { lookupPosoKaneiBarcode, lookupPosoKaneiProduct, searchPosoKanei };
 }
 
 const defaultClient = createPosoKaneiClient();
 export const lookupPosoKaneiBarcode = defaultClient.lookupPosoKaneiBarcode;
+export const lookupPosoKaneiProduct = defaultClient.lookupPosoKaneiProduct;
+export const searchPosoKanei = defaultClient.searchPosoKanei;
