@@ -4,7 +4,7 @@ import { requireAuth, roleAtLeast } from "../auth.js";
 import { ApiError, handler, parseBody, requireHouse } from "../http.js";
 import { limitRequests, limiters, userOrIp } from "../rate-limit.js";
 import { all, get, lockHouseholdLedger, newId, now, parseJson, tx } from "../db.js";
-import { lookupPosoKaneiBarcode, PosoKaneiUnavailableError } from "../services/posokanei.js";
+import { lookupPosoKaneiBarcode, lookupPosoKaneiProduct, PosoKaneiUnavailableError } from "../services/posokanei.js";
 import { shoppingRow } from "../services/shopping.js";
 import {
   householdInsight,
@@ -46,10 +46,21 @@ export function createShoppingOffersHandler(
     if (!line || line.checked) throw new ApiError(404, "Open shopping line not found");
     if (!line.item_id) throw new ApiError(400, "Link this shopping line to an inventory item first");
     const item = await get<any>(
-      "SELECT id FROM items WHERE id = ? AND house_id = ? AND archived = 0",
+      "SELECT id, off_code, off_project FROM items WHERE id = ? AND house_id = ? AND archived = 0",
       [line.item_id, houseId],
     );
     if (!item) throw new ApiError(404, "Inventory item not found");
+    const mapping = item.off_code ? await get<any>("SELECT product_id FROM posokanei_mappings WHERE house_id = ? AND off_project = ? AND off_code = ?", [houseId, item.off_project ?? "off", item.off_code]) : null;
+    if (mapping) {
+      try {
+        const offers = await lookupPosoKaneiProduct(mapping.product_id, req.user!.id);
+        res.json({ barcode: null, productId: mapping.product_id, offers });
+        return;
+      } catch (error) {
+        if (error instanceof PosoKaneiUnavailableError) throw posoKaneiUnavailableApiError(error, res);
+        throw error;
+      }
+    }
     const barcodes = await all<any>(
       "SELECT code FROM item_barcodes WHERE item_id = ? AND house_id = ? ORDER BY created_at, id",
       [item.id, houseId],

@@ -24,6 +24,7 @@ import { Icon, type IconName } from "@/components/icons";
 import { BarcodeScanner } from "@/components/BarcodeScanner";
 import { NutritionRows, basisLabel } from "@/components/Nutrition";
 import { OffProductPicker } from "@/components/OffProductPicker";
+import { PosoKaneiMapping } from "@/components/PosoKaneiMapping";
 import { ZoomableImage } from "@/components/ZoomableImage";
 import { StockDialog } from "@/components/ItemCard";
 import { ItemLoansCard } from "@/components/Loans";
@@ -981,6 +982,8 @@ export function ItemPage() {
               </>
             )}
           </Card>
+
+          {item.off && house.settings?.priceLookup?.enabled === true && <PosoKaneiMapping item={item} canEdit={can("member")} />}
 
           <Card className="p-4">
             <div className="mb-1 flex items-center justify-between gap-2">

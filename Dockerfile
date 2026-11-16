@@ -10,7 +10,7 @@ FROM deps AS build
 ARG APP_BUILD_VERSION=""
 WORKDIR /app
 COPY . .
-RUN SV_VERSION="$APP_BUILD_VERSION" npm run build && npm prune --omit=dev --omit=optional
+RUN SV_VERSION="$APP_BUILD_VERSION" npm run build && npm prune --omit=dev --include=optional
 
 FROM node:22-bookworm-slim AS runtime
 ARG APP_BUILD_VERSION=""

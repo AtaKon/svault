@@ -1207,15 +1207,18 @@ Mounted at `/api/houses/:houseId/insights`. Reads need `viewer`; changing settin
 | `POST` | `/price-alerts/scan` | Create in-app reminders for those alerts (one per item per month) and return `{ created, alerts }`. |
 | `GET` | `/use-it-up?days=7` | Expiring lots grouped by item plus recipes that use them. Defaults to `useItUpDays` from settings. |
 | `GET` | `/shopping-prices` | Best recent unit price and shop for each open shopping-list line. |
-| `GET` | `/shopping-offers/:lineId` | `member+`; when enabled by a house admin, looks up exact-barcode Greek retailer prices and promotions from PosoKanei. Results do not change SVault purchase history. |
+| `GET` | `/shopping-offers/:lineId` | `member+`; when enabled, looks up Greek retailer offers using a household PosoKanei mapping or the item's barcode. Results do not change SVault purchase history. |
 | `GET` | `/household` | Per-member `paid`, `share` and `balance`, settle-up transfers, and the recent receipts used. |
 | `PATCH` | `/settings` | Set `{ monthlyBudget, priceAlertPercent, useItUpDays }`; stored in the house settings. |
 
 Price lookup is off by default. A house admin enables it with `PATCH /api/houses/:houseId` and
 `{ "settings": { "priceLookup": { "enabled": true } } }`. `priceLookup` accepts exactly
-`{ "enabled": boolean }`. Members trigger one lookup at a time from
-the shopping list. SVault sends the oldest valid barcode attached to the linked item to the fixed
-HTTPS PosoKanei API and returns that barcode with the offers so the UI can show which code was checked.
+`{ "enabled": boolean }`. Members can search for and select a PosoKanei product from an inventory
+item linked to Open Food Facts. The mapping is scoped to the house and Open Food Facts project and
+code, and can be replaced or removed. Members trigger one lookup at a time from the shopping list.
+SVault sends the mapped product ID, or if there is no mapping, the oldest valid barcode attached to
+the item, to the fixed HTTPS PosoKanei API. Barcode lookups return the barcode with the offers;
+mapped lookups return `barcode: null` and `productId`.
 Successful results are cached per user in memory for 30 minutes; unknown barcodes are cached for 10 minutes.
 The cache is per process, holds at most 500 user/barcode pairs, and is cleared when the server restarts.
 Neither is written to purchase history. Successful lookups and upstream 429 attempts are limited to
@@ -1233,7 +1236,16 @@ reads. This request guard is separate from the upstream quota.
 | Other upstream or malformed-product failure | Refunded | Refunded; that barcode pauses for 15 seconds |
 | Rejected by cooldown or instance quota | None | None |
 
+Mapping endpoints are `GET /api/items/:itemId/posokanei` (viewer), `GET
+/api/items/:itemId/posokanei/search?q=...&page=1`, `PUT /api/items/:itemId/posokanei` with
+`{ "id": "...", "name": "..." }`, and `DELETE /api/items/:itemId/posokanei` (member). Search
+and mapping require an Open Food Facts link; search and save also require price lookup to be enabled.
+Search sends the entered product name to PosoKanei and is limited to 20 per user and 60 per instance
+per 15 minutes, separately from product lookups. The endpoint request guard also applies to search.
+
 PosoKanei does not publish an API contract, so responses may change or be unavailable.
+The server uses the `impit` Chrome-compatible HTTP client for these requests. Source installations
+must include npm's optional dependencies so the native binary for the host platform is installed.
 Valid product responses with an empty retailer-price list return no offers; responses missing required
 product fields are treated as malformed upstream responses and return an unavailable error.
 

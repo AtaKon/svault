@@ -152,6 +152,8 @@ export const limiters = {
   /** Unofficial upstream barcode price lookups are tightly rate limited. */
   posokanei: new RateLimiter("POSOKANEI", { max: 2, windowMs: 15 * 60_000 }),
   posokaneiGlobal: new RateLimiter("POSOKANEI_GLOBAL", { max: 3, windowMs: 15 * 60_000 }),
+  posokaneiSearch: new RateLimiter("POSOKANEI_SEARCH", { max: 20, windowMs: 15 * 60_000 }),
+  posokaneiSearchGlobal: new RateLimiter("POSOKANEI_SEARCH_GLOBAL", { max: 60, windowMs: 15 * 60_000 }),
   /** Bounds authenticated validation/cache requests before they reach the lookup service. */
   posokaneiRequests: new RateLimiter("POSOKANEI_REQUESTS", { max: 60, windowMs: 10 * 60_000 }),
   /** Global search runs on every debounced keystroke; still bounded per user. */
