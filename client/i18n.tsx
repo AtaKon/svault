@@ -7,6 +7,9 @@ import { buildDynamicMatcher, matchDynamicTranslation } from "@shared/i18n";
 export type Language = "en" | "el";
 
 const EL: Record<string, string> = {
+  "No products found": "Δεν βρέθηκαν προϊόντα",
+  "Link an OpenFoodFacts product first": "Σύνδεσε πρώτα ένα προϊόν OpenFoodFacts",
+  "Enter a search of 2 to 120 characters": "Εισάγαγε αναζήτηση από 2 έως 120 χαρακτήρες",
   "Allow house members to search PosoKanei and check Greek retailer prices and promotions for linked products.": "Επίτρεψε στα μέλη να αναζητούν στο PosoKanei και να ελέγχουν τιμές και προσφορές ελληνικών καταστημάτων για συνδεδεμένα προϊόντα.",
   "Members can search for a PosoKanei product and link it to an OpenFoodFacts product. Searches send the entered text to PosoKanei; checking offers sends the selected product ID or the item's barcode over HTTPS. Results are cached and rate limited. No store accounts, location, or purchase history are sent. PosoKanei's API is undocumented and may change or become unavailable. Offers are informational and may not reflect local availability or checkout prices.": "Τα μέλη μπορούν να αναζητήσουν ένα προϊόν PosoKanei και να το συνδέσουν με ένα προϊόν OpenFoodFacts. Οι αναζητήσεις στέλνουν το κείμενο στο PosoKanei· ο έλεγχος προσφορών στέλνει το αναγνωριστικό του επιλεγμένου προϊόντος ή το barcode μέσω HTTPS. Τα αποτελέσματα αποθηκεύονται προσωρινά και ισχύουν όρια αιτημάτων. Δεν αποστέλλονται λογαριασμοί καταστημάτων, τοποθεσία ή ιστορικό αγορών. Το API του PosoKanei δεν τεκμηριώνεται και μπορεί να αλλάξει ή να μη λειτουργεί. Οι προσφορές είναι ενδεικτικές και μπορεί να διαφέρουν από την τοπική διαθεσιμότητα ή την τιμή στο ταμείο.",
   "Could not load PosoKanei mapping": "Δεν ήταν δυνατή η φόρτωση της αντιστοίχισης PosoKanei",
