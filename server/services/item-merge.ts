@@ -18,7 +18,7 @@ import type {
  * `merged_into` set instead of being deleted, so history stays readable.
  */
 
-/** Every table with an `item_id` column that the merge must re-point. */
+/** Tables counted in the merge preview. moveSource handles each table explicitly. */
 export const ITEM_MERGE_TABLES = [
   "item_documents",
   "item_barcodes",

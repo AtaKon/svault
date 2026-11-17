@@ -1254,7 +1254,8 @@ its `scope`), `GET /api/items/:itemId/posokanei/search?q=...&page=1` (member; an
 and `DELETE /api/items/:itemId/posokanei` (member). Omitting `scope` preserves the old behavior:
 an OpenFoodFacts-linked item writes the shared match, while an item without OpenFoodFacts writes an
 item match. `scope: "off"` requires an OpenFoodFacts link. Delete removes a direct item match when
-one exists; an item with no direct match removes the shared match, exactly as before. Search and save
+one exists; an item with no direct match removes the shared match, exactly as before. Delete returns
+`{ ok: true, mapping }`, where `mapping` is the remaining effective match or null. Search and save
 require price lookup to be enabled. Search sends the entered product name to PosoKanei and is limited
 to 20 per user and 60 per instance per 15 minutes, separately from product lookups. The endpoint
 request guard also applies to search.

@@ -1559,7 +1559,7 @@ itemRoutes.put("/:itemId/posokanei", handler(async (req, res) => {
 itemRoutes.delete("/:itemId/posokanei", handler(async (req, res) => {
   const { item, houseId } = await itemAccess(req, "member");
   await removePosoKaneiMapping(houseId, item);
-  res.json({ ok: true });
+  res.json({ ok: true, mapping: await effectivePosoKaneiMapping(houseId, item) });
 }));
 
 itemRoutes.get(

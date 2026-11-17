@@ -201,7 +201,9 @@ describe("PosoKanei item mappings", () => {
     assert.equal((await request(`/api/items/${offItemAId}/posokanei`)).data.mapping.id, "pk_item");
     assert.equal((await request(`/api/items/${offItemBId}/posokanei`)).data.mapping.id, "pk_shared");
 
-    assert.equal((await request(`/api/items/${offItemAId}/posokanei`, { method: "DELETE" })).status, 200);
+    const removedOverride = await request(`/api/items/${offItemAId}/posokanei`, { method: "DELETE" });
+    assert.equal(removedOverride.status, 200);
+    assert.deepEqual(removedOverride.data.mapping, { id: "pk_shared", name: "Shared product", scope: "off" });
     assert.deepEqual(
       (await request(`/api/items/${offItemAId}/posokanei`)).data.mapping,
       { id: "pk_shared", name: "Shared product", scope: "off" },

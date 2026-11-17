@@ -51,7 +51,7 @@ export function PosoKaneiMapping({ item, canEdit }: { item: ItemDetail; canEdit:
   };
   const unlink = async () => {
     setBusy(true);
-    try { await api(`/api/items/${item.id}/posokanei`, { method: "DELETE" }); const result = await api<{ mapping: Mapping | null }>(`/api/items/${item.id}/posokanei`); setMapping(result.mapping); setConfirmSharedRemoval(false); toast.success(t(result.mapping ? "Item match removed; shared match remains" : "PosoKanei link removed")); }
+    try { const result = await api<{ mapping: Mapping | null }>(`/api/items/${item.id}/posokanei`, { method: "DELETE" }); setMapping(result.mapping); setConfirmSharedRemoval(false); toast.success(t(result.mapping ? "Item match removed; shared match remains" : "PosoKanei link removed")); }
     catch (err) { toast.error(err instanceof Error ? t(err.message) : t("Could not remove PosoKanei mapping")); }
     finally { setBusy(false); }
   };

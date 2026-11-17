@@ -259,10 +259,10 @@ export async function rememberPosoKaneiRetailers(
     for (const [key, name] of missing) {
       const vendorId = inferVendorId(name, indexes, catalog);
       await session.run(
-      `INSERT INTO posokanei_retailers (house_id, retailer_key, retailer_name, vendor_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)
-       ON CONFLICT (house_id, retailer_key) DO NOTHING`,
-      [houseId, key, name, vendorId, timestamp, timestamp],
+        `INSERT INTO posokanei_retailers (house_id, retailer_key, retailer_name, vendor_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT (house_id, retailer_key) DO NOTHING`,
+        [houseId, key, name, vendorId, timestamp, timestamp],
       );
     }
   }, { writeLock: true });
