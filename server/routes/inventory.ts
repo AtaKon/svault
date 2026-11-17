@@ -1524,7 +1524,8 @@ itemRoutes.get("/:itemId/posokanei/search", limitRequests(limiters.posokaneiRequ
   const page = intParam(req.query.page, 1, 100);
   try {
     const result = await searchPosoKanei(query, page, req.user!.id);
-    await rememberPosoKaneiRetailers(houseId, result.products.flatMap((product) => product.offers));
+    try { await rememberPosoKaneiRetailers(houseId, result.products.flatMap((product) => product.offers)); }
+    catch (error) { console.warn("Could not record PosoKanei retailers", error); }
     const filterContext = await createPosoKaneiOfferFilter(houseId, settings);
     const products = [];
     for (const product of result.products) {

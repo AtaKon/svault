@@ -562,10 +562,23 @@ describe("item merge", () => {
     assert.equal(refused.status, 403);
   });
 
+  it("keeps the surviving item's direct match when both items have one", async () => {
+    const target = await createItem({ name: "Match target", unit: "pcs" });
+    const source = await createItem({ name: "Match source", unit: "pcs" });
+    for (const [id, product] of [[target.id, "target-product"], [source.id, "source-product"]]) {
+      await run("INSERT INTO posokanei_item_mappings (house_id, item_id, product_id, product_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)", [houseId, id, product, product, "2026-01-01", "2026-01-01"]);
+    }
+    const merged = await request(`/api/houses/${houseId}/items/${target.id}/merge`, { method: "POST", body: { sourceIds: [source.id] } });
+    assert.equal(merged.status, 200, JSON.stringify(merged.data));
+    const rows = await all<any>("SELECT item_id, product_id FROM posokanei_item_mappings WHERE house_id = ? AND item_id IN (?, ?)", [houseId, target.id, source.id]);
+    assert.deepEqual(rows.map((row) => ({ ...row })), [{ item_id: target.id, product_id: "target-product" }]);
+  });
+
   it("rolls the whole transaction back when a write fails", async () => {
     if (databaseKind() !== "sqlite") return;
     const target = await createItem({ name: "Merge rollback target", unit: "pcs", initialStock: { quantity: 2 } });
     const source = await createItem({ name: "Merge rollback source", unit: "pcs", initialStock: { quantity: 3 } });
+    await run("INSERT INTO posokanei_item_mappings (house_id, item_id, product_id, product_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)", [houseId, source.id, "rollback-product", "Rollback", "2026-01-01", "2026-01-01"]);
     await exec(
       "CREATE TRIGGER merge_failure BEFORE UPDATE OF merged_into ON items WHEN NEW.merged_into IS NOT NULL BEGIN SELECT RAISE(ABORT, 'forced merge failure'); END;",
     );
@@ -584,5 +597,7 @@ describe("item merge", () => {
     assert.equal(sourceDetail.quantity, 3, "the source keeps its batches");
     assert.equal(sourceDetail.archived, false);
     assert.equal(sourceDetail.mergedInto, null);
+    assert.equal((await get<any>("SELECT product_id FROM posokanei_item_mappings WHERE house_id = ? AND item_id = ?", [houseId, source.id]))?.product_id, "rollback-product");
+    assert.equal(await get("SELECT product_id FROM posokanei_item_mappings WHERE house_id = ? AND item_id = ?", [houseId, target.id]), undefined);
   });
 });

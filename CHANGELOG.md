@@ -33,7 +33,8 @@ All notable changes to SVault are documented here. The format follows
   mapped or unmapped in price settings; unmatched labels are reported instead of guessed. Inventory items
   without an Open Food Facts link can now be matched to a PosoKanei product directly. Existing shared
   Open Food Facts matches keep working, an item-specific match takes precedence, and a house with no
-  accessible shops keeps the previous unfiltered behavior.
+  accessible shops keeps the previous unfiltered behavior. When merging two items with direct matches,
+  the surviving item's match is kept and the other match is discarded.
 - Undo for the last stock action: a short toast with an **Undo** button after any successful add, use,
   waste, count or move, plus an **Undo** action on the newest rows of an item's history. Undo appends a
   compensating movement to the ledger (nothing is edited or deleted), restores the exact batches a FIFO

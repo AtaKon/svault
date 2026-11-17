@@ -95,7 +95,8 @@ export function createShoppingOffersHandler(
 
     // Record every retailer label before filtering so unknown shops stay
     // discoverable in Settings even when their offers are hidden here.
-    await rememberPosoKaneiRetailers(houseId, offers);
+    try { await rememberPosoKaneiRetailers(houseId, offers); }
+    catch (error) { console.warn("Could not record PosoKanei retailers", error); }
     const filterContext = await createPosoKaneiOfferFilter(houseId, settings);
     const visibleOffers = await filterPosoKaneiOffers(filterContext, offers);
     const filter = posoKaneiOfferFilterSummary(filterContext);

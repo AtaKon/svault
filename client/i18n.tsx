@@ -7,6 +7,9 @@ import { buildDynamicMatcher, matchDynamicTranslation } from "@shared/i18n";
 export type Language = "en" | "el";
 
 const EL: Record<string, string> = {
+  "Remove shared match?": "Να αφαιρεθεί η κοινή αντιστοίχιση;",
+  "This removes the PosoKanei match for every item linked to this OpenFoodFacts product in this house.": "Αυτό αφαιρεί την αντιστοίχιση PosoKanei για κάθε αντικείμενο που συνδέεται με αυτό το προϊόν OpenFoodFacts στο σπίτι.",
+  "Item match removed; shared match remains": "Η αντιστοίχιση του αντικειμένου αφαιρέθηκε· η κοινή αντιστοίχιση παραμένει",
   "No products found": "Δεν βρέθηκαν προϊόντα",
   "Link an OpenFoodFacts product first": "Σύνδεσε πρώτα ένα προϊόν OpenFoodFacts",
   "Enter a search of 2 to 120 characters": "Εισάγαγε αναζήτηση από 2 έως 120 χαρακτήρες",

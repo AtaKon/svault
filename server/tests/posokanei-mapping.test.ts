@@ -12,7 +12,7 @@ process.env.SVAI_API_KEY = "";
 process.env.SV_REGISTRATION = "open";
 
 const { app } = await import("../index.js");
-const { closeDb, get, run } = await import("../db.js");
+const { closeDb, databaseKind, exec, get, run } = await import("../db.js");
 const { createShoppingOffersHandler } = await import("../routes/insights.js");
 
 let server: import("node:http").Server;
@@ -354,6 +354,18 @@ describe("PosoKanei retailer filters", () => {
       method: "PUT", body: { retailer: "Lidl", vendorId: lidlVendorId },
     });
     assert.equal(restored.status, 200);
+  });
+
+  it("still returns offers if retailer discovery cannot write", async () => {
+    if (databaseKind() !== "sqlite") return;
+    await exec("CREATE TRIGGER fail_retailer_discovery BEFORE INSERT ON posokanei_retailers BEGIN SELECT RAISE(ABORT, 'discovery failure'); END;");
+    try {
+      const result = await callOffers(barcodeLineId, async () => [offer("A new retailer")]);
+      assert.deepEqual(result.offers, []);
+      assert.deepEqual(result.retailerFilter.unknownRetailers, ["A new retailer"]);
+    } finally {
+      await exec("DROP TRIGGER IF EXISTS fail_retailer_discovery");
+    }
   });
 
   it("filters product-ID lookups through the item mapping", async () => {

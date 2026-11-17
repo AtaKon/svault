@@ -1,4 +1,4 @@
-import { all, get, now, run } from "../db.js";
+import { all, get, now, run, tx } from "../db.js";
 import { ApiError } from "../http.js";
 import type { ExternalShoppingOffer } from "../../shared/types.js";
 import {
@@ -255,15 +255,17 @@ export async function rememberPosoKaneiRetailers(
   const [vendors, catalog] = await Promise.all([loadHouseVendors(houseId), catalogEntries("GR")]);
   const indexes = vendorIndexes(vendors, catalog);
   const timestamp = now();
-  for (const [key, name] of missing) {
-    const vendorId = inferVendorId(name, indexes, catalog);
-    await run(
+  await tx(async (session) => {
+    for (const [key, name] of missing) {
+      const vendorId = inferVendorId(name, indexes, catalog);
+      await session.run(
       `INSERT INTO posokanei_retailers (house_id, retailer_key, retailer_name, vendor_id, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT (house_id, retailer_key) DO NOTHING`,
       [houseId, key, name, vendorId, timestamp, timestamp],
-    );
-  }
+      );
+    }
+  }, { writeLock: true });
 }
 
 export async function listPosoKaneiRetailerSettings(

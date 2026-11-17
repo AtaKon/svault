@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "@/api";
-import { Button, Card, Input, Sheet } from "@/components/ui";
+import { Button, Card, ConfirmDialog, Input, Sheet } from "@/components/ui";
 import { useI18n } from "@/i18n";
 import { useToast } from "@/components/toast";
 import type { ExternalShoppingOffer, ItemDetail } from "@shared/types";
@@ -13,6 +13,7 @@ export function PosoKaneiMapping({ item, canEdit }: { item: ItemDetail; canEdit:
   const toast = useToast();
   const [mapping, setMapping] = useState<Mapping | null>(null);
   const [open, setOpen] = useState(false);
+  const [confirmSharedRemoval, setConfirmSharedRemoval] = useState(false);
   const [query, setQuery] = useState("");
   const [products, setProducts] = useState<Product[]>([]);
   const [page, setPage] = useState(1);
@@ -50,7 +51,7 @@ export function PosoKaneiMapping({ item, canEdit }: { item: ItemDetail; canEdit:
   };
   const unlink = async () => {
     setBusy(true);
-    try { await api(`/api/items/${item.id}/posokanei`, { method: "DELETE" }); const result = await api<{ mapping: Mapping | null }>(`/api/items/${item.id}/posokanei`); setMapping(result.mapping); toast.success(t("PosoKanei link removed")); }
+    try { await api(`/api/items/${item.id}/posokanei`, { method: "DELETE" }); const result = await api<{ mapping: Mapping | null }>(`/api/items/${item.id}/posokanei`); setMapping(result.mapping); setConfirmSharedRemoval(false); toast.success(t(result.mapping ? "Item match removed; shared match remains" : "PosoKanei link removed")); }
     catch (err) { toast.error(err instanceof Error ? t(err.message) : t("Could not remove PosoKanei mapping")); }
     finally { setBusy(false); }
   };
@@ -70,9 +71,10 @@ export function PosoKaneiMapping({ item, canEdit }: { item: ItemDetail; canEdit:
       {error && !open && <p className="text-xs text-danger">{error}</p>}
       {canEdit && <div className="flex gap-2">
         <Button size="sm" variant="secondary" onClick={() => { setQuery(item.off?.product?.name || item.name); setProducts([]); setSearched(false); setError(null); setOpen(true); }}>{t(mapping ? "Change match" : "Find a match")}</Button>
-        {mapping && <Button size="sm" variant="ghost" loading={busy} onClick={() => void unlink()}>{t("Remove match")}</Button>}
+        {mapping && <Button size="sm" variant="ghost" loading={busy} onClick={() => mapping.scope === "off" ? setConfirmSharedRemoval(true) : void unlink()}>{t("Remove match")}</Button>}
       </div>}
     </Card>
+    <ConfirmDialog open={confirmSharedRemoval} onClose={() => setConfirmSharedRemoval(false)} onConfirm={() => void unlink()} loading={busy} title={t("Remove shared match?")} body={t("This removes the PosoKanei match for every item linked to this OpenFoodFacts product in this house.")} confirmLabel={t("Remove match")} />
     <Sheet open={open} onClose={() => setOpen(false)} title={t("Find a PosoKanei product")} description={t("Compare the name, brand and size with your product before selecting a match.")}>
       <p className="mb-3 text-xs text-muted">{t("Your product")}: {productName}{productDetails ? ` · ${productDetails}` : ""}</p>
       <form className="flex gap-2" onSubmit={(event) => { event.preventDefault(); void search(); }}>
