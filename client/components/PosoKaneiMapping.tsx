@@ -6,7 +6,7 @@ import { useToast } from "@/components/toast";
 import type { ExternalShoppingOffer, ItemDetail } from "@shared/types";
 
 type Product = { id: string; name: string; brand: string | null; category: string | null; unit: string | null; quantity: number | null; offers: ExternalShoppingOffer[] };
-type Mapping = { id: string; name: string };
+type Mapping = { id: string; name: string; scope: "item" | "off" };
 
 export function PosoKaneiMapping({ item, canEdit }: { item: ItemDetail; canEdit: boolean }) {
   const { t } = useI18n();
@@ -23,7 +23,6 @@ export function PosoKaneiMapping({ item, canEdit }: { item: ItemDetail; canEdit:
 
   useEffect(() => {
     setMapping(null);
-    if (!item.off) return;
     let active = true;
     api<{ mapping: Mapping | null }>(`/api/items/${item.id}/posokanei`)
       .then((result) => { if (active) setMapping(result.mapping); })
@@ -44,30 +43,38 @@ export function PosoKaneiMapping({ item, canEdit }: { item: ItemDetail; canEdit:
   const select = async (product: Product) => {
     setBusy(true);
     try {
-      const result = await api<{ mapping: Mapping }>(`/api/items/${item.id}/posokanei`, { method: "PUT", body: { id: product.id, name: product.name } });
+      const result = await api<{ mapping: Mapping }>(`/api/items/${item.id}/posokanei`, { method: "PUT", body: { id: product.id, name: product.name, ...(mapping ? { scope: mapping.scope } : {}) } });
       setMapping(result.mapping); setOpen(false); toast.success(t("PosoKanei product linked"));
     } catch (err) { setError(err instanceof Error ? t(err.message) : t("Could not save PosoKanei mapping")); }
     finally { setBusy(false); }
   };
   const unlink = async () => {
     setBusy(true);
-    try { await api(`/api/items/${item.id}/posokanei`, { method: "DELETE" }); setMapping(null); toast.success(t("PosoKanei link removed")); }
+    try { await api(`/api/items/${item.id}/posokanei`, { method: "DELETE" }); const result = await api<{ mapping: Mapping | null }>(`/api/items/${item.id}/posokanei`); setMapping(result.mapping); toast.success(t("PosoKanei link removed")); }
     catch (err) { toast.error(err instanceof Error ? t(err.message) : t("Could not remove PosoKanei mapping")); }
     finally { setBusy(false); }
   };
+  const productName = item.off?.product?.name || item.name;
+  const productDetails = [item.off?.product?.brand, item.off?.product?.quantity].filter(Boolean).join(" · ");
+  const sharedOff = Boolean(item.off) && mapping?.scope !== "item";
   return <>
     <Card className="space-y-2 p-4">
       <h2 className="font-display text-lg">PosoKanei</h2>
-      <p className="text-xs text-muted">{t("Match this OpenFoodFacts product with a PosoKanei product to check Greek supermarket offers. The match is shared with this house.")}</p>
+      <p className="text-xs text-muted">{t(sharedOff
+        ? "Match this OpenFoodFacts product with a PosoKanei product to check Greek supermarket offers. The match is shared with this house."
+        : "Match this inventory product with a PosoKanei product to check Greek supermarket offers. The match is only for this item.")}</p>
       {mapping && <p className="text-sm font-medium">{mapping.name}</p>}
+      {mapping && <p className="text-[11px] text-muted">{t(mapping.scope === "off"
+        ? "Shared with every item linked to the same OpenFoodFacts product."
+        : "Applies only to this item.")}</p>}
       {error && !open && <p className="text-xs text-danger">{error}</p>}
       {canEdit && <div className="flex gap-2">
         <Button size="sm" variant="secondary" onClick={() => { setQuery(item.off?.product?.name || item.name); setProducts([]); setSearched(false); setError(null); setOpen(true); }}>{t(mapping ? "Change match" : "Find a match")}</Button>
         {mapping && <Button size="sm" variant="ghost" loading={busy} onClick={() => void unlink()}>{t("Remove match")}</Button>}
       </div>}
     </Card>
-    <Sheet open={open} onClose={() => setOpen(false)} title={t("Find a PosoKanei product")} description={t("Compare the name, brand and size with your OpenFoodFacts product before selecting a match.")}>
-      <p className="mb-3 text-xs text-muted">{t("Your product")}: {item.off?.product?.name || item.name} · {[item.off?.product?.brand, item.off?.product?.quantity].filter(Boolean).join(" · ")}</p>
+    <Sheet open={open} onClose={() => setOpen(false)} title={t("Find a PosoKanei product")} description={t("Compare the name, brand and size with your product before selecting a match.")}>
+      <p className="mb-3 text-xs text-muted">{t("Your product")}: {productName}{productDetails ? ` · ${productDetails}` : ""}</p>
       <form className="flex gap-2" onSubmit={(event) => { event.preventDefault(); void search(); }}>
         <Input value={query} maxLength={120} onChange={(event) => setQuery(event.target.value)} placeholder={t("Product name or brand")} />
         <Button type="submit" loading={busy} disabled={busy}>{t("Search")}</Button>

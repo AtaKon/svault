@@ -142,7 +142,10 @@ Mounted at `/api/houses`.
       "apiKey": "sk-..."
     },
     "notifications": { "lowStock": true, "expiryDays": 7 },
-    "priceLookup": { "enabled": true }
+    "priceLookup": {
+      "enabled": true,
+      "accessibleVendorIds": ["vnd_shop_id"]
+    }
   }
 }
 ```
@@ -1207,18 +1210,27 @@ Mounted at `/api/houses/:houseId/insights`. Reads need `viewer`; changing settin
 | `POST` | `/price-alerts/scan` | Create in-app reminders for those alerts (one per item per month) and return `{ created, alerts }`. |
 | `GET` | `/use-it-up?days=7` | Expiring lots grouped by item plus recipes that use them. Defaults to `useItUpDays` from settings. |
 | `GET` | `/shopping-prices` | Best recent unit price and shop for each open shopping-list line. |
-| `GET` | `/shopping-offers/:lineId` | `member+`; when enabled, looks up Greek retailer offers using a household PosoKanei mapping or the item's barcode. Results do not change SVault purchase history. |
+| `GET` | `/shopping-offers/:lineId` | `member+`; when enabled, looks up Greek retailer offers using the item's PosoKanei match, a household OpenFoodFacts match, or the item's barcode. Results do not change SVault purchase history. |
 | `GET` | `/household` | Per-member `paid`, `share` and `balance`, settle-up transfers, and the recent receipts used. |
 | `PATCH` | `/settings` | Set `{ monthlyBudget, priceAlertPercent, useItUpDays }`; stored in the house settings. |
 
 Price lookup is off by default. A house admin enables it with `PATCH /api/houses/:houseId` and
-`{ "settings": { "priceLookup": { "enabled": true } } }`. `priceLookup` accepts exactly
-`{ "enabled": boolean }`. Members can search for and select a PosoKanei product from an inventory
-item linked to Open Food Facts. The mapping is scoped to the house and Open Food Facts project and
-code, and can be replaced or removed. Members trigger one lookup at a time from the shopping list.
-SVault sends the mapped product ID, or if there is no mapping, the oldest valid barcode attached to
-the item, to the fixed HTTPS PosoKanei API. Barcode lookups return the barcode with the offers;
-mapped lookups return `barcode: null` and `productId`.
+`{ "settings": { "priceLookup": { "enabled": true } } }`. `priceLookup` accepts
+`{ "enabled": boolean, "accessibleVendorIds"?: string[] }`; the IDs must belong to receipt shops in
+the same house. An empty or missing `accessibleVendorIds` keeps the original behavior and shows
+every retailer. Members can search for and select a PosoKanei product from any inventory item. The
+match is stored either:
+
+- **Per item** (`scope: "item"`) when the item has no OpenFoodFacts link, or when a caller explicitly
+  asks for an item match. Only that inventory item uses it.
+- **Per OpenFoodFacts product** (`scope: "off"`) for items linked to OpenFoodFacts. This keeps the
+  original shared behavior: every item linked to the same house, project and code uses the same
+  match.
+
+An item match takes precedence over a shared match. Members trigger one lookup at a time from the
+shopping list. SVault sends the effective mapped product ID, or if there is no mapping, the oldest
+valid barcode attached to the item, to the fixed HTTPS PosoKanei API. Barcode lookups return the
+barcode with the offers; mapped lookups return `barcode: null` and `productId`.
 Successful results are cached per user in memory for 30 minutes; unknown barcodes are cached for 10 minutes.
 The cache is per process, holds at most 500 user/barcode pairs, and is cleared when the server restarts.
 Neither is written to purchase history. Successful lookups and upstream 429 attempts are limited to
@@ -1236,12 +1248,28 @@ reads. This request guard is separate from the upstream quota.
 | Other upstream or malformed-product failure | Refunded | Refunded; that barcode pauses for 15 seconds |
 | Rejected by cooldown or instance quota | None | None |
 
-Mapping endpoints are `GET /api/items/:itemId/posokanei` (viewer), `GET
-/api/items/:itemId/posokanei/search?q=...&page=1`, `PUT /api/items/:itemId/posokanei` with
-`{ "id": "...", "name": "..." }`, and `DELETE /api/items/:itemId/posokanei` (member). Search
-and mapping require an Open Food Facts link; search and save also require price lookup to be enabled.
-Search sends the entered product name to PosoKanei and is limited to 20 per user and 60 per instance
-per 15 minutes, separately from product lookups. The endpoint request guard also applies to search.
+Mapping endpoints are `GET /api/items/:itemId/posokanei` (viewer; returns the effective match and
+its `scope`), `GET /api/items/:itemId/posokanei/search?q=...&page=1` (member; any inventory item),
+`PUT /api/items/:itemId/posokanei` with `{ "id": "...", "name": "...", "scope"?: "item" | "off" }`,
+and `DELETE /api/items/:itemId/posokanei` (member). Omitting `scope` preserves the old behavior:
+an OpenFoodFacts-linked item writes the shared match, while an item without OpenFoodFacts writes an
+item match. `scope: "off"` requires an OpenFoodFacts link. Delete removes a direct item match when
+one exists; an item with no direct match removes the shared match, exactly as before. Search and save
+require price lookup to be enabled. Search sends the entered product name to PosoKanei and is limited
+to 20 per user and 60 per instance per 15 minutes, separately from product lookups. The endpoint
+request guard also applies to search.
+
+Retailer matching keeps PosoKanei's labels separate from a house's receipt shops. `GET
+/api/houses/:houseId/posokanei/retailers` (viewer) returns receipt shops, discovered retailer
+labels, `accessibleVendorIds` and `filterActive`. `PUT /api/houses/:houseId/posokanei/retailers`
+(admin) takes `{ "retailer": "...", "vendorId": "vnd_..." | null }` and stores an explicit mapping;
+`DELETE /api/houses/:houseId/posokanei/retailers/:retailerKey` (admin) removes it. Retailer labels
+are discovered whenever offers are read. An unambiguous name or vendor-catalogue match is stored
+automatically; anything else stays `unknown` until an admin maps it. When at least one accessible
+shop is configured, both product-ID and barcode lookups keep only offers whose retailer resolves to
+one of those shops. Unknown labels and known-but-inaccessible shops are hidden and reported in
+`retailerFilter` (`hiddenOffers`, `unknownRetailers`). With no accessible shops, no filter runs and
+the response keeps its original `{ barcode | productId, offers }` shape, including every retailer.
 
 PosoKanei does not publish an API contract, so responses may change or be unavailable.
 The server uses the `impit` Chrome-compatible HTTP client for these requests. Source installations

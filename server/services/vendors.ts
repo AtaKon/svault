@@ -235,11 +235,17 @@ export async function catalogCountries(): Promise<{ code: string; name: string }
   return rows.map((row) => ({ code: row.country, name: CATALOG_COUNTRIES[row.country] ?? row.country }));
 }
 
-/** Match a merchant name against the catalogue and return the canonical entry. */
-export async function canonicalVendor(value: string | null | undefined, country = "GR"): Promise<CatalogEntry | null> {
+/**
+ * Match a merchant name against an already-loaded catalogue. Callers that
+ * resolve many names share one catalogue read instead of one per name.
+ */
+export function canonicalVendorFrom(
+  value: string | null | undefined,
+  entries: CatalogEntry[],
+): CatalogEntry | null {
   if (!value) return null;
   let best: { entry: CatalogEntry; length: number } | null = null;
-  for (const entry of await catalogEntries(country)) {
+  for (const entry of entries) {
     for (const alias of [entry.name, ...entry.aliases]) {
       if (!matchesAlias(value, alias)) continue;
       const length = normalizeVendorName(alias).length;
@@ -247,6 +253,12 @@ export async function canonicalVendor(value: string | null | undefined, country 
     }
   }
   return best?.entry ?? null;
+}
+
+/** Match a merchant name against the catalogue and return the canonical entry. */
+export async function canonicalVendor(value: string | null | undefined, country = "GR"): Promise<CatalogEntry | null> {
+  if (!value) return null;
+  return canonicalVendorFrom(value, await catalogEntries(country));
 }
 
 /** Look for a known shop in the header of a receipt. */

@@ -22,6 +22,7 @@ import type {
 export const ITEM_MERGE_TABLES = [
   "item_documents",
   "item_barcodes",
+  "posokanei_item_mappings",
   "espresso_shots",
   "stock_lots",
   "stock_movements",
@@ -350,6 +351,16 @@ async function moveSource(
   }
 
   await run("UPDATE item_documents SET item_id = ? WHERE item_id = ?", [target.id, source.id]);
+  // A direct PosoKanei match belongs to the item that survives. Keep the
+  // target's own match when both items have one.
+  if (await get("SELECT item_id FROM posokanei_item_mappings WHERE house_id = ? AND item_id = ?", [target.house_id, source.id])) {
+    const targetMapping = await get("SELECT item_id FROM posokanei_item_mappings WHERE house_id = ? AND item_id = ?", [target.house_id, target.id]);
+    if (targetMapping) {
+      await run("DELETE FROM posokanei_item_mappings WHERE house_id = ? AND item_id = ?", [target.house_id, source.id]);
+    } else {
+      await run("UPDATE posokanei_item_mappings SET item_id = ? WHERE house_id = ? AND item_id = ?", [target.id, target.house_id, source.id]);
+    }
+  }
   await run("UPDATE espresso_shots SET item_id = ? WHERE item_id = ?", [target.id, source.id]);
   await run("UPDATE receipt_lines SET item_id = ? WHERE item_id = ?", [target.id, source.id]);
   await run("UPDATE product_aliases SET item_id = ? WHERE item_id = ?", [target.id, source.id]);

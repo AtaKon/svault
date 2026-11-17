@@ -256,6 +256,10 @@ describe("item merge", () => {
       ["bar_merge_test", source.id, houseId, "5209999999991", stamp],
     );
     await run(
+      "INSERT INTO posokanei_item_mappings (house_id, item_id, product_id, product_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+      [houseId, source.id, "pk_merge_test", "Merge product", stamp, stamp],
+    );
+    await run(
       "INSERT INTO espresso_shots (id, house_id, item_id, brewed_at, rating, tags, created_at, updated_at) VALUES (?, ?, ?, ?, ?, '[]', ?, ?)",
       ["esp_merge_test", houseId, source.id, stamp, 4, stamp, stamp],
     );
@@ -315,6 +319,11 @@ describe("item merge", () => {
     assert.equal(recipeLink.item_id, target.id);
     const receiptLink = await get<any>("SELECT item_id FROM receipt_lines WHERE id = ?", ["rln_merge_test"]);
     assert.equal(receiptLink.item_id, target.id);
+    const posoKaneiLink = await get<any>(
+      "SELECT item_id FROM posokanei_item_mappings WHERE house_id = ? AND product_id = ?",
+      [houseId, "pk_merge_test"],
+    );
+    assert.equal(posoKaneiLink.item_id, target.id, "a direct PosoKanei match follows the surviving item");
     const notification = await get<any>("SELECT id FROM notifications WHERE id = ? AND resolved_at IS NULL", ["ntf_merge_test"]);
     assert.equal(notification, undefined, "source reminders must not survive the merge");
 

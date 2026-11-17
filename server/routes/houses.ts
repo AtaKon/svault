@@ -160,9 +160,22 @@ houseRoutes.patch(
     const incomingSettings = body.settings ? { ...body.settings } : undefined;
     if (incomingSettings?.priceLookup !== undefined) {
       incomingSettings.priceLookup = parseBody(
-        z.object({ enabled: z.boolean() }).strict(),
+        z.object({
+          enabled: z.boolean(),
+          accessibleVendorIds: z.array(z.string().trim().min(1).max(60)).max(100).optional(),
+        }).strict(),
         incomingSettings.priceLookup,
       );
+      const accessibleVendorIds = incomingSettings.priceLookup.accessibleVendorIds;
+      if (accessibleVendorIds?.length) {
+        const vendorIds = new Set(
+          (await all<{ id: string }>("SELECT id FROM vendors WHERE house_id = ?", [houseId])).map((row) => row.id),
+        );
+        if (accessibleVendorIds.some((id: string) => !vendorIds.has(id))) {
+          throw new ApiError(400, "Shop does not exist in this house");
+        }
+        incomingSettings.priceLookup.accessibleVendorIds = [...new Set(accessibleVendorIds)];
+      }
     }
     const settings = incomingSettings
       ? mergeSettings(parseJson<Record<string, any>>(current.settings, {}), incomingSettings)

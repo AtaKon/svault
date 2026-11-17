@@ -21,7 +21,14 @@ import { Icon } from "@/components/icons";
 import { useToast } from "@/components/toast";
 import { liveActorName, subscribeLive, useLiveRefresh } from "@/live";
 import { qty, shortDate, todayInput } from "@/format";
-import type { ExternalShoppingOffer, Item, Location, ShoppingItem, ShoppingPriceHint } from "@shared/types";
+import type {
+  ExternalOfferRetailerFilter,
+  ExternalShoppingOffer,
+  Item,
+  Location,
+  ShoppingItem,
+  ShoppingPriceHint,
+} from "@shared/types";
 
 interface Groups {
   [key: string]: ShoppingItem[];
@@ -44,6 +51,7 @@ export function ShoppingPage() {
   const [checkTarget, setCheckTarget] = useState<ShoppingItem | null>(null);
   const [priceHints, setPriceHints] = useState<Record<string, ShoppingPriceHint>>({});
   const [externalOffers, setExternalOffers] = useState<Record<string, ExternalShoppingOffer[]>>({});
+  const [offerFilters, setOfferFilters] = useState<Record<string, ExternalOfferRetailerFilter>>({});
   const [lookupBarcodes, setLookupBarcodes] = useState<Record<string, string>>({});
   const [lookedUp, setLookedUp] = useState<Record<string, boolean>>({});
   const [lookingUp, setLookingUp] = useState<string | null>(null);
@@ -150,6 +158,11 @@ export function ShoppingPage() {
       delete next[item.id];
       return next;
     });
+    setOfferFilters((current) => {
+      const next = { ...current };
+      delete next[item.id];
+      return next;
+    });
     setLookupBarcodes((current) => {
       const next = { ...current };
       delete next[item.id];
@@ -162,6 +175,11 @@ export function ShoppingPage() {
     await api(`/api/houses/${house.id}/shopping/${item.id}`, { method: "DELETE" });
     setLookedUp((current) => { const next = { ...current }; delete next[item.id]; return next; });
     setExternalOffers((current) => {
+      const next = { ...current };
+      delete next[item.id];
+      return next;
+    });
+    setOfferFilters((current) => {
       const next = { ...current };
       delete next[item.id];
       return next;
@@ -179,10 +197,20 @@ export function ShoppingPage() {
     lookupInProgress.current = true;
     setLookingUp(line.id);
     try {
-      const result = await api<{ barcode: string | null; offers: ExternalShoppingOffer[] }>(
+      const result = await api<{
+        barcode: string | null;
+        offers: ExternalShoppingOffer[];
+        retailerFilter?: ExternalOfferRetailerFilter;
+      }>(
         `/api/houses/${house.id}/insights/shopping-offers/${line.id}`,
       );
       setExternalOffers((current) => ({ ...current, [line.id]: result.offers }));
+      setOfferFilters((current) => {
+        const next = { ...current };
+        if (result.retailerFilter) next[line.id] = result.retailerFilter;
+        else delete next[line.id];
+        return next;
+      });
       setLookupBarcodes((current) => ({ ...current, [line.id]: result.barcode ?? "" }));
       setLookedUp((current) => ({ ...current, [line.id]: true }));
       if (!result.offers.length) toast.push(t("No matching retailer offers were found"), "info");
@@ -330,6 +358,14 @@ export function ShoppingPage() {
                           {lookupBarcodes[item.id] && <>{t("Barcode queried: {barcode}", { barcode: lookupBarcodes[item.id] })} · </>}{t("No matching retailer offers were found")}
                         </div>
                       ) : null}
+                      {!item.checked && offerFilters[item.id]?.active && offerFilters[item.id].hiddenOffers > 0 ? (
+                        <div className="mt-1 text-[10px] text-muted">
+                          {t("Some offers are hidden by the accessible-shop settings.")}
+                          {offerFilters[item.id].unknownRetailers.length > 0 && (
+                            <> · {t("Unmatched retailers")}: {offerFilters[item.id].unknownRetailers.join(", ")}</>
+                          )}
+                        </div>
+                      ) : null}
                     </div>
                     <IconButton icon="pencil" label={t("Edit {item}", { item: item.name })} onClick={() => setEditTarget(item)} disabled={!can("member")} />
                     <IconButton icon="trash" label={t("Remove {item}", { item: item.name })} onClick={() => void remove(item)} disabled={!can("member")} />
@@ -366,6 +402,11 @@ export function ShoppingPage() {
               delete next[editedLineId];
               return next;
             });
+            setOfferFilters((current) => {
+              const next = { ...current };
+              delete next[editedLineId];
+              return next;
+            });
             setLookupBarcodes((current) => {
               const next = { ...current };
               delete next[editedLineId];
@@ -387,6 +428,11 @@ export function ShoppingPage() {
           const checkedId = checkTarget?.id;
           if (checkedId) {
             setExternalOffers((current) => {
+              const next = { ...current };
+              delete next[checkedId];
+              return next;
+            });
+            setOfferFilters((current) => {
               const next = { ...current };
               delete next[checkedId];
               return next;

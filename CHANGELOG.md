@@ -27,6 +27,13 @@ All notable changes to SVault are documented here. The format follows
 
 ### Added
 
+- **PosoKanei retailer and product matching.** Offers are now filtered by receipt shops an admin marks as
+  accessible, so a shopping line only shows shops the house can reach. PosoKanei retailer labels are
+  discovered from offers, matched automatically to a house shop when the name is unambiguous, and can be
+  mapped or unmapped in price settings; unmatched labels are reported instead of guessed. Inventory items
+  without an Open Food Facts link can now be matched to a PosoKanei product directly. Existing shared
+  Open Food Facts matches keep working, an item-specific match takes precedence, and a house with no
+  accessible shops keeps the previous unfiltered behavior.
 - Undo for the last stock action: a short toast with an **Undo** button after any successful add, use,
   waste, count or move, plus an **Undo** action on the newest rows of an item's history. Undo appends a
   compensating movement to the ledger (nothing is edited or deleted), restores the exact batches a FIFO

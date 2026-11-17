@@ -983,7 +983,7 @@ export function ItemPage() {
             )}
           </Card>
 
-          {item.off && house.settings?.priceLookup?.enabled === true && <PosoKaneiMapping item={item} canEdit={can("member")} />}
+          {house.settings?.priceLookup?.enabled === true && <PosoKaneiMapping item={item} canEdit={can("member")} />}
 
           <Card className="p-4">
             <div className="mb-1 flex items-center justify-between gap-2">

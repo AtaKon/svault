@@ -957,6 +957,8 @@ CREATE TABLE IF NOT EXISTS catalog_products (
   PRIMARY KEY (project, code)
 );
 
+/* Shared OpenFoodFacts-based PosoKanei mappings. Every item linked to the
+   same OpenFoodFacts product uses the same row in a house. */
 CREATE TABLE IF NOT EXISTS posokanei_mappings (
   house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
   off_project TEXT NOT NULL,
@@ -965,6 +967,35 @@ CREATE TABLE IF NOT EXISTS posokanei_mappings (
   product_name TEXT NOT NULL,
   PRIMARY KEY (house_id, off_project, off_code)
 );
+
+/* Direct PosoKanei mappings for one inventory item. They exist alongside the
+   shared OpenFoodFacts mapping so products without an OpenFoodFacts link can
+   still be checked; an item mapping takes precedence over the shared one. */
+CREATE TABLE IF NOT EXISTS posokanei_item_mappings (
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  product_id TEXT NOT NULL,
+  product_name TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (house_id, item_id)
+);
+CREATE INDEX IF NOT EXISTS posokanei_item_mappings_item ON posokanei_item_mappings(item_id);
+
+/* PosoKanei's retailer labels mapped to this house's receipt shops. Rows are
+   discovered from offers and may stay unmapped (vendor_id NULL) until an
+   admin matches them. */
+CREATE TABLE IF NOT EXISTS posokanei_retailers (
+  house_id TEXT NOT NULL REFERENCES houses(id) ON DELETE CASCADE,
+  retailer_key TEXT NOT NULL,
+  retailer_name TEXT NOT NULL,
+  vendor_id TEXT REFERENCES vendors(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (house_id, retailer_key)
+);
+CREATE INDEX IF NOT EXISTS posokanei_retailers_house ON posokanei_retailers(house_id);
+CREATE INDEX IF NOT EXISTS posokanei_retailers_vendor ON posokanei_retailers(vendor_id);
 
 CREATE TABLE IF NOT EXISTS catalog_mappings (
   id TEXT PRIMARY KEY,
