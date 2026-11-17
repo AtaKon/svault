@@ -19,6 +19,7 @@ const steps = [
   [...shared, "--test", "server/tests/item-merge.test.ts"],
   [...shared, "--test", "server/tests/live.test.ts"],
   [...shared, "--test", "server/tests/schema-upgrade.test.ts"],
+  [...shared, "--test", "server/tests/posokanei-mapping.test.ts"],
   [...shared, "--test", "server/tests/api.test.ts"],
   [...shared, "--test", "server/tests/label-links.test.ts"],
 ];

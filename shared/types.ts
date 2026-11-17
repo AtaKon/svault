@@ -64,6 +64,11 @@ export interface NotificationChannel {
 export interface HouseSettings {
   priceLookup?: {
     enabled?: boolean;
+    /**
+     * House shops treated as accessible for PosoKanei price checks. An empty or
+     * missing list keeps the original behavior and shows every retailer.
+     */
+    accessibleVendorIds?: string[];
   };
   ai?: {
     enabled?: boolean;
@@ -1511,6 +1516,39 @@ export interface ExternalShoppingOffer {
   discountPercent: number | null;
   updatedAt: string | null;
   fetchedAt: string;
+}
+
+/** Why some PosoKanei offers were left out of a response. */
+export interface ExternalOfferRetailerFilter {
+  active: boolean;
+  hiddenOffers: number;
+  /** PosoKanei labels that could not be mapped to any house shop. */
+  unknownRetailers: string[];
+}
+
+export interface PosoKaneiRetailerVendor {
+  id: string;
+  name: string;
+  kind: string;
+  purchaseCount?: number;
+}
+
+export interface PosoKaneiRetailer {
+  /** Stable normalised key used when saving a mapping. */
+  key: string;
+  name: string;
+  vendorId: string | null;
+  vendorName: string | null;
+  /** A likely house shop when the retailer is not matched yet. */
+  suggestedVendorId: string | null;
+  unknown: boolean;
+}
+
+export interface PosoKaneiRetailerSettings {
+  vendors: PosoKaneiRetailerVendor[];
+  retailers: PosoKaneiRetailer[];
+  accessibleVendorIds: string[];
+  filterActive: boolean;
 }
 
 export interface ApiToken {

@@ -4,7 +4,15 @@ import { requireAuth, roleAtLeast } from "../auth.js";
 import { ApiError, handler, parseBody, requireHouse } from "../http.js";
 import { limitRequests, limiters, userOrIp } from "../rate-limit.js";
 import { all, get, lockHouseholdLedger, newId, now, parseJson, tx } from "../db.js";
+import type { ExternalShoppingOffer } from "../../shared/types.js";
 import { lookupPosoKaneiBarcode, lookupPosoKaneiProduct, PosoKaneiUnavailableError } from "../services/posokanei.js";
+import { effectivePosoKaneiMapping } from "../services/posokanei-mapping.js";
+import {
+  createPosoKaneiOfferFilter,
+  filterPosoKaneiOffers,
+  posoKaneiOfferFilterSummary,
+  rememberPosoKaneiRetailers,
+} from "../services/posokanei-retailers.js";
 import { shoppingRow } from "../services/shopping.js";
 import {
   householdInsight,
@@ -34,6 +42,7 @@ export function posoKaneiUnavailableApiError(
 
 export function createShoppingOffersHandler(
   lookup: typeof lookupPosoKaneiBarcode = lookupPosoKaneiBarcode,
+  productLookup: typeof lookupPosoKaneiProduct = lookupPosoKaneiProduct,
 ) {
   return handler(async (req, res) => {
     const { houseId } = await requireHouse(req, "member");
@@ -50,35 +59,53 @@ export function createShoppingOffersHandler(
       [line.item_id, houseId],
     );
     if (!item) throw new ApiError(404, "Inventory item not found");
-    const mapping = item.off_code ? await get<any>("SELECT product_id FROM posokanei_mappings WHERE house_id = ? AND off_project = ? AND off_code = ?", [houseId, item.off_project ?? "off", item.off_code]) : null;
+
+    const mapping = await effectivePosoKaneiMapping(houseId, item);
+    let productId: string | null = null;
+    let barcode: string | null = null;
+    let offers: ExternalShoppingOffer[];
     if (mapping) {
+      productId = mapping.id;
       try {
-        const offers = await lookupPosoKaneiProduct(mapping.product_id, req.user!.id);
-        res.json({ barcode: null, productId: mapping.product_id, offers });
-        return;
+        offers = await productLookup(mapping.id, req.user!.id);
       } catch (error) {
         if (error instanceof PosoKaneiUnavailableError) throw posoKaneiUnavailableApiError(error, res);
         throw error;
       }
-    }
-    const barcodes = await all<any>(
-      "SELECT code FROM item_barcodes WHERE item_id = ? AND house_id = ? ORDER BY created_at, id",
-      [item.id, houseId],
-    );
-    const validCodes = barcodes
-      .map((row: any) => String(row.code ?? "").trim())
-      .filter((code: string) => /^\d{8,14}$/.test(code));
-    if (!validCodes.length) throw new ApiError(400, "Add a valid barcode to this inventory item first");
+    } else {
+      const barcodes = await all<any>(
+        "SELECT code FROM item_barcodes WHERE item_id = ? AND house_id = ? ORDER BY created_at, id",
+        [item.id, houseId],
+      );
+      const validCodes = barcodes
+        .map((row: any) => String(row.code ?? "").trim())
+        .filter((code: string) => /^\d{8,14}$/.test(code));
+      if (!validCodes.length) throw new ApiError(400, "Add a valid barcode to this inventory item first");
+      barcode = validCodes[0];
 
-    try {
-      const offers = await lookup(validCodes[0], req.user!.id);
-      res.json({ barcode: validCodes[0], offers });
-    } catch (error) {
-      if (error instanceof PosoKaneiUnavailableError) {
-        throw posoKaneiUnavailableApiError(error, res);
+      try {
+        offers = await lookup(barcode, req.user!.id);
+      } catch (error) {
+        if (error instanceof PosoKaneiUnavailableError) {
+          throw posoKaneiUnavailableApiError(error, res);
+        }
+        throw error;
       }
-      throw error;
     }
+
+    // Record every retailer label before filtering so unknown shops stay
+    // discoverable in Settings even when their offers are hidden here.
+    try { await rememberPosoKaneiRetailers(houseId, offers); }
+    catch (error) { console.warn("Could not record PosoKanei retailers", error); }
+    const filterContext = await createPosoKaneiOfferFilter(houseId, settings);
+    const visibleOffers = await filterPosoKaneiOffers(filterContext, offers);
+    const filter = posoKaneiOfferFilterSummary(filterContext);
+    res.json({
+      barcode,
+      ...(productId ? { productId } : {}),
+      offers: visibleOffers,
+      ...(filter.active ? { retailerFilter: filter } : {}),
+    });
   });
 }
 

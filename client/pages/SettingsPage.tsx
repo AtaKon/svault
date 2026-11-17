@@ -35,6 +35,7 @@ import type {
   House,
   Location as HouseLocation,
   NotificationChannel,
+  PosoKaneiRetailerSettings,
   Role,
 } from "@shared/types";
 
@@ -167,23 +168,80 @@ function PriceLookupTab({ house, onSave }: { house: House; onSave: (patch: Recor
   const { can } = useHouse();
   const toast = useToast();
   const [enabled, setEnabled] = useState(house.settings?.priceLookup?.enabled === true);
+  const savedAccessibleVendorIds = Array.isArray(house.settings?.priceLookup?.accessibleVendorIds)
+    ? house.settings.priceLookup.accessibleVendorIds
+    : [];
+  const [accessibleVendorIds, setAccessibleVendorIds] = useState<string[]>(savedAccessibleVendorIds);
+  const [retailers, setRetailers] = useState<PosoKaneiRetailerSettings | null>(null);
+  const [loadingRetailers, setLoadingRetailers] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [mappingBusy, setMappingBusy] = useState<string | null>(null);
 
   useEffect(() => {
     setEnabled(house.settings?.priceLookup?.enabled === true);
-  }, [house.settings?.priceLookup?.enabled]);
+    setAccessibleVendorIds(
+      Array.isArray(house.settings?.priceLookup?.accessibleVendorIds)
+        ? house.settings.priceLookup.accessibleVendorIds
+        : [],
+    );
+  }, [house.settings?.priceLookup?.enabled, house.settings?.priceLookup?.accessibleVendorIds]);
+
+  const loadRetailers = useCallback(async () => {
+    setLoadingRetailers(true);
+    try {
+      setRetailers(await api<PosoKaneiRetailerSettings>(`/api/houses/${house.id}/posokanei/retailers`));
+    } catch (err) {
+      toast.error(err instanceof Error ? t(err.message) : t("Could not load PosoKanei retailers"));
+    } finally {
+      setLoadingRetailers(false);
+    }
+  }, [house.id, t, toast]);
+
+  useEffect(() => {
+    void loadRetailers();
+  }, [loadRetailers]);
 
   const save = async () => {
     setBusy(true);
     try {
-      await onSave({ priceLookup: { enabled } });
+      await onSave({ priceLookup: { enabled, accessibleVendorIds } });
       toast.success(t("Price lookup settings saved"));
+      await loadRetailers();
     } catch (err) {
       toast.error(err instanceof Error ? t(err.message) : t("Could not save"));
     } finally {
       setBusy(false);
     }
   };
+
+  const setRetailerVendor = async (retailerName: string, vendorId: string | null) => {
+    setMappingBusy(retailerName);
+    try {
+      const result = await api<{ retailer: PosoKaneiRetailerSettings["retailers"][number] }>(
+        `/api/houses/${house.id}/posokanei/retailers`,
+        { method: "PUT", body: { retailer: retailerName, vendorId } },
+      );
+      setRetailers((current) => current ? {
+        ...current,
+        retailers: current.retailers.map((entry) => entry.key === result.retailer.key ? result.retailer : entry),
+      } : current);
+      toast.success(t("Retailer mapping saved"));
+    } catch (err) {
+      toast.error(err instanceof Error ? t(err.message) : t("Could not save retailer mapping"));
+    } finally {
+      setMappingBusy(null);
+    }
+  };
+
+  const toggleAccessible = (vendorId: string, next: boolean) => {
+    setAccessibleVendorIds((current) => {
+      if (next) return current.includes(vendorId) ? current : [...current, vendorId];
+      return current.filter((id) => id !== vendorId);
+    });
+  };
+
+  const vendors = retailers?.vendors ?? [];
+  const vendorName = (vendorId: string | null) => vendors.find((vendor) => vendor.id === vendorId)?.name ?? null;
 
   return (
     <div className="space-y-4">
@@ -200,12 +258,79 @@ function PriceLookupTab({ house, onSave }: { house: House; onSave: (patch: Recor
           label={t("Enable PosoKanei lookups")}
           disabled={!can("admin")}
         />
+      </Card>
+
+      <Card className="space-y-3 p-4">
+        <div>
+          <h2 className="font-display text-lg">{t("Accessible shops")}</h2>
+          <p className="mt-1 text-xs leading-relaxed text-muted">
+            {t("Choose the shops this house can reach. PosoKanei offers from other shops are hidden in price checks. Leave all shops off to show every retailer.")}
+          </p>
+        </div>
+        {vendors.length === 0 ? (
+          <p className="text-xs text-muted">{t("No house shops yet. Add a shop from a receipt first.")}</p>
+        ) : (
+          <div className="divide-y divide-line">
+            {vendors.map((vendor) => (
+              <Switch
+                key={vendor.id}
+                checked={accessibleVendorIds.includes(vendor.id)}
+                onChange={(next) => toggleAccessible(vendor.id, next)}
+                label={vendor.name}
+                disabled={!can("admin")}
+              />
+            ))}
+          </div>
+        )}
         <Button onClick={() => void save()} loading={busy} disabled={!can("admin")}>
           {t("Save price settings")}
         </Button>
       </Card>
+
+      <Card className="space-y-3 p-4">
+        <div>
+          <h2 className="font-display text-lg">{t("PosoKanei retailers")}</h2>
+          <p className="mt-1 text-xs leading-relaxed text-muted">
+            {t("Retailers seen in price checks. Match each one to a shop so its offers count as accessible.")}
+          </p>
+        </div>
+        {loadingRetailers ? (
+          <p className="text-xs text-muted">{t("Loading retailers…")}</p>
+        ) : !retailers?.retailers.length ? (
+          <p className="text-xs text-muted">{t("No PosoKanei retailers discovered yet. Check offers on a shopping line to discover them.")}</p>
+        ) : (
+          <div className="divide-y divide-line">
+            {retailers.retailers.map((retailer) => {
+              const suggested = vendorName(retailer.suggestedVendorId);
+              return (
+                <div key={retailer.key} className="grid gap-2 py-2 sm:grid-cols-[1fr_200px] sm:items-center">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium">{retailer.name}</p>
+                    <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted">
+                      {retailer.unknown
+                        ? <Badge tone="outline">{t("Unknown retailer")}</Badge>
+                        : <span>{retailer.vendorName}</span>}
+                      {suggested && <span>{t("Suggested")}: {suggested}</span>}
+                    </div>
+                  </div>
+                  <Select
+                    aria-label={t("Matched shop")}
+                    value={retailer.vendorId ?? ""}
+                    onChange={(event) => void setRetailerVendor(retailer.name, event.target.value || null)}
+                    disabled={!can("admin") || mappingBusy === retailer.name}
+                  >
+                    <option value="">{t("Not matched")}</option>
+                    {vendors.map((vendor) => <option key={vendor.id} value={vendor.id}>{vendor.name}</option>)}
+                  </Select>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Card>
+
       <Card className="p-4 text-[11px] leading-relaxed text-muted">
-        {t("Members can search for a PosoKanei product and link it to an OpenFoodFacts product. Searches send the entered text to PosoKanei; checking offers sends the selected product ID or the item's barcode over HTTPS. Results are cached and rate limited. No store accounts, location, or purchase history are sent. PosoKanei's API is undocumented and may change or become unavailable. Offers are informational and may not reflect local availability or checkout prices.")}
+        {t("Members can search for a PosoKanei product and link it to an OpenFoodFacts product or directly to one inventory item. Searches send the entered text to PosoKanei; checking offers sends the selected product ID or the item's barcode over HTTPS. Results are cached and rate limited. No store accounts, location, or purchase history are sent. PosoKanei's API is undocumented and may change or become unavailable. Offers are informational and may not reflect local availability or checkout prices.")}
       </Card>
     </div>
   );
