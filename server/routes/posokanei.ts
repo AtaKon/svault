@@ -26,6 +26,8 @@ posoKaneiRoutes.get(
   "/:houseId/posokanei/retailers",
   handler(async (req, res) => {
     const { houseId } = await requireHouse(req);
+    // Settings remain accessible while lookups are disabled so an admin can
+    // review and prepare existing shop mappings before enabling the feature.
     res.json(await listPosoKaneiRetailerSettings(houseId, await houseSettings(houseId)));
   }),
 );

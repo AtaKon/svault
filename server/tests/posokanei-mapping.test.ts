@@ -249,6 +249,18 @@ describe("PosoKanei item mappings", () => {
 describe("PosoKanei retailer filters", () => {
   const unknownRetailer = "Παντοπωλείο Άγνωστο";
 
+  it("keeps retailer settings available while price lookup is disabled", async () => {
+    const disabled = await request(`/api/houses/${houseId}`, { method: "PATCH", body: { settings: { priceLookup: { enabled: false } } } });
+    assert.equal(disabled.status, 200);
+    try {
+      assert.equal((await request(`/api/houses/${houseId}/posokanei/retailers`)).status, 200);
+      assert.equal((await request(`/api/items/${plainItemId}/posokanei/search?q=test`)).status, 404);
+    } finally {
+      const enabled = await request(`/api/houses/${houseId}`, { method: "PATCH", body: { settings: { priceLookup: { enabled: true } } } });
+      assert.equal(enabled.status, 200);
+    }
+  });
+
   it("rejects a retailer mapping to another house's vendor", async () => {
     const otherHouse = await request("/api/houses", { body: { name: "Other house" } });
     assert.equal(otherHouse.status, 201);
