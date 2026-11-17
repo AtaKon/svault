@@ -1,4 +1,4 @@
-import { all, get, now, run, tx } from "../db.js";
+import { all, get, lockHouseholdLedger, now, run, tx } from "../db.js";
 import { ApiError } from "../http.js";
 import type { ExternalShoppingOffer } from "../../shared/types.js";
 import {
@@ -231,6 +231,7 @@ export function posoKaneiOfferFilterSummary(
  * Record retailer labels seen in an offer response. New rows get an
  * unambiguous house-shop match when one exists; existing rows (including
  * explicit mappings and deliberate "not matched" rows) are left alone.
+ * Automatic discovery stops at 500 rows per house; manual mappings remain possible.
  */
 export async function rememberPosoKaneiRetailers(
   houseId: string,
@@ -238,8 +239,9 @@ export async function rememberPosoKaneiRetailers(
 ): Promise<void> {
   const names = new Map<string, string>();
   for (const offer of offers) {
-    const key = posoKaneiRetailerKey(offer.retailer);
-    if (key && !names.has(key)) names.set(key, offer.retailer.trim().slice(0, 120));
+    const name = offer.retailer.trim().slice(0, 120);
+    const key = posoKaneiRetailerKey(name);
+    if (key && !names.has(key)) names.set(key, name);
   }
   if (!names.size) return;
 
@@ -256,14 +258,20 @@ export async function rememberPosoKaneiRetailers(
   const indexes = vendorIndexes(vendors, catalog);
   const timestamp = now();
   await tx(async (session) => {
+    // Serialize discovery per house so concurrent requests cannot exceed the cap.
+    if (!await lockHouseholdLedger(session, houseId)) return;
+    const count = await session.get<{ count: number }>("SELECT COUNT(*) AS count FROM posokanei_retailers WHERE house_id = ?", [houseId]);
+    let remaining = Math.max(0, 500 - Number(count?.count ?? 0));
     for (const [key, name] of missing) {
+      if (!remaining) break;
       const vendorId = inferVendorId(name, indexes, catalog);
-      await session.run(
+      const inserted = await session.run(
         `INSERT INTO posokanei_retailers (house_id, retailer_key, retailer_name, vendor_id, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT (house_id, retailer_key) DO NOTHING`,
         [houseId, key, name, vendorId, timestamp, timestamp],
       );
+      remaining -= inserted.changes;
     }
   }, { writeLock: true });
 }

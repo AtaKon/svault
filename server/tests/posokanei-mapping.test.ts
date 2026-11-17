@@ -12,8 +12,9 @@ process.env.SVAI_API_KEY = "";
 process.env.SV_REGISTRATION = "open";
 
 const { app } = await import("../index.js");
-const { closeDb, databaseKind, exec, get, run } = await import("../db.js");
+const { closeDb, databaseKind, exec, get, run, tx } = await import("../db.js");
 const { createShoppingOffersHandler } = await import("../routes/insights.js");
+const { rememberPosoKaneiRetailers } = await import("../services/posokanei-retailers.js");
 
 let server: import("node:http").Server;
 let base = "";
@@ -50,14 +51,14 @@ async function request(
 
 function offer(retailer: string, price = 1, productId = "pk_product") {
   return {
-    source: "PosoKanei",
+    source: "PosoKanei" as const,
     productId,
     productName: "Test product",
     unit: "kg",
     retailer,
     price,
     unitPrice: price,
-    currency: "EUR",
+    currency: "EUR" as const,
     discount: false,
     discountPercent: null,
     updatedAt: null,
@@ -247,6 +248,30 @@ describe("PosoKanei item mappings", () => {
 
 describe("PosoKanei retailer filters", () => {
   const unknownRetailer = "Παντοπωλείο Άγνωστο";
+
+  it("rejects a retailer mapping to another house's vendor", async () => {
+    const otherHouse = await request("/api/houses", { body: { name: "Other house" } });
+    assert.equal(otherHouse.status, 201);
+    const otherVendor = await request(`/api/houses/${otherHouse.data.id}/vendors`, { body: { name: "Other shop" } });
+    assert.equal(otherVendor.status, 201);
+    const result = await request(`/api/houses/${houseId}/posokanei/retailers`, { method: "PUT", body: { retailer: "Foreign mapping", vendorId: otherVendor.data.id } });
+    assert.equal(result.status, 400);
+    assert.equal(await get("SELECT vendor_id FROM posokanei_retailers WHERE house_id = ? AND vendor_id = ?", [houseId, otherVendor.data.id]), undefined);
+  });
+
+  it("caps automatic retailer discovery per house", async () => {
+    const otherHouse = await request("/api/houses", { body: { name: "Discovery cap house" } });
+    assert.equal(otherHouse.status, 201);
+    const id = otherHouse.data.id;
+    await tx(async (session) => {
+      for (let i = 0; i < 499; i++) {
+        await session.run("INSERT INTO posokanei_retailers (house_id, retailer_key, retailer_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)", [id, `shop ${i}`, `Shop ${i}`, "2026-01-01", "2026-01-01"]);
+      }
+    }, { writeLock: true });
+    await rememberPosoKaneiRetailers(id, [offer("New retailer A"), offer("New retailer B")]);
+    const count = await get<{ count: number }>("SELECT COUNT(*) AS count FROM posokanei_retailers WHERE house_id = ?", [id]);
+    assert.equal(Number(count?.count), 500);
+  });
 
   it("maps discovered retailers to receipt shops and reports unknown ones", async () => {
     const changed = await request(`/api/houses/${houseId}`, {

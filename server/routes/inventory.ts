@@ -1510,8 +1510,8 @@ itemRoutes.delete(
 /* ------------------------------------------------------ OpenFoodFacts links */
 
 itemRoutes.get("/:itemId/posokanei", handler(async (req, res) => {
-  const { item } = await itemAccess(req);
-  res.json({ mapping: await effectivePosoKaneiMapping(item.house_id, item) });
+  const { item, houseId } = await itemAccess(req);
+  res.json({ mapping: await effectivePosoKaneiMapping(houseId, item) });
 }));
 
 itemRoutes.get("/:itemId/posokanei/search", limitRequests(limiters.posokaneiRequests, userOrIp, "Too many price lookup requests. Try again later."), handler(async (req, res) => {
