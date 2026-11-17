@@ -3,7 +3,7 @@ import { api } from "@/api";
 import { Button, Card, ConfirmDialog, Input, Sheet } from "@/components/ui";
 import { useI18n } from "@/i18n";
 import { useToast } from "@/components/toast";
-import type { ExternalShoppingOffer, ItemDetail } from "@shared/types";
+import type { ExternalOfferRetailerFilter, ExternalShoppingOffer, ItemDetail } from "@shared/types";
 
 type Product = { id: string; name: string; brand: string | null; category: string | null; unit: string | null; quantity: number | null; offers: ExternalShoppingOffer[] };
 type Mapping = { id: string; name: string; scope: "item" | "off" };
@@ -16,6 +16,7 @@ export function PosoKaneiMapping({ item, canEdit }: { item: ItemDetail; canEdit:
   const [confirmSharedRemoval, setConfirmSharedRemoval] = useState(false);
   const [query, setQuery] = useState("");
   const [products, setProducts] = useState<Product[]>([]);
+  const [retailerFilter, setRetailerFilter] = useState<ExternalOfferRetailerFilter | null>(null);
   const [page, setPage] = useState(1);
   const [hasNext, setHasNext] = useState(false);
   const [searched, setSearched] = useState(false);
@@ -34,10 +35,11 @@ export function PosoKaneiMapping({ item, canEdit }: { item: ItemDetail; canEdit:
   const search = async (nextPage = 1) => {
     const text = query.trim();
     if (text.length < 2) { setError(t("Enter at least two characters")); return; }
-    setBusy(true); setError(null); setSearched(true);
+    setBusy(true); setError(null); setSearched(true); setRetailerFilter(null);
     try {
-      const result = await api<{ products: Product[]; hasNext: boolean }>(`/api/items/${item.id}/posokanei/search?q=${encodeURIComponent(text)}&page=${nextPage}`);
+      const result = await api<{ products: Product[]; hasNext: boolean; retailerFilter?: ExternalOfferRetailerFilter }>(`/api/items/${item.id}/posokanei/search?q=${encodeURIComponent(text)}&page=${nextPage}`);
       setProducts(result.products); setPage(nextPage); setHasNext(result.hasNext);
+      setRetailerFilter(result.retailerFilter ?? null);
     } catch (err) { setProducts([]); setHasNext(false); setError(err instanceof Error ? t(err.message) : t("Could not search PosoKanei")); }
     finally { setBusy(false); }
   };
@@ -70,7 +72,7 @@ export function PosoKaneiMapping({ item, canEdit }: { item: ItemDetail; canEdit:
         : "Applies only to this item.")}</p>}
       {error && !open && <p className="text-xs text-danger">{error}</p>}
       {canEdit && <div className="flex gap-2">
-        <Button size="sm" variant="secondary" onClick={() => { setQuery(item.off?.product?.name || item.name); setProducts([]); setSearched(false); setError(null); setOpen(true); }}>{t(mapping ? "Change match" : "Find a match")}</Button>
+        <Button size="sm" variant="secondary" onClick={() => { setQuery(item.off?.product?.name || item.name); setProducts([]); setRetailerFilter(null); setSearched(false); setError(null); setOpen(true); }}>{t(mapping ? "Change match" : "Find a match")}</Button>
         {mapping && <Button size="sm" variant="ghost" loading={busy} onClick={() => mapping.scope === "off" ? setConfirmSharedRemoval(true) : void unlink()}>{t("Remove match")}</Button>}
       </div>}
     </Card>
@@ -82,6 +84,10 @@ export function PosoKaneiMapping({ item, canEdit }: { item: ItemDetail; canEdit:
         <Button type="submit" loading={busy} disabled={busy}>{t("Search")}</Button>
       </form>
       {error && <p role="alert" className="mt-3 text-xs text-danger">{error}</p>}
+      {retailerFilter && retailerFilter.hiddenOffers > 0 && <p className="mt-3 text-xs text-muted">
+        {t("Some offers are hidden by the accessible-shop settings.")}
+        {retailerFilter.unknownRetailers.length > 0 && <> · {t("Unmatched retailers")}: {retailerFilter.unknownRetailers.join(", ")}</>}
+      </p>}
       {searched && !busy && !products.length && !error && <p className="mt-4 text-sm text-muted">{t("No products found")}</p>}
       <div className="mt-3 space-y-2">{products.map((product) => <div key={product.id} className="rounded-xl border border-line p-3">
         <p className="text-sm font-medium">{product.name}</p>
