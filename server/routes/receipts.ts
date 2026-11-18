@@ -473,7 +473,7 @@ receiptRoutes.post(
     // validates the issuer allowlist before reserving a slot or fetching.
     const qrImport = !body.preferAi && body.qr ? await readQrReceiptScan(houseId, body.qr) : null;
     // The issuer service returns success only with product lines and source text.
-    const digitalReceipt = qrImport?.status === "ok" ? qrImport : null;
+    const digitalReceipt = qrImport?.status === "ok" && qrImport.draft.lines.length ? qrImport : null;
     const qrDraft = digitalReceipt?.draft;
     const qrText = digitalReceipt?.text;
     const qrExcludedCharges = digitalReceipt?.excludedCharges ?? 0;
