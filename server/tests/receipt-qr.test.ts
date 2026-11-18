@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { matchReceiptQrLink } from "../../shared/receipt-qr-links.js";
-import { configureReceiptQrFetcherForTests, fetchQrReceiptDraft } from "../services/receipt-qr.js";
+import { configureReceiptQrFetcherForTests, fetchQrReceiptDraft, readQrReceiptScan } from "../services/receipt-qr.js";
 
 const ref = "12345678-1234-1234-1234-123456789abc";
 const token = "testAB12";
@@ -20,10 +20,12 @@ function item(code: string, description: string, unit: string, qty: string, befo
 }
 
 const invoice = `<div class="BoldBlueHeader">ΔΟΚΙΜΑΣΤΙΚΟ ΚΑΤΑΣΤΗΜΑ</div>
+  <div>Αρ. Παραστατικού: 12 3456</div><div>2026</div>
   <div>Ημ/νία έκδοσης: 11-11-2026</div><div>Έναρξης Αποστολής: 2026-11-12</div>
   <table><tbody>
     ${item("SKU-A", "ΜΗΛΑ &amp; ΑΧΛΑΔΙΑ", "Κιλό", "1,250", "4,00", "0,50", "3,50")}
     ${item("PERTEL", "Περιβαλλοντικό τέλος", "Τεμάχιο", "1,00", "0,10", "0,00", "0,10")}
+    <tr><td>Σύνολο</td><td></td><td></td><td>3,60</td></tr>
   </tbody></table>
   <div>Αξία προ έκπτωσης</div><div>4,10EUR</div>
   <div>Έκπτωση</div><div>0,50EUR</div>
@@ -45,7 +47,7 @@ test("reads a pinned Entersoft document and preserves the amounts and weighted q
   const requests: string[] = [];
   const frame = issuerPath
     .replace(token, "%74" + token.slice(1))
-    .replaceAll("&", "&amp;");
+    .replace("&", "&#38;").replaceAll("&hashToken", "&amp;hashToken");
   configureReceiptQrFetcherForTests(async (url) => {
     requests.push(url);
     return requests.length === 1
@@ -58,6 +60,7 @@ test("reads a pinned Entersoft document and preserves the amounts and weighted q
   assert.ok(result.draft);
   assert.equal(result.draft.purchasedAt, "2026-11-11");
   assert.equal(result.draft.currency, "EUR");
+  assert.equal(result.draft.notes, "Αρ. Παραστατικού 12 3456");
   assert.equal(result.draft.total, 3.60);
   assert.equal(result.draft.subtotal, 3.19);
   assert.equal(result.draft.tax, 0.41);
@@ -93,6 +96,7 @@ test("rejects unknown links, escaped redirects and a replaced Entersoft frame", 
   for (const location of [
     "https://wrong.example/elsewhere",
     "https://epsilondigital-sklavenitis.epsilonnet.gr/unrelated",
+    "https://epsilondigital-sklavenitis.epsilonnet.gr/DocViewer/00000000-0000-0000-0000-000000000000",
     `https://epsilondigital-sklavenitis.epsilonnet.gr:8080/DocViewer/${ref}`,
   ]) {
     const requests: string[] = [];
@@ -108,6 +112,15 @@ test("rejects unknown links, escaped redirects and a replaced Entersoft frame", 
   configureReceiptQrFetcherForTests(async (url) => {
     requests.push(url);
     return html(`<iframe id="iframeContent" src="${issuerPath.replace(token, "mismatch").replaceAll("&", "&amp;")}"></iframe>`);
+  });
+  assert.equal((await fetchQrReceiptDraft(entersoftUrl)).status, "unavailable");
+  assert.deepEqual(requests, [entersoftUrl]);
+
+  requests.length = 0;
+  const duplicate = issuerPath.replace("&isPreview=True", "&hashToken=mismatch").replaceAll("&", "&amp;");
+  configureReceiptQrFetcherForTests(async (url) => {
+    requests.push(url);
+    return html(`<iframe id="iframeContent" src="${duplicate}"></iframe>`);
   });
   assert.equal((await fetchQrReceiptDraft(entersoftUrl)).status, "unavailable");
   assert.deepEqual(requests, [entersoftUrl]);
@@ -165,6 +178,30 @@ test("gives Entersoft verification instructions at either retrieval stage", asyn
   }
 });
 
+test("keeps verification available regardless of payload order and skips unknown links", async () => {
+  let requests = 0;
+  configureReceiptQrFetcherForTests(async (url) => {
+    requests++;
+    if (url === epsilonUrl) return html('<div id="cf-turnstile"></div>');
+    assert.equal(url, entersoftUrl);
+    throw new Error("issuer network failure");
+  });
+  const cases = [
+    [epsilonUrl, entersoftUrl],
+    [entersoftUrl, epsilonUrl],
+    ["https://e-invoicing.gr/unrelated", epsilonUrl],
+  ];
+  for (const payloads of cases) {
+    const resolved = await readQrReceiptScan("test-house", payloads);
+    assert.equal(resolved.issuer, "epsilon-sklavenitis");
+    assert.equal(resolved.status, "challenge");
+  }
+  assert.equal(requests, 5);
+  const failed = await fetchQrReceiptDraft(entersoftUrl);
+  assert.equal(failed.status, "unavailable");
+  assert.match(failed.message ?? "", /photo scan and AI re-read/);
+});
+
 test("decodes an explicitly declared Greek charset and rejects unlabeled item columns", async () => {
   const decoder = new TextDecoder("windows-1253");
   const encoding = new Map(Array.from({ length: 256 }, (_, value) => [decoder.decode(Uint8Array.of(value)), value]));
@@ -182,4 +219,12 @@ test("decodes an explicitly declared Greek charset and rejects unlabeled item co
     ? html(`<iframe id="iframeContent" src="${issuerPath.replaceAll("&", "&amp;")}"></iframe>`)
     : html(invoice.replace('data-title="Συνολική Αξία"', 'data-title="Άγνωστη στήλη"')));
   assert.equal((await fetchQrReceiptDraft(entersoftUrl)).status, "unavailable");
+});
+
+test("recognizes an Entersoft frame on a declared Latin-1 viewer page", async () => {
+  const viewer = `<p>Café</p><iframe id="iframeContent" src="${issuerPath.replaceAll("&", "&amp;")}"></iframe>`;
+  configureReceiptQrFetcherForTests(async (url) => url === entersoftUrl
+    ? new Response(Buffer.from(viewer, "latin1"), { headers: { "content-type": "text/html; charset=iso-8859-1" } })
+    : html(invoice));
+  assert.equal((await fetchQrReceiptDraft(entersoftUrl)).status, "ok");
 });

@@ -632,8 +632,9 @@ Pass up to two decoded issuer links in `qr` to try digital retrieval before text
 successful read returns `provider: "qr"`. The optional `qr` response reports the issuer and outcome
 (`ok`, `challenge`, `unsupported`, or `unavailable`). For a challenge, the client can open the issuer's
 viewer and send text extracted from the verified PDF through the same endpoint.
-Issuer lookups share a 12-second budget per request and are rate limited per household and server
-process. When the lookup limit is reached, the response still supports local receipt parsing.
+Issuer lookups share a 12-second budget per request. The default limits are 20 scans per household
+and 120 per server process in five minutes. Unrecognized links do not use either limit. When a limit
+is reached, the response still supports local receipt parsing.
 `preferAi: true` (the "Re-read with AI" button) explicitly requests AI and uses its draft when it finds
 lines. This also applies to bulk receipt intake.
 

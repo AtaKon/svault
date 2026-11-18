@@ -4,6 +4,7 @@ import {
   DecodeHintType,
   FormatException,
   HybridBinarizer,
+  NotFoundException,
   PerspectiveTransform,
   RGBLuminanceSource,
 } from "@zxing/library";
@@ -25,7 +26,8 @@ export function recoverReceiptQr(
   if (!detection) return null;
   const size = detection.getBits().getWidth();
   const [bottomLeft, topLeft, topRight, alignment] = detection.getPoints();
-  if (!alignment || size > 57) return null;
+  // Version 1 has no alignment pattern. Recovery needs that fourth point.
+  if (!alignment || size < 25 || size > 57) return null;
 
   const acrossX = (topRight.getX() - topLeft.getX()) / (size - 7);
   const acrossY = (topRight.getY() - topLeft.getY()) / (size - 7);
@@ -108,12 +110,18 @@ export function recoverReceiptQr(
   return null;
 }
 
-function detectGeometry(bitmap: BinaryBitmap, luminance: Uint8ClampedArray, width: number, height: number) {
+function detectGeometry(
+  bitmap: BinaryBitmap,
+  luminance: Uint8ClampedArray,
+  width: number,
+  height: number,
+): ReturnType<Detector["detect"]> | null {
   const hints = new Map([[DecodeHintType.TRY_HARDER, true]]);
   try {
     return new Detector(bitmap.getBlackMatrix()).detect(hints);
   } catch (error) {
-    if (!(error instanceof FormatException)) return null;
+    if (error instanceof NotFoundException) return null;
+    if (!(error instanceof FormatException)) throw error;
   }
   // A blurred timing row can give FinderPattern an invalid module count.
   // Use a fixed threshold for one more geometry estimate.
@@ -121,8 +129,9 @@ function detectGeometry(bitmap: BinaryBitmap, luminance: Uint8ClampedArray, widt
   const binarizer = new HybridBinarizer(new RGBLuminanceSource(thresholded, width, height));
   try {
     return new Detector(binarizer.getBlackMatrix()).detect(hints);
-  } catch {
-    return null;
+  } catch (error) {
+    if (error instanceof NotFoundException || error instanceof FormatException) return null;
+    throw error;
   }
 }
 

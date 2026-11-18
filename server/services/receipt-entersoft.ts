@@ -125,10 +125,10 @@ function findDate(foldedText: string, rawText: string): string | null {
   return detectDate(rawText);
 }
 
-function findReceiptNumber(foldedText: string): string | null {
-  const match = foldedText.match(/ΑΡ\.?\s*ΠΑΡΑΣΤΑΤΙΚΟΥ[^0-9]*((?:\d[\d\s]*)\d)/);
-  if (!match) return null;
-  return match[1].replace(/\s+/g, " ").trim();
+function findReceiptNumber(html: string): string | null {
+  // Keep the series and number inside the issuer's printed field.
+  const match = html.match(/Αρ\.?[ \t]+Παραστατικ(?:ού|ου)[ \t]*:?[ \t]*(\d{1,20}(?:[ \t]+\d{1,20})?)[ \t]*(?=<\/|\r?\n)/iu);
+  return match ? match[1].replace(/[ \t]+/g, " ") : null;
 }
 
 /**
@@ -146,7 +146,7 @@ function parseVatBreakdown(html: string): TaxBreakdownEntry[] {
   const section = html.match(/ΑΝΑΛΥΣΗ\s+ΦΠΑ([\s\S]*?)(?:ΣΤΟΙΧΕΙΑ\s+ΠΛΗΡΩΜΗΣ|ΠΑΡΑΤΗΡΗΣΕΙΣ|$)/i);
   if (!section) return [];
   const entries: TaxBreakdownEntry[] = [];
-  // The issuer puts rate, net amount and tax in three sibling cells per row.
+  // Only the issuer's three-column layout identifies a rate, net amount and tax.
   const rows = section[1].matchAll(/<div\b[^>]*>\s*((?:<div\b[^>]*>[^<]*<\/div>\s*){3})<\/div>/gi);
   const money = /^-?\d[\d.,]*[.,]\d{2}\s*(?:EUR|€)?$/i;
   for (const row of rows) {
@@ -169,7 +169,7 @@ function parseRows(html: string): EntersoftRow[] | null {
   const rows: EntersoftRow[] = [];
   for (const rowMatch of table[1].matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)) {
     const cells = [...rowMatch[1].matchAll(/<td([^>]*)>([\s\S]*?)<\/td>/gi)];
-    if (cells.length < 4) continue; // header or filler row
+    if (!cells.length) continue;
     const row: EntersoftRow = {
       code: null,
       description: null,
@@ -187,6 +187,8 @@ function parseRows(html: string): EntersoftRow[] | null {
       const field = title && COLUMN_KEYS[labelKey(title[2])];
       if (field && value) row[field] = value;
     }
+    if (!Object.values(row).some(Boolean)) continue; // Unlabeled summary or spacer row.
+    // An incomplete labeled item would create a partial purchase draft.
     if (!row.description || !row.quantity || !row.lineTotal ||
         parseQuantity(row.quantity) == null || parseAmount(row.lineTotal) == null) return null;
     rows.push(row);
@@ -233,7 +235,7 @@ export function parseEntersoftInvoiceHtml(
   const currency = /(?<![A-Za-z])EUR(?![A-Za-z])|\u20ac/.test(source) ? "EUR" : fallbackCurrency;
   const purchasedAt = findDate(foldedFullText, fullText);
   const vendorName = findVendor(source);
-  const receiptNumber = findReceiptNumber(foldedFullText);
+  const receiptNumber = findReceiptNumber(source);
   if (total == null && !rows.some((row) => row.lineTotal)) return null;
 
   const lines: ReceiptDraft["lines"] = [];

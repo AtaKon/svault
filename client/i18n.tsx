@@ -2863,7 +2863,6 @@ const EL: Record<string, string> = {
   "The digital receipt could not be read automatically. The photo scan and AI re-read remain available.": "Δεν ήταν δυνατή η αυτόματη ανάγνωση της ψηφιακής απόδειξης. Μπορείτε να σαρώσετε τη φωτογραφία ή να χρησιμοποιήσετε την ανάγνωση με AI.",
   "That QR code or link is not from a supported digital receipt issuer.": "Ο κωδικός QR ή ο σύνδεσμος δεν προέρχεται από υποστηριζόμενο εκδότη ψηφιακών αποδείξεων.",
   "The digital receipt could not be fetched from the issuer.": "Δεν ήταν δυνατή η λήψη της ψηφιακής απόδειξης από τον εκδότη.",
-  "The digital receipt link could not be read automatically.": "Δεν ήταν δυνατή η αυτόματη ανάγνωση του συνδέσμου της ψηφιακής απόδειξης.",
   "Your account needs instance administrator access.": "Ο λογαριασμός σου χρειάζεται δικαιώματα διαχειριστή της εγκατάστασης.",
   "Could not load the admin console": "Δεν ήταν δυνατή η φόρτωση της κονσόλας διαχείρισης.",
   "Could not load the house settings": "Δεν ήταν δυνατή η φόρτωση των ρυθμίσεων του σπιτιού.",

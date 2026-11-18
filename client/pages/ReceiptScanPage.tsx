@@ -258,6 +258,7 @@ export function ReceiptScanPage() {
   const stitchedUrlRef = useRef<string | null>(null);
   const stitchedPathRef = useRef<string | null>(null);
   const stitchSeqRef = useRef(0);
+  const workspaceRevisionRef = useRef(0);
   const readingRef = useRef(false);
   const pageUploadsRef = useRef(new Map<string, Promise<string | null>>());
   const validationSeqRef = useRef(0);
@@ -610,15 +611,17 @@ export function ReceiptScanPage() {
   };
 
   const handleFiles = async (files: File[]) => {
-    if (!files.length || readingRef.current) return;
+    if (!files.length || readingRef.current || busy || ocrRunning) return;
     readingRef.current = true;
     setBusy(true);
     setOcrError(null);
     if (provider !== "qr") setWarning(null);
-    const sequence = stitchSeqRef.current;
+    // Only resetting the workspace invalidates a read. Reset also removes its pages.
+    const revision = workspaceRevisionRef.current;
     const addedKeys: string[] = [];
     const links = new Map<string, ReceiptQrLink>();
     const hasDigitalDraft = provider === "qr" && lines.length > 0;
+    // Additional photos must preserve the existing product edits.
     const tryDigital = lines.length === 0;
     try {
       const decoder = tryDigital ? await import("@/receipt-qr").catch(() => null) : null;
@@ -631,7 +634,7 @@ export function ReceiptScanPage() {
           // Straighten each shot on its own before OCR: a combined photo would
           // confuse the corner finder and blur the seam.
           const scan = await scanDocument(prepared, { maxSize: 4000 });
-          if (sequence !== stitchSeqRef.current) return;
+          if (revision !== workspaceRevisionRef.current) return;
           const page: ReceiptPage = {
             key: newKey("page"),
             file: scan.file,
@@ -658,8 +661,9 @@ export function ReceiptScanPage() {
             method: "POST",
             body: { qr: [link.url] },
           });
-          if (sequence !== stitchSeqRef.current) return;
-          if (data.provider === "qr" && data.draft.lines.length) {
+          if (revision !== workspaceRevisionRef.current) return;
+          const currentLines = snapshotRef.current()?.lines ?? lines;
+          if (data.provider === "qr" && data.draft.lines.length && !currentLines.length) {
             applyScan(data);
             setManualMode(true);
             setDigitalLink(null);
@@ -672,7 +676,7 @@ export function ReceiptScanPage() {
           }
         } catch {
           // The original photo can still be parsed locally when the issuer is unavailable.
-          if (sequence !== stitchSeqRef.current) return;
+          if (revision !== workspaceRevisionRef.current) return;
           setDigitalLink(link.url);
         }
       }
@@ -680,12 +684,12 @@ export function ReceiptScanPage() {
         commitPages(pagesRef.current.map((page) => addedKeys.includes(page.key) ? { ...page, status: "done" } : page), false);
       } else {
         for (const key of addedKeys) {
-          if (sequence !== stitchSeqRef.current) return;
+          if (revision !== workspaceRevisionRef.current) return;
           const current = pagesRef.current;
           await runPageOcr(key, current.findIndex((page) => page.key === key), current.length);
         }
       }
-      if (sequence === stitchSeqRef.current) await rebuildStitch();
+      if (revision === workspaceRevisionRef.current) await rebuildStitch();
     } finally {
       readingRef.current = false;
       setBusy(false);
@@ -693,6 +697,7 @@ export function ReceiptScanPage() {
   };
 
   const removePage = async (key: string) => {
+    if (readingRef.current) return;
     const page = pagesRef.current.find((entry) => entry.key === key);
     if (page) URL.revokeObjectURL(page.url);
     commitPages(pagesRef.current.filter((entry) => entry.key !== key));
@@ -702,6 +707,7 @@ export function ReceiptScanPage() {
   };
 
   const movePage = async (key: string, direction: -1 | 1) => {
+    if (readingRef.current) return;
     const next = [...pagesRef.current];
     const index = next.findIndex((entry) => entry.key === key);
     const target = index + direction;
@@ -737,13 +743,13 @@ export function ReceiptScanPage() {
   };
 
   const handlePdf = async (file: File | undefined) => {
-    if (!file || readingRef.current || busy) return;
+    if (!file || readingRef.current || busy || ocrRunning) return;
     readingRef.current = true;
     setBusy(true);
-    const sequence = stitchSeqRef.current;
+    const revision = workspaceRevisionRef.current;
     try {
       const receiptText = (await readDigitalPdfText(file)).slice(0, 50000);
-      if (sequence !== stitchSeqRef.current) return;
+      if (revision !== workspaceRevisionRef.current) return;
       if (!receiptText) {
         toast.error(t("This PDF has no selectable text. Add a receipt photo to scan it."));
         return;
@@ -752,7 +758,7 @@ export function ReceiptScanPage() {
         method: "POST",
         body: { text: receiptText },
       });
-      if (sequence !== stitchSeqRef.current) return;
+      if (revision !== workspaceRevisionRef.current) return;
       const currentLines = snapshotRef.current()?.lines ?? lines;
       if (currentLines.length) {
         if (!data.draft.lines.length) {
@@ -761,6 +767,7 @@ export function ReceiptScanPage() {
         }
         if (!window.confirm(t("Replace the current receipt details and line edits with the PDF?"))) return;
       }
+      if (revision !== workspaceRevisionRef.current || (snapshotRef.current()?.lines ?? lines) !== currentLines) return;
       setManualMode(true);
       setText(data.selectedText ?? receiptText);
       setMergeRemoved(0);
@@ -1043,6 +1050,7 @@ export function ReceiptScanPage() {
   /* -------------------------------------------------------- reset & resume */
 
   const clearWorkspace = () => {
+    workspaceRevisionRef.current++;
     stitchSeqRef.current++;
     validationSeqRef.current++;
     for (const page of pagesRef.current) URL.revokeObjectURL(page.url);
@@ -1411,7 +1419,7 @@ export function ReceiptScanPage() {
                         <button
                           type="button"
                           onClick={() => void runPageOcr(activePage.key, activeIndex, pages.length)}
-                          disabled={ocrRunning || stitching || activePage.status === "reading"}
+                          disabled={busy || ocrRunning || stitching || activePage.status === "reading"}
                           aria-label={t("Re-run OCR for this page")}
                           className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-raised disabled:opacity-30"
                         >
@@ -1420,7 +1428,7 @@ export function ReceiptScanPage() {
                         <button
                           type="button"
                           onClick={() => void movePage(activePage.key, -1)}
-                          disabled={activeIndex <= 0}
+                          disabled={busy || activeIndex <= 0}
                           aria-label={t("Move this page earlier")}
                           className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-raised disabled:opacity-30"
                         >
@@ -1429,7 +1437,7 @@ export function ReceiptScanPage() {
                         <button
                           type="button"
                           onClick={() => void movePage(activePage.key, 1)}
-                          disabled={activeIndex >= pages.length - 1}
+                          disabled={busy || activeIndex >= pages.length - 1}
                           aria-label={t("Move this page later")}
                           className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-raised disabled:opacity-30"
                         >
@@ -1438,6 +1446,7 @@ export function ReceiptScanPage() {
                         <button
                           type="button"
                           onClick={() => void removePage(activePage.key)}
+                          disabled={busy}
                           aria-label={t("Remove this page")}
                           className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-raised hover:text-danger"
                         >

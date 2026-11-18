@@ -1,6 +1,7 @@
 import { matchReceiptQrLink, type ReceiptQrIssuer, type ReceiptQrLink } from "../../shared/receipt-qr-links.js";
 import type { ReceiptDraft } from "../../shared/types.js";
 import { outboundFetch } from "../lib/outbound.js";
+import { limiters } from "../rate-limit.js";
 import { parseEntersoftInvoiceHtml } from "./receipt-entersoft.js";
 
 /**
@@ -37,9 +38,6 @@ type EntersoftRef = NonNullable<ReceiptQrLink["entersoft"]>;
 const EPSILON_HOST = "epsilondigital-sklavenitis.epsilonnet.gr";
 const ENTERSOFT_HOST = "e-invoicing.gr";
 
-const EPSILON_FD_PATH = /^\/fd\/[0-9a-f]{32}:\d{1,10}$/i;
-const EPSILON_DOCVIEWER_PATH =
-  /^\/DocViewer\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ENTERSOFT_VIEWINVOICE_PATH =
   /^\/edocuments\/ViewInvoice\/-?\d{1,4}\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_[A-Za-z0-9]{8}$/i;
 
@@ -47,7 +45,7 @@ const REDIRECT_STATUS = new Set([301, 302, 303, 307, 308]);
 const MAX_REDIRECTS = 3;
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 8000;
-export const RECEIPT_QR_BUDGET_MS = 12000;
+const RECEIPT_QR_BUDGET_MS = 12000;
 
 /** Cloudflare Turnstile and the generic challenge script host. */
 const CHALLENGE_MARKERS = /challenges\.cloudflare\.com|cf-turnstile/i;
@@ -64,6 +62,13 @@ const ENTERSOFT_UNAVAILABLE_MESSAGE =
   "The digital receipt could not be read automatically. The photo scan and AI re-read remain available.";
 const UNSUPPORTED_MESSAGE = "That QR code or link is not from a supported digital receipt issuer.";
 const GENERIC_UNAVAILABLE_MESSAGE = "The digital receipt could not be fetched from the issuer.";
+const RATE_LIMIT_MESSAGE = "Too many digital receipt requests. Try again in a few minutes or scan the photo.";
+const STATUS_PRIORITY: Record<ReceiptQrStatus, number> = {
+  unsupported: 0,
+  unavailable: 1,
+  challenge: 2,
+  ok: 3,
+};
 
 /** Injected in tests; production goes through the SSRF-guarded outbound fetch. */
 let testFetch: QrFetch | null = null;
@@ -96,7 +101,12 @@ async function readBounded(response: Response, signal: AbortSignal): Promise<Uin
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
-  const cancel = () => { void reader.cancel().catch(() => undefined); };
+  let cancelled = false;
+  const cancel = () => {
+    if (cancelled) return;
+    cancelled = true;
+    void reader.cancel().catch(() => undefined);
+  };
   signal.addEventListener("abort", cancel, { once: true });
   try {
     if (signal.aborted) cancel();
@@ -113,6 +123,7 @@ async function readBounded(response: Response, signal: AbortSignal): Promise<Uin
       chunks.push(value);
     }
   } finally {
+    if (signal.aborted) cancel();
     signal.removeEventListener("abort", cancel);
     reader.releaseLock();
   }
@@ -140,7 +151,7 @@ function decodeHtmlBytes(bytes: Uint8Array, contentType: string): string {
     return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch (error) {
     const prefix = new TextDecoder("latin1").decode(bytes.subarray(0, 2048));
-    const declaration = /charset\s*=\s*["']?(windows-1253|iso-8859-7)\b/i;
+    const declaration = /charset\s*=\s*["']?(windows-1253|windows-1252|iso-8859-7|iso-8859-1)\b/i;
     const charset = contentType.match(declaration)?.[1] ?? prefix.match(declaration)?.[1];
     if (!charset) throw error;
     return new TextDecoder(charset).decode(bytes);
@@ -169,8 +180,13 @@ async function fetchPage(
       throw new IssuerPageError("redirect");
     }
     const signal = AbortSignal.timeout(Math.min(REQUEST_TIMEOUT_MS, remainingMs));
-    const response = await issuerFetch(current.toString(), signal);
-    signal.throwIfAborted();
+    let response: Response;
+    try {
+      response = await issuerFetch(current.toString(), signal);
+      signal.throwIfAborted();
+    } catch {
+      throw new IssuerPageError("network");
+    }
     if (REDIRECT_STATUS.has(response.status)) {
       const location = response.headers.get("location");
       void response.body?.cancel().catch(() => undefined);
@@ -194,14 +210,20 @@ async function fetchPage(
       void response.body?.cancel().catch(() => undefined);
       throw new IssuerPageError("content-type");
     }
-    const html = decodeHtmlBytes(await readBounded(response, signal), contentType);
-    return { url: current, html };
+    let bytes: Uint8Array;
+    try {
+      bytes = await readBounded(response, signal);
+    } catch (error) {
+      if (error instanceof IssuerPageError) throw error;
+      throw new IssuerPageError("network");
+    }
+    return { url: current, html: decodeHtmlBytes(bytes, contentType) };
   }
   throw new IssuerPageError("redirect");
 }
 
 function result(
-  issuer: ReceiptQrIssuer,
+  issuer: ReceiptQrIssuer | null,
   status: ReceiptQrStatus,
   message: string | null,
   draft: ReceiptDraft | null = null,
@@ -213,10 +235,13 @@ function result(
 
 /** Epsilon Digital (Sklavenitis): /fd/… redirects to a Blazor DocViewer that renders Cloudflare Turnstile before the PDF. */
 async function fetchEpsilon(link: ReceiptQrLink, deadline: number): Promise<ReceiptQrFetchResult> {
+  const receiptPath = new URL(link.url).pathname.toLowerCase();
+  const identifier = receiptPath.slice("/fd/".length).split(":")[0];
+  const viewerPath = "/docviewer/" + identifier.replace(/^(........)(....)(....)(....)(............)$/, "$1-$2-$3-$4-$5");
   const allowed = (url: URL) =>
     url.protocol === "https:" &&
     url.hostname === EPSILON_HOST &&
-    !url.search && (EPSILON_FD_PATH.test(url.pathname) || EPSILON_DOCVIEWER_PATH.test(url.pathname));
+    !url.search && [receiptPath, viewerPath].includes(url.pathname.toLowerCase());
   const page = await fetchPage(link.url, allowed, deadline);
   if (CHALLENGE_MARKERS.test(page.html)) {
     return result(link.issuer, "challenge", EPSILON_CHALLENGE_MESSAGE);
@@ -227,27 +252,24 @@ async function fetchEpsilon(link: ReceiptQrLink, deadline: number): Promise<Rece
 }
 
 /** Entersoft: the viewer page frames /api/GetInvoice with the document reference. */
-function pinnedGetInvoiceUrl(ref: EntersoftRef): string {
-  const params = new URLSearchParams({
+function invoiceParams(ref: EntersoftRef): URLSearchParams {
+  return new URLSearchParams({
     contentType: "PEPPOL",
     intRefDocID: ref.uuid,
     hashToken: ref.token,
     ofenm: ref.ofenm,
     isPreview: "True",
   });
-  return `https://${ENTERSOFT_HOST}/api/GetInvoice?${params.toString()}`;
 }
 
 function matchesPinnedInvoice(url: URL, ref: EntersoftRef): boolean {
   if (url.origin !== `https://${ENTERSOFT_HOST}` || url.pathname !== "/api/GetInvoice" ||
-      url.username || url.password || url.hash || url.searchParams.size !== 5) return false;
-  return (
-    url.searchParams.get("contentType") === "PEPPOL" &&
-    (url.searchParams.get("intRefDocID") ?? "").toLowerCase() === ref.uuid &&
-    url.searchParams.get("hashToken") === ref.token &&
-    url.searchParams.get("ofenm") === ref.ofenm &&
-    url.searchParams.get("isPreview") === "True"
-  );
+      url.username || url.password || url.hash) return false;
+  const expected = invoiceParams(ref);
+  return url.searchParams.size === expected.size && [...expected].every(([key, value]) => {
+    const values = url.searchParams.getAll(key);
+    return values.length === 1 && (key === "intRefDocID" ? values[0].toLowerCase() : values[0]) === value;
+  });
 }
 
 /** Only the iframe named iframeContent is honoured; its parameters must match the link. */
@@ -257,7 +279,8 @@ function iframeMatchesPinnedSource(html: string, ref: EntersoftRef): boolean {
     const src = tag.match(/\ssrc\s*=\s*(["'])(.*?)\1/i)?.[2];
     if (!src) return false;
     try {
-      return matchesPinnedInvoice(new URL(src.replace(/&amp;/gi, "&"), `https://${ENTERSOFT_HOST}`), ref);
+      const decoded = src.replace(/&(?:amp|#0*38|#x0*26);/gi, "&");
+      return matchesPinnedInvoice(new URL(decoded, `https://${ENTERSOFT_HOST}`), ref);
     } catch {
       return false;
     }
@@ -280,13 +303,13 @@ async function fetchEntersoft(link: ReceiptQrLink, deadline: number): Promise<Re
   if (!iframeMatchesPinnedSource(page.html, ref)) {
     return result(link.issuer, "unavailable", ENTERSOFT_UNAVAILABLE_MESSAGE);
   }
-  const documentUrl = pinnedGetInvoiceUrl(ref);
+  const documentUrl = `https://${ENTERSOFT_HOST}/api/GetInvoice?${invoiceParams(ref)}`;
   const document = await fetchPage(documentUrl, (url) => matchesPinnedInvoice(url, ref), deadline);
   if (CHALLENGE_MARKERS.test(document.html)) {
     return result(link.issuer, "challenge", ENTERSOFT_CHALLENGE_MESSAGE);
   }
   const parsed = parseEntersoftInvoiceHtml(document.html);
-  if (!parsed || (!parsed.draft.lines.length && parsed.draft.total == null)) {
+  if (!parsed?.draft.lines.length) {
     return result(link.issuer, "unavailable", ENTERSOFT_UNAVAILABLE_MESSAGE);
   }
   return result(link.issuer, "ok", null, parsed.draft, parsed.text, parsed.excludedCharges);
@@ -303,14 +326,15 @@ function messageForError(issuer: ReceiptQrIssuer, error: IssuerPageError): strin
  * links and every failure mode come back as a status with a safe message, so
  * the scan flow can fall back to the photo scan honestly.
  */
-export async function fetchQrReceiptDraft(
+export function fetchQrReceiptDraft(
   payload: string,
   deadline = Date.now() + RECEIPT_QR_BUDGET_MS,
 ): Promise<ReceiptQrFetchResult> {
   const link = matchReceiptQrLink(payload);
-  if (!link) {
-    return { status: "unsupported", issuer: null, message: UNSUPPORTED_MESSAGE, draft: null, text: null, excludedCharges: 0 };
-  }
+  return link ? fetchIssuerReceipt(link, deadline) : Promise.resolve(result(null, "unsupported", UNSUPPORTED_MESSAGE));
+}
+
+async function fetchIssuerReceipt(link: ReceiptQrLink, deadline: number): Promise<ReceiptQrFetchResult> {
   try {
     return link.issuer === "epsilon-sklavenitis"
       ? await fetchEpsilon(link, deadline)
@@ -322,4 +346,28 @@ export async function fetchQrReceiptDraft(
     // Unexpected errors must not surface the bearer link; keep the message generic.
     return result(link.issuer, "unavailable", GENERIC_UNAVAILABLE_MESSAGE);
   }
+}
+
+/** Resolve at most two allowlisted links for an authorized household, with one budget for the scan. */
+export async function readQrReceiptScan(houseId: string, payloads: string[]): Promise<ReceiptQrFetchResult> {
+  const links = [...new Set(payloads.map((payload) => payload.trim()))]
+    .map(matchReceiptQrLink)
+    .filter((link) => link !== null)
+    .slice(0, 2);
+  let best = result(null, "unsupported", UNSUPPORTED_MESSAGE);
+  if (!links.length) return best;
+  if (limiters.receiptQr.blocked(houseId) || limiters.receiptQrGlobal.blocked("all")) {
+    return result(links[0].issuer, "unavailable", RATE_LIMIT_MESSAGE);
+  }
+
+  // Count attempts before contacting issuers so failed requests are bounded too.
+  limiters.receiptQr.hit(houseId);
+  limiters.receiptQrGlobal.hit("all");
+  const deadline = Date.now() + RECEIPT_QR_BUDGET_MS;
+  for (const link of links) {
+    const current = await fetchIssuerReceipt(link, deadline);
+    if (current.status === "ok") return current;
+    if (STATUS_PRIORITY[current.status] > STATUS_PRIORITY[best.status]) best = current;
+  }
+  return best;
 }

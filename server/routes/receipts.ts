@@ -21,9 +21,7 @@ import {
 } from "../services/vendors.js";
 import { selectReceiptTemplate } from "../services/receipt-templates.js";
 import { lidlExcludedCharges } from "../services/receipt-lidl.js";
-import { fetchQrReceiptDraft, RECEIPT_QR_BUDGET_MS } from "../services/receipt-qr.js";
-import { limiters } from "../rate-limit.js";
-import { matchReceiptQrLink } from "../../shared/receipt-qr-links.js";
+import { readQrReceiptScan } from "../services/receipt-qr.js";
 import { hasOcrNumericDisagreement, selectOcrCandidate } from "../services/receipt-candidates.js";
 import { learnProductAlias } from "../services/product-aliases.js";
 import { suggestProductMatches } from "../services/product-match.js";
@@ -53,7 +51,6 @@ import type {
   ReceiptDraft,
   ReceiptDuplicate,
   ReceiptProvider,
-  ReceiptQrInfo,
   ReceiptScanResponse,
   ReceiptStockRevert,
   ReceiptValidation,
@@ -462,7 +459,7 @@ receiptRoutes.post(
     );
     let rawText = (body.text ?? "").trim();
     const visionPaths = body.images?.length ? body.images : body.image ? [body.image] : [];
-    const qrPayloads = [...new Set((body.qr ?? []).map((payload) => payload.trim()).filter(Boolean))].slice(0, 2);
+    const qrPayloads = (body.qr ?? []).filter((payload) => payload.trim());
     if (!rawText && !visionPaths.length && !qrPayloads.length) throw new ApiError(400, "Provide receipt text or a scan image");
     await ownedOr400([...(body.images ?? []), body.image], houseId);
 
@@ -473,48 +470,14 @@ receiptRoutes.post(
     const currency = house.currency ?? null;
     const warnings: string[] = [];
 
-    // Digital receipt behind an issuer QR link, fetched server-side through
-    // this authenticated scan. On success it supersedes the text parsers; an
-    // explicit "Re-read with AI" still wins below. Failures come back as a
-    // warning so the photo scan can proceed honestly.
-    let qrDraft: ReceiptDraft | null = null;
-    let qrText: string | null = null;
-    let qrExcludedCharges = 0;
-    let qrInfo: ReceiptQrInfo | null = null;
-    if (!body.preferAi && qrPayloads.length) {
-      const recognized = qrPayloads.map(matchReceiptQrLink).find((link) => link !== null);
-      const wait = recognized && (limiters.receiptQr.blocked(houseId) || limiters.receiptQrGlobal.blocked("all"));
-      if (recognized && wait) {
-        qrInfo = {
-          issuer: recognized.issuer,
-          status: "unavailable",
-          message: "Too many digital receipt requests. Try again in a few minutes or scan the photo.",
-        };
-      } else {
-        if (recognized) {
-          limiters.receiptQr.hit(houseId);
-          limiters.receiptQrGlobal.hit("all");
-        }
-        const deadline = Date.now() + RECEIPT_QR_BUDGET_MS;
-        for (const payload of qrPayloads) {
-          const fetched = await fetchQrReceiptDraft(payload, deadline);
-          const info = { issuer: fetched.issuer, status: fetched.status, message: fetched.message };
-          if (fetched.status === "ok" && fetched.draft && fetched.draft.lines.length) {
-            qrInfo = info;
-            qrDraft = fetched.draft;
-            qrText = fetched.text;
-            qrExcludedCharges = fetched.excludedCharges;
-            break;
-          }
-          if (qrInfo?.status !== "challenge" && (info.status !== "unsupported" || qrInfo == null)) qrInfo = info;
-        }
-      }
-      // The digital text becomes the scan's text: AI re-reads get it as
-      // context, the shop catalogue detects the vendor from it, and the client
-      // shows it as the source of the draft.
-      if (qrDraft && qrText) rawText = qrText;
-      if (!qrDraft) warnings.push(qrInfo?.message ?? "The digital receipt link could not be read automatically.");
-    }
+    // Membership and upload ownership are checked above. The QR service
+    // validates the issuer allowlist before reserving a slot or fetching.
+    const qrImport = !body.preferAi && qrPayloads.length ? await readQrReceiptScan(houseId, qrPayloads) : null;
+    const qrDraft = qrImport?.draft ?? null;
+    const qrText = qrImport?.text ?? null;
+    const qrExcludedCharges = qrImport?.excludedCharges ?? 0;
+    if (qrText) rawText = qrText;
+    if (qrImport?.message) warnings.push(qrImport.message);
 
     const canUseAi = cfg.enabled && Boolean(rawText || (visionPaths.length && hasVisionModel));
     const template = qrDraft ? null : await selectReceiptTemplate(rawText, houseId);
@@ -707,7 +670,7 @@ receiptRoutes.post(
       aiAvailable: canUseAi,
       reconciliation: draftReconciliation(draft),
       ...(candidateSelected || qrText ? { selectedText: rawText } : {}),
-      ...(qrInfo ? { qr: qrInfo } : {}),
+      ...(qrImport ? { qr: { issuer: qrImport.issuer, status: qrImport.status, message: qrImport.message } } : {}),
       draft,
     };
     res.json(response);
