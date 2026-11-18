@@ -43,6 +43,12 @@ function html(body: string) {
   return new Response(body, { headers: { "content-type": "text/html" } });
 }
 
+function invoiceDraft(body: string) {
+  const parsed = parseEntersoftInvoiceHtml(body);
+  assert.ok(parsed.status === "ok");
+  return parsed.draft;
+}
+
 afterEach(() => configureReceiptQrFetcherForTests(null));
 
 test("reads a pinned Entersoft document and preserves the amounts and weighted quantity", async () => {
@@ -293,7 +299,9 @@ test("decodes an explicitly declared Greek charset and rejects unlabeled item co
   configureReceiptQrFetcherForTests(async (url) => url === entersoftUrl
     ? html(`<iframe id="iframeContent" src="${issuerPath.replaceAll("&", "&amp;")}"></iframe>`)
     : html(invoice.replace('data-title="Συνολική Αξία"', 'data-title="Άγνωστη στήλη"')));
-  assert.equal((await fetchQrReceiptDraft(entersoftUrl)).status, "unavailable");
+  const incomplete = await fetchQrReceiptDraft(entersoftUrl);
+  assert.equal(incomplete.status, "unavailable");
+  assert.match(incomplete.message ?? "", /incomplete product line/);
 });
 
 test("recognizes an Entersoft frame on a declared Latin-1 viewer page", async () => {
@@ -309,27 +317,26 @@ test("parses grouped totals and explicitly free items without taking dates from 
     ${item("SKU-B", "PROMO 12-11-2026", "Τεμάχιο", "1", "1.234,56", "0,00", "1.234,56")}
     ${item("GIFT", "Gift", "Τεμάχιο", "1", "2,00", "2,00", "")}
   </tbody></table><div>ΤΕΛΙΚΗ ΑΞΙΑ 1.234,56EUR</div>`;
-  const result = parseEntersoftInvoiceHtml(document);
-  assert.ok(result);
-  assert.equal(result.draft.total, 1234.56);
-  assert.equal(result.draft.purchasedAt, null);
-  assert.deepEqual(result.draft.lines.map((line) => line.lineTotal), [1234.56, 0]);
-  assert.equal(parseEntersoftInvoiceHtml(document.replace('data-title="Έκπτωση">2,00', 'data-title="Έκπτωση">1,00')), null);
+  const draft = invoiceDraft(document);
+  assert.equal(draft.total, 1234.56);
+  assert.equal(draft.purchasedAt, null);
+  assert.deepEqual(draft.lines.map((line) => line.lineTotal), [1234.56, 0]);
+  assert.equal(parseEntersoftInvoiceHtml(document.replace('data-title="Έκπτωση">2,00', 'data-title="Έκπτωση">1,00')).status, "incomplete");
 });
 
 test("reads the VAT summary when the breakdown appears first", () => {
   const document = invoice.replace("<div>Φ.Π.Α</div><div>0,41EUR</div>", "")
     .replace("<div>ΣΤΟΙΧΕΙΑ ΠΛΗΡΩΜΗΣ</div>", "<div>ΣΤΟΙΧΕΙΑ ΠΛΗΡΩΜΗΣ</div><div>Φ.Π.Α</div><div>0,59EUR</div>");
-  assert.equal(parseEntersoftInvoiceHtml(document)?.draft.tax, 0.59);
+  assert.equal(invoiceDraft(document).tax, 0.59);
   for (const label of ["Αρ.Παραστατικού:12 3456", "Αρ. Παραστατικού : 12 3456&nbsp;"]) {
     const withNumber = document.replace("Αρ. Παραστατικού: 12 3456", label);
-    assert.equal(parseEntersoftInvoiceHtml(withNumber)?.draft.notes, "Αρ. Παραστατικού 12 3456");
+    assert.equal(invoiceDraft(withNumber).notes, "Αρ. Παραστατικού 12 3456");
   }
 });
 
 test("accepts an issuer column title wrapped across lines", () => {
   const wrapped = invoice.replace('data-title="Συνολική Αξία"', 'data-title="Συνολική\n Αξία"');
-  assert.equal(parseEntersoftInvoiceHtml(wrapped)?.draft.lines[0].lineTotal, 3.5);
+  assert.equal(invoiceDraft(wrapped).lines[0].lineTotal, 3.5);
 });
 
 test("keeps the issuer's recovery instructions on an undecodable page", async () => {
@@ -348,7 +355,7 @@ test("recognizes a blank total with an explicitly zero unit price", () => {
   const free = item("FREE", "Free sample", "Τεμάχιο", "1", "", "", "")
     .replace('data-title="Τιμή μονάδας">2,00', 'data-title="Τιμή μονάδας">0,00');
   const wrap = (row: string) => `<table><tbody>${row}</tbody></table>`;
-  assert.equal(parseEntersoftInvoiceHtml(wrap(free))?.draft.lines[0].lineTotal, 0);
+  assert.equal(invoiceDraft(wrap(free)).lines[0].lineTotal, 0);
   const unpriced = free.replace('data-title="Τιμή μονάδας">0,00', 'data-title="Τιμή μονάδας">');
-  assert.equal(parseEntersoftInvoiceHtml(wrap(unpriced)), null);
+  assert.equal(parseEntersoftInvoiceHtml(wrap(unpriced)).status, "incomplete");
 });

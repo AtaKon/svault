@@ -30,13 +30,14 @@ import { detectDate, parseAmount, parseQuantity } from "./receipt-local.js";
  * never makes a row a fee.
  */
 
-export interface EntersoftInvoiceParse {
+export type EntersoftInvoiceParse = { status: "incomplete" | "unavailable" } | {
+  status: "ok";
   draft: ReceiptDraft;
   /** Plain-text rendition of the invoice, for provenance and vendor detection. */
   text: string;
   /** Sum of fee-only rows excluded from the lines but still in the total. */
   excludedCharges: number;
-}
+};
 
 interface EntersoftRow {
   code: string | null;
@@ -165,7 +166,7 @@ function parseVatBreakdown(html: string): TaxBreakdownEntry[] {
 }
 
 /** Parse the item table rows; returns null when the page has no such table. */
-function parseRows(html: string): EntersoftRow[] | null {
+function parseRows(html: string): EntersoftRow[] | "incomplete" | null {
   const table = html.match(/<tbody[^>]*>([\s\S]*?)<\/tbody>/i);
   if (!table) return null;
   const rows: EntersoftRow[] = [];
@@ -200,7 +201,7 @@ function parseRows(html: string): EntersoftRow[] | null {
     }
     // An incomplete labeled item would create a partial purchase draft.
     if (!row.description || !row.quantity || !row.lineTotal ||
-        parseQuantity(row.quantity) == null || parseAmount(row.lineTotal) == null) return null;
+        parseQuantity(row.quantity) == null || parseAmount(row.lineTotal) == null) return "incomplete";
     rows.push(row);
   }
   return rows.length ? rows : null;
@@ -218,17 +219,18 @@ function mapUnit(raw: string | null): string | null {
 }
 
 /**
- * Parse an Entersoft invoice page. Returns null when the HTML does not look
- * like the expected document, so the caller can fall back honestly.
+ * Parse an Entersoft invoice page. Incomplete labeled rows get a distinct
+ * result so the caller can explain why photo OCR is needed.
  */
 export function parseEntersoftInvoiceHtml(
   html: string,
   fallbackCurrency: string | null = null,
-): EntersoftInvoiceParse | null {
+): EntersoftInvoiceParse {
   const source = String(html ?? "");
-  if (!source.trim()) return null;
+  if (!source.trim()) return { status: "unavailable" };
   const rows = parseRows(source);
-  if (!rows) return null;
+  if (!rows) return { status: "unavailable" };
+  if (rows === "incomplete") return { status: "incomplete" };
 
   const fullText = stripTags(source);
   const foldedFullText = foldGreek(fullText);
@@ -247,7 +249,6 @@ export function parseEntersoftInvoiceHtml(
   const purchasedAt = findDate(foldedFullText);
   const vendorName = findVendor(source);
   const receiptNumber = findReceiptNumber(source);
-  if (total == null && !rows.some((row) => row.lineTotal)) return null;
 
   const lines: ReceiptDraft["lines"] = [];
   const textLines: string[] = [];
@@ -331,5 +332,5 @@ export function parseEntersoftInvoiceHtml(
     notes: receiptNumber ? `Αρ. Παραστατικού ${receiptNumber}` : null,
     lines,
   };
-  return { draft, text: textLines.join("\n"), excludedCharges };
+  return { status: "ok", draft, text: textLines.join("\n"), excludedCharges };
 }

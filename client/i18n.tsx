@@ -1964,6 +1964,8 @@ const EL: Record<string, string> = {
   "No product lines found in the receipt PDF.": "Δεν βρέθηκαν γραμμές προϊόντων στο PDF της απόδειξης.",
   "Replace the current receipt details and line edits with the PDF?": "Να αντικατασταθούν τα τρέχοντα στοιχεία και οι αλλαγές στις γραμμές της απόδειξης από το PDF;",
   "Your edits were kept. Start over to import the digital receipt.": "Οι αλλαγές σας διατηρήθηκαν. Ξεκινήστε από την αρχή για να εισαγάγετε την ψηφιακή απόδειξη.",
+  "The digital receipt could not be loaded. Reading the photo instead.": "Δεν ήταν δυνατή η φόρτωση της ψηφιακής απόδειξης. Γίνεται ανάγνωση της φωτογραφίας.",
+  "The digital receipt contains an incomplete product line. Use a photo to read the full receipt.": "Η ψηφιακή απόδειξη περιέχει ελλιπή γραμμή προϊόντος. Χρησιμοποιήστε μια φωτογραφία για ανάγνωση ολόκληρης της απόδειξης.",
   "These photos contain different receipt links. Scan one receipt at a time.": "Οι φωτογραφίες περιέχουν διαφορετικούς συνδέσμους αποδείξεων. Σαρώστε μία απόδειξη κάθε φορά.",
   "Import receipt PDF": "Εισαγωγή PDF απόδειξης",
   "Open digital receipt": "Άνοιγμα ψηφιακής απόδειξης",

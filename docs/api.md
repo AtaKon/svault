@@ -635,8 +635,8 @@ scanned separately.
 A successful read returns `provider: "qr"`. The optional `qr` response reports the issuer and outcome
 (`ok`, `challenge`, `unsupported`, or `unavailable`). For a challenge, the client can open the issuer's
 viewer and send text extracted from the verified PDF through the same endpoint.
-Entersoft receipts with an incomplete labeled product fall back to local parsing to avoid
-presenting a partial receipt as complete.
+Entersoft receipts with an incomplete labeled product fall back to local parsing and explain
+that the photo is needed to read the full receipt.
 The endpoint returns HTTP 200 with the local draft on `challenge`, `unsupported`, or `unavailable`,
 using the supplied text when present. Issuer lookups share a 12-second budget per request. The
 default limits are 20 recognized link attempts per household and 120 per server process in five

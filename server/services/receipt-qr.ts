@@ -65,6 +65,8 @@ const ENTERSOFT_CHALLENGE_MESSAGE =
   "Entersoft requires browser verification. Open the digital receipt to verify it, or continue with the photo scan.";
 const ENTERSOFT_UNAVAILABLE_MESSAGE =
   "The digital receipt could not be read automatically. The photo scan and AI re-read remain available.";
+const ENTERSOFT_INCOMPLETE_MESSAGE =
+  "The digital receipt contains an incomplete product line. Use a photo to read the full receipt.";
 const UNSUPPORTED_MESSAGE = "That QR code or link is not from a supported digital receipt issuer.";
 const GENERIC_UNAVAILABLE_MESSAGE = "The digital receipt could not be fetched from the issuer.";
 const RATE_LIMIT_MESSAGE = "Too many digital receipt requests. Try again in a few minutes or scan the photo.";
@@ -309,10 +311,13 @@ async function fetchEntersoft(link: EntersoftLink, signal: AbortSignal): Promise
     return result(link.issuer, "challenge", ENTERSOFT_CHALLENGE_MESSAGE);
   }
   const parsed = parseEntersoftInvoiceHtml(document.html);
-  if (!parsed?.draft.lines.length || !parsed.text.trim()) {
+  if (parsed.status === "incomplete") {
+    return result(link.issuer, "unavailable", ENTERSOFT_INCOMPLETE_MESSAGE);
+  }
+  if (parsed.status !== "ok" || !parsed.draft.lines.length || !parsed.text.trim()) {
     return result(link.issuer, "unavailable", ENTERSOFT_UNAVAILABLE_MESSAGE);
   }
-  return { status: "ok", issuer: link.issuer, ...parsed, message: null };
+  return { ...parsed, issuer: link.issuer, message: null };
 }
 
 function messageForError(issuer: ReceiptQrIssuer, error: IssuerPageError): string {
@@ -386,15 +391,16 @@ export async function readQrReceiptScan(
   let verification: ReceiptQrFailure | null = null;
   let firstFailure: ReceiptQrFailure | null = null;
   let currentIssuer = links[0].issuer;
+  const deadline = Date.now() + timeoutMs;
   // An earlier verification result stays actionable if a later issuer times out.
   const onTimeout = () => verification ?? timedOut(currentIssuer);
   return withinQrBudget(timeoutMs, async (signal) => {
     for (const link of links) {
-      if (signal.aborted) break;
       if (limiters.receiptQr.blocked(houseId) || limiters.receiptQrGlobal.blocked("all")) {
         return verification ?? result(link.issuer, "unavailable", RATE_LIMIT_MESSAGE);
       }
       // Charge each attempted link, including unsuccessful lookups.
+      if (signal.aborted || Date.now() >= deadline) return onTimeout();
       limiters.receiptQr.hit(houseId);
       limiters.receiptQrGlobal.hit("all");
       currentIssuer = link.issuer;

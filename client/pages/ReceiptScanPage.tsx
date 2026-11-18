@@ -118,6 +118,19 @@ interface SavedDraft {
 const AUTO_SELECT_SCORE = 0.9;
 const MAX_VISION_PAGES = 8;
 
+function hasEditedReceiptText(draft: SavedDraft): boolean {
+  return Boolean(draft.text.trim()) && draft.text.trim() !== mergeOcrTexts(draft.pages.map((page) => page.text)).text.trim();
+}
+
+function hasReceiptDetails(draft: SavedDraft, defaultCurrency: string): boolean {
+  return Boolean(
+    draft.provider || draft.lines.length || draft.vendorName.trim() || draft.locationId ||
+    draft.purchasedAt !== todayInput() || draft.currency !== defaultCurrency ||
+    draft.total || draft.subtotal || draft.tax || draft.savings || draft.taxBreakdown.length ||
+    hasEditedReceiptText(draft),
+  );
+}
+
 function numberOrNull(value: string): number | null {
   if (!value.trim()) return null;
   const parsed = Number(value.replace(",", "."));
@@ -511,7 +524,7 @@ export function ReceiptScanPage() {
   };
 
   // Callers gate concurrent reads. The active photo batch uses this while busy.
-  const runPageOcr = async (key: string, index: number, count: number) => {
+  const runPageOcr = async (key: string, index: number, count: number, preserveEdits = false) => {
     const page = pagesRef.current.find((entry) => entry.key === key);
     if (!page) return;
     const revision = workspaceRevisionRef.current;
@@ -519,7 +532,8 @@ export function ReceiptScanPage() {
     setOcrProgress(0);
     setOcrStatus(count > 1 ? t("Reading page {page} of {count}", { page: index + 1, count }) : t("Starting OCR"));
     setOcrError(null);
-    patchPage(key, { status: "reading" });
+    const mergePageText = () => !preserveEdits || !hasEditedReceiptText(snapshotRef.current() ?? snapshot());
+    patchPage(key, { status: "reading" }, mergePageText());
     try {
       let candidates: string[] = [];
       const result = await ocrImage(
@@ -535,7 +549,7 @@ export function ReceiptScanPage() {
       );
       if (revision !== workspaceRevisionRef.current) return;
       const recognised = result.trim();
-      patchPage(key, { text: recognised, candidates, status: "done" });
+      patchPage(key, { text: recognised, candidates, status: "done" }, mergePageText());
       if (!recognised) {
         setOcrError(
           t("Page {page} had no detectable text. Try a sharper, flatter photo or type the lines manually.", { page: index + 1 }),
@@ -543,7 +557,7 @@ export function ReceiptScanPage() {
       }
     } catch (err) {
       if (revision !== workspaceRevisionRef.current) return;
-      patchPage(key, { status: "error" });
+      patchPage(key, { status: "error" }, mergePageText());
       setOcrError(err instanceof Error ? t(err.message) : t("Page {page}: OCR failed", { page: index + 1 }));
     } finally {
       setOcrRunning(false);
@@ -628,16 +642,13 @@ export function ReceiptScanPage() {
     if (!files.length || readingRef.current || busy || ocrRunning) return;
     readingRef.current = true;
     setBusy(true);
-    setOcrError(null);
-    if (provider !== "qr") setWarning(null);
     // Only resetting the workspace invalidates a read. Reset also removes its pages.
     const revision = workspaceRevisionRef.current;
     const addedKeys: string[] = [];
     const links = new Map<string, ReceiptQrLink>();
-    const existingLines = snapshotRef.current()?.lines ?? lines;
-    const hasDigitalDraft = provider === "qr" && existingLines.length > 0;
-    // Additional photos must preserve the existing product edits.
-    const tryDigital = existingLines.length === 0;
+    const existingDraft = snapshotRef.current() ?? snapshot();
+    const hasDigitalDraft = existingDraft.provider === "qr";
+    const tryDigital = !hasReceiptDetails(existingDraft, house.currency);
     try {
       const decoder = tryDigital ? await import("@/receipt-qr").catch(() => null) : null;
       if (decoder) {
@@ -653,6 +664,8 @@ export function ReceiptScanPage() {
           }
         }
       }
+      setOcrError(null);
+      if (!hasDigitalDraft) setWarning(null);
       for (const file of files) {
         try {
           const prepared = await prepareImage(file, { maxSize: 4000, quality: 0.92 });
@@ -687,9 +700,8 @@ export function ReceiptScanPage() {
             body: { qr: [link.url] },
           });
           if (revision !== workspaceRevisionRef.current) return;
-          const currentLines = snapshotRef.current()?.lines ?? lines;
           if (data.provider === "qr" && data.draft.lines.length) {
-            if (currentLines.length) {
+            if (hasReceiptDetails(snapshotRef.current() ?? snapshot(), house.currency)) {
               setWarning("Your edits were kept. Start over to import the digital receipt.");
               setDigitalLink(link.url);
             } else {
@@ -707,6 +719,7 @@ export function ReceiptScanPage() {
         } catch {
           // The original photo can still be parsed locally when the issuer is unavailable.
           if (revision !== workspaceRevisionRef.current) return;
+          setWarning("The digital receipt could not be loaded. Reading the photo instead.");
           setDigitalLink(link.url);
         }
       }
@@ -716,7 +729,7 @@ export function ReceiptScanPage() {
         for (const key of addedKeys) {
           if (revision !== workspaceRevisionRef.current) return;
           const current = pagesRef.current;
-          await runPageOcr(key, current.findIndex((page) => page.key === key), current.length);
+          await runPageOcr(key, current.findIndex((page) => page.key === key), current.length, true);
         }
       }
       if (revision === workspaceRevisionRef.current) await rebuildStitch();
@@ -794,8 +807,8 @@ export function ReceiptScanPage() {
         toast.error(t("No product lines found in the receipt PDF."));
         return;
       }
-      const currentLines = snapshotRef.current()?.lines ?? lines;
-      if (currentLines.length && !window.confirm(t("Replace the current receipt details and line edits with the PDF?"))) return;
+      if (hasReceiptDetails(snapshotRef.current() ?? snapshot(), house.currency) &&
+          !window.confirm(t("Replace the current receipt details and line edits with the PDF?"))) return;
       // The native confirmation blocks the page's event loop. A reset
       // invalidates the pending import regardless of the dialog result.
       if (revision !== workspaceRevisionRef.current) return;
