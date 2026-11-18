@@ -200,7 +200,9 @@ function parseRows(html: string): EntersoftRow[] | "incomplete" | null {
       else if (before == null && discount === 0 && row.unitPrice && parseAmount(row.unitPrice) === 0) row.lineTotal = "0,00";
     }
     // Fees need a posted amount. Products also need a name and quantity.
-    if (!row.lineTotal || parseAmount(row.lineTotal) == null) return "incomplete";
+    // Credits and returns need OCR review rather than a zero-value product.
+    const total = row.lineTotal ? parseAmount(row.lineTotal) : null;
+    if (total == null || total < 0) return "incomplete";
     if (!isFeeRow(row) && (!row.description || !row.quantity || parseQuantity(row.quantity) == null)) return "incomplete";
     rows.push(row);
   }
