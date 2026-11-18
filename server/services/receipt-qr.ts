@@ -337,7 +337,7 @@ export function fetchQrReceiptDraft(
 ): Promise<ReceiptQrFetchResult> {
   const link = matchReceiptQrLink(payload);
   if (!link) return Promise.resolve(result(null, "unsupported", UNSUPPORTED_MESSAGE));
-  return withinQrBudget(timeoutMs, (signal) => fetchIssuerReceipt(link, signal), () => timedOut(link.issuer));
+  return fetchWithinBudget(link, timeoutMs);
 }
 
 async function fetchIssuerReceipt(link: ReceiptQrLink, signal: AbortSignal): Promise<ReceiptQrFetchResult> {
@@ -354,62 +354,36 @@ async function fetchIssuerReceipt(link: ReceiptQrLink, signal: AbortSignal): Pro
   }
 }
 
-function timedOut(issuer: ReceiptQrIssuer) {
-  return result(issuer, "unavailable", messageForError(issuer, new IssuerPageError("network")));
-}
-
-/** The deadline covers every link and redirect, even if a transport ignores abort. */
-async function withinQrBudget(
-  timeoutMs: number,
-  read: (signal: AbortSignal) => Promise<ReceiptQrFetchResult>,
-  onTimeout: () => ReceiptQrFetchResult,
-): Promise<ReceiptQrFetchResult> {
+/** One deadline covers the issuer's viewer, invoice and redirect hops. */
+async function fetchWithinBudget(link: ReceiptQrLink, timeoutMs: number): Promise<ReceiptQrFetchResult> {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<ReceiptQrFetchResult>((resolve) => {
     timer = setTimeout(() => {
       controller.abort();
-      resolve(onTimeout());
+      resolve(result(link.issuer, "unavailable", messageForError(link.issuer, new IssuerPageError("network"))));
     }, timeoutMs);
   });
   try {
-    return await Promise.race([read(controller.signal), timeout]);
+    // The race observes both promises even if the issuer settles after abort.
+    return await Promise.race([fetchIssuerReceipt(link, controller.signal), timeout]);
   } finally {
     clearTimeout(timer);
   }
 }
 
-/** Resolve at most two allowlisted links for an authorized household, with one budget for the scan. */
+/** Resolve one allowlisted link for an authorized household. */
 export async function readQrReceiptScan(
   houseId: string,
-  payloads: string[],
+  payload: string,
   timeoutMs = RECEIPT_QR_BUDGET_MS,
 ): Promise<ReceiptQrFetchResult> {
-  const supported = payloads.map(matchReceiptQrLink).filter((link) => link !== null);
-  const links = [...new Map(supported.map((link) => [link.url, link])).values()].slice(0, 2);
-  if (!links.length) return result(null, "unsupported", UNSUPPORTED_MESSAGE);
-  let verification: ReceiptQrFailure | null = null;
-  let firstFailure: ReceiptQrFailure | null = null;
-  let currentIssuer = links[0].issuer;
-  const deadline = Date.now() + timeoutMs;
-  // An earlier verification result stays actionable if a later issuer times out.
-  const onTimeout = () => verification ?? timedOut(currentIssuer);
-  return withinQrBudget(timeoutMs, async (signal) => {
-    for (const link of links) {
-      if (limiters.receiptQr.blocked(houseId) || limiters.receiptQrGlobal.blocked("all")) {
-        return verification ?? result(link.issuer, "unavailable", RATE_LIMIT_MESSAGE);
-      }
-      // Charge each attempted link, including unsuccessful lookups.
-      if (signal.aborted || Date.now() >= deadline) return onTimeout();
-      limiters.receiptQr.hit(houseId);
-      limiters.receiptQrGlobal.hit("all");
-      currentIssuer = link.issuer;
-      const current = await fetchIssuerReceipt(link, signal);
-      if (current.status === "ok") return current;
-      // Save each completed outcome before starting a subsequent link.
-      if (current.status === "challenge") verification ??= current;
-      else firstFailure ??= current;
-    }
-    return verification ?? firstFailure ?? timedOut(currentIssuer);
-  }, onTimeout);
+  const link = matchReceiptQrLink(payload);
+  if (!link) return result(null, "unsupported", UNSUPPORTED_MESSAGE);
+  if (limiters.receiptQr.blocked(houseId) || limiters.receiptQrGlobal.blocked("all")) {
+    return result(link.issuer, "unavailable", RATE_LIMIT_MESSAGE);
+  }
+  limiters.receiptQr.hit(houseId);
+  limiters.receiptQrGlobal.hit("all");
+  return fetchWithinBudget(link, timeoutMs);
 }

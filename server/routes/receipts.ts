@@ -450,8 +450,8 @@ receiptRoutes.post(
         image: receiptImage.optional(),
         /** Each page photo, in order, for the vision model. */
         images: z.array(receiptImage).max(MAX_SCAN_IMAGES).optional(),
-        /** Issuer QR payloads (decoded photos or a pasted link), tried before any text parsing. */
-        qr: z.array(z.string().min(1).max(600)).max(2).optional(),
+        /** A decoded issuer QR link, tried before text parsing. */
+        qr: z.string().trim().min(1).max(600).optional(),
         /** Skip the template and let AI read the receipt ("Re-read with AI"). */
         preferAi: z.boolean().optional(),
       }),
@@ -459,8 +459,7 @@ receiptRoutes.post(
     );
     let rawText = (body.text ?? "").trim();
     const visionPaths = body.images?.length ? body.images : body.image ? [body.image] : [];
-    const qrPayloads = (body.qr ?? []).filter((payload) => payload.trim());
-    if (!rawText && !visionPaths.length && !qrPayloads.length) throw new ApiError(400, "Provide receipt text or a scan image");
+    if (!rawText && !visionPaths.length && !body.qr) throw new ApiError(400, "Provide receipt text or a scan image");
     await ownedOr400([...(body.images ?? []), body.image], houseId);
 
     const house = (await get<any>("SELECT * FROM houses WHERE id = ?", [houseId]))!;
@@ -472,7 +471,7 @@ receiptRoutes.post(
 
     // Membership and upload ownership are checked above. The QR service
     // validates the issuer allowlist before reserving a slot or fetching.
-    const qrImport = !body.preferAi && qrPayloads.length ? await readQrReceiptScan(houseId, qrPayloads) : null;
+    const qrImport = !body.preferAi && body.qr ? await readQrReceiptScan(houseId, body.qr) : null;
     // The issuer service returns success only with product lines and source text.
     const digitalReceipt = qrImport?.status === "ok" ? qrImport : null;
     const qrDraft = digitalReceipt?.draft;

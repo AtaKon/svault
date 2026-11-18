@@ -42,13 +42,14 @@ export function matchReceiptQrLink(payload: string): ReceiptQrLink | null {
   } catch {
     return null;
   }
-  // No credentials, nondefault ports, query strings or fragments: the issuers'
-  // QR links are bare paths and anything else is unexpected.
+  // URL normalizes the HTTPS default port. Reject other ports, credentials,
+  // queries and fragments before matching the issuer's receipt path.
   if (url.username || url.password || url.port || url.search || url.hash) return null;
   if (url.protocol !== "https:") return null;
 
   const epsilon = EPSILON_PATH.exec(url.pathname);
   if (url.hostname === EPSILON_HOST && epsilon) {
+    url.pathname = url.pathname.toLowerCase();
     return {
       issuer: "epsilon-sklavenitis",
       url: url.href,

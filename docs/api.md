@@ -628,7 +628,7 @@ is not selected automatically. `warning` calls out uncertainties; matching arith
 `selectedText` contains the selected OCR candidate or the issuer's receipt rendered as text.
 `aiAvailable` indicates that the current scan has an enabled AI provider and usable text or vision input.
 
-Pass up to two decoded issuer links in `qr` to try digital retrieval before text parsing. A
+Pass one decoded issuer link as the `qr` string to try digital retrieval before text parsing. A
 photo batch in the scanner uses automatic digital retrieval only when the photos identify one
 unique issuer link. A batch with distinct links is rejected before upload so its receipts can be
 scanned separately.

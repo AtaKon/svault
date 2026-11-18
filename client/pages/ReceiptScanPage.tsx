@@ -639,7 +639,7 @@ export function ReceiptScanPage() {
   };
 
   const handleFiles = async (files: File[]) => {
-    if (!files.length || readingRef.current || busy || ocrRunning) return;
+    if (!files.length || pendingDraft || readingRef.current || busy || ocrRunning) return;
     readingRef.current = true;
     setBusy(true);
     // Only resetting the workspace invalidates a read. Reset also removes its pages.
@@ -697,7 +697,7 @@ export function ReceiptScanPage() {
         try {
           const data = await api<ReceiptScanResponse>(`/api/houses/${house.id}/receipts/scan`, {
             method: "POST",
-            body: { qr: [link.url] },
+            body: { qr: link.url },
           });
           if (revision !== workspaceRevisionRef.current) return;
           if (data.provider === "qr" && data.draft.lines.length) {
@@ -787,7 +787,7 @@ export function ReceiptScanPage() {
   };
 
   const handlePdf = async (file: File | undefined) => {
-    if (!file || readingRef.current || busy || ocrRunning) return;
+    if (!file || pendingDraft || readingRef.current || busy || ocrRunning) return;
     readingRef.current = true;
     setBusy(true);
     const revision = workspaceRevisionRef.current;

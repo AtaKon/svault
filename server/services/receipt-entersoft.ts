@@ -130,7 +130,7 @@ function findDate(foldedText: string): string | null {
 function findReceiptNumber(html: string): string | null {
   // Keep the series and number inside the issuer's printed field.
   const match = html.replace(/&nbsp;|\u00a0/gi, " ")
-    .match(/Αρ\.?[ \t]*Παραστατικ(?:ού|ου)[ \t]*:?[ \t]*(\d{1,20}(?:[ \t]+\d{1,20})?)[ \t]*(?=<\/|\r?\n)/iu);
+    .match(/Αρ\.?[ \t]*Παραστατικ(?:ού|ου)[ \t]*:?[ \t]*(\d{1,20}(?:[ \t]+\d{1,20})?)[ \t]*(?=<|\r?\n|$)/iu);
   return match ? match[1].replace(/[ \t]+/g, " ") : null;
 }
 
@@ -199,9 +199,9 @@ function parseRows(html: string): EntersoftRow[] | "incomplete" | null {
       if (discount != null && before === Math.abs(discount)) row.lineTotal = "0,00";
       else if (before == null && discount === 0 && row.unitPrice && parseAmount(row.unitPrice) === 0) row.lineTotal = "0,00";
     }
-    // An incomplete labeled item would create a partial purchase draft.
-    if (!row.description || !row.quantity || !row.lineTotal ||
-        parseQuantity(row.quantity) == null || parseAmount(row.lineTotal) == null) return "incomplete";
+    // Fees need a posted amount. Products also need a name and quantity.
+    if (!row.lineTotal || parseAmount(row.lineTotal) == null) return "incomplete";
+    if (!isFeeRow(row) && (!row.description || !row.quantity || parseQuantity(row.quantity) == null)) return "incomplete";
     rows.push(row);
   }
   return rows.length ? rows : null;
@@ -257,7 +257,6 @@ export function parseEntersoftInvoiceHtml(
 
   for (const row of rows) {
     const description = (row.description ?? "").trim().slice(0, 160);
-    if (!description) continue;
     const quantity = parseQuantity(row.quantity ?? "") ?? 1;
     const lineTotalRaw = parseAmount(row.lineTotal ?? "");
     const lineTotal = lineTotalRaw != null ? Math.max(0, lineTotalRaw) : null;

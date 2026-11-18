@@ -5053,7 +5053,7 @@ describe("receipts and shops", () => {
       return new Response(body, { headers: { "content-type": "text/html" } });
     });
     try {
-      const unauthenticated = await request(path, { body: { qr: [entersoft] }, auth: "" });
+      const unauthenticated = await request(path, { body: { qr: entersoft }, auth: "" });
       assert.equal(unauthenticated.status, 401);
       const stranger = await request("/api/auth/me", { auth: secondUserCookie });
       const form = new FormData();
@@ -5064,17 +5064,17 @@ describe("receipts and shops", () => {
         auth: secondUserCookie,
       });
       assert.equal(upload.status, 201);
-      const foreignUpload = await request(path, { body: { qr: [entersoft], image: upload.data.path } });
+      const foreignUpload = await request(path, { body: { qr: entersoft, image: upload.data.path } });
       assert.equal(foreignUpload.status, 400);
       assert.equal(attempts, 0);
 
-      const failed = await request(path, { body: { qr: [epsilon], text } });
+      const failed = await request(path, { body: { qr: epsilon, text } });
       assert.equal(failed.status, 200);
       assert.equal(failed.data.qr.status, "unavailable");
       assert.ok(failed.data.warning.includes(failed.data.qr.message));
       assert.equal(failed.data.draft.lines[0].description, "Milk");
 
-      const digital = await request(path, { body: { qr: [epsilon, entersoft] } });
+      const digital = await request(path, { body: { qr: entersoft } });
       assert.equal(digital.status, 200);
       assert.equal(digital.data.provider, "qr");
       assert.equal(digital.data.qr.status, "ok");
@@ -5086,20 +5086,20 @@ describe("receipts and shops", () => {
       assert.match(digital.data.warning, /environmental fee/);
       assert.match(digital.data.selectedText, /Sample digital product/);
       assert.ok(!JSON.stringify(digital.data).includes(token));
-      assert.equal(attempts, 4);
+      assert.equal(attempts, 3);
 
-      const ai = await request(path, { body: { qr: [entersoft], text, preferAi: true } });
+      const ai = await request(path, { body: { qr: entersoft, text, preferAi: true } });
       assert.equal(ai.status, 200);
       assert.equal(ai.data.qr, undefined);
-      assert.equal(attempts, 4);
+      assert.equal(attempts, 3);
 
       feeOnly = true;
-      const emptyDigital = await request(path, { body: { qr: [entersoft], text } });
+      const emptyDigital = await request(path, { body: { qr: entersoft, text } });
       assert.equal(emptyDigital.status, 200);
       assert.equal(emptyDigital.data.qr.status, "unavailable");
       assert.equal(emptyDigital.data.provider, "local");
       assert.equal(emptyDigital.data.draft.lines[0].description, "Milk");
-      assert.equal(attempts, 6);
+      assert.equal(attempts, 5);
 
       process.env.SV_RATE_LIMIT = "on";
       process.env.SV_RATE_LIMIT_RECEIPT_QR = "1/300";
@@ -5107,37 +5107,39 @@ describe("receipts and shops", () => {
       limiters.receiptQr.reset(houseId);
       limiters.receiptQrGlobal.reset("all");
       const unsupported = await request(path, {
-        body: { qr: ["https://unknown.example/receipt", "https://e-invoicing.gr/unrelated"] },
+        body: { qr: "https://e-invoicing.gr/unrelated" },
       });
       assert.equal(unsupported.status, 200);
       assert.equal(unsupported.data.qr.status, "unsupported");
-      assert.equal(attempts, 6);
+      assert.equal(attempts, 5);
       assert.equal(limiters.receiptQr.blocked(houseId), 0);
       assert.equal(limiters.receiptQrGlobal.blocked("all"), 0);
 
       limiters.receiptQr.hit(houseId);
-      const limited = await request(path, { body: { qr: [entersoft], text } });
+      const limited = await request(path, { body: { qr: entersoft, text } });
       assert.equal(limited.status, 200);
       assert.equal(limited.data.qr.status, "unavailable");
       assert.match(limited.data.qr.message, /Too many digital receipt requests/);
       assert.equal(limited.data.draft.lines[0].description, "Milk");
-      assert.equal(attempts, 6);
+      assert.equal(attempts, 5);
 
       limiters.receiptQr.reset(houseId);
       limiters.receiptQrGlobal.hit("all");
-      const globallyLimited = await request(path, { body: { qr: [entersoft], text } });
+      const globallyLimited = await request(path, { body: { qr: entersoft, text } });
       assert.equal(globallyLimited.status, 200);
       assert.equal(globallyLimited.data.qr.status, "unavailable");
       assert.equal(globallyLimited.data.draft.lines[0].description, "Milk");
       assert.equal(limiters.receiptQr.blocked(houseId), 0);
-      assert.equal(attempts, 6);
+      assert.equal(attempts, 5);
 
       limiters.receiptQrGlobal.reset("all");
       process.env.SV_RATE_LIMIT_RECEIPT_QR = "2/300";
       process.env.SV_RATE_LIMIT_RECEIPT_QR_GLOBAL = "2/300";
-      const twoLinks = await request(path, { body: { qr: [epsilon, entersoft], text } });
-      assert.equal(twoLinks.status, 200);
-      assert.equal(attempts, 9);
+      const firstLink = await request(path, { body: { qr: epsilon, text } });
+      assert.equal(firstLink.status, 200);
+      const secondLink = await request(path, { body: { qr: entersoft, text } });
+      assert.equal(secondLink.status, 200);
+      assert.equal(attempts, 8);
       assert.ok(limiters.receiptQr.blocked(houseId) > 0);
       assert.ok(limiters.receiptQrGlobal.blocked("all") > 0);
     } finally {

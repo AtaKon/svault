@@ -149,7 +149,7 @@ test("passes only the canonical validated receipt URL to the fetcher", async () 
     requests.push(url);
     return new Response(null, { status: 404 });
   });
-  await readQrReceiptScan("canonical-link-house", [variant, entersoftUrl]);
+  await readQrReceiptScan("canonical-link-house", variant);
   assert.deepEqual(requests, [entersoftUrl]);
 });
 
@@ -207,7 +207,7 @@ test("returns within the scan budget when the second Entersoft request ignores a
     return new Promise<Response>(() => undefined);
   });
   const started = performance.now();
-  const failed = await readQrReceiptScan("test-budget-house", [entersoftUrl, epsilonUrl], 40);
+  const failed = await readQrReceiptScan("test-budget-house", entersoftUrl, 40);
   assert.equal(failed.status, "unavailable");
   assert.ok(performance.now() - started < 1000);
   assert.ok(documentSignal?.aborted);
@@ -227,22 +227,17 @@ test("aborts a cooperative transport waiting for the Entersoft invoice", { timeo
       }, { once: true });
     });
   });
-  const result = await readQrReceiptScan("cooperative-transport-house", [entersoftUrl], 40);
+  const result = await readQrReceiptScan("cooperative-transport-house", entersoftUrl, 40);
   assert.equal(result.status, "unavailable");
   assert.equal(result.issuer, "entersoft");
   assert.ok(documentAborted);
 });
 
-test("attributes a timeout to the pending issuer and retains an earlier verification result", { timeout: 2000 }, async () => {
-  configureReceiptQrFetcherForTests(async (url) => url === epsilonUrl
-    ? html('<div id="cf-turnstile"></div>')
-    : new Promise<Response>(() => undefined));
-  const timeout = await readQrReceiptScan("test-timeout-house", [entersoftUrl], 30);
+test("attributes a timeout to the pending issuer", { timeout: 2000 }, async () => {
+  configureReceiptQrFetcherForTests(async () => new Promise<Response>(() => undefined));
+  const timeout = await readQrReceiptScan("test-timeout-house", entersoftUrl, 30);
   assert.equal(timeout.status, "unavailable");
   assert.equal(timeout.issuer, "entersoft");
-  const verification = await readQrReceiptScan("test-timeout-house", [epsilonUrl, entersoftUrl], 30);
-  assert.equal(verification.status, "challenge");
-  assert.equal(verification.issuer, "epsilon-sklavenitis");
 });
 
 test("gives Entersoft verification instructions at either retrieval stage", async () => {
@@ -257,7 +252,7 @@ test("gives Entersoft verification instructions at either retrieval stage", asyn
   }
 });
 
-test("keeps verification available regardless of payload order and skips unknown links", async () => {
+test("reports verification for one link and rejects unknown links", async () => {
   let requests = 0;
   configureReceiptQrFetcherForTests(async (url) => {
     requests++;
@@ -265,17 +260,12 @@ test("keeps verification available regardless of payload order and skips unknown
     assert.equal(url, entersoftUrl);
     throw new Error("issuer network failure");
   });
-  const cases = [
-    [epsilonUrl, entersoftUrl],
-    [entersoftUrl, epsilonUrl],
-    ["https://e-invoicing.gr/unrelated", epsilonUrl],
-  ];
-  for (const payloads of cases) {
-    const resolved = await readQrReceiptScan("test-house", payloads);
-    assert.equal(resolved.issuer, "epsilon-sklavenitis");
-    assert.equal(resolved.status, "challenge");
-  }
-  assert.equal(requests, 5);
+  const resolved = await readQrReceiptScan("test-house", epsilonUrl);
+  assert.equal(resolved.issuer, "epsilon-sklavenitis");
+  assert.equal(resolved.status, "challenge");
+  const unknown = await readQrReceiptScan("test-house", "https://e-invoicing.gr/unrelated");
+  assert.equal(unknown.status, "unsupported");
+  assert.equal(requests, 1);
   const failed = await fetchQrReceiptDraft(entersoftUrl);
   assert.equal(failed.status, "unavailable");
   assert.match(failed.message ?? "", /photo scan and AI re-read/);
