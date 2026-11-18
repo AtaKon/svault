@@ -12,19 +12,19 @@
 
 export type ReceiptQrIssuer = "epsilon-sklavenitis" | "entersoft";
 
-export interface ReceiptQrLink {
-  issuer: ReceiptQrIssuer;
+export type ReceiptQrLink = {
   /** The parsed and validated HTTPS URL used for retrieval. */
   url: string;
-  /** Entersoft only: the document reference pinned to the initial link. */
-  entersoft?: { ofenm: string; uuid: string; token: string };
-}
+} & (
+  | { issuer: "epsilon-sklavenitis"; viewerPath: string }
+  | { issuer: "entersoft"; entersoft: { ofenm: string; uuid: string; token: string } }
+);
 
 const EPSILON_HOST = "epsilondigital-sklavenitis.epsilonnet.gr";
 const ENTERSOFT_HOST = "e-invoicing.gr";
 
 /** Epsilon Digital (Sklavenitis): /fd/{32 hex}:{register digits} */
-const EPSILON_PATH = /^\/fd\/[0-9a-f]{32}:\d{1,10}$/i;
+const EPSILON_PATH = /^\/fd\/([0-9a-f]{8})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{12}):\d{1,10}$/i;
 /** Entersoft: /edocuments/ViewInvoice/{ofenm}/{uuid}_{8 alphanumeric} */
 const ENTERSOFT_PATH =
   /^\/edocuments\/ViewInvoice\/(-?\d{1,4})\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})_([A-Za-z0-9]{8})$/i;
@@ -47,8 +47,13 @@ export function matchReceiptQrLink(payload: string): ReceiptQrLink | null {
   if (url.username || url.password || url.port || url.search || url.hash) return null;
   if (url.protocol !== "https:") return null;
 
-  if (url.hostname === EPSILON_HOST && EPSILON_PATH.test(url.pathname)) {
-    return { issuer: "epsilon-sklavenitis", url: url.href };
+  const epsilon = EPSILON_PATH.exec(url.pathname);
+  if (url.hostname === EPSILON_HOST && epsilon) {
+    return {
+      issuer: "epsilon-sklavenitis",
+      url: url.href,
+      viewerPath: "/docviewer/" + epsilon.slice(1).join("-").toLowerCase(),
+    };
   }
   const entersoft = ENTERSOFT_PATH.exec(url.pathname);
   if (url.hostname === ENTERSOFT_HOST && entersoft) {

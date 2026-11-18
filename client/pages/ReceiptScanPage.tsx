@@ -640,11 +640,21 @@ export function ReceiptScanPage() {
     const tryDigital = existingLines.length === 0;
     try {
       const decoder = tryDigital ? await import("@/receipt-qr").catch(() => null) : null;
-      for (const file of files) {
-        try {
-          const payload = await decoder?.decodeReceiptQrFile(file);
+      if (decoder) {
+        for (const file of files) {
+          const payload = await decoder.decodeReceiptQrFile(file);
+          if (revision !== workspaceRevisionRef.current) return;
           const link = payload ? matchReceiptQrLink(payload) : null;
           if (link) links.set(link.url, link);
+          // Identify distinct purchases before appending or uploading any pages.
+          if (links.size > 1) {
+            toast.error(t("These photos contain different receipt links. Scan one receipt at a time."));
+            return;
+          }
+        }
+      }
+      for (const file of files) {
+        try {
           const prepared = await prepareImage(file, { maxSize: 4000, quality: 0.92 });
           // Straighten each shot on its own before OCR: a combined photo would
           // confuse the corner finder and blur the seam.
@@ -669,12 +679,7 @@ export function ReceiptScanPage() {
         }
       }
       let appliedDigital = false;
-      // Each draft represents one purchase. Distinct QR links may identify separate receipts.
-      if (links.size > 1) {
-        setDigitalLink(null);
-        setWarning("These photos contain different receipt links. Scan one receipt at a time for digital import.");
-      }
-      const link = links.size === 1 ? links.values().next().value : null;
+      const link = links.values().next().value;
       if (link) {
         try {
           const data = await api<ReceiptScanResponse>(`/api/houses/${house.id}/receipts/scan`, {
@@ -785,14 +790,12 @@ export function ReceiptScanPage() {
         body: { text: receiptText },
       });
       if (revision !== workspaceRevisionRef.current) return;
-      const currentLines = snapshotRef.current()?.lines ?? lines;
-      if (currentLines.length) {
-        if (!data.draft.lines.length) {
-          toast.error(t("No product lines found in the receipt PDF."));
-          return;
-        }
-        if (!window.confirm(t("Replace the current receipt details and line edits with the PDF?"))) return;
+      if (!data.draft.lines.length) {
+        toast.error(t("No product lines found in the receipt PDF."));
+        return;
       }
+      const currentLines = snapshotRef.current()?.lines ?? lines;
+      if (currentLines.length && !window.confirm(t("Replace the current receipt details and line edits with the PDF?"))) return;
       // The native confirmation blocks the page's event loop. A reset
       // invalidates the pending import regardless of the dialog result.
       if (revision !== workspaceRevisionRef.current) return;

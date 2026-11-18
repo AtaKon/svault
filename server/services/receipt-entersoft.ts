@@ -185,7 +185,7 @@ function parseRows(html: string): EntersoftRow[] | null {
     };
     for (const cell of cells) {
       const value = stripTags(cell[2]);
-      const title = cell[1].match(/\sdata-title\s*=\s*(["'])(.*?)\1/i);
+      const title = cell[1].match(/\sdata-title\s*=\s*(["'])([\s\S]*?)\1/i);
       const field = title && COLUMN_KEYS[labelKey(title[2])];
       if (field && value) row[field] = value;
     }

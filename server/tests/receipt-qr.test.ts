@@ -132,6 +132,12 @@ test("passes only the canonical validated receipt URL to the fetcher", async () 
   const variant = entersoftUrl.replace("https://e-invoicing.gr/", "HTTPS://E-INVOICING.GR:443/");
   assert.equal(matchReceiptQrLink(variant)?.url, entersoftUrl);
   assert.equal(matchReceiptQrLink(entersoftUrl.replace("e-invoicing.gr/", "e-invoicing.gr./")), null);
+  assert.equal(matchReceiptQrLink(entersoftUrl.replace("e-invoicing.gr/", "e-invoicing.gr:8443/")), null);
+  assert.equal(matchReceiptQrLink("javascript:void(0)"), null);
+  assert.equal(matchReceiptQrLink(epsilonUrl.replace("/fd/1", "/fd/g")), null);
+  const epsilon = matchReceiptQrLink(epsilonUrl);
+  assert.ok(epsilon?.issuer === "epsilon-sklavenitis");
+  assert.equal(epsilon.viewerPath, `/docviewer/${ref}`);
   const requests: string[] = [];
   configureReceiptQrFetcherForTests(async (url) => {
     requests.push(url);
@@ -319,6 +325,11 @@ test("reads the VAT summary when the breakdown appears first", () => {
     const withNumber = document.replace("Αρ. Παραστατικού: 12 3456", label);
     assert.equal(parseEntersoftInvoiceHtml(withNumber)?.draft.notes, "Αρ. Παραστατικού 12 3456");
   }
+});
+
+test("accepts an issuer column title wrapped across lines", () => {
+  const wrapped = invoice.replace('data-title="Συνολική Αξία"', 'data-title="Συνολική\n Αξία"');
+  assert.equal(parseEntersoftInvoiceHtml(wrapped)?.draft.lines[0].lineTotal, 3.5);
 });
 
 test("keeps the issuer's recovery instructions on an undecodable page", async () => {

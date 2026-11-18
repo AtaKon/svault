@@ -36,7 +36,9 @@ export type ReceiptQrFetchResult = ReceiptQrFailure | {
 };
 
 type QrFetch = (url: string, signal: AbortSignal) => Promise<Response>;
-type EntersoftRef = NonNullable<ReceiptQrLink["entersoft"]>;
+type EpsilonLink = Extract<ReceiptQrLink, { issuer: "epsilon-sklavenitis" }>;
+type EntersoftLink = Extract<ReceiptQrLink, { issuer: "entersoft" }>;
+type EntersoftRef = EntersoftLink["entersoft"];
 
 const EPSILON_HOST = "epsilondigital-sklavenitis.epsilonnet.gr";
 const ENTERSOFT_HOST = "e-invoicing.gr";
@@ -147,7 +149,7 @@ function decodeHtmlBytes(bytes: Uint8Array, contentType: string): string {
   try {
     return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch (error) {
-    const prefix = new TextDecoder("latin1").decode(bytes.subarray(0, 2048));
+    const prefix = new TextDecoder("windows-1252").decode(bytes.subarray(0, 2048));
     const declaration = /charset\s*=\s*["']?(windows-1253|windows-1252|iso-8859-7|iso-8859-1)\b/i;
     const charset = contentType.match(declaration)?.[1] ?? prefix.match(declaration)?.[1];
     if (!charset) throw error;
@@ -233,15 +235,13 @@ function result(
 }
 
 /** Epsilon Digital (Sklavenitis): /fd/… redirects to a Blazor DocViewer that renders Cloudflare Turnstile before the PDF. */
-async function fetchEpsilon(link: ReceiptQrLink, signal: AbortSignal): Promise<ReceiptQrFetchResult> {
+async function fetchEpsilon(link: EpsilonLink, signal: AbortSignal): Promise<ReceiptQrFetchResult> {
   const receiptPath = new URL(link.url).pathname.toLowerCase();
-  const identifier = receiptPath.slice("/fd/".length).split(":")[0];
-  // fetchPage can follow the issuer redirect to this receipt's viewer only.
-  const viewerPath = "/docviewer/" + identifier.replace(/^(........)(....)(....)(....)(............)$/, "$1-$2-$3-$4-$5");
+  // The shared matcher derives the viewer path from the validated 32 hex digits.
   const allowed = (url: URL) =>
     url.protocol === "https:" &&
     url.hostname === EPSILON_HOST &&
-    !url.search && [receiptPath, viewerPath].includes(url.pathname.toLowerCase());
+    !url.search && [receiptPath, link.viewerPath].includes(url.pathname.toLowerCase());
   const page = await fetchPage(link.url, allowed, signal);
   if (CHALLENGE_MARKERS.test(page.html)) {
     return result(link.issuer, "challenge", EPSILON_CHALLENGE_MESSAGE);
@@ -288,8 +288,8 @@ function iframeMatchesPinnedSource(html: string, ref: EntersoftRef): boolean {
   return false;
 }
 
-async function fetchEntersoft(link: ReceiptQrLink, signal: AbortSignal): Promise<ReceiptQrFetchResult> {
-  const ref = link.entersoft!;
+async function fetchEntersoft(link: EntersoftLink, signal: AbortSignal): Promise<ReceiptQrFetchResult> {
+  const ref = link.entersoft;
   const allowed = (url: URL) =>
     url.protocol === "https:" && url.hostname === ENTERSOFT_HOST &&
     !url.search && ENTERSOFT_VIEWINVOICE_PATH.test(url.pathname);
