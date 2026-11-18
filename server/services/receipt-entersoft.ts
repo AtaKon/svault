@@ -56,6 +56,7 @@ const COLUMN_KEYS: Record<string, keyof EntersoftRow> = {
   ΠΕΡΙΓΡΑΦΗ: "description",
   ΜΜ: "unit",
   ΠΟΣΟΤΗΤΑ: "quantity",
+  ΤΙΜΗΜΟΝΑΔΑΣ: "unitPrice",
   ΤΙΜΗΜΟΝΑΔΟΣ: "unitPrice",
   ΑΞΙΑΠΡΟΕΚΠΤΩΣΗΣ: "preDiscount",
   ΕΚΠΤΩΣΗ: "discount",
@@ -189,11 +190,12 @@ function parseRows(html: string): EntersoftRow[] | null {
       if (field && value) row[field] = value;
     }
     if (!Object.values(row).some(Boolean)) continue; // Unlabeled summary or spacer row.
-    if (!row.lineTotal && row.preDiscount) {
-      const before = parseAmount(row.preDiscount);
+    if (!row.lineTotal) {
+      const before = row.preDiscount ? parseAmount(row.preDiscount) : null;
       const discount = row.discount ? parseAmount(row.discount) : 0;
       // A blank amount is a free item only when the other amounts establish zero.
-      if (before != null && discount != null && before === Math.abs(discount)) row.lineTotal = "0,00";
+      if (discount != null && before === Math.abs(discount)) row.lineTotal = "0,00";
+      else if (before == null && discount === 0 && row.unitPrice && parseAmount(row.unitPrice) === 0) row.lineTotal = "0,00";
     }
     // An incomplete labeled item would create a partial purchase draft.
     if (!row.description || !row.quantity || !row.lineTotal ||

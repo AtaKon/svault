@@ -21,7 +21,9 @@ export function recoverReceiptQr(
   luminance: Uint8ClampedArray,
   width: number,
   height: number,
+  deadline = Infinity,
 ): string | null {
+  if (Date.now() >= deadline) return null;
   const detection = detectGeometry(bitmap, luminance, width, height);
   if (!detection) return null;
   const size = detection.getBits().getWidth();
@@ -58,6 +60,7 @@ export function recoverReceiptQr(
   const farFinder = size - 3.5;
 
   for (const top of offsets) for (const bottom of offsets) for (const across of offsets) for (const lower of offsets) {
+    if (Date.now() >= deadline) return null;
     const x = across * acrossX;
     const y = across * acrossY;
     const transform = PerspectiveTransform.quadrilateralToQuadrilateral(
@@ -90,6 +93,7 @@ export function recoverReceiptQr(
   const decoder = new Decoder();
   candidates.sort((left, right) => right.contrast - left.contrast);
   for (const { transform, black, contrast } of candidates.slice(0, 96)) {
+    if (Date.now() >= deadline) return null;
     positions.set(moduleCoordinates);
     transform.transformPoints(positions);
     for (let i = 0; i < samples.length; i++) samples[i] = pixel(positions[2 * i], positions[2 * i + 1]);
@@ -124,7 +128,7 @@ function detectGeometry(
     if (!(error instanceof FormatException)) throw error;
   }
   // A blurred timing row can give FinderPattern an invalid module count.
-  // Use a fixed threshold for one more geometry estimate.
+  // In recovery only, retry with a cutoff slightly below mid-gray.
   const thresholded = luminance.map((value) => value < 115 ? 0 : 255);
   const binarizer = new HybridBinarizer(new RGBLuminanceSource(thresholded, width, height));
   try {

@@ -5131,6 +5131,15 @@ describe("receipts and shops", () => {
       assert.equal(globallyLimited.data.draft.lines[0].description, "Milk");
       assert.equal(limiters.receiptQr.blocked(houseId), 0);
       assert.equal(attempts, 6);
+
+      limiters.receiptQrGlobal.reset("all");
+      process.env.SV_RATE_LIMIT_RECEIPT_QR = "2/300";
+      process.env.SV_RATE_LIMIT_RECEIPT_QR_GLOBAL = "2/300";
+      const twoLinks = await request(path, { body: { qr: [epsilon, entersoft], text } });
+      assert.equal(twoLinks.status, 200);
+      assert.equal(attempts, 9);
+      assert.ok(limiters.receiptQr.blocked(houseId) > 0);
+      assert.ok(limiters.receiptQrGlobal.blocked("all") > 0);
     } finally {
       configureReceiptQrFetcherForTests(null);
       limiters.receiptQr.reset(houseId);

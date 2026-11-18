@@ -57,8 +57,8 @@ test("reads a pinned Entersoft document and preserves the amounts and weighted q
   });
   const result = await fetchQrReceiptDraft(entersoftUrl);
   assert.deepEqual(requests, [entersoftUrl, "https://e-invoicing.gr" + issuerPath]);
-  assert.equal(result.status, "ok");
-  assert.ok(result.draft);
+  assert.ok(result.status === "ok");
+  assert.match(result.text, /ΜΗΛΑ/);
   assert.equal(result.draft.purchasedAt, "2026-11-11");
   assert.equal(result.draft.currency, "EUR");
   assert.equal(result.draft.notes, "Αρ. Παραστατικού 12 3456");
@@ -85,7 +85,7 @@ test("reports Epsilon verification after its same-origin viewer redirect", async
   });
   const result = await fetchQrReceiptDraft(epsilonUrl);
   assert.equal(result.status, "challenge");
-  assert.equal(result.draft, null);
+  assert.ok(!("draft" in result));
   assert.equal(requests.length, 2);
 });
 
@@ -247,7 +247,9 @@ test("decodes an explicitly declared Greek charset and rejects unlabeled item co
   configureReceiptQrFetcherForTests(async (url) => url === entersoftUrl
     ? html(`<iframe id="iframeContent" src="${issuerPath.replaceAll("&", "&amp;")}"></iframe>`)
     : new Response(bytes, { headers: { "content-type": "text/html; charset=windows-1253" } }));
-  assert.equal((await fetchQrReceiptDraft(entersoftUrl)).draft?.lines[0].description, "ΜΗΛΑ & ΑΧΛΑΔΙΑ");
+  const decoded = await fetchQrReceiptDraft(entersoftUrl);
+  assert.ok(decoded.status === "ok");
+  assert.equal(decoded.draft.lines[0].description, "ΜΗΛΑ & ΑΧΛΑΔΙΑ");
 
   configureReceiptQrFetcherForTests(async (url) => url === entersoftUrl
     ? html(`<iframe id="iframeContent" src="${issuerPath.replaceAll("&", "&amp;")}"></iframe>`)
@@ -284,4 +286,25 @@ test("reads the VAT summary when the breakdown appears first", () => {
     const withNumber = document.replace("Αρ. Παραστατικού: 12 3456", label);
     assert.equal(parseEntersoftInvoiceHtml(withNumber)?.draft.notes, "Αρ. Παραστατικού 12 3456");
   }
+});
+
+test("keeps the issuer's recovery instructions on an undecodable page", async () => {
+  configureReceiptQrFetcherForTests(async () => new Response(Uint8Array.of(0xff, 0x41), {
+    headers: { "content-type": "text/html" },
+  }));
+  const epsilon = await fetchQrReceiptDraft(epsilonUrl);
+  assert.equal(epsilon.status, "unavailable");
+  assert.match(epsilon.message ?? "", /download the receipt PDF/);
+  const entersoft = await fetchQrReceiptDraft(entersoftUrl);
+  assert.equal(entersoft.status, "unavailable");
+  assert.match(entersoft.message ?? "", /photo scan and AI re-read/);
+});
+
+test("recognizes a blank total with an explicitly zero unit price", () => {
+  const free = item("FREE", "Free sample", "Τεμάχιο", "1", "", "", "")
+    .replace('data-title="Τιμή μονάδας">2,00', 'data-title="Τιμή μονάδας">0,00');
+  const wrap = (row: string) => `<table><tbody>${row}</tbody></table>`;
+  assert.equal(parseEntersoftInvoiceHtml(wrap(free))?.draft.lines[0].lineTotal, 0);
+  const unpriced = free.replace('data-title="Τιμή μονάδας">0,00', 'data-title="Τιμή μονάδας">');
+  assert.equal(parseEntersoftInvoiceHtml(wrap(unpriced)), null);
 });

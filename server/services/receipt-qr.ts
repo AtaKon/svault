@@ -20,17 +20,20 @@ import { parseEntersoftInvoiceHtml } from "./receipt-entersoft.js";
 
 export type ReceiptQrStatus = "ok" | "challenge" | "unsupported" | "unavailable";
 
-export interface ReceiptQrFetchResult {
-  status: ReceiptQrStatus;
+type ReceiptQrFailure = {
+  status: Exclude<ReceiptQrStatus, "ok">;
   issuer: ReceiptQrIssuer | null;
-  /** Draft and rendition on "ok"; null otherwise. */
-  draft: ReceiptDraft | null;
-  text: string | null;
-  /** Fee rows excluded from the lines but still part of the printed total. */
+  message: string;
+};
+
+export type ReceiptQrFetchResult = ReceiptQrFailure | {
+  status: "ok";
+  issuer: ReceiptQrIssuer;
+  draft: ReceiptDraft;
+  text: string;
   excludedCharges: number;
-  /** User-facing message, safe for logs and the review UI (no URL inside). */
-  message: string | null;
-}
+  message: null;
+};
 
 type QrFetch = (url: string, signal: AbortSignal) => Promise<Response>;
 type EntersoftRef = NonNullable<ReceiptQrLink["entersoft"]>;
@@ -63,12 +66,6 @@ const ENTERSOFT_UNAVAILABLE_MESSAGE =
 const UNSUPPORTED_MESSAGE = "That QR code or link is not from a supported digital receipt issuer.";
 const GENERIC_UNAVAILABLE_MESSAGE = "The digital receipt could not be fetched from the issuer.";
 const RATE_LIMIT_MESSAGE = "Too many digital receipt requests. Try again in a few minutes or scan the photo.";
-const STATUS_PRIORITY: Record<ReceiptQrStatus, number> = {
-  unsupported: 0,
-  unavailable: 1,
-  challenge: 2,
-  ok: 3,
-};
 
 /** Injected in tests; production goes through the SSRF-guarded outbound fetch. */
 let testFetch: QrFetch | null = null;
@@ -89,7 +86,7 @@ async function issuerFetch(url: string, signal: AbortSignal): Promise<Response> 
 
 class IssuerPageError extends Error {
   constructor(
-    public readonly reason: "network" | "redirect" | "large" | "status" | "content-type",
+    public readonly reason: "network" | "redirect" | "large" | "status" | "content-type" | "encoding",
     public readonly status = 0,
   ) {
     super(reason);
@@ -218,20 +215,21 @@ async function fetchPage(
       if (error instanceof IssuerPageError) throw error;
       throw new IssuerPageError("network");
     }
-    return { url: current, html: decodeHtmlBytes(bytes, contentType) };
+    try {
+      return { url: current, html: decodeHtmlBytes(bytes, contentType) };
+    } catch {
+      throw new IssuerPageError("encoding");
+    }
   }
   throw new IssuerPageError("redirect");
 }
 
 function result(
   issuer: ReceiptQrIssuer | null,
-  status: ReceiptQrStatus,
-  message: string | null,
-  draft: ReceiptDraft | null = null,
-  text: string | null = null,
-  excludedCharges = 0,
-): ReceiptQrFetchResult {
-  return { status, issuer, message, draft, text, excludedCharges };
+  status: ReceiptQrFailure["status"],
+  message: string,
+): ReceiptQrFailure {
+  return { status, issuer, message };
 }
 
 /** Epsilon Digital (Sklavenitis): /fd/… redirects to a Blazor DocViewer that renders Cloudflare Turnstile before the PDF. */
@@ -310,10 +308,10 @@ async function fetchEntersoft(link: ReceiptQrLink, signal: AbortSignal): Promise
     return result(link.issuer, "challenge", ENTERSOFT_CHALLENGE_MESSAGE);
   }
   const parsed = parseEntersoftInvoiceHtml(document.html);
-  if (!parsed?.draft.lines.length) {
+  if (!parsed?.draft.lines.length || !parsed.text.trim()) {
     return result(link.issuer, "unavailable", ENTERSOFT_UNAVAILABLE_MESSAGE);
   }
-  return result(link.issuer, "ok", null, parsed.draft, parsed.text, parsed.excludedCharges);
+  return { status: "ok", issuer: link.issuer, ...parsed, message: null };
 }
 
 function messageForError(issuer: ReceiptQrIssuer, error: IssuerPageError): string {
@@ -386,15 +384,16 @@ export async function readQrReceiptScan(
     .filter((link) => link !== null)
     .slice(0, 2);
   if (!links.length) return result(null, "unsupported", UNSUPPORTED_MESSAGE);
-  let best: ReceiptQrFetchResult | null = null;
+  let verification: ReceiptQrFailure | null = null;
+  let firstFailure: ReceiptQrFailure | null = null;
   let currentIssuer = links[0].issuer;
   // An earlier verification result stays actionable if a later issuer times out.
-  const onTimeout = () => best?.status === "challenge" ? best : timedOut(currentIssuer);
+  const onTimeout = () => verification ?? timedOut(currentIssuer);
   return withinQrBudget(timeoutMs, async (signal) => {
     for (const link of links) {
       if (signal.aborted) break;
       if (limiters.receiptQr.blocked(houseId) || limiters.receiptQrGlobal.blocked("all")) {
-        return best?.status === "challenge" ? best : result(link.issuer, "unavailable", RATE_LIMIT_MESSAGE);
+        return verification ?? result(link.issuer, "unavailable", RATE_LIMIT_MESSAGE);
       }
       // Charge each attempted link, including unsuccessful lookups.
       limiters.receiptQr.hit(houseId);
@@ -402,8 +401,10 @@ export async function readQrReceiptScan(
       currentIssuer = link.issuer;
       const current = await fetchIssuerReceipt(link, signal);
       if (current.status === "ok") return current;
-      if (!best || STATUS_PRIORITY[current.status] > STATUS_PRIORITY[best.status]) best = current;
+      // Save each completed outcome before starting a subsequent link.
+      if (current.status === "challenge") verification ??= current;
+      else firstFailure ??= current;
     }
-    return best ?? timedOut(currentIssuer);
+    return verification ?? firstFailure ?? timedOut(currentIssuer);
   }, onTimeout);
 }

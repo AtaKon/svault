@@ -53,6 +53,7 @@ test("recovers a warped low-resolution QR that the standard readers cannot decod
   for (const input of [bitmap, global]) {
     assert.throws(() => new zxing.QRCodeReader().decode(input, hints));
   }
+  assert.equal(recoverReceiptQr(bitmap, gray, width, height, Date.now() - 1), null);
   assert.equal(recoverReceiptQr(bitmap, gray, width, height), text);
 });
 

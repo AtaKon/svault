@@ -514,6 +514,7 @@ export function ReceiptScanPage() {
   const runPageOcr = async (key: string, index: number, count: number) => {
     const page = pagesRef.current.find((entry) => entry.key === key);
     if (!page) return;
+    const revision = workspaceRevisionRef.current;
     setOcrRunning(true);
     setOcrProgress(0);
     setOcrStatus(count > 1 ? t("Reading page {page} of {count}", { page: index + 1, count }) : t("Starting OCR"));
@@ -524,6 +525,7 @@ export function ReceiptScanPage() {
       const result = await ocrImage(
         page.file,
         (progress, status) => {
+          if (revision !== workspaceRevisionRef.current) return;
           setOcrProgress(progress);
           setOcrStatus(count > 1
             ? `${t("Page {page} of {count}", { page: index + 1, count })} · ${t(status)}`
@@ -531,6 +533,7 @@ export function ReceiptScanPage() {
         },
         { mode: "receipt", onCandidates: (values) => { candidates = values; } },
       );
+      if (revision !== workspaceRevisionRef.current) return;
       const recognised = result.trim();
       patchPage(key, { text: recognised, candidates, status: "done" });
       if (!recognised) {
@@ -539,6 +542,7 @@ export function ReceiptScanPage() {
         );
       }
     } catch (err) {
+      if (revision !== workspaceRevisionRef.current) return;
       patchPage(key, { status: "error" });
       setOcrError(err instanceof Error ? t(err.message) : t("Page {page}: OCR failed", { page: index + 1 }));
     } finally {
@@ -546,10 +550,18 @@ export function ReceiptScanPage() {
     }
   };
 
-  const rerunAllOcr = async () => {
+  const rerunOcr = async (key?: string) => {
+    if (readingRef.current || busy || ocrRunning) return;
+    readingRef.current = true;
+    const revision = workspaceRevisionRef.current;
     const current = [...pagesRef.current];
-    for (let index = 0; index < current.length; index++) {
-      await runPageOcr(current[index].key, index, current.length);
+    try {
+      for (const [index, page] of current.entries()) {
+        if (revision !== workspaceRevisionRef.current) break;
+        if (!key || key === page.key) await runPageOcr(page.key, index, current.length);
+      }
+    } finally {
+      readingRef.current = false;
     }
   };
 
@@ -813,6 +825,8 @@ export function ReceiptScanPage() {
     if (pagesRef.current.length > MAX_VISION_PAGES) {
       toast.push(t("Only the first {count} photos are sent to the vision model.", { count: MAX_VISION_PAGES }));
     }
+    readingRef.current = true;
+    const revision = workspaceRevisionRef.current;
     setBusy(true);
     try {
       const currentPages = pagesRef.current;
@@ -827,6 +841,7 @@ export function ReceiptScanPage() {
           ...(preferAi ? { preferAi: true } : {}),
         },
       });
+      if (revision !== workspaceRevisionRef.current) return;
       if (data.selectedText != null && data.selectedText !== text) setText(data.selectedText);
       applyScan(data);
       if (!data.draft.lines.length) {
@@ -836,6 +851,7 @@ export function ReceiptScanPage() {
     } catch (err) {
       toast.error(err instanceof Error ? t(err.message) : t("Could not read the receipt"));
     } finally {
+      readingRef.current = false;
       setBusy(false);
     }
   };
@@ -995,7 +1011,7 @@ export function ReceiptScanPage() {
   };
 
   const save = async (allowDuplicate = false) => {
-    if (busy || readingRef.current) return;
+    if (busy || readingRef.current || ocrRunning) return;
     if (uploading) {
       toast.error(t("The scan is still being stored"));
       return;
@@ -1009,6 +1025,7 @@ export function ReceiptScanPage() {
       return;
     }
     const rows = included;
+    readingRef.current = true;
     setSaving(true);
     try {
       const check = await validate(rows).catch((err) => {
@@ -1053,6 +1070,7 @@ export function ReceiptScanPage() {
       }
       toast.error(receiptErrorMessage(err, t));
     } finally {
+      readingRef.current = false;
       setSaving(false);
     }
   };
@@ -1060,6 +1078,7 @@ export function ReceiptScanPage() {
   /* -------------------------------------------------------- reset & resume */
 
   const clearWorkspace = () => {
+    // An in-flight operation owns readingRef until its finally block releases it.
     workspaceRevisionRef.current++;
     stitchSeqRef.current++;
     validationSeqRef.current++;
@@ -1237,7 +1256,7 @@ export function ReceiptScanPage() {
         subtitle={t("Photograph the receipt — one shot or several for a long one — check the lines, and the whole shop lands in inventory with the shop recorded.")}
         actions={
           showWorkspace ? (
-            <Button variant="ghost" size="sm" icon="refresh" onClick={reset}>
+            <Button variant="ghost" size="sm" icon="refresh" onClick={reset} disabled={saving}>
               {t("Start over")}</Button>
           ) : undefined
         }
@@ -1428,7 +1447,7 @@ export function ReceiptScanPage() {
                       <span className="flex items-center gap-1">
                         <button
                           type="button"
-                          onClick={() => void runPageOcr(activePage.key, activeIndex, pages.length)}
+                          onClick={() => void rerunOcr(activePage.key)}
                           disabled={busy || ocrRunning || stitching || activePage.status === "reading"}
                           aria-label={t("Re-run OCR for this page")}
                           className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-raised disabled:opacity-30"
@@ -1560,7 +1579,7 @@ export function ReceiptScanPage() {
                     size="sm"
                     variant="secondary"
                     icon="refresh"
-                    onClick={() => void rerunAllOcr()}
+                    onClick={() => void rerunOcr()}
                     disabled={ocrRunning || stitching}
                   >
                     {t("Re-run OCR")}</Button>

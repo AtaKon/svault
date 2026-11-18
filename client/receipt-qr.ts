@@ -96,7 +96,7 @@ async function decodeWithRecovery(pixels: GrayPixels, deadline: number): Promise
   if (!recovery || Date.now() > deadline) return null;
   try {
     const bitmap = new BinaryBitmap(new HybridBinarizer(new RGBLuminanceSource(pixels.gray, pixels.width, pixels.height)));
-    return recovery.recoverReceiptQr(bitmap, pixels.gray, pixels.width, pixels.height);
+    return recovery.recoverReceiptQr(bitmap, pixels.gray, pixels.width, pixels.height, deadline);
   } catch {
     return null;
   }
