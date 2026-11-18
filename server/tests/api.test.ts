@@ -114,6 +114,7 @@ const { scaledCalories } = await import("../../shared/recipe-calories.js");
 const { REFERENCE_FOOD_COUNT, referenceNutrition } = await import("../services/food-reference.js");
 const { recipeNutrition } = await import("../services/nutrition.js");
 const { decodeEntities, importRecipeFromUrl, isoDurationMinutes, normaliseRecipeUrl, parseRecipePage, parseRecipeYield, readJsonLd } = await import("../services/recipe-import.js");
+const { configureReceiptQrFetcherForTests } = await import("../services/receipt-qr.js");
 const { heuristicReceipt } = await import("../services/receipt-local.js");
 const { billLinesTotal, parseBillNumber, parseBillText } = await import("../../shared/bill-parser.js");
 const { billHistory, extractBillMetrics } = await import("../../shared/bill-history.js");
@@ -5022,6 +5023,82 @@ describe("receipts and shops", () => {
     });
     assert.equal(res.status, 200);
     assert.equal(res.data.draft.vendorName, "Lidl");
+  });
+
+  it("authorizes and rate limits digital receipt retrieval while preserving OCR and AI fallback", async () => {
+    const path = `/api/houses/${houseId}/receipts/scan`;
+    const ref = "12345678-1234-1234-1234-123456789abc";
+    const token = "tEsTaB12";
+    const entersoft = `https://e-invoicing.gr/edocuments/ViewInvoice/-1/${ref}_${token}`;
+    const epsilon = "https://epsilondigital-sklavenitis.epsilonnet.gr/fd/12345678123412341234123456789abc:12";
+    const frame = `/api/GetInvoice?contentType=PEPPOL&amp;intRefDocID=${ref}&amp;hashToken=${token}&amp;ofenm=-1&amp;isPreview=True`;
+    const text = "CORNER MARKET\n12/10/2026\nMilk 2.40\nTOTAL 2.40";
+    const previousRateLimit = process.env.SV_RATE_LIMIT;
+    const previousQrLimit = process.env.SV_RATE_LIMIT_RECEIPT_QR;
+    let attempts = 0;
+    configureReceiptQrFetcherForTests(async (url) => {
+      attempts++;
+      if (url === epsilon) return new Response(null, { status: 404 });
+      const body = url === entersoft
+        ? `<iframe id="iframeContent" src="${frame}"></iframe>`
+        : `<table><tbody><tr><td data-title="Κωδικός">SKU</td>
+           <td data-title="Περιγραφή">Sample digital product</td>
+           <td data-title="Ποσότητα">1</td><td data-title="Συνολική Αξία">2,40</td></tr></tbody></table>
+           <div>ΤΕΛΙΚΗ ΑΞΙΑ 2,40EUR</div>`;
+      return new Response(body, { headers: { "content-type": "text/html" } });
+    });
+    try {
+      const unauthenticated = await request(path, { body: { qr: [entersoft] }, auth: "" });
+      assert.equal(unauthenticated.status, 401);
+      const stranger = await request("/api/auth/me", { auth: secondUserCookie });
+      const form = new FormData();
+      const png = new Uint8Array(encodePng(4, 4, Buffer.alloc(4 * 4 * 4, 120)));
+      form.append("image", new Blob([png], { type: "image/png" }), "receipt.png");
+      const upload = await request(`/api/houses/${stranger.data.houses[0].id}/receipts/upload`, {
+        body: form,
+        auth: secondUserCookie,
+      });
+      assert.equal(upload.status, 201);
+      const foreignUpload = await request(path, { body: { qr: [entersoft], image: upload.data.path } });
+      assert.equal(foreignUpload.status, 400);
+      assert.equal(attempts, 0);
+
+      const failed = await request(path, { body: { qr: [epsilon], text } });
+      assert.equal(failed.status, 200);
+      assert.equal(failed.data.qr.status, "unavailable");
+      assert.ok(failed.data.warning.includes(failed.data.qr.message));
+      assert.equal(failed.data.draft.lines[0].description, "Milk");
+
+      const digital = await request(path, { body: { qr: [epsilon, entersoft] } });
+      assert.equal(digital.status, 200);
+      assert.equal(digital.data.provider, "qr");
+      assert.equal(digital.data.qr.status, "ok");
+      assert.match(digital.data.selectedText, /Sample digital product/);
+      assert.ok(!JSON.stringify(digital.data).includes(token));
+      assert.equal(attempts, 4);
+
+      const ai = await request(path, { body: { qr: [entersoft], text, preferAi: true } });
+      assert.equal(ai.status, 200);
+      assert.equal(ai.data.qr, undefined);
+      assert.equal(attempts, 4);
+
+      process.env.SV_RATE_LIMIT = "on";
+      process.env.SV_RATE_LIMIT_RECEIPT_QR = "1/300";
+      limiters.receiptQr.hit(houseId);
+      const limited = await request(path, { body: { qr: [entersoft], text } });
+      assert.equal(limited.status, 200);
+      assert.equal(limited.data.qr.status, "unavailable");
+      assert.match(limited.data.qr.message, /Too many digital receipt requests/);
+      assert.equal(limited.data.draft.lines[0].description, "Milk");
+      assert.equal(attempts, 4);
+    } finally {
+      configureReceiptQrFetcherForTests(null);
+      limiters.receiptQr.reset(houseId);
+      if (previousRateLimit === undefined) delete process.env.SV_RATE_LIMIT;
+      else process.env.SV_RATE_LIMIT = previousRateLimit;
+      if (previousQrLimit === undefined) delete process.env.SV_RATE_LIMIT_RECEIPT_QR;
+      else process.env.SV_RATE_LIMIT_RECEIPT_QR = previousQrLimit;
+    }
   });
 
   it("uses the Lidl template on a full Lidl receipt", async () => {

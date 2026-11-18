@@ -63,19 +63,6 @@ const COLUMN_KEYS: Record<string, keyof EntersoftRow> = {
   ΣΥΝΟΛΙΚΗΑΞΙΑ: "lineTotal",
 };
 
-/** Header order used when cells carry no data-title attributes. */
-const COLUMN_ORDER: (keyof EntersoftRow)[] = [
-  "code",
-  "description",
-  "unit",
-  "quantity",
-  "unitPrice",
-  "preDiscount",
-  "discount",
-  "taxRate",
-  "lineTotal",
-];
-
 /** Unit-of-measure cells mapped to SVault base units; pieces stay unit-less. */
 const UNIT_MAP: Record<string, string> = {
   ΚΙΛΟ: "kg",
@@ -134,7 +121,7 @@ function findDate(foldedText: string, rawText: string): string | null {
   const issue = foldedText.match(/ΗΜ\/ΝΙΑΣ?\s+ΕΚΔΟΣΗΣ[^0-9]*(\d{1,2}-\d{1,2}-\d{2,4})/);
   if (issue) return detectDate(issue[1]);
   const dispatch = foldedText.match(/ΕΝΑΡΞΗΣ\s*ΑΠΟΣΤΟΛΗΣ[^0-9]*(\d{4}-\d{2}-\d{2})/);
-  if (dispatch) return dispatch[1];
+  if (dispatch) return detectDate(dispatch[1]);
   return detectDate(rawText);
 }
 
@@ -151,21 +138,25 @@ function findReceiptNumber(foldedText: string): string | null {
  * breakdown header.
  */
 function labelledAmount(foldedText: string, label: string): number | null {
-  const match = foldedText.match(new RegExp(`(?<![\\p{L}])${label}(?![\\p{L}])[^0-9]*(\\d+[.,]\\d+)`, "u"));
+  const match = foldedText.match(new RegExp(`(?<![\\p{L}])${label}(?![\\p{L}])[\\s:]*(\\d+[.,]\\d+)`, "u"));
   return match ? parseAmount(match[1]) : null;
 }
 
-function parseVatBreakdown(foldedText: string): TaxBreakdownEntry[] {
-  const section = foldedText.match(/ΑΝΑΛΥΣΗ\s+ΦΠΑ([\s\S]*?)(?:ΣΤΟΙΧΕΙΑ\s+ΠΛΗΡΩΜΗΣ|ΠΑΡΑΤΗΡΗΣΕΙΣ|$)/);
+function parseVatBreakdown(html: string): TaxBreakdownEntry[] {
+  const section = html.match(/ΑΝΑΛΥΣΗ\s+ΦΠΑ([\s\S]*?)(?:ΣΤΟΙΧΕΙΑ\s+ΠΛΗΡΩΜΗΣ|ΠΑΡΑΤΗΡΗΣΕΙΣ|$)/i);
   if (!section) return [];
   const entries: TaxBreakdownEntry[] = [];
-  const pattern = /(\d{1,2}(?:[.,]\d+)?)\s*%\s*[^%]*?(\d+[.,]\d+)\s*(?:EUR)?\s*(\d+[.,]\d+)/g;
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(section[1]))) {
-    const rate = parseAmount(match[1]);
-    const net = parseAmount(match[2]);
-    const tax = parseAmount(match[3]);
-    if (rate == null || net == null || tax == null) continue;
+  // The issuer puts rate, net amount and tax in three sibling cells per row.
+  const rows = section[1].matchAll(/<div\b[^>]*>\s*((?:<div\b[^>]*>[^<]*<\/div>\s*){3})<\/div>/gi);
+  const money = /^-?\d[\d.,]*[.,]\d{2}\s*(?:EUR|€)?$/i;
+  for (const row of rows) {
+    const [rateCell, netCell, taxCell] = [...row[1].matchAll(/<div\b[^>]*>([^<]*)<\/div>/gi)]
+      .map((cell) => stripTags(cell[1]));
+    if (!/^\d{1,3}(?:[.,]\d+)?\s*%$/.test(rateCell) || !money.test(netCell) || !money.test(taxCell)) continue;
+    const rate = parseQuantity(rateCell);
+    const net = parseAmount(netCell);
+    const tax = parseAmount(taxCell);
+    if (rate == null || rate > 100 || net == null || tax == null) continue;
     entries.push({ rate, net, tax, gross: round(net + tax, 2) });
   }
   return entries;
@@ -190,15 +181,15 @@ function parseRows(html: string): EntersoftRow[] | null {
       taxRate: null,
       lineTotal: null,
     };
-    cells.forEach((cell, index) => {
+    for (const cell of cells) {
       const value = stripTags(cell[2]);
-      if (!value) return;
-      const title = cell[1].match(/data-title="([^"]*)"/i);
-      const key = title && COLUMN_KEYS[labelKey(title[1])];
-      const field = key ?? COLUMN_ORDER[index];
-      if (field) row[field] = value;
-    });
-    if (row.description || row.lineTotal) rows.push(row);
+      const title = cell[1].match(/\sdata-title\s*=\s*(["'])(.*?)\1/i);
+      const field = title && COLUMN_KEYS[labelKey(title[2])];
+      if (field && value) row[field] = value;
+    }
+    if (!row.description || !row.quantity || !row.lineTotal ||
+        parseQuantity(row.quantity) == null || parseAmount(row.lineTotal) == null) return null;
+    rows.push(row);
   }
   return rows.length ? rows : null;
 }
@@ -234,9 +225,9 @@ export function parseEntersoftInvoiceHtml(
 
   const total = labelledAmount(foldedTotals, "ΤΕΛΙΚΗ\\s+ΑΞΙΑ");
   const subtotal = labelledAmount(foldedTotals, "ΚΑΘΑΡΗ\\s+ΑΞΙΑ");
-  const tax = labelledAmount(foldedTotals, "Φ\\.?\\s*Π\\.?\\s*Α\\s");
+  const tax = labelledAmount(foldedTotals, "Φ\\.?\\s*Π\\.?\\s*Α\\.?");
   const savings = labelledAmount(foldedTotals, "ΕΚΠΤΩΣΗ");
-  const taxBreakdown = parseVatBreakdown(foldedTotals);
+  const taxBreakdown = parseVatBreakdown(afterTable);
   // Amounts print the currency joined to the digits ("51,39EUR"), so the
   // currency test must not require a word boundary before EUR.
   const currency = /(?<![A-Za-z])EUR(?![A-Za-z])|\u20ac/.test(source) ? "EUR" : fallbackCurrency;

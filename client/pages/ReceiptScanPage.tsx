@@ -618,11 +618,13 @@ export function ReceiptScanPage() {
     const sequence = stitchSeqRef.current;
     const addedKeys: string[] = [];
     const links = new Map<string, ReceiptQrLink>();
+    const hasDigitalDraft = provider === "qr" && lines.length > 0;
+    const tryDigital = lines.length === 0;
     try {
-      const decoder = await import("@/receipt-qr").catch(() => null);
+      const decoder = tryDigital ? await import("@/receipt-qr").catch(() => null) : null;
       for (const file of files) {
         try {
-          const payload = provider === "qr" ? null : await decoder?.decodeReceiptQrFile(file);
+          const payload = await decoder?.decodeReceiptQrFile(file);
           const link = payload ? matchReceiptQrLink(payload) : null;
           if (link) links.set(link.url, link);
           const prepared = await prepareImage(file, { maxSize: 4000, quality: 0.92 });
@@ -648,9 +650,9 @@ export function ReceiptScanPage() {
           toast.error(err instanceof Error ? t(err.message) : t("Could not read that photo"));
         }
       }
-      let usedDigital = provider === "qr";
+      let appliedDigital = false;
       const link = links.size === 1 ? links.values().next().value : null;
-      if (link && !lines.length) {
+      if (link) {
         try {
           const data = await api<ReceiptScanResponse>(`/api/houses/${house.id}/receipts/scan`, {
             method: "POST",
@@ -663,16 +665,18 @@ export function ReceiptScanPage() {
             setDigitalLink(null);
             setText(data.selectedText ?? "");
             setMergeRemoved(0);
-            usedDigital = true;
+            appliedDigital = true;
           } else if (data.qr?.message) {
             setWarning(data.qr.message);
-            if (link.issuer === "epsilon-sklavenitis" || data.qr.status === "challenge") setDigitalLink(link.url);
+            setDigitalLink(link.url);
           }
         } catch {
           // The original photo can still be parsed locally when the issuer is unavailable.
+          if (sequence !== stitchSeqRef.current) return;
+          setDigitalLink(link.url);
         }
       }
-      if (usedDigital) {
+      if (hasDigitalDraft || appliedDigital) {
         commitPages(pagesRef.current.map((page) => addedKeys.includes(page.key) ? { ...page, status: "done" } : page), false);
       } else {
         for (const key of addedKeys) {
@@ -749,6 +753,14 @@ export function ReceiptScanPage() {
         body: { text: receiptText },
       });
       if (sequence !== stitchSeqRef.current) return;
+      const currentLines = snapshotRef.current()?.lines ?? lines;
+      if (currentLines.length) {
+        if (!data.draft.lines.length) {
+          toast.error(t("No product lines found in the receipt PDF."));
+          return;
+        }
+        if (!window.confirm(t("Replace the current receipt details and line edits with the PDF?"))) return;
+      }
       setManualMode(true);
       setText(data.selectedText ?? receiptText);
       setMergeRemoved(0);
@@ -1257,13 +1269,13 @@ export function ReceiptScanPage() {
               <div className="mt-1 text-xs text-muted">{t("Any angle · each paper is straightened on this device")}</div>
             </div>
             <div className="flex flex-wrap justify-center gap-2">
-              <Button type="button" icon="camera" disabled={Boolean(pendingDraft)} onClick={() => cameraRef.current?.click()}>
+              <Button type="button" icon="camera" disabled={busy || Boolean(pendingDraft)} onClick={() => cameraRef.current?.click()}>
                 {t("Take photo")}</Button>
               <Button
                 type="button"
                 variant="secondary"
                 icon="upload"
-                disabled={Boolean(pendingDraft)}
+                disabled={busy || Boolean(pendingDraft)}
                 onClick={() => libraryRef.current?.click()}
               >
                 {t("Upload photos")}</Button>
@@ -1379,6 +1391,7 @@ export function ReceiptScanPage() {
                     <button
                       type="button"
                       onClick={() => libraryRef.current?.click()}
+                      disabled={busy}
                       aria-label={t("Add another receipt photo")}
                       className="flex h-16 w-14 shrink-0 flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-line text-muted transition-colors hover:border-brand hover:text-brand"
                     >
@@ -1455,10 +1468,10 @@ export function ReceiptScanPage() {
                         : t("No photo")}
                 </span>
                 <span className="flex items-center gap-2">
-                  <button type="button" onClick={() => cameraRef.current?.click()} className="font-medium text-brand hover:underline">
+                  <button type="button" disabled={busy} onClick={() => cameraRef.current?.click()} className="font-medium text-brand hover:underline">
                     {t("Camera")}</button>
                   <span>·</span>
-                  <button type="button" onClick={() => libraryRef.current?.click()} className="font-medium text-brand hover:underline">
+                  <button type="button" disabled={busy} onClick={() => libraryRef.current?.click()} className="font-medium text-brand hover:underline">
                     {t("Upload")}</button>
                 </span>
               </div>

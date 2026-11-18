@@ -30,7 +30,10 @@ const invoice = `<div class="BoldBlueHeader">ΔΟΚΙΜΑΣΤΙΚΟ ΚΑΤΑΣΤ
   <div>ΤΕΛΙΚΗ ΑΞΙΑ</div><div>3,60EUR</div>
   <div>Καθαρή Αξία</div><div>3,19EUR</div>
   <div>Φ.Π.Α</div><div>0,41EUR</div>
-  <div>ΑΝΑΛΥΣΗ ΦΠΑ</div><div>13% 3,19EUR 0,41EUR</div>`;
+  <div>ΑΝΑΛΥΣΗ ΦΠΑ</div>
+  <div class="row"><div>0%</div><div>ΣΥΝΟΛΟ 7,00EUR</div><div>6,00EUR</div></div>
+  <div class="row"><div>13%</div><div>3,19EUR</div><div>0,41EUR</div></div>
+  <div>ΣΤΟΙΧΕΙΑ ΠΛΗΡΩΜΗΣ</div>`;
 
 function html(body: string) {
   return new Response(body, { headers: { "content-type": "text/html" } });
@@ -40,10 +43,13 @@ afterEach(() => configureReceiptQrFetcherForTests(null));
 
 test("reads a pinned Entersoft document and preserves the amounts and weighted quantity", async () => {
   const requests: string[] = [];
+  const frame = issuerPath
+    .replace(token, "%74" + token.slice(1))
+    .replaceAll("&", "&amp;");
   configureReceiptQrFetcherForTests(async (url) => {
     requests.push(url);
     return requests.length === 1
-      ? html(`<iframe id="iframeContent" src="${issuerPath.replaceAll("&", "&amp;")}"></iframe>`)
+      ? html(`<iframe src='${frame}' id='iframeContent'></iframe>`)
       : html(invoice);
   });
   const result = await fetchQrReceiptDraft(entersoftUrl);
@@ -86,6 +92,7 @@ test("rejects unknown links, escaped redirects and a replaced Entersoft frame", 
 
   for (const location of [
     "https://wrong.example/elsewhere",
+    "https://epsilondigital-sklavenitis.epsilonnet.gr/unrelated",
     `https://epsilondigital-sklavenitis.epsilonnet.gr:8080/DocViewer/${ref}`,
   ]) {
     const requests: string[] = [];
@@ -104,4 +111,75 @@ test("rejects unknown links, escaped redirects and a replaced Entersoft frame", 
   });
   assert.equal((await fetchQrReceiptDraft(entersoftUrl)).status, "unavailable");
   assert.deepEqual(requests, [entersoftUrl]);
+});
+
+test("stops a redirect loop and requires the named Entersoft viewer frame", async () => {
+  let requests = 0;
+  configureReceiptQrFetcherForTests(async () => {
+    requests++;
+    return new Response(null, { status: 302, headers: { location: `/DocViewer/${ref}` } });
+  });
+  assert.equal((await fetchQrReceiptDraft(epsilonUrl)).status, "unavailable");
+  assert.equal(requests, 4);
+
+  requests = 0;
+  configureReceiptQrFetcherForTests(async () => {
+    requests++;
+    return html(invoice);
+  });
+  assert.equal((await fetchQrReceiptDraft(entersoftUrl)).status, "unavailable");
+  assert.equal(requests, 1);
+});
+
+test("stops on an oversized or stalled issuer body", { timeout: 2000 }, async () => {
+  let cancelled = false;
+  const response = (chunk: Uint8Array) => new Response(new ReadableStream({
+    start(controller) { controller.enqueue(chunk); },
+    cancel() { cancelled = true; },
+  }), { headers: { "content-type": "text/html" } });
+  configureReceiptQrFetcherForTests(async () => response(new Uint8Array(2 * 1024 * 1024 + 1)));
+  assert.equal((await fetchQrReceiptDraft(epsilonUrl)).status, "unavailable");
+  assert.ok(cancelled);
+
+  cancelled = false;
+  configureReceiptQrFetcherForTests(async () => response(new TextEncoder().encode("<html>")));
+  // AbortSignal.timeout is unref'ed and the mocked stream has no socket.
+  const keepAlive = setTimeout(() => undefined, 1000);
+  try {
+    assert.equal((await fetchQrReceiptDraft(epsilonUrl, Date.now() + 30)).status, "unavailable");
+    assert.ok(cancelled, "the deadline cancels an in-progress body read");
+  } finally {
+    clearTimeout(keepAlive);
+  }
+});
+
+test("gives Entersoft verification instructions at either retrieval stage", async () => {
+  for (const atInvoice of [false, true]) {
+    configureReceiptQrFetcherForTests(async (url) =>
+      atInvoice && url === entersoftUrl
+        ? html(`<iframe id="iframeContent" src="${issuerPath.replaceAll("&", "&amp;")}"></iframe>`)
+        : html('<div id="cf-turnstile"></div>'));
+    const result = await fetchQrReceiptDraft(entersoftUrl);
+    assert.equal(result.status, "challenge");
+    assert.match(result.message ?? "", /Entersoft requires browser verification/);
+  }
+});
+
+test("decodes an explicitly declared Greek charset and rejects unlabeled item columns", async () => {
+  const decoder = new TextDecoder("windows-1253");
+  const encoding = new Map(Array.from({ length: 256 }, (_, value) => [decoder.decode(Uint8Array.of(value)), value]));
+  const bytes = Uint8Array.from(invoice, (char) => {
+    const value = encoding.get(char);
+    assert.notEqual(value, undefined);
+    return value!;
+  });
+  configureReceiptQrFetcherForTests(async (url) => url === entersoftUrl
+    ? html(`<iframe id="iframeContent" src="${issuerPath.replaceAll("&", "&amp;")}"></iframe>`)
+    : new Response(bytes, { headers: { "content-type": "text/html; charset=windows-1253" } }));
+  assert.equal((await fetchQrReceiptDraft(entersoftUrl)).draft?.lines[0].description, "ΜΗΛΑ & ΑΧΛΑΔΙΑ");
+
+  configureReceiptQrFetcherForTests(async (url) => url === entersoftUrl
+    ? html(`<iframe id="iframeContent" src="${issuerPath.replaceAll("&", "&amp;")}"></iframe>`)
+    : html(invoice.replace('data-title="Συνολική Αξία"', 'data-title="Άγνωστη στήλη"')));
+  assert.equal((await fetchQrReceiptDraft(entersoftUrl)).status, "unavailable");
 });

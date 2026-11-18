@@ -21,7 +21,9 @@ import {
 } from "../services/vendors.js";
 import { selectReceiptTemplate } from "../services/receipt-templates.js";
 import { lidlExcludedCharges } from "../services/receipt-lidl.js";
-import { fetchQrReceiptDraft } from "../services/receipt-qr.js";
+import { fetchQrReceiptDraft, RECEIPT_QR_BUDGET_MS } from "../services/receipt-qr.js";
+import { limiters } from "../rate-limit.js";
+import { matchReceiptQrLink } from "../../shared/receipt-qr-links.js";
 import { hasOcrNumericDisagreement, selectOcrCandidate } from "../services/receipt-candidates.js";
 import { learnProductAlias } from "../services/product-aliases.js";
 import { suggestProductMatches } from "../services/product-match.js";
@@ -480,14 +482,31 @@ receiptRoutes.post(
     let qrExcludedCharges = 0;
     let qrInfo: ReceiptQrInfo | null = null;
     if (!body.preferAi && qrPayloads.length) {
-      for (const payload of qrPayloads) {
-        const fetched = await fetchQrReceiptDraft(payload);
-        qrInfo = { issuer: fetched.issuer, status: fetched.status, message: fetched.message };
-        if (fetched.status === "ok" && fetched.draft && fetched.draft.lines.length) {
-          qrDraft = fetched.draft;
-          qrText = fetched.text;
-          qrExcludedCharges = fetched.excludedCharges;
-          break;
+      const recognized = qrPayloads.map(matchReceiptQrLink).find((link) => link !== null);
+      const wait = recognized && (limiters.receiptQr.blocked(houseId) || limiters.receiptQrGlobal.blocked("all"));
+      if (recognized && wait) {
+        qrInfo = {
+          issuer: recognized.issuer,
+          status: "unavailable",
+          message: "Too many digital receipt requests. Try again in a few minutes or scan the photo.",
+        };
+      } else {
+        if (recognized) {
+          limiters.receiptQr.hit(houseId);
+          limiters.receiptQrGlobal.hit("all");
+        }
+        const deadline = Date.now() + RECEIPT_QR_BUDGET_MS;
+        for (const payload of qrPayloads) {
+          const fetched = await fetchQrReceiptDraft(payload, deadline);
+          const info = { issuer: fetched.issuer, status: fetched.status, message: fetched.message };
+          if (fetched.status === "ok" && fetched.draft && fetched.draft.lines.length) {
+            qrInfo = info;
+            qrDraft = fetched.draft;
+            qrText = fetched.text;
+            qrExcludedCharges = fetched.excludedCharges;
+            break;
+          }
+          if (qrInfo?.status !== "challenge" && (info.status !== "unsupported" || qrInfo == null)) qrInfo = info;
         }
       }
       // The digital text becomes the scan's text: AI re-reads get it as
