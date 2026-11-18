@@ -369,7 +369,7 @@ export function serializeReceipt(row: any, lines?: any[]): Receipt {
     })),
     templateId: row.template_id ?? null,
     templateConfidence: row.template_confidence == null ? null : Number(row.template_confidence),
-    provider: row.provider === "ai" || row.provider === "local" || row.provider === "template" ? row.provider : null,
+    provider: ["ai", "local", "template", "qr"].includes(row.provider) ? row.provider : null,
     aiCost: row.ai_cost == null ? null : Number(row.ai_cost),
     savings: row.savings == null ? null : Number(row.savings),
     image: row.image ?? null,

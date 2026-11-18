@@ -6,6 +6,7 @@ import { useAuth, useHouse } from "@/state";
 import { Badge, Button, Card, Field, Input, PageHeader, Select, Sheet, Spinner, Textarea, cn } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { useToast } from "@/components/toast";
+import { readDigitalPdfText } from "@/bill-scan";
 import { ocrImage } from "@/ocr";
 import { mergeOcrCandidates, mergeOcrTexts } from "@/ocr-merge";
 import { scanDocument } from "@/document-scan";
@@ -16,12 +17,14 @@ import { ItemPickerSheet } from "@/components/ItemPickerSheet";
 import { ZoomableImage } from "@/components/ZoomableImage";
 import { clearReceiptDraft, loadReceiptDraft, receiptDraftKey, saveReceiptDraft, type StoredReceiptDraft } from "@/receipt-draft-store";
 import { reconcileReceipt } from "@shared/receipt-reconcile";
+import { matchReceiptQrLink, type ReceiptQrLink } from "@shared/receipt-qr-links";
 import type {
   Location,
   OffProduct,
   Receipt,
   ReceiptDraft,
   ReceiptDuplicate,
+  ReceiptProvider,
   ReceiptScanResponse,
   ReceiptValidation,
   ReceiptValidationLine,
@@ -71,7 +74,7 @@ interface ReceiptPage {
   trimmed: boolean;
   text: string;
   candidates?: string[];
-  status: "queued" | "reading" | "done" | "error";
+  status: "queued" | "reading" | "done" | "skipped" | "error";
   /** The page photo on the server, sent to the vision model on its own. */
   uploadedPath: string | null;
   upload: "pending" | "done" | "error";
@@ -103,7 +106,7 @@ interface SavedDraft {
   taxBreakdown: TaxBreakdownEntry[];
   locationId: string;
   lines: DraftLine[];
-  provider: "ai" | "local" | "template" | null;
+  provider: ReceiptProvider | null;
   aiCost: number | null;
   templateId: string | null;
   scanId: string | null;
@@ -114,6 +117,19 @@ interface SavedDraft {
 /** Suggestions this certain are pre-selected; weaker ones wait for a tap. */
 const AUTO_SELECT_SCORE = 0.9;
 const MAX_VISION_PAGES = 8;
+
+function hasEditedReceiptText(draft: SavedDraft): boolean {
+  return Boolean(draft.text.trim()) && draft.text.trim() !== mergeOcrTexts(draft.pages.map((page) => page.text)).text.trim();
+}
+
+function hasReceiptDetails(draft: SavedDraft, defaultCurrency: string): boolean {
+  return Boolean(
+    draft.provider || draft.lines.length || draft.vendorName.trim() || draft.locationId ||
+    draft.purchasedAt !== todayInput() || draft.currency !== defaultCurrency ||
+    draft.total || draft.subtotal || draft.tax || draft.savings || draft.taxBreakdown.length ||
+    hasEditedReceiptText(draft),
+  );
+}
 
 function numberOrNull(value: string): number | null {
   if (!value.trim()) return null;
@@ -250,10 +266,12 @@ export function ReceiptScanPage() {
   const toast = useToast();
   const cameraRef = useRef<HTMLInputElement>(null);
   const libraryRef = useRef<HTMLInputElement>(null);
+  const pdfRef = useRef<HTMLInputElement>(null);
   const pagesRef = useRef<ReceiptPage[]>([]);
   const stitchedUrlRef = useRef<string | null>(null);
   const stitchedPathRef = useRef<string | null>(null);
   const stitchSeqRef = useRef(0);
+  const workspaceRevisionRef = useRef(0);
   const readingRef = useRef(false);
   const pageUploadsRef = useRef(new Map<string, Promise<string | null>>());
   const validationSeqRef = useRef(0);
@@ -274,6 +292,7 @@ export function ReceiptScanPage() {
   const [ocrStatus, setOcrStatus] = useState("");
   const [ocrError, setOcrError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [digitalLink, setDigitalLink] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   const [vendors, setVendors] = useState<Vendor[]>([]);
@@ -289,7 +308,7 @@ export function ReceiptScanPage() {
   const [taxBreakdown, setTaxBreakdown] = useState<TaxBreakdownEntry[]>([]);
   const [locationId, setLocationId] = useState("");
   const [lines, setLines] = useState<DraftLine[]>([]);
-  const [provider, setProvider] = useState<"ai" | "local" | "template" | null>(null);
+  const [provider, setProvider] = useState<ReceiptProvider | null>(null);
   const [aiCost, setAiCost] = useState<number | null>(null);
   const [templateId, setTemplateId] = useState<string | null>(null);
   const [scanId, setScanId] = useState<string | null>(null);
@@ -504,19 +523,23 @@ export function ReceiptScanPage() {
     return pending ? await pending : await startPageUpload(page);
   };
 
-  const runPageOcr = async (key: string, index: number, count: number) => {
+  // Callers gate concurrent reads. The active photo batch uses this while busy.
+  const runPageOcr = async (key: string, index: number, count: number, preserveEdits = false) => {
     const page = pagesRef.current.find((entry) => entry.key === key);
     if (!page) return;
+    const revision = workspaceRevisionRef.current;
     setOcrRunning(true);
     setOcrProgress(0);
     setOcrStatus(count > 1 ? t("Reading page {page} of {count}", { page: index + 1, count }) : t("Starting OCR"));
     setOcrError(null);
-    patchPage(key, { status: "reading" });
+    const mergePageText = () => !preserveEdits || !hasEditedReceiptText(snapshotRef.current() ?? snapshot());
+    patchPage(key, { status: "reading" }, mergePageText());
     try {
       let candidates: string[] = [];
       const result = await ocrImage(
         page.file,
         (progress, status) => {
+          if (revision !== workspaceRevisionRef.current) return;
           setOcrProgress(progress);
           setOcrStatus(count > 1
             ? `${t("Page {page} of {count}", { page: index + 1, count })} · ${t(status)}`
@@ -524,25 +547,35 @@ export function ReceiptScanPage() {
         },
         { mode: "receipt", onCandidates: (values) => { candidates = values; } },
       );
+      if (revision !== workspaceRevisionRef.current) return;
       const recognised = result.trim();
-      patchPage(key, { text: recognised, candidates, status: "done" });
+      patchPage(key, { text: recognised, candidates, status: "done" }, mergePageText());
       if (!recognised) {
         setOcrError(
           t("Page {page} had no detectable text. Try a sharper, flatter photo or type the lines manually.", { page: index + 1 }),
         );
       }
     } catch (err) {
-      patchPage(key, { status: "error" });
+      if (revision !== workspaceRevisionRef.current) return;
+      patchPage(key, { status: "error" }, mergePageText());
       setOcrError(err instanceof Error ? t(err.message) : t("Page {page}: OCR failed", { page: index + 1 }));
     } finally {
       setOcrRunning(false);
     }
   };
 
-  const rerunAllOcr = async () => {
+  const rerunOcr = async (key?: string) => {
+    if (readingRef.current || busy || ocrRunning) return;
+    readingRef.current = true;
+    const revision = workspaceRevisionRef.current;
     const current = [...pagesRef.current];
-    for (let index = 0; index < current.length; index++) {
-      await runPageOcr(current[index].key, index, current.length);
+    try {
+      for (const [index, page] of current.entries()) {
+        if (revision !== workspaceRevisionRef.current) break;
+        if (!key || key === page.key) await runPageOcr(page.key, index, current.length);
+      }
+    } finally {
+      readingRef.current = false;
     }
   };
 
@@ -550,6 +583,7 @@ export function ReceiptScanPage() {
    * Stitches the pages for the stored scan. A single page reuses its own
    * upload; several pages are combined and uploaded once, and the stitch they
    * replace is deleted from the server.
+   * This also runs before the active photo batch releases its busy state.
    */
   const rebuildStitch = async (options: { reusePath?: string | null } = {}) => {
     const sequence = ++stitchSeqRef.current;
@@ -605,19 +639,40 @@ export function ReceiptScanPage() {
   };
 
   const handleFiles = async (files: File[]) => {
-    if (!files.length || readingRef.current) return;
+    if (!files.length || pendingDraft || readingRef.current || busy || ocrRunning) return;
     readingRef.current = true;
-    setOcrError(null);
-    setWarning(null);
-    const start = pagesRef.current.length;
+    setBusy(true);
+    // Only resetting the workspace invalidates a read. Reset also removes its pages.
+    const revision = workspaceRevisionRef.current;
+    const addedKeys: string[] = [];
+    const links = new Map<string, ReceiptQrLink>();
+    const existingDraft = snapshotRef.current() ?? snapshot();
+    const hasDigitalDraft = existingDraft.provider === "qr";
+    const tryDigital = !hasReceiptDetails(existingDraft, house.currency);
     try {
-      for (let offset = 0; offset < files.length; offset++) {
-        const file = files[offset];
+      const decoder = tryDigital ? await import("@/receipt-qr").catch(() => null) : null;
+      if (decoder) {
+        for (const file of files) {
+          const payload = await decoder.decodeReceiptQrFile(file);
+          if (revision !== workspaceRevisionRef.current) return;
+          const link = payload ? matchReceiptQrLink(payload) : null;
+          if (link) links.set(link.url, link);
+          // Identify distinct purchases before appending or uploading any pages.
+          if (links.size > 1) {
+            toast.error(t("These photos contain different receipt links. Scan one receipt at a time."));
+            return;
+          }
+        }
+      }
+      setOcrError(null);
+      if (!hasDigitalDraft) setWarning(null);
+      for (const file of files) {
         try {
           const prepared = await prepareImage(file, { maxSize: 4000, quality: 0.92 });
           // Straighten each shot on its own before OCR: a combined photo would
           // confuse the corner finder and blur the seam.
           const scan = await scanDocument(prepared, { maxSize: 4000 });
+          if (revision !== workspaceRevisionRef.current) return;
           const page: ReceiptPage = {
             key: newKey("page"),
             file: scan.file,
@@ -628,21 +683,64 @@ export function ReceiptScanPage() {
             uploadedPath: null,
             upload: "pending",
           };
-          commitPages([...pagesRef.current, page]);
+          commitPages([...pagesRef.current, page], false);
+          addedKeys.push(page.key);
           setViewKey(page.key);
           void startPageUpload(page);
-          await runPageOcr(page.key, start + offset, start + files.length);
         } catch (err) {
           toast.error(err instanceof Error ? t(err.message) : t("Could not read that photo"));
         }
       }
+      let appliedDigital = false;
+      const link = links.values().next().value;
+      if (link) {
+        try {
+          const data = await api<ReceiptScanResponse>(`/api/houses/${house.id}/receipts/scan`, {
+            method: "POST",
+            body: { qr: link.url },
+          });
+          if (revision !== workspaceRevisionRef.current) return;
+          if (data.provider === "qr" && data.draft.lines.length) {
+            if (hasReceiptDetails(snapshotRef.current() ?? snapshot(), house.currency)) {
+              setWarning("Your edits were kept. Start over to import the digital receipt.");
+              setDigitalLink(link.url);
+            } else {
+              applyScan(data);
+              setManualMode(true);
+              setDigitalLink(null);
+              setText(data.selectedText ?? "");
+              setMergeRemoved(0);
+              appliedDigital = true;
+            }
+          } else if (data.qr?.message) {
+            setWarning(data.qr.message);
+            setDigitalLink(link.url);
+          }
+        } catch {
+          // The original photo can still be parsed locally when the issuer is unavailable.
+          if (revision !== workspaceRevisionRef.current) return;
+          setWarning("The digital receipt could not be loaded. Reading the photo instead.");
+          setDigitalLink(link.url);
+        }
+      }
+      if (hasDigitalDraft || appliedDigital) {
+        commitPages(pagesRef.current.map((page) => addedKeys.includes(page.key) ? { ...page, status: "skipped" } : page), false);
+      } else {
+        for (const key of addedKeys) {
+          if (revision !== workspaceRevisionRef.current) return;
+          const current = pagesRef.current;
+          await runPageOcr(key, current.findIndex((page) => page.key === key), current.length, true);
+        }
+      }
+      if (revision === workspaceRevisionRef.current) await rebuildStitch();
     } finally {
       readingRef.current = false;
+      setBusy(false);
     }
-    await rebuildStitch();
   };
 
   const removePage = async (key: string) => {
+    if (readingRef.current) return;
     const page = pagesRef.current.find((entry) => entry.key === key);
     if (page) URL.revokeObjectURL(page.url);
     commitPages(pagesRef.current.filter((entry) => entry.key !== key));
@@ -652,6 +750,7 @@ export function ReceiptScanPage() {
   };
 
   const movePage = async (key: string, direction: -1 | 1) => {
+    if (readingRef.current) return;
     const next = [...pagesRef.current];
     const index = next.findIndex((entry) => entry.key === key);
     const target = index + direction;
@@ -683,10 +782,52 @@ export function ReceiptScanPage() {
     setTemplateId(data.draft.templateId ?? null);
     setScanId(data.scanId ?? null);
     setAiAvailable(Boolean(data.aiAvailable));
-    setWarning(data.warning);
+    // Each result replaces the previous source's warning, including a null warning.
+    setWarning(data.warning ?? null);
+  };
+
+  const handlePdf = async (file: File | undefined) => {
+    if (!file || pendingDraft || readingRef.current || busy || ocrRunning) return;
+    readingRef.current = true;
+    setBusy(true);
+    const revision = workspaceRevisionRef.current;
+    try {
+      const receiptText = await readDigitalPdfText(file, 50000);
+      if (revision !== workspaceRevisionRef.current) return;
+      if (!receiptText) {
+        toast.error(t("This PDF has no selectable text. Add a receipt photo to scan it."));
+        return;
+      }
+      const data = await api<ReceiptScanResponse>(`/api/houses/${house.id}/receipts/scan`, {
+        method: "POST",
+        body: { text: receiptText },
+      });
+      if (revision !== workspaceRevisionRef.current) return;
+      if (!data.draft.lines.length) {
+        toast.error(t("No product lines found in the receipt PDF."));
+        return;
+      }
+      if (hasReceiptDetails(snapshotRef.current() ?? snapshot(), house.currency) &&
+          !window.confirm(t("Replace the current receipt details and line edits with the PDF?"))) return;
+      // The native confirmation blocks the page's event loop. A reset
+      // invalidates the pending import regardless of the dialog result.
+      if (revision !== workspaceRevisionRef.current) return;
+      setManualMode(true);
+      setText(data.selectedText ?? receiptText);
+      setMergeRemoved(0);
+      setDigitalLink(null);
+      setOcrError(null);
+      applyScan(data);
+    } catch {
+      toast.error(t("Could not read the receipt PDF"));
+    } finally {
+      readingRef.current = false;
+      setBusy(false);
+    }
   };
 
   const readReceipt = async (preferAi = false) => {
+    if (busy || readingRef.current) return;
     const pageImages = pagesRef.current
       .map((page) => page.uploadedPath)
       .filter((path): path is string => Boolean(path))
@@ -706,6 +847,8 @@ export function ReceiptScanPage() {
     if (pagesRef.current.length > MAX_VISION_PAGES) {
       toast.push(t("Only the first {count} photos are sent to the vision model.", { count: MAX_VISION_PAGES }));
     }
+    readingRef.current = true;
+    const revision = workspaceRevisionRef.current;
     setBusy(true);
     try {
       const currentPages = pagesRef.current;
@@ -720,6 +863,7 @@ export function ReceiptScanPage() {
           ...(preferAi ? { preferAi: true } : {}),
         },
       });
+      if (revision !== workspaceRevisionRef.current) return;
       if (data.selectedText != null && data.selectedText !== text) setText(data.selectedText);
       applyScan(data);
       if (!data.draft.lines.length) {
@@ -729,6 +873,7 @@ export function ReceiptScanPage() {
     } catch (err) {
       toast.error(err instanceof Error ? t(err.message) : t("Could not read the receipt"));
     } finally {
+      readingRef.current = false;
       setBusy(false);
     }
   };
@@ -888,6 +1033,7 @@ export function ReceiptScanPage() {
   };
 
   const save = async (allowDuplicate = false) => {
+    if (busy || readingRef.current || ocrRunning) return;
     if (uploading) {
       toast.error(t("The scan is still being stored"));
       return;
@@ -901,6 +1047,7 @@ export function ReceiptScanPage() {
       return;
     }
     const rows = included;
+    readingRef.current = true;
     setSaving(true);
     try {
       const check = await validate(rows).catch((err) => {
@@ -945,6 +1092,7 @@ export function ReceiptScanPage() {
       }
       toast.error(receiptErrorMessage(err, t));
     } finally {
+      readingRef.current = false;
       setSaving(false);
     }
   };
@@ -952,6 +1100,8 @@ export function ReceiptScanPage() {
   /* -------------------------------------------------------- reset & resume */
 
   const clearWorkspace = () => {
+    // An in-flight operation owns readingRef until its finally block releases it.
+    workspaceRevisionRef.current++;
     stitchSeqRef.current++;
     validationSeqRef.current++;
     for (const page of pagesRef.current) URL.revokeObjectURL(page.url);
@@ -983,6 +1133,7 @@ export function ReceiptScanPage() {
     setScanId(null);
     setAiAvailable(false);
     setWarning(null);
+    setDigitalLink(null);
     setOffLineKey(null);
     setPickerLineKey(null);
     setValidation({});
@@ -1038,7 +1189,7 @@ export function ReceiptScanPage() {
             text: page.text,
             candidates: page.candidates,
             // OCR that was interrupted by the reload can be re-run per page.
-            status: page.status === "done" ? "done" : page.text ? "done" : "error",
+            status: page.status === "skipped" ? "skipped" : page.status === "done" || page.text ? "done" : "error",
             uploadedPath: alive ? page.uploadedPath : null,
             upload: alive ? "done" : "pending",
           } satisfies ReceiptPage;
@@ -1100,9 +1251,26 @@ export function ReceiptScanPage() {
   const shownCurrency = currency || house.currency;
   const locationName = (id: string) => locations.find((location) => location.id === id)?.name ?? t("another place");
   const canReRead = aiAvailable && Boolean(text.trim() || uploadedPath);
+  const pdfButton = (
+    <Button type="button" size="sm" variant="secondary" icon="upload" disabled={busy || ocrRunning || Boolean(pendingDraft)}
+      onClick={() => pdfRef.current?.click()}>
+      {t("Import receipt PDF")}
+    </Button>
+  );
 
   return (
     <div className="space-y-4">
+      <input
+        ref={pdfRef}
+        type="file"
+        accept="application/pdf,.pdf"
+        className="hidden"
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          event.target.value = "";
+          void handlePdf(file);
+        }}
+      />
       <PageHeader
         back={() => navigate("/receipts")}
         eyebrow={t("Receipt intake")}
@@ -1110,7 +1278,7 @@ export function ReceiptScanPage() {
         subtitle={t("Photograph the receipt — one shot or several for a long one — check the lines, and the whole shop lands in inventory with the shop recorded.")}
         actions={
           showWorkspace ? (
-            <Button variant="ghost" size="sm" icon="refresh" onClick={reset}>
+            <Button variant="ghost" size="sm" icon="refresh" onClick={reset} disabled={saving}>
               {t("Start over")}</Button>
           ) : undefined
         }
@@ -1160,16 +1328,17 @@ export function ReceiptScanPage() {
               <div className="mt-1 text-xs text-muted">{t("Any angle · each paper is straightened on this device")}</div>
             </div>
             <div className="flex flex-wrap justify-center gap-2">
-              <Button type="button" icon="camera" disabled={Boolean(pendingDraft)} onClick={() => cameraRef.current?.click()}>
+              <Button type="button" icon="camera" disabled={busy || Boolean(pendingDraft)} onClick={() => cameraRef.current?.click()}>
                 {t("Take photo")}</Button>
               <Button
                 type="button"
                 variant="secondary"
                 icon="upload"
-                disabled={Boolean(pendingDraft)}
+                disabled={busy || Boolean(pendingDraft)}
                 onClick={() => libraryRef.current?.click()}
               >
                 {t("Upload photos")}</Button>
+              {pdfButton}
             </div>
             <p className="text-[11px] text-muted">
               {t("JPG, PNG or HEIC from your camera roll. A long receipt can be photographed in several overlapping shots.")}</p>
@@ -1273,7 +1442,7 @@ export function ReceiptScanPage() {
                         <span
                           className={cn(
                             "absolute right-1 top-1 h-1.5 w-1.5 rounded-full",
-                            page.status === "done" ? "bg-brand" : page.status === "error" ? "bg-danger" : "bg-warn",
+                            page.status === "done" ? "bg-brand" : page.status === "skipped" ? "bg-muted" : page.status === "error" ? "bg-danger" : "bg-warn",
                           )}
                         />
                       </button>
@@ -1281,6 +1450,7 @@ export function ReceiptScanPage() {
                     <button
                       type="button"
                       onClick={() => libraryRef.current?.click()}
+                      disabled={busy}
                       aria-label={t("Add another receipt photo")}
                       className="flex h-16 w-14 shrink-0 flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-line text-muted transition-colors hover:border-brand hover:text-brand"
                     >
@@ -1294,13 +1464,14 @@ export function ReceiptScanPage() {
                       <span>
                         {t("Page")} {activeIndex + 1} {t("of")} {pages.length}
                         {activePage.trimmed ? t(" · straightened") : ""}
+                        {activePage.status === "skipped" ? t(" · OCR skipped") : ""}
                         {activePage.upload === "error" ? t(" · not uploaded") : ""}
                       </span>
                       <span className="flex items-center gap-1">
                         <button
                           type="button"
-                          onClick={() => void runPageOcr(activePage.key, activeIndex, pages.length)}
-                          disabled={ocrRunning || stitching || activePage.status === "reading"}
+                          onClick={() => void rerunOcr(activePage.key)}
+                          disabled={busy || ocrRunning || stitching || activePage.status === "reading"}
                           aria-label={t("Re-run OCR for this page")}
                           className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-raised disabled:opacity-30"
                         >
@@ -1309,7 +1480,7 @@ export function ReceiptScanPage() {
                         <button
                           type="button"
                           onClick={() => void movePage(activePage.key, -1)}
-                          disabled={activeIndex <= 0}
+                          disabled={busy || activeIndex <= 0}
                           aria-label={t("Move this page earlier")}
                           className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-raised disabled:opacity-30"
                         >
@@ -1318,7 +1489,7 @@ export function ReceiptScanPage() {
                         <button
                           type="button"
                           onClick={() => void movePage(activePage.key, 1)}
-                          disabled={activeIndex >= pages.length - 1}
+                          disabled={busy || activeIndex >= pages.length - 1}
                           aria-label={t("Move this page later")}
                           className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-raised disabled:opacity-30"
                         >
@@ -1327,6 +1498,7 @@ export function ReceiptScanPage() {
                         <button
                           type="button"
                           onClick={() => void removePage(activePage.key)}
+                          disabled={busy}
                           aria-label={t("Remove this page")}
                           className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-raised hover:text-danger"
                         >
@@ -1357,10 +1529,10 @@ export function ReceiptScanPage() {
                         : t("No photo")}
                 </span>
                 <span className="flex items-center gap-2">
-                  <button type="button" onClick={() => cameraRef.current?.click()} className="font-medium text-brand hover:underline">
+                  <button type="button" disabled={busy} onClick={() => cameraRef.current?.click()} className="font-medium text-brand hover:underline">
                     {t("Camera")}</button>
                   <span>·</span>
-                  <button type="button" onClick={() => libraryRef.current?.click()} className="font-medium text-brand hover:underline">
+                  <button type="button" disabled={busy} onClick={() => libraryRef.current?.click()} className="font-medium text-brand hover:underline">
                     {t("Upload")}</button>
                 </span>
               </div>
@@ -1430,13 +1602,16 @@ export function ReceiptScanPage() {
                     size="sm"
                     variant="secondary"
                     icon="refresh"
-                    onClick={() => void rerunAllOcr()}
+                    onClick={() => void rerunOcr()}
                     disabled={ocrRunning || stitching}
                   >
                     {t("Re-run OCR")}</Button>
                 )}
-                <Button type="button" size="sm" icon="sparkles" loading={busy} onClick={() => void readReceipt()}>
-                  {t("Read receipt")}</Button>
+                {(provider !== "qr" || pages.some((page) => page.text)) && (
+                  <Button type="button" size="sm" icon="sparkles" loading={busy} onClick={() => void readReceipt()}>
+                    {t("Read receipt")}</Button>
+                )}
+                {pdfButton}
               </div>
             </Card>
           </div>
@@ -1448,7 +1623,9 @@ export function ReceiptScanPage() {
                 {provider && (
                   <div className="flex items-center gap-1.5">
                     <Badge tone={provider === "local" ? "neutral" : "brand"}>
-                      {provider === "template"
+                      {provider === "qr"
+                        ? t("Digital receipt")
+                        : provider === "template"
                         ? t(receiptTemplateLabel(templateId) ?? "template")
                         : provider === "ai"
                           ? t("AI read")
@@ -1459,6 +1636,11 @@ export function ReceiptScanPage() {
                 )}
               </div>
               {warning && <p className="rounded-xl bg-raised px-3 py-2 text-[11px] leading-relaxed text-muted">{t(warning)}</p>}
+              {digitalLink && (
+                <a href={digitalLink} target="_blank" rel="noopener noreferrer" className="inline-block text-xs font-medium text-brand hover:underline">
+                  {t("Open digital receipt")}
+                </a>
+              )}
               {provider && aiAvailable && (
                 <div className="flex flex-wrap items-center gap-2">
                   <Button type="button" size="sm" variant="secondary" icon="sparkles" loading={busy} onClick={() => void readReceipt(true)}>

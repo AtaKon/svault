@@ -580,7 +580,7 @@ for unknown products.
 | `POST` | `/api/houses/:houseId/receipts/validate` | member+ | Dry run of an import (same body): per-line item match, new items and errors. Writes nothing. |
 | `POST` | `/api/houses/:houseId/receipts/upload` | member+ | Upload a receipt photo (`field: image`) and get `{ path }`. |
 | `DELETE` | `/api/houses/:houseId/receipts/upload` | member+ | Delete a draft upload `{ "path": "/uploads/receipts/..." }`. `409` when a saved receipt uses it. |
-| `POST` | `/api/houses/:houseId/receipts/scan` | member+ | Parse OCR text and/or page images into a receipt draft with a reconciliation and a `scanId`. |
+| `POST` | `/api/houses/:houseId/receipts/scan` | member+ | Read issuer QR links, receipt text or page images into a draft with reconciliation and a `scanId`. |
 | `GET` | `/api/receipts/:receiptId` | viewer+ | Receipt with its lines and linked item names. |
 | `DELETE` | `/api/receipts/:receiptId` | member+ | Delete the receipt and its image. `?revertStock=true` also removes the stock it added that is still there. |
 
@@ -625,8 +625,23 @@ edited. A matched template compares them against the original total and keeps an
 its arithmetic improves without reducing line or priced-line counts or losing recognized barcodes. When chosen, `selectedText`
 contains the text used. The original total anchors the comparison, so a different total in an alternative
 is not selected automatically. `warning` calls out uncertainties; matching arithmetic does not verify names.
-`selectedText` is present only when a candidate was selected; `aiAvailable` indicates that the current
-scan has an enabled AI provider and usable text or vision input.
+`selectedText` contains the selected OCR candidate or the issuer's receipt rendered as text.
+`aiAvailable` indicates that the current scan has an enabled AI provider and usable text or vision input.
+
+Pass one decoded issuer link as the `qr` string to try digital retrieval before text parsing. A
+photo batch in the scanner uses automatic digital retrieval only when the photos identify one
+unique issuer link. A batch with distinct links is rejected before upload so its receipts can be
+scanned separately.
+A successful read returns `provider: "qr"`. The optional `qr` response reports the issuer and outcome
+(`ok`, `challenge`, `unsupported`, or `unavailable`). For a challenge, the client can open the issuer's
+viewer and send text extracted from the verified PDF through the same endpoint.
+Entersoft receipts with an incomplete labeled product fall back to local parsing and explain
+that the photo is needed to read the full receipt.
+The endpoint returns HTTP 200 with the local draft on `challenge`, `unsupported`, or `unavailable`,
+using the supplied text when present. Issuer lookups share a 12-second budget per request. The
+default limits are 20 recognized link attempts per household and 120 per server process in five
+minutes. Unrecognized links do not use either limit. Local parsing remains available when a limit
+is reached.
 `preferAi: true` (the "Re-read with AI" button) explicitly requests AI and uses its draft when it finds
 lines. This also applies to bulk receipt intake.
 
@@ -702,7 +717,7 @@ Import body:
   "allowDuplicate": false,
   "savings": 1.04,
   "image": "/uploads/receipts/....jpg",
-  "ocrText": "raw text, optional",
+  "ocrText": "receipt source text, optional",
   "notes": null,
   "lines": [
     {

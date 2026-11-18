@@ -23,7 +23,7 @@ export interface ScanRecord {
   id: string;
   houseId: string;
   userId: string;
-  provider: "ai" | "local" | "template";
+  provider: "ai" | "local" | "template" | "qr";
   aiCost: number | null;
   templateId: string | null;
   templateConfidence: number | null;

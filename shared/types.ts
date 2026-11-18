@@ -834,7 +834,7 @@ export interface Receipt {
   taxBreakdown: TaxBreakdownEntry[];
   templateId?: string | null;
   templateConfidence?: number | null;
-  provider?: "ai" | "local" | "template" | null;
+  provider?: ReceiptProvider | null;
   /** USD spent on the AI read of this receipt. */
   aiCost?: number | null;
   savings?: number | null;
@@ -901,8 +901,22 @@ export interface ReceiptReconciliation {
   ok: boolean;
 }
 
+/**
+ * How the draft was produced: a local/template/AI parse of scanned text, or a
+ * digital receipt fetched behind an issuer QR link.
+ */
+export type ReceiptProvider = "ai" | "local" | "template" | "qr";
+
+/** Outcome of the server-side fetch behind an issuer QR receipt link. */
+export interface ReceiptQrInfo {
+  issuer: "epsilon-sklavenitis" | "entersoft" | null;
+  status: "ok" | "challenge" | "unsupported" | "unavailable";
+  /** Safe user-facing note; never contains the bearer link itself. */
+  message: string | null;
+}
+
 export interface ReceiptScanResponse {
-  provider: "ai" | "local" | "template";
+  provider: ReceiptProvider;
   warning: string | null;
   aiCost: number | null;
   /** Short-lived server record holding the scan's provenance; pass it to the import. */
@@ -912,6 +926,8 @@ export interface ReceiptScanResponse {
   reconciliation: ReceiptReconciliation;
   /** OCR text selected from the supplied local candidates. */
   selectedText?: string;
+  /** Present when the request carried issuer QR payloads. */
+  qr?: ReceiptQrInfo | null;
   draft: ReceiptDraft;
 }
 

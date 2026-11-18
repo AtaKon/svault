@@ -75,6 +75,7 @@ export function receiptProviderLabel(
   if (provider === "ai") return "AI read";
   if (provider === "template") return "Template";
   if (provider === "local") return "Local read";
+  if (provider === "qr") return "Digital receipt";
   return source === "manual" ? "Manual" : "Not recorded";
 }
 
