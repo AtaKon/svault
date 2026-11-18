@@ -215,7 +215,9 @@ food ideas. What never does: stock, prices, barcodes, reminders, photo labelling
   pass never rewrites a product name or price; only
   numeric look-alikes (`O`/`Θ`/`Β`, missing decimals) are repaired in the parser.
 - Barcode decoding uses `@zxing/browser`. The camera API requires HTTPS or localhost.
-- Receipt scans reuse the same browser OCR. A local line parser (`server/services/receipt-local.ts`)
+- Receipt scans first decode supported issuer QR links from the original photo. The receipt API
+  restricts retrieval to known issuer routes. When the issuer requires verification, the browser
+  can import the downloaded PDF's text layer. Photo scans fall back to browser OCR. A local line parser (`server/services/receipt-local.ts`)
   drops totals, tax and payment lines, then reads quantity/unit/price from the remaining lines. AI can
   replace that draft when explicitly requested. Merchant names are resolved against `vendor_catalog`
   (`server/services/vendors.ts`), which is seeded on boot and keyed by country; Greece is the first
@@ -227,8 +229,8 @@ food ideas. What never does: stock, prices, barcodes, reminders, photo labelling
   follow-up on the next, folds `ΕΚΠΤΩΣΗ` discounts into the line and reads the `ΣΥΝΟΛΟ` total. Template
   selection is a confidence score over layout signals; unknown layouts fall back to the generic parser
   or AI.
-- Receipts persist the `provider` (`ai`, `local` or `template`) that produced the draft so the UI can
-  flag AI-assisted reads. Discount and savings lines never become products: product discounts are
+- Receipts persist the `provider` (`ai`, `local`, `template` or `qr`) that produced the draft so the UI can
+  identify digital and AI-assisted reads. Discount and savings lines never become products: product discounts are
   applied to the matching line, receipt-level savings lines are summed into `receipts.savings`, and
   both feed the receipt's **money saved** total.
 - Custom templates are stored per house in `receipt_templates` and executed by

@@ -6,6 +6,7 @@ import { useAuth, useHouse } from "@/state";
 import { Badge, Button, Card, Field, Input, PageHeader, Select, Sheet, Spinner, Textarea, cn } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { useToast } from "@/components/toast";
+import { readDigitalPdfText } from "@/bill-scan";
 import { ocrImage } from "@/ocr";
 import { mergeOcrCandidates, mergeOcrTexts } from "@/ocr-merge";
 import { scanDocument } from "@/document-scan";
@@ -16,12 +17,14 @@ import { ItemPickerSheet } from "@/components/ItemPickerSheet";
 import { ZoomableImage } from "@/components/ZoomableImage";
 import { clearReceiptDraft, loadReceiptDraft, receiptDraftKey, saveReceiptDraft, type StoredReceiptDraft } from "@/receipt-draft-store";
 import { reconcileReceipt } from "@shared/receipt-reconcile";
+import { matchReceiptQrLink, type ReceiptQrLink } from "@shared/receipt-qr-links";
 import type {
   Location,
   OffProduct,
   Receipt,
   ReceiptDraft,
   ReceiptDuplicate,
+  ReceiptProvider,
   ReceiptScanResponse,
   ReceiptValidation,
   ReceiptValidationLine,
@@ -103,7 +106,7 @@ interface SavedDraft {
   taxBreakdown: TaxBreakdownEntry[];
   locationId: string;
   lines: DraftLine[];
-  provider: "ai" | "local" | "template" | null;
+  provider: ReceiptProvider | null;
   aiCost: number | null;
   templateId: string | null;
   scanId: string | null;
@@ -250,6 +253,7 @@ export function ReceiptScanPage() {
   const toast = useToast();
   const cameraRef = useRef<HTMLInputElement>(null);
   const libraryRef = useRef<HTMLInputElement>(null);
+  const pdfRef = useRef<HTMLInputElement>(null);
   const pagesRef = useRef<ReceiptPage[]>([]);
   const stitchedUrlRef = useRef<string | null>(null);
   const stitchedPathRef = useRef<string | null>(null);
@@ -274,6 +278,7 @@ export function ReceiptScanPage() {
   const [ocrStatus, setOcrStatus] = useState("");
   const [ocrError, setOcrError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [digitalLink, setDigitalLink] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   const [vendors, setVendors] = useState<Vendor[]>([]);
@@ -289,7 +294,7 @@ export function ReceiptScanPage() {
   const [taxBreakdown, setTaxBreakdown] = useState<TaxBreakdownEntry[]>([]);
   const [locationId, setLocationId] = useState("");
   const [lines, setLines] = useState<DraftLine[]>([]);
-  const [provider, setProvider] = useState<"ai" | "local" | "template" | null>(null);
+  const [provider, setProvider] = useState<ReceiptProvider | null>(null);
   const [aiCost, setAiCost] = useState<number | null>(null);
   const [templateId, setTemplateId] = useState<string | null>(null);
   const [scanId, setScanId] = useState<string | null>(null);
@@ -607,17 +612,24 @@ export function ReceiptScanPage() {
   const handleFiles = async (files: File[]) => {
     if (!files.length || readingRef.current) return;
     readingRef.current = true;
+    setBusy(true);
     setOcrError(null);
-    setWarning(null);
-    const start = pagesRef.current.length;
+    if (provider !== "qr") setWarning(null);
+    const sequence = stitchSeqRef.current;
+    const addedKeys: string[] = [];
+    const links = new Map<string, ReceiptQrLink>();
     try {
-      for (let offset = 0; offset < files.length; offset++) {
-        const file = files[offset];
+      const decoder = await import("@/receipt-qr").catch(() => null);
+      for (const file of files) {
         try {
+          const payload = provider === "qr" ? null : await decoder?.decodeReceiptQrFile(file);
+          const link = payload ? matchReceiptQrLink(payload) : null;
+          if (link) links.set(link.url, link);
           const prepared = await prepareImage(file, { maxSize: 4000, quality: 0.92 });
           // Straighten each shot on its own before OCR: a combined photo would
           // confuse the corner finder and blur the seam.
           const scan = await scanDocument(prepared, { maxSize: 4000 });
+          if (sequence !== stitchSeqRef.current) return;
           const page: ReceiptPage = {
             key: newKey("page"),
             file: scan.file,
@@ -628,18 +640,52 @@ export function ReceiptScanPage() {
             uploadedPath: null,
             upload: "pending",
           };
-          commitPages([...pagesRef.current, page]);
+          commitPages([...pagesRef.current, page], false);
+          addedKeys.push(page.key);
           setViewKey(page.key);
           void startPageUpload(page);
-          await runPageOcr(page.key, start + offset, start + files.length);
         } catch (err) {
           toast.error(err instanceof Error ? t(err.message) : t("Could not read that photo"));
         }
       }
+      let usedDigital = provider === "qr";
+      const link = links.size === 1 ? links.values().next().value : null;
+      if (link && !lines.length) {
+        try {
+          const data = await api<ReceiptScanResponse>(`/api/houses/${house.id}/receipts/scan`, {
+            method: "POST",
+            body: { qr: [link.url] },
+          });
+          if (sequence !== stitchSeqRef.current) return;
+          if (data.provider === "qr" && data.draft.lines.length) {
+            applyScan(data);
+            setManualMode(true);
+            setDigitalLink(null);
+            setText(data.selectedText ?? "");
+            setMergeRemoved(0);
+            usedDigital = true;
+          } else if (data.qr?.message) {
+            setWarning(data.qr.message);
+            if (link.issuer === "epsilon-sklavenitis" || data.qr.status === "challenge") setDigitalLink(link.url);
+          }
+        } catch {
+          // The original photo can still be parsed locally when the issuer is unavailable.
+        }
+      }
+      if (usedDigital) {
+        commitPages(pagesRef.current.map((page) => addedKeys.includes(page.key) ? { ...page, status: "done" } : page), false);
+      } else {
+        for (const key of addedKeys) {
+          if (sequence !== stitchSeqRef.current) return;
+          const current = pagesRef.current;
+          await runPageOcr(key, current.findIndex((page) => page.key === key), current.length);
+        }
+      }
+      if (sequence === stitchSeqRef.current) await rebuildStitch();
     } finally {
       readingRef.current = false;
+      setBusy(false);
     }
-    await rebuildStitch();
   };
 
   const removePage = async (key: string) => {
@@ -686,7 +732,39 @@ export function ReceiptScanPage() {
     setWarning(data.warning);
   };
 
+  const handlePdf = async (file: File | undefined) => {
+    if (!file || readingRef.current || busy) return;
+    readingRef.current = true;
+    setBusy(true);
+    const sequence = stitchSeqRef.current;
+    try {
+      const receiptText = (await readDigitalPdfText(file)).slice(0, 50000);
+      if (sequence !== stitchSeqRef.current) return;
+      if (!receiptText) {
+        toast.error(t("This PDF has no selectable text. Add a receipt photo to scan it."));
+        return;
+      }
+      const data = await api<ReceiptScanResponse>(`/api/houses/${house.id}/receipts/scan`, {
+        method: "POST",
+        body: { text: receiptText },
+      });
+      if (sequence !== stitchSeqRef.current) return;
+      setManualMode(true);
+      setText(data.selectedText ?? receiptText);
+      setMergeRemoved(0);
+      setDigitalLink(null);
+      setOcrError(null);
+      applyScan(data);
+    } catch {
+      toast.error(t("Could not read the receipt PDF"));
+    } finally {
+      readingRef.current = false;
+      setBusy(false);
+    }
+  };
+
   const readReceipt = async (preferAi = false) => {
+    if (busy || readingRef.current) return;
     const pageImages = pagesRef.current
       .map((page) => page.uploadedPath)
       .filter((path): path is string => Boolean(path))
@@ -888,6 +966,7 @@ export function ReceiptScanPage() {
   };
 
   const save = async (allowDuplicate = false) => {
+    if (busy || readingRef.current) return;
     if (uploading) {
       toast.error(t("The scan is still being stored"));
       return;
@@ -983,6 +1062,7 @@ export function ReceiptScanPage() {
     setScanId(null);
     setAiAvailable(false);
     setWarning(null);
+    setDigitalLink(null);
     setOffLineKey(null);
     setPickerLineKey(null);
     setValidation({});
@@ -1100,9 +1180,26 @@ export function ReceiptScanPage() {
   const shownCurrency = currency || house.currency;
   const locationName = (id: string) => locations.find((location) => location.id === id)?.name ?? t("another place");
   const canReRead = aiAvailable && Boolean(text.trim() || uploadedPath);
+  const pdfButton = (
+    <Button type="button" size="sm" variant="secondary" icon="upload" disabled={busy || Boolean(pendingDraft)}
+      onClick={() => pdfRef.current?.click()}>
+      {t("Import receipt PDF")}
+    </Button>
+  );
 
   return (
     <div className="space-y-4">
+      <input
+        ref={pdfRef}
+        type="file"
+        accept="application/pdf,.pdf"
+        className="hidden"
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          event.target.value = "";
+          void handlePdf(file);
+        }}
+      />
       <PageHeader
         back={() => navigate("/receipts")}
         eyebrow={t("Receipt intake")}
@@ -1170,6 +1267,7 @@ export function ReceiptScanPage() {
                 onClick={() => libraryRef.current?.click()}
               >
                 {t("Upload photos")}</Button>
+              {pdfButton}
             </div>
             <p className="text-[11px] text-muted">
               {t("JPG, PNG or HEIC from your camera roll. A long receipt can be photographed in several overlapping shots.")}</p>
@@ -1435,8 +1533,11 @@ export function ReceiptScanPage() {
                   >
                     {t("Re-run OCR")}</Button>
                 )}
-                <Button type="button" size="sm" icon="sparkles" loading={busy} onClick={() => void readReceipt()}>
-                  {t("Read receipt")}</Button>
+                {(provider !== "qr" || pages.some((page) => page.text)) && (
+                  <Button type="button" size="sm" icon="sparkles" loading={busy} onClick={() => void readReceipt()}>
+                    {t("Read receipt")}</Button>
+                )}
+                {pdfButton}
               </div>
             </Card>
           </div>
@@ -1448,7 +1549,9 @@ export function ReceiptScanPage() {
                 {provider && (
                   <div className="flex items-center gap-1.5">
                     <Badge tone={provider === "local" ? "neutral" : "brand"}>
-                      {provider === "template"
+                      {provider === "qr"
+                        ? t("Digital receipt")
+                        : provider === "template"
                         ? t(receiptTemplateLabel(templateId) ?? "template")
                         : provider === "ai"
                           ? t("AI read")
@@ -1459,6 +1562,11 @@ export function ReceiptScanPage() {
                 )}
               </div>
               {warning && <p className="rounded-xl bg-raised px-3 py-2 text-[11px] leading-relaxed text-muted">{t(warning)}</p>}
+              {digitalLink && (
+                <a href={digitalLink} target="_blank" rel="noopener noreferrer" className="inline-block text-xs font-medium text-brand hover:underline">
+                  {t("Open digital receipt")}
+                </a>
+              )}
               {provider && aiAvailable && (
                 <div className="flex flex-wrap items-center gap-2">
                   <Button type="button" size="sm" variant="secondary" icon="sparkles" loading={busy} onClick={() => void readReceipt(true)}>

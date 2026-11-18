@@ -21,6 +21,7 @@ import {
 } from "../services/vendors.js";
 import { selectReceiptTemplate } from "../services/receipt-templates.js";
 import { lidlExcludedCharges } from "../services/receipt-lidl.js";
+import { fetchQrReceiptDraft } from "../services/receipt-qr.js";
 import { hasOcrNumericDisagreement, selectOcrCandidate } from "../services/receipt-candidates.js";
 import { learnProductAlias } from "../services/product-aliases.js";
 import { suggestProductMatches } from "../services/product-match.js";
@@ -49,6 +50,8 @@ import type {
   ReceiptDeleteResult,
   ReceiptDraft,
   ReceiptDuplicate,
+  ReceiptProvider,
+  ReceiptQrInfo,
   ReceiptScanResponse,
   ReceiptStockRevert,
   ReceiptValidation,
@@ -448,6 +451,8 @@ receiptRoutes.post(
         image: receiptImage.optional(),
         /** Each page photo, in order, for the vision model. */
         images: z.array(receiptImage).max(MAX_SCAN_IMAGES).optional(),
+        /** Issuer QR payloads (decoded photos or a pasted link), tried before any text parsing. */
+        qr: z.array(z.string().min(1).max(600)).max(2).optional(),
         /** Skip the template and let AI read the receipt ("Re-read with AI"). */
         preferAi: z.boolean().optional(),
       }),
@@ -455,7 +460,8 @@ receiptRoutes.post(
     );
     let rawText = (body.text ?? "").trim();
     const visionPaths = body.images?.length ? body.images : body.image ? [body.image] : [];
-    if (!rawText && !visionPaths.length) throw new ApiError(400, "Provide receipt text or a scan image");
+    const qrPayloads = [...new Set((body.qr ?? []).map((payload) => payload.trim()).filter(Boolean))].slice(0, 2);
+    if (!rawText && !visionPaths.length && !qrPayloads.length) throw new ApiError(400, "Provide receipt text or a scan image");
     await ownedOr400([...(body.images ?? []), body.image], houseId);
 
     const house = (await get<any>("SELECT * FROM houses WHERE id = ?", [houseId]))!;
@@ -463,13 +469,39 @@ receiptRoutes.post(
     const cfg = resolveAi(settings);
     const hasVisionModel = Boolean(settings?.ai?.visionModel || AI_ENV.visionModel);
     const currency = house.currency ?? null;
-    const canUseAi = cfg.enabled && Boolean(rawText || (visionPaths.length && hasVisionModel));
-
-    const template = await selectReceiptTemplate(rawText, houseId);
-    let draft: ReceiptDraft = heuristicReceipt(rawText, currency);
-    let provider: "ai" | "local" | "template" = "local";
-    let aiCost: number | null = null;
     const warnings: string[] = [];
+
+    // Digital receipt behind an issuer QR link, fetched server-side through
+    // this authenticated scan. On success it supersedes the text parsers; an
+    // explicit "Re-read with AI" still wins below. Failures come back as a
+    // warning so the photo scan can proceed honestly.
+    let qrDraft: ReceiptDraft | null = null;
+    let qrText: string | null = null;
+    let qrExcludedCharges = 0;
+    let qrInfo: ReceiptQrInfo | null = null;
+    if (!body.preferAi && qrPayloads.length) {
+      for (const payload of qrPayloads) {
+        const fetched = await fetchQrReceiptDraft(payload);
+        qrInfo = { issuer: fetched.issuer, status: fetched.status, message: fetched.message };
+        if (fetched.status === "ok" && fetched.draft && fetched.draft.lines.length) {
+          qrDraft = fetched.draft;
+          qrText = fetched.text;
+          qrExcludedCharges = fetched.excludedCharges;
+          break;
+        }
+      }
+      // The digital text becomes the scan's text: AI re-reads get it as
+      // context, the shop catalogue detects the vendor from it, and the client
+      // shows it as the source of the draft.
+      if (qrDraft && qrText) rawText = qrText;
+      if (!qrDraft) warnings.push(qrInfo?.message ?? "The digital receipt link could not be read automatically.");
+    }
+
+    const canUseAi = cfg.enabled && Boolean(rawText || (visionPaths.length && hasVisionModel));
+    const template = qrDraft ? null : await selectReceiptTemplate(rawText, houseId);
+    let draft: ReceiptDraft = qrDraft ?? heuristicReceipt(rawText, currency);
+    let provider: ReceiptProvider = qrDraft ? "qr" : "local";
+    let aiCost: number | null = null;
 
     const readWithAi = async (reason: string) => {
       const vision =
@@ -516,11 +548,17 @@ receiptRoutes.post(
       }
     }
 
-    if (templateDraft && template) {
+    if (qrDraft) {
+      const reconciliation = draftReconciliation(qrDraft);
+      if (qrExcludedCharges > 0 && reconciliation.difference != null &&
+          Math.abs(reconciliation.difference - qrExcludedCharges) <= 0.02) {
+        warnings.push("The receipt total includes an environmental fee that is excluded from inventory.");
+      } else if (reconciliation.difference != null && !reconciliation.ok) {
+        warnings.push("The product lines do not match the printed total. Check the receipt or re-read with AI.");
+      }
+    } else if (templateDraft && template) {
       const templateCheck = draftReconciliation(templateDraft);
       const excludedCharges = template.id === "lidl-gr" ? lidlExcludedCharges(rawText) : 0;
-      // Only explain a discrepancy using amounts actually printed as excluded
-      // charges. Keep the normal reconciliation visible to the user.
       const chargesExplainDifference = excludedCharges > 0 && templateCheck.difference != null &&
         Math.abs(templateCheck.difference - excludedCharges) <= 0.02;
       const mismatch = templateCheck.difference != null && !templateCheck.ok && !chargesExplainDifference;
@@ -649,7 +687,8 @@ receiptRoutes.post(
       scanId: scan.id,
       aiAvailable: canUseAi,
       reconciliation: draftReconciliation(draft),
-      ...(candidateSelected ? { selectedText: rawText } : {}),
+      ...(candidateSelected || qrText ? { selectedText: rawText } : {}),
+      ...(qrInfo ? { qr: qrInfo } : {}),
       draft,
     };
     res.json(response);

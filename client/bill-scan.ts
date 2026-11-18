@@ -40,6 +40,32 @@ function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob | null> {
   return new Promise((resolve) => canvas.toBlob((blob) => resolve(blob), "image/jpeg", 0.92));
 }
 
+async function pdfTextPages(
+  pdf: import("pdfjs-dist").PDFDocumentProxy,
+  onPage?: (index: number, count: number) => void,
+): Promise<string[]> {
+  const pages: string[] = [];
+  const count = Math.min(pdf.numPages, MAX_TEXT_PAGES);
+  for (let pageNumber = 1; pageNumber <= count; pageNumber++) {
+    onPage?.(pageNumber - 1, count);
+    const page = await pdf.getPage(pageNumber);
+    const content = await page.getTextContent();
+    pages.push(pdfItemsToText(content.items));
+  }
+  return pages;
+}
+
+/** Read an issuer's exported PDF directly from its text layer. */
+export async function readDigitalPdfText(file: File): Promise<string> {
+  const pdfjs = await loadPdfjs();
+  const task = pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) });
+  try {
+    return (await pdfTextPages(await task.promise)).join("\n").trim();
+  } finally {
+    await task.destroy().catch(() => undefined);
+  }
+}
+
 async function readPdf(
   file: File,
   onProgress: (progress: number, status: string) => void,
@@ -49,17 +75,9 @@ async function readPdf(
   // Keep the loading task: pdf.js v6 removed PDFDocumentProxy.destroy(), and
   // task.destroy() tears down the document and worker on both v5 and v6.
   const task = pdfjs.getDocument({ data });
-  const pdf = await task.promise;
-  const textPages = Math.min(pdf.numPages, MAX_TEXT_PAGES);
-
   try {
-    const pages: string[] = [];
-    for (let pageNumber = 1; pageNumber <= textPages; pageNumber++) {
-      onProgress(((pageNumber - 1) / textPages) * 0.25, "Reading the PDF");
-      const page = await pdf.getPage(pageNumber);
-      const content = await page.getTextContent();
-      pages.push(pdfItemsToText(content.items));
-    }
+    const pdf = await task.promise;
+    const pages = await pdfTextPages(pdf, (index, count) => onProgress(index / count * 0.25, "Reading the PDF"));
 
     const meaningful = (text: string) => (text.match(/[\p{L}\p{N}]/gu) ?? []).length;
     const ocrPage = async (pageNumber: number, phaseStart: number, phaseSpan: number): Promise<string> => {
