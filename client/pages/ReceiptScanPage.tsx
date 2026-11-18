@@ -510,6 +510,7 @@ export function ReceiptScanPage() {
     return pending ? await pending : await startPageUpload(page);
   };
 
+  // Callers gate concurrent reads. The active photo batch uses this while busy.
   const runPageOcr = async (key: string, index: number, count: number) => {
     const page = pagesRef.current.find((entry) => entry.key === key);
     if (!page) return;
@@ -556,6 +557,7 @@ export function ReceiptScanPage() {
    * Stitches the pages for the stored scan. A single page reuses its own
    * upload; several pages are combined and uploaded once, and the stitch they
    * replace is deleted from the server.
+   * This also runs before the active photo batch releases its busy state.
    */
   const rebuildStitch = async (options: { reusePath?: string | null } = {}) => {
     const sequence = ++stitchSeqRef.current;

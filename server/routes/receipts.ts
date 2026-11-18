@@ -477,6 +477,8 @@ receiptRoutes.post(
     const qrDraft = qrImport?.status === "ok" && qrImport.draft?.lines.length ? qrImport.draft : null;
     const qrText = qrDraft ? qrImport?.text : null;
     const qrExcludedCharges = qrImport?.excludedCharges ?? 0;
+    // selectedText records the actual source used for review. The issuer's
+    // rendition can be edited or reused as text for an explicit AI re-read.
     if (qrText) rawText = qrText;
     if (qrImport?.message) warnings.push(qrImport.message);
 

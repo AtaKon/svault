@@ -62,3 +62,9 @@ test("leaves version-one QR codes without an alignment pattern to the standard r
   assert.equal(new zxing.QRCodeReader().decode(bitmap, hints).getText(), "version one");
   assert.equal(recoverReceiptQr(bitmap, gray, width, height), null);
 });
+
+test("a blank image has no receipt QR", () => {
+  const gray = new Uint8ClampedArray(width * height).fill(240);
+  const bitmap = new zxing.BinaryBitmap(new zxing.HybridBinarizer(new zxing.RGBLuminanceSource(gray, width, height)));
+  assert.equal(recoverReceiptQr(bitmap, gray, width, height), null);
+});

@@ -127,7 +127,8 @@ function findDate(foldedText: string): string | null {
 
 function findReceiptNumber(html: string): string | null {
   // Keep the series and number inside the issuer's printed field.
-  const match = html.match(/Αρ\.?[ \t]+Παραστατικ(?:ού|ου)[ \t]*:?[ \t]*(\d{1,20}(?:[ \t]+\d{1,20})?)[ \t]*(?=<\/|\r?\n)/iu);
+  const match = html.replace(/&nbsp;|\u00a0/gi, " ")
+    .match(/Αρ\.?[ \t]*Παραστατικ(?:ού|ου)[ \t]*:?[ \t]*(\d{1,20}(?:[ \t]+\d{1,20})?)[ \t]*(?=<\/|\r?\n)/iu);
   return match ? match[1].replace(/[ \t]+/g, " ") : null;
 }
 
@@ -233,7 +234,8 @@ export function parseEntersoftInvoiceHtml(
 
   const total = labelledAmount(foldedTotals, "ΤΕΛΙΚΗ\\s+ΑΞΙΑ");
   const subtotal = labelledAmount(foldedTotals, "ΚΑΘΑΡΗ\\s+ΑΞΙΑ");
-  const tax = labelledAmount(foldedTotals, "Φ\\.?\\s*Π\\.?\\s*Α\\.?");
+  // The dotted label is the summary total. The breakdown uses undotted ΦΠΑ.
+  const tax = labelledAmount(foldedTotals, "Φ\\.\\s*Π\\.\\s*Α\\.?");
   const savings = labelledAmount(foldedTotals, "ΕΚΠΤΩΣΗ");
   const taxBreakdown = parseVatBreakdown(afterTable);
   // Amounts print the currency joined to the digits ("51,39EUR"), so the

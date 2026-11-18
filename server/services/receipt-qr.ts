@@ -173,11 +173,13 @@ async function fetchPage(
   } catch {
     throw new IssuerPageError("redirect");
   }
+  const visited = new Set<string>();
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     if (scanSignal.aborted) throw new IssuerPageError("network");
-    if (!allowed(current) || current.username || current.password || current.port || current.hash) {
+    if (!allowed(current) || current.username || current.password || current.port || current.hash || visited.has(current.href)) {
       throw new IssuerPageError("redirect");
     }
+    visited.add(current.href);
     const signal = AbortSignal.any([scanSignal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]);
     let response: Response;
     try {
@@ -383,14 +385,16 @@ export async function readQrReceiptScan(
     .map(matchReceiptQrLink)
     .filter((link) => link !== null)
     .slice(0, 2);
-  let best = result(null, "unsupported", UNSUPPORTED_MESSAGE);
-  if (!links.length) return best;
+  if (!links.length) return result(null, "unsupported", UNSUPPORTED_MESSAGE);
+  let best: ReceiptQrFetchResult | null = null;
   let currentIssuer = links[0].issuer;
+  // An earlier verification result stays actionable if a later issuer times out.
+  const onTimeout = () => best?.status === "challenge" ? best : timedOut(currentIssuer);
   return withinQrBudget(timeoutMs, async (signal) => {
     for (const link of links) {
       if (signal.aborted) break;
       if (limiters.receiptQr.blocked(houseId) || limiters.receiptQrGlobal.blocked("all")) {
-        return best.status === "challenge" ? best : result(link.issuer, "unavailable", RATE_LIMIT_MESSAGE);
+        return best?.status === "challenge" ? best : result(link.issuer, "unavailable", RATE_LIMIT_MESSAGE);
       }
       // Charge each attempted link, including unsuccessful lookups.
       limiters.receiptQr.hit(houseId);
@@ -398,8 +402,8 @@ export async function readQrReceiptScan(
       currentIssuer = link.issuer;
       const current = await fetchIssuerReceipt(link, signal);
       if (current.status === "ok") return current;
-      if (STATUS_PRIORITY[current.status] > STATUS_PRIORITY[best.status]) best = current;
+      if (!best || STATUS_PRIORITY[current.status] > STATUS_PRIORITY[best.status]) best = current;
     }
-    return best;
-  }, () => best.status === "challenge" ? best : timedOut(currentIssuer));
+    return best ?? timedOut(currentIssuer);
+  }, onTimeout);
 }

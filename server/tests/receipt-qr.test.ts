@@ -134,7 +134,15 @@ test("stops a redirect loop and requires the named Entersoft viewer frame", asyn
     return new Response(null, { status: 302, headers: { location: `/DocViewer/${ref}` } });
   });
   assert.equal((await fetchQrReceiptDraft(epsilonUrl)).status, "unavailable");
-  assert.equal(requests, 4);
+  assert.equal(requests, 2);
+
+  requests = 0;
+  configureReceiptQrFetcherForTests(async () => {
+    requests++;
+    return new Response(null, { status: 302, headers: { location: new URL(epsilonUrl).pathname } });
+  });
+  assert.equal((await fetchQrReceiptDraft(epsilonUrl)).status, "unavailable");
+  assert.equal(requests, 1);
 
   requests = 0;
   configureReceiptQrFetcherForTests(async () => {
@@ -178,6 +186,18 @@ test("returns within the scan budget when the second Entersoft request ignores a
   assert.ok(performance.now() - started < 1000);
   assert.ok(documentSignal?.aborted);
   assert.deepEqual(requests, [entersoftUrl, "https://e-invoicing.gr" + issuerPath]);
+});
+
+test("attributes a timeout to the pending issuer and retains an earlier verification result", { timeout: 2000 }, async () => {
+  configureReceiptQrFetcherForTests(async (url) => url === epsilonUrl
+    ? html('<div id="cf-turnstile"></div>')
+    : new Promise<Response>(() => undefined));
+  const timeout = await readQrReceiptScan("test-timeout-house", [entersoftUrl], 30);
+  assert.equal(timeout.status, "unavailable");
+  assert.equal(timeout.issuer, "entersoft");
+  const verification = await readQrReceiptScan("test-timeout-house", [epsilonUrl, entersoftUrl], 30);
+  assert.equal(verification.status, "challenge");
+  assert.equal(verification.issuer, "epsilon-sklavenitis");
 });
 
 test("gives Entersoft verification instructions at either retrieval stage", async () => {
@@ -254,4 +274,14 @@ test("parses grouped totals and explicitly free items without taking dates from 
   assert.equal(result.draft.purchasedAt, null);
   assert.deepEqual(result.draft.lines.map((line) => line.lineTotal), [1234.56, 0]);
   assert.equal(parseEntersoftInvoiceHtml(document.replace('data-title="Έκπτωση">2,00', 'data-title="Έκπτωση">1,00')), null);
+});
+
+test("reads the VAT summary when the breakdown appears first", () => {
+  const document = invoice.replace("<div>Φ.Π.Α</div><div>0,41EUR</div>", "")
+    .replace("<div>ΣΤΟΙΧΕΙΑ ΠΛΗΡΩΜΗΣ</div>", "<div>ΣΤΟΙΧΕΙΑ ΠΛΗΡΩΜΗΣ</div><div>Φ.Π.Α</div><div>0,59EUR</div>");
+  assert.equal(parseEntersoftInvoiceHtml(document)?.draft.tax, 0.59);
+  for (const label of ["Αρ.Παραστατικού:12 3456", "Αρ. Παραστατικού : 12 3456&nbsp;"]) {
+    const withNumber = document.replace("Αρ. Παραστατικού: 12 3456", label);
+    assert.equal(parseEntersoftInvoiceHtml(withNumber)?.draft.notes, "Αρ. Παραστατικού 12 3456");
+  }
 });
