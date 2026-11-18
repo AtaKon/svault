@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { matchReceiptQrLink } from "../../shared/receipt-qr-links.js";
 import { configureReceiptQrFetcherForTests, fetchQrReceiptDraft, readQrReceiptScan } from "../services/receipt-qr.js";
+import { parseEntersoftInvoiceHtml } from "../services/receipt-entersoft.js";
 
 const ref = "12345678-1234-1234-1234-123456789abc";
 const token = "testAB12";
@@ -156,14 +157,27 @@ test("stops on an oversized or stalled issuer body", { timeout: 2000 }, async ()
 
   cancelled = false;
   configureReceiptQrFetcherForTests(async () => response(new TextEncoder().encode("<html>")));
-  // AbortSignal.timeout is unref'ed and the mocked stream has no socket.
-  const keepAlive = setTimeout(() => undefined, 1000);
-  try {
-    assert.equal((await fetchQrReceiptDraft(epsilonUrl, Date.now() + 30)).status, "unavailable");
-    assert.ok(cancelled, "the deadline cancels an in-progress body read");
-  } finally {
-    clearTimeout(keepAlive);
-  }
+  assert.equal((await fetchQrReceiptDraft(epsilonUrl, 30)).status, "unavailable");
+  assert.ok(cancelled, "the deadline cancels an in-progress body read");
+});
+
+test("returns within the scan budget when the second Entersoft request ignores abort", { timeout: 2000 }, async () => {
+  const requests: string[] = [];
+  let documentSignal: AbortSignal | undefined;
+  configureReceiptQrFetcherForTests(async (url, signal) => {
+    requests.push(url);
+    if (url === entersoftUrl) {
+      return html(`<iframe id="iframeContent" src="${issuerPath.replaceAll("&", "&amp;")}"></iframe>`);
+    }
+    documentSignal = signal;
+    return new Promise<Response>(() => undefined);
+  });
+  const started = performance.now();
+  const failed = await readQrReceiptScan("test-budget-house", [entersoftUrl, epsilonUrl], 40);
+  assert.equal(failed.status, "unavailable");
+  assert.ok(performance.now() - started < 1000);
+  assert.ok(documentSignal?.aborted);
+  assert.deepEqual(requests, [entersoftUrl, "https://e-invoicing.gr" + issuerPath]);
 });
 
 test("gives Entersoft verification instructions at either retrieval stage", async () => {
@@ -227,4 +241,17 @@ test("recognizes an Entersoft frame on a declared Latin-1 viewer page", async ()
     ? new Response(Buffer.from(viewer, "latin1"), { headers: { "content-type": "text/html; charset=iso-8859-1" } })
     : html(invoice));
   assert.equal((await fetchQrReceiptDraft(entersoftUrl)).status, "ok");
+});
+
+test("parses grouped totals and explicitly free items without taking dates from product names", () => {
+  const document = `<table><tbody>
+    ${item("SKU-B", "PROMO 12-11-2026", "Τεμάχιο", "1", "1.234,56", "0,00", "1.234,56")}
+    ${item("GIFT", "Gift", "Τεμάχιο", "1", "2,00", "2,00", "")}
+  </tbody></table><div>ΤΕΛΙΚΗ ΑΞΙΑ 1.234,56EUR</div>`;
+  const result = parseEntersoftInvoiceHtml(document);
+  assert.ok(result);
+  assert.equal(result.draft.total, 1234.56);
+  assert.equal(result.draft.purchasedAt, null);
+  assert.deepEqual(result.draft.lines.map((line) => line.lineTotal), [1234.56, 0]);
+  assert.equal(parseEntersoftInvoiceHtml(document.replace('data-title="Έκπτωση">2,00', 'data-title="Έκπτωση">1,00')), null);
 });

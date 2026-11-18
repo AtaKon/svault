@@ -1962,6 +1962,7 @@ const EL: Record<string, string> = {
   "Could not read the receipt PDF": "Δεν ήταν δυνατή η ανάγνωση του PDF της απόδειξης",
   "No product lines found in the receipt PDF.": "Δεν βρέθηκαν γραμμές προϊόντων στο PDF της απόδειξης.",
   "Replace the current receipt details and line edits with the PDF?": "Να αντικατασταθούν τα τρέχοντα στοιχεία και οι αλλαγές στις γραμμές της απόδειξης από το PDF;",
+  "Your edits were kept. Start over to import the digital receipt.": "Οι αλλαγές σας διατηρήθηκαν. Ξεκινήστε από την αρχή για να εισαγάγετε την ψηφιακή απόδειξη.",
   "Import receipt PDF": "Εισαγωγή PDF απόδειξης",
   "Open digital receipt": "Άνοιγμα ψηφιακής απόδειξης",
   "This PDF has no selectable text. Add a receipt photo to scan it.": "Αυτό το PDF δεν έχει επιλέξιμο κείμενο. Προσθέστε μια φωτογραφία της απόδειξης για σάρωση.",

@@ -473,8 +473,9 @@ receiptRoutes.post(
     // Membership and upload ownership are checked above. The QR service
     // validates the issuer allowlist before reserving a slot or fetching.
     const qrImport = !body.preferAi && qrPayloads.length ? await readQrReceiptScan(houseId, qrPayloads) : null;
-    const qrDraft = qrImport?.draft ?? null;
-    const qrText = qrImport?.text ?? null;
+    // A digital read needs product lines. Keep the input OCR text for fallback.
+    const qrDraft = qrImport?.status === "ok" && qrImport.draft?.lines.length ? qrImport.draft : null;
+    const qrText = qrDraft ? qrImport?.text : null;
     const qrExcludedCharges = qrImport?.excludedCharges ?? 0;
     if (qrText) rawText = qrText;
     if (qrImport?.message) warnings.push(qrImport.message);

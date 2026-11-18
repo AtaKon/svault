@@ -165,7 +165,7 @@ function decodeHtmlBytes(bytes: Uint8Array, contentType: string): string {
 async function fetchPage(
   startUrl: string,
   allowed: (url: URL) => boolean,
-  deadline: number,
+  scanSignal: AbortSignal,
 ): Promise<{ url: URL; html: string }> {
   let current: URL;
   try {
@@ -174,12 +174,11 @@ async function fetchPage(
     throw new IssuerPageError("redirect");
   }
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-    const remainingMs = deadline - Date.now();
-    if (remainingMs <= 0) throw new IssuerPageError("network");
+    if (scanSignal.aborted) throw new IssuerPageError("network");
     if (!allowed(current) || current.username || current.password || current.port || current.hash) {
       throw new IssuerPageError("redirect");
     }
-    const signal = AbortSignal.timeout(Math.min(REQUEST_TIMEOUT_MS, remainingMs));
+    const signal = AbortSignal.any([scanSignal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]);
     let response: Response;
     try {
       response = await issuerFetch(current.toString(), signal);
@@ -234,7 +233,7 @@ function result(
 }
 
 /** Epsilon Digital (Sklavenitis): /fd/… redirects to a Blazor DocViewer that renders Cloudflare Turnstile before the PDF. */
-async function fetchEpsilon(link: ReceiptQrLink, deadline: number): Promise<ReceiptQrFetchResult> {
+async function fetchEpsilon(link: ReceiptQrLink, signal: AbortSignal): Promise<ReceiptQrFetchResult> {
   const receiptPath = new URL(link.url).pathname.toLowerCase();
   const identifier = receiptPath.slice("/fd/".length).split(":")[0];
   const viewerPath = "/docviewer/" + identifier.replace(/^(........)(....)(....)(....)(............)$/, "$1-$2-$3-$4-$5");
@@ -242,7 +241,7 @@ async function fetchEpsilon(link: ReceiptQrLink, deadline: number): Promise<Rece
     url.protocol === "https:" &&
     url.hostname === EPSILON_HOST &&
     !url.search && [receiptPath, viewerPath].includes(url.pathname.toLowerCase());
-  const page = await fetchPage(link.url, allowed, deadline);
+  const page = await fetchPage(link.url, allowed, signal);
   if (CHALLENGE_MARKERS.test(page.html)) {
     return result(link.issuer, "challenge", EPSILON_CHALLENGE_MESSAGE);
   }
@@ -288,12 +287,12 @@ function iframeMatchesPinnedSource(html: string, ref: EntersoftRef): boolean {
   return false;
 }
 
-async function fetchEntersoft(link: ReceiptQrLink, deadline: number): Promise<ReceiptQrFetchResult> {
+async function fetchEntersoft(link: ReceiptQrLink, signal: AbortSignal): Promise<ReceiptQrFetchResult> {
   const ref = link.entersoft!;
   const allowed = (url: URL) =>
     url.protocol === "https:" && url.hostname === ENTERSOFT_HOST &&
     !url.search && ENTERSOFT_VIEWINVOICE_PATH.test(url.pathname);
-  const page = await fetchPage(link.url, allowed, deadline);
+  const page = await fetchPage(link.url, allowed, signal);
   if (CHALLENGE_MARKERS.test(page.html)) {
     return result(link.issuer, "challenge", ENTERSOFT_CHALLENGE_MESSAGE);
   }
@@ -304,7 +303,7 @@ async function fetchEntersoft(link: ReceiptQrLink, deadline: number): Promise<Re
     return result(link.issuer, "unavailable", ENTERSOFT_UNAVAILABLE_MESSAGE);
   }
   const documentUrl = `https://${ENTERSOFT_HOST}/api/GetInvoice?${invoiceParams(ref)}`;
-  const document = await fetchPage(documentUrl, (url) => matchesPinnedInvoice(url, ref), deadline);
+  const document = await fetchPage(documentUrl, (url) => matchesPinnedInvoice(url, ref), signal);
   if (CHALLENGE_MARKERS.test(document.html)) {
     return result(link.issuer, "challenge", ENTERSOFT_CHALLENGE_MESSAGE);
   }
@@ -328,17 +327,18 @@ function messageForError(issuer: ReceiptQrIssuer, error: IssuerPageError): strin
  */
 export function fetchQrReceiptDraft(
   payload: string,
-  deadline = Date.now() + RECEIPT_QR_BUDGET_MS,
+  timeoutMs = RECEIPT_QR_BUDGET_MS,
 ): Promise<ReceiptQrFetchResult> {
   const link = matchReceiptQrLink(payload);
-  return link ? fetchIssuerReceipt(link, deadline) : Promise.resolve(result(null, "unsupported", UNSUPPORTED_MESSAGE));
+  if (!link) return Promise.resolve(result(null, "unsupported", UNSUPPORTED_MESSAGE));
+  return withinQrBudget(timeoutMs, (signal) => fetchIssuerReceipt(link, signal), () => timedOut(link.issuer));
 }
 
-async function fetchIssuerReceipt(link: ReceiptQrLink, deadline: number): Promise<ReceiptQrFetchResult> {
+async function fetchIssuerReceipt(link: ReceiptQrLink, signal: AbortSignal): Promise<ReceiptQrFetchResult> {
   try {
     return link.issuer === "epsilon-sklavenitis"
-      ? await fetchEpsilon(link, deadline)
-      : await fetchEntersoft(link, deadline);
+      ? await fetchEpsilon(link, signal)
+      : await fetchEntersoft(link, signal);
   } catch (error) {
     if (error instanceof IssuerPageError) {
       return result(link.issuer, "unavailable", messageForError(link.issuer, error));
@@ -348,26 +348,58 @@ async function fetchIssuerReceipt(link: ReceiptQrLink, deadline: number): Promis
   }
 }
 
+function timedOut(issuer: ReceiptQrIssuer) {
+  return result(issuer, "unavailable", messageForError(issuer, new IssuerPageError("network")));
+}
+
+/** The deadline covers every link and redirect, even if a transport ignores abort. */
+async function withinQrBudget(
+  timeoutMs: number,
+  read: (signal: AbortSignal) => Promise<ReceiptQrFetchResult>,
+  onTimeout: () => ReceiptQrFetchResult,
+): Promise<ReceiptQrFetchResult> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<ReceiptQrFetchResult>((resolve) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      resolve(onTimeout());
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([read(controller.signal), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Resolve at most two allowlisted links for an authorized household, with one budget for the scan. */
-export async function readQrReceiptScan(houseId: string, payloads: string[]): Promise<ReceiptQrFetchResult> {
+export async function readQrReceiptScan(
+  houseId: string,
+  payloads: string[],
+  timeoutMs = RECEIPT_QR_BUDGET_MS,
+): Promise<ReceiptQrFetchResult> {
   const links = [...new Set(payloads.map((payload) => payload.trim()))]
     .map(matchReceiptQrLink)
     .filter((link) => link !== null)
     .slice(0, 2);
   let best = result(null, "unsupported", UNSUPPORTED_MESSAGE);
   if (!links.length) return best;
-  if (limiters.receiptQr.blocked(houseId) || limiters.receiptQrGlobal.blocked("all")) {
-    return result(links[0].issuer, "unavailable", RATE_LIMIT_MESSAGE);
-  }
-
-  // Count attempts before contacting issuers so failed requests are bounded too.
-  limiters.receiptQr.hit(houseId);
-  limiters.receiptQrGlobal.hit("all");
-  const deadline = Date.now() + RECEIPT_QR_BUDGET_MS;
-  for (const link of links) {
-    const current = await fetchIssuerReceipt(link, deadline);
-    if (current.status === "ok") return current;
-    if (STATUS_PRIORITY[current.status] > STATUS_PRIORITY[best.status]) best = current;
-  }
-  return best;
+  let currentIssuer = links[0].issuer;
+  return withinQrBudget(timeoutMs, async (signal) => {
+    for (const link of links) {
+      if (signal.aborted) break;
+      if (limiters.receiptQr.blocked(houseId) || limiters.receiptQrGlobal.blocked("all")) {
+        return best.status === "challenge" ? best : result(link.issuer, "unavailable", RATE_LIMIT_MESSAGE);
+      }
+      // Charge each attempted link, including unsuccessful lookups.
+      limiters.receiptQr.hit(houseId);
+      limiters.receiptQrGlobal.hit("all");
+      currentIssuer = link.issuer;
+      const current = await fetchIssuerReceipt(link, signal);
+      if (current.status === "ok") return current;
+      if (STATUS_PRIORITY[current.status] > STATUS_PRIORITY[best.status]) best = current;
+    }
+    return best;
+  }, () => best.status === "challenge" ? best : timedOut(currentIssuer));
 }

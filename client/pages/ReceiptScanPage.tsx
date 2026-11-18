@@ -620,9 +620,10 @@ export function ReceiptScanPage() {
     const revision = workspaceRevisionRef.current;
     const addedKeys: string[] = [];
     const links = new Map<string, ReceiptQrLink>();
-    const hasDigitalDraft = provider === "qr" && lines.length > 0;
+    const existingLines = snapshotRef.current()?.lines ?? lines;
+    const hasDigitalDraft = provider === "qr" && existingLines.length > 0;
     // Additional photos must preserve the existing product edits.
-    const tryDigital = lines.length === 0;
+    const tryDigital = existingLines.length === 0;
     try {
       const decoder = tryDigital ? await import("@/receipt-qr").catch(() => null) : null;
       for (const file of files) {
@@ -663,13 +664,18 @@ export function ReceiptScanPage() {
           });
           if (revision !== workspaceRevisionRef.current) return;
           const currentLines = snapshotRef.current()?.lines ?? lines;
-          if (data.provider === "qr" && data.draft.lines.length && !currentLines.length) {
-            applyScan(data);
-            setManualMode(true);
-            setDigitalLink(null);
-            setText(data.selectedText ?? "");
-            setMergeRemoved(0);
-            appliedDigital = true;
+          if (data.provider === "qr" && data.draft.lines.length) {
+            if (currentLines.length) {
+              setWarning("Your edits were kept. Start over to import the digital receipt.");
+              setDigitalLink(link.url);
+            } else {
+              applyScan(data);
+              setManualMode(true);
+              setDigitalLink(null);
+              setText(data.selectedText ?? "");
+              setMergeRemoved(0);
+              appliedDigital = true;
+            }
           } else if (data.qr?.message) {
             setWarning(data.qr.message);
             setDigitalLink(link.url);
@@ -748,7 +754,7 @@ export function ReceiptScanPage() {
     setBusy(true);
     const revision = workspaceRevisionRef.current;
     try {
-      const receiptText = (await readDigitalPdfText(file)).slice(0, 50000);
+      const receiptText = await readDigitalPdfText(file, 50000);
       if (revision !== workspaceRevisionRef.current) return;
       if (!receiptText) {
         toast.error(t("This PDF has no selectable text. Add a receipt photo to scan it."));
@@ -767,7 +773,9 @@ export function ReceiptScanPage() {
         }
         if (!window.confirm(t("Replace the current receipt details and line edits with the PDF?"))) return;
       }
-      if (revision !== workspaceRevisionRef.current || (snapshotRef.current()?.lines ?? lines) !== currentLines) return;
+      // The native confirmation blocks the page's event loop. A reset
+      // invalidates the pending import regardless of the dialog result.
+      if (revision !== workspaceRevisionRef.current) return;
       setManualMode(true);
       setText(data.selectedText ?? receiptText);
       setMergeRemoved(0);
@@ -1201,7 +1209,7 @@ export function ReceiptScanPage() {
   const locationName = (id: string) => locations.find((location) => location.id === id)?.name ?? t("another place");
   const canReRead = aiAvailable && Boolean(text.trim() || uploadedPath);
   const pdfButton = (
-    <Button type="button" size="sm" variant="secondary" icon="upload" disabled={busy || Boolean(pendingDraft)}
+    <Button type="button" size="sm" variant="secondary" icon="upload" disabled={busy || ocrRunning || Boolean(pendingDraft)}
       onClick={() => pdfRef.current?.click()}>
       {t("Import receipt PDF")}
     </Button>

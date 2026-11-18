@@ -117,12 +117,12 @@ function findVendor(html: string): string | null {
  * The invoice's own issue date wins over the dispatch timestamp; both are
  * matched on accent-folded text and parsed from their printed forms.
  */
-function findDate(foldedText: string, rawText: string): string | null {
+function findDate(foldedText: string): string | null {
   const issue = foldedText.match(/ΗΜ\/ΝΙΑΣ?\s+ΕΚΔΟΣΗΣ[^0-9]*(\d{1,2}-\d{1,2}-\d{2,4})/);
   if (issue) return detectDate(issue[1]);
   const dispatch = foldedText.match(/ΕΝΑΡΞΗΣ\s*ΑΠΟΣΤΟΛΗΣ[^0-9]*(\d{4}-\d{2}-\d{2})/);
   if (dispatch) return detectDate(dispatch[1]);
-  return detectDate(rawText);
+  return null;
 }
 
 function findReceiptNumber(html: string): string | null {
@@ -138,7 +138,7 @@ function findReceiptNumber(html: string): string | null {
  * breakdown header.
  */
 function labelledAmount(foldedText: string, label: string): number | null {
-  const match = foldedText.match(new RegExp(`(?<![\\p{L}])${label}(?![\\p{L}])[\\s:]*(\\d+[.,]\\d+)`, "u"));
+  const match = foldedText.match(new RegExp(`(?<![\\p{L}])${label}(?![\\p{L}])[\\s:]*(\\d+(?:[.,]\\d{3})*[.,]\\d{2})(?!\\d)`, "u"));
   return match ? parseAmount(match[1]) : null;
 }
 
@@ -188,6 +188,12 @@ function parseRows(html: string): EntersoftRow[] | null {
       if (field && value) row[field] = value;
     }
     if (!Object.values(row).some(Boolean)) continue; // Unlabeled summary or spacer row.
+    if (!row.lineTotal && row.preDiscount) {
+      const before = parseAmount(row.preDiscount);
+      const discount = row.discount ? parseAmount(row.discount) : 0;
+      // A blank amount is a free item only when the other amounts establish zero.
+      if (before != null && discount != null && before === Math.abs(discount)) row.lineTotal = "0,00";
+    }
     // An incomplete labeled item would create a partial purchase draft.
     if (!row.description || !row.quantity || !row.lineTotal ||
         parseQuantity(row.quantity) == null || parseAmount(row.lineTotal) == null) return null;
@@ -233,7 +239,7 @@ export function parseEntersoftInvoiceHtml(
   // Amounts print the currency joined to the digits ("51,39EUR"), so the
   // currency test must not require a word boundary before EUR.
   const currency = /(?<![A-Za-z])EUR(?![A-Za-z])|\u20ac/.test(source) ? "EUR" : fallbackCurrency;
-  const purchasedAt = findDate(foldedFullText, fullText);
+  const purchasedAt = findDate(foldedFullText);
   const vendorName = findVendor(source);
   const receiptNumber = findReceiptNumber(source);
   if (total == null && !rows.some((row) => row.lineTotal)) return null;

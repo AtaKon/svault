@@ -5037,14 +5037,16 @@ describe("receipts and shops", () => {
     const previousQrLimit = process.env.SV_RATE_LIMIT_RECEIPT_QR;
     const previousGlobalLimit = process.env.SV_RATE_LIMIT_RECEIPT_QR_GLOBAL;
     let attempts = 0;
+    let feeOnly = false;
     configureReceiptQrFetcherForTests(async (url) => {
       attempts++;
       if (url === epsilon) return new Response(null, { status: 404 });
+      const product = feeOnly ? "" : `<tr><td data-title="Κωδικός">SKU</td>
+         <td data-title="Περιγραφή">Sample digital product</td>
+         <td data-title="Ποσότητα">1</td><td data-title="Συνολική Αξία">2,40</td></tr>`;
       const body = url === entersoft
         ? `<iframe id="iframeContent" src="${frame}"></iframe>`
-        : `<table><tbody><tr><td data-title="Κωδικός">SKU</td>
-           <td data-title="Περιγραφή">Sample digital product</td>
-           <td data-title="Ποσότητα">1</td><td data-title="Συνολική Αξία">2,40</td></tr>
+        : `<table><tbody>${product}
            <tr><td data-title="Κωδικός">PERTEL</td><td data-title="Περιγραφή">Περιβαλλοντικό τέλος</td>
            <td data-title="Ποσότητα">1</td><td data-title="Συνολική Αξία">0,10</td></tr></tbody></table>
            <div>ΤΕΛΙΚΗ ΑΞΙΑ 2,50EUR</div>`;
@@ -5078,6 +5080,9 @@ describe("receipts and shops", () => {
       assert.equal(digital.data.qr.status, "ok");
       assert.equal(digital.data.draft.total, 2.50);
       assert.equal(digital.data.draft.lines.length, 1);
+      assert.equal(digital.data.aiCost, null);
+      assert.equal(digital.data.draft.templateId, null);
+      assert.equal(digital.data.draft.templateConfidence, null);
       assert.match(digital.data.warning, /environmental fee/);
       assert.match(digital.data.selectedText, /Sample digital product/);
       assert.ok(!JSON.stringify(digital.data).includes(token));
@@ -5088,15 +5093,25 @@ describe("receipts and shops", () => {
       assert.equal(ai.data.qr, undefined);
       assert.equal(attempts, 4);
 
+      feeOnly = true;
+      const emptyDigital = await request(path, { body: { qr: [entersoft], text } });
+      assert.equal(emptyDigital.status, 200);
+      assert.equal(emptyDigital.data.qr.status, "unavailable");
+      assert.equal(emptyDigital.data.provider, "local");
+      assert.equal(emptyDigital.data.draft.lines[0].description, "Milk");
+      assert.equal(attempts, 6);
+
       process.env.SV_RATE_LIMIT = "on";
       process.env.SV_RATE_LIMIT_RECEIPT_QR = "1/300";
       process.env.SV_RATE_LIMIT_RECEIPT_QR_GLOBAL = "1/300";
+      limiters.receiptQr.reset(houseId);
+      limiters.receiptQrGlobal.reset("all");
       const unsupported = await request(path, {
         body: { qr: ["https://unknown.example/receipt", "https://e-invoicing.gr/unrelated"] },
       });
       assert.equal(unsupported.status, 200);
       assert.equal(unsupported.data.qr.status, "unsupported");
-      assert.equal(attempts, 4);
+      assert.equal(attempts, 6);
       assert.equal(limiters.receiptQr.blocked(houseId), 0);
       assert.equal(limiters.receiptQrGlobal.blocked("all"), 0);
 
@@ -5106,7 +5121,7 @@ describe("receipts and shops", () => {
       assert.equal(limited.data.qr.status, "unavailable");
       assert.match(limited.data.qr.message, /Too many digital receipt requests/);
       assert.equal(limited.data.draft.lines[0].description, "Milk");
-      assert.equal(attempts, 4);
+      assert.equal(attempts, 6);
 
       limiters.receiptQr.reset(houseId);
       limiters.receiptQrGlobal.hit("all");
@@ -5115,7 +5130,7 @@ describe("receipts and shops", () => {
       assert.equal(globallyLimited.data.qr.status, "unavailable");
       assert.equal(globallyLimited.data.draft.lines[0].description, "Milk");
       assert.equal(limiters.receiptQr.blocked(houseId), 0);
-      assert.equal(attempts, 4);
+      assert.equal(attempts, 6);
     } finally {
       configureReceiptQrFetcherForTests(null);
       limiters.receiptQr.reset(houseId);
