@@ -128,7 +128,8 @@ function detectGeometry(
     if (!(error instanceof FormatException)) throw error;
   }
   // A blurred timing row can give FinderPattern an invalid module count.
-  // In recovery only, retry with a cutoff slightly below mid-gray.
+  // Retry geometry with a fixed cutoff. Payload sampling still uses the
+  // original luminance with thresholds derived from the detected QR patterns.
   const thresholded = luminance.map((value) => value < 115 ? 0 : 255);
   const binarizer = new HybridBinarizer(new RGBLuminanceSource(thresholded, width, height));
   try {

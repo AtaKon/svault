@@ -3,7 +3,7 @@
  * receipts and e-invoices.
  *
  * The patterns are deliberately exact — a known https host, a known route
- * shape, no credentials, port, query or fragment — because the server fetches
+ * shape, no credentials, nondefault port, query or fragment — because the server fetches
  * whatever matches without user interaction. Both the client (classifying
  * decoded QR payloads and pasted links) and the server (validating before the
  * fetch) share this module, so the two sides can never disagree about what is
@@ -14,7 +14,7 @@ export type ReceiptQrIssuer = "epsilon-sklavenitis" | "entersoft";
 
 export interface ReceiptQrLink {
   issuer: ReceiptQrIssuer;
-  /** The exact https URL as the QR carries it (trimmed only). */
+  /** The parsed and validated HTTPS URL used for retrieval. */
   url: string;
   /** Entersoft only: the document reference pinned to the initial link. */
   entersoft?: { ofenm: string; uuid: string; token: string };
@@ -42,19 +42,19 @@ export function matchReceiptQrLink(payload: string): ReceiptQrLink | null {
   } catch {
     return null;
   }
-  // No credentials, explicit ports, query strings or fragments: the issuers'
+  // No credentials, nondefault ports, query strings or fragments: the issuers'
   // QR links are bare paths and anything else is unexpected.
   if (url.username || url.password || url.port || url.search || url.hash) return null;
   if (url.protocol !== "https:") return null;
 
   if (url.hostname === EPSILON_HOST && EPSILON_PATH.test(url.pathname)) {
-    return { issuer: "epsilon-sklavenitis", url: trimmed };
+    return { issuer: "epsilon-sklavenitis", url: url.href };
   }
   const entersoft = ENTERSOFT_PATH.exec(url.pathname);
   if (url.hostname === ENTERSOFT_HOST && entersoft) {
     return {
       issuer: "entersoft",
-      url: trimmed,
+      url: url.href,
       entersoft: {
         ofenm: entersoft[1],
         uuid: entersoft[2].toLowerCase(),

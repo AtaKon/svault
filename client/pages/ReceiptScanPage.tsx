@@ -74,7 +74,7 @@ interface ReceiptPage {
   trimmed: boolean;
   text: string;
   candidates?: string[];
-  status: "queued" | "reading" | "done" | "error";
+  status: "queued" | "reading" | "done" | "skipped" | "error";
   /** The page photo on the server, sent to the vision model on its own. */
   uploadedPath: string | null;
   upload: "pending" | "done" | "error";
@@ -669,6 +669,11 @@ export function ReceiptScanPage() {
         }
       }
       let appliedDigital = false;
+      // Each draft represents one purchase. Distinct QR links may identify separate receipts.
+      if (links.size > 1) {
+        setDigitalLink(null);
+        setWarning("These photos contain different receipt links. Scan one receipt at a time for digital import.");
+      }
       const link = links.size === 1 ? links.values().next().value : null;
       if (link) {
         try {
@@ -701,7 +706,7 @@ export function ReceiptScanPage() {
         }
       }
       if (hasDigitalDraft || appliedDigital) {
-        commitPages(pagesRef.current.map((page) => addedKeys.includes(page.key) ? { ...page, status: "done" } : page), false);
+        commitPages(pagesRef.current.map((page) => addedKeys.includes(page.key) ? { ...page, status: "skipped" } : page), false);
       } else {
         for (const key of addedKeys) {
           if (revision !== workspaceRevisionRef.current) return;
@@ -759,7 +764,8 @@ export function ReceiptScanPage() {
     setTemplateId(data.draft.templateId ?? null);
     setScanId(data.scanId ?? null);
     setAiAvailable(Boolean(data.aiAvailable));
-    setWarning(data.warning);
+    // Each result replaces the previous source's warning, including a null warning.
+    setWarning(data.warning ?? null);
   };
 
   const handlePdf = async (file: File | undefined) => {
@@ -1167,7 +1173,7 @@ export function ReceiptScanPage() {
             text: page.text,
             candidates: page.candidates,
             // OCR that was interrupted by the reload can be re-run per page.
-            status: page.status === "done" ? "done" : page.text ? "done" : "error",
+            status: page.status === "skipped" ? "skipped" : page.status === "done" || page.text ? "done" : "error",
             uploadedPath: alive ? page.uploadedPath : null,
             upload: alive ? "done" : "pending",
           } satisfies ReceiptPage;
@@ -1420,7 +1426,7 @@ export function ReceiptScanPage() {
                         <span
                           className={cn(
                             "absolute right-1 top-1 h-1.5 w-1.5 rounded-full",
-                            page.status === "done" ? "bg-brand" : page.status === "error" ? "bg-danger" : "bg-warn",
+                            page.status === "done" ? "bg-brand" : page.status === "skipped" ? "bg-muted" : page.status === "error" ? "bg-danger" : "bg-warn",
                           )}
                         />
                       </button>
@@ -1442,6 +1448,7 @@ export function ReceiptScanPage() {
                       <span>
                         {t("Page")} {activeIndex + 1} {t("of")} {pages.length}
                         {activePage.trimmed ? t(" · straightened") : ""}
+                        {activePage.status === "skipped" ? t(" · OCR skipped") : ""}
                         {activePage.upload === "error" ? t(" · not uploaded") : ""}
                       </span>
                       <span className="flex items-center gap-1">

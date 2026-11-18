@@ -27,6 +27,7 @@ const invoice = `<div class="BoldBlueHeader">ΔΟΚΙΜΑΣΤΙΚΟ ΚΑΤΑΣΤ
     ${item("SKU-A", "ΜΗΛΑ &amp; ΑΧΛΑΔΙΑ", "Κιλό", "1,250", "4,00", "0,50", "3,50")}
     ${item("PERTEL", "Περιβαλλοντικό τέλος", "Τεμάχιο", "1,00", "0,10", "0,00", "0,10")}
     <tr><td>Σύνολο</td><td></td><td></td><td>3,60</td></tr>
+    <tr><td data-title="Περιγραφή">Σύνολο</td><td data-title="Συνολική Αξία">3,60</td></tr>
   </tbody></table>
   <div>Αξία προ έκπτωσης</div><div>4,10EUR</div>
   <div>Έκπτωση</div><div>0,50EUR</div>
@@ -127,6 +128,19 @@ test("rejects unknown links, escaped redirects and a replaced Entersoft frame", 
   assert.deepEqual(requests, [entersoftUrl]);
 });
 
+test("passes only the canonical validated receipt URL to the fetcher", async () => {
+  const variant = entersoftUrl.replace("https://e-invoicing.gr/", "HTTPS://E-INVOICING.GR:443/");
+  assert.equal(matchReceiptQrLink(variant)?.url, entersoftUrl);
+  assert.equal(matchReceiptQrLink(entersoftUrl.replace("e-invoicing.gr/", "e-invoicing.gr./")), null);
+  const requests: string[] = [];
+  configureReceiptQrFetcherForTests(async (url) => {
+    requests.push(url);
+    return new Response(null, { status: 404 });
+  });
+  await readQrReceiptScan("canonical-link-house", [variant, entersoftUrl]);
+  assert.deepEqual(requests, [entersoftUrl]);
+});
+
 test("stops a redirect loop and requires the named Entersoft viewer frame", async () => {
   let requests = 0;
   configureReceiptQrFetcherForTests(async () => {
@@ -186,6 +200,25 @@ test("returns within the scan budget when the second Entersoft request ignores a
   assert.ok(performance.now() - started < 1000);
   assert.ok(documentSignal?.aborted);
   assert.deepEqual(requests, [entersoftUrl, "https://e-invoicing.gr" + issuerPath]);
+});
+
+test("aborts a cooperative transport waiting for the Entersoft invoice", { timeout: 2000 }, async () => {
+  let documentAborted = false;
+  configureReceiptQrFetcherForTests(async (url, signal) => {
+    if (url === entersoftUrl) {
+      return html(`<iframe id="iframeContent" src="${issuerPath.replaceAll("&", "&amp;")}"></iframe>`);
+    }
+    return new Promise<Response>((_, reject) => {
+      signal.addEventListener("abort", () => {
+        documentAborted = true;
+        reject(signal.reason);
+      }, { once: true });
+    });
+  });
+  const result = await readQrReceiptScan("cooperative-transport-house", [entersoftUrl], 40);
+  assert.equal(result.status, "unavailable");
+  assert.equal(result.issuer, "entersoft");
+  assert.ok(documentAborted);
 });
 
 test("attributes a timeout to the pending issuer and retains an earlier verification result", { timeout: 2000 }, async () => {

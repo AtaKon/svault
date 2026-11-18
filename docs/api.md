@@ -629,7 +629,9 @@ is not selected automatically. `warning` calls out uncertainties; matching arith
 `aiAvailable` indicates that the current scan has an enabled AI provider and usable text or vision input.
 
 Pass up to two decoded issuer links in `qr` to try digital retrieval before text parsing. A
-successful read returns `provider: "qr"`. The optional `qr` response reports the issuer and outcome
+photo batch in the scanner uses automatic digital retrieval only when the photos identify one
+unique issuer link. Distinct links are flagged for the user to review as separate receipts.
+A successful read returns `provider: "qr"`. The optional `qr` response reports the issuer and outcome
 (`ok`, `challenge`, `unsupported`, or `unavailable`). For a challenge, the client can open the issuer's
 viewer and send text extracted from the verified PDF through the same endpoint.
 Entersoft receipts with an incomplete labeled product fall back to local parsing to avoid

@@ -190,6 +190,7 @@ function parseRows(html: string): EntersoftRow[] | null {
       if (field && value) row[field] = value;
     }
     if (!Object.values(row).some(Boolean)) continue; // Unlabeled summary or spacer row.
+    if (!row.code && !row.quantity && /^(?:ΜΕΡΙΚΟ|ΓΕΝΙΚΟ)?ΣΥΝΟΛΟ$/.test(labelKey(row.description ?? ""))) continue;
     if (!row.lineTotal) {
       const before = row.preDiscount ? parseAmount(row.preDiscount) : null;
       const discount = row.discount ? parseAmount(row.discount) : 0;

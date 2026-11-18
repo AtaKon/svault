@@ -236,6 +236,7 @@ function result(
 async function fetchEpsilon(link: ReceiptQrLink, signal: AbortSignal): Promise<ReceiptQrFetchResult> {
   const receiptPath = new URL(link.url).pathname.toLowerCase();
   const identifier = receiptPath.slice("/fd/".length).split(":")[0];
+  // fetchPage can follow the issuer redirect to this receipt's viewer only.
   const viewerPath = "/docviewer/" + identifier.replace(/^(........)(....)(....)(....)(............)$/, "$1-$2-$3-$4-$5");
   const allowed = (url: URL) =>
     url.protocol === "https:" &&
@@ -379,10 +380,8 @@ export async function readQrReceiptScan(
   payloads: string[],
   timeoutMs = RECEIPT_QR_BUDGET_MS,
 ): Promise<ReceiptQrFetchResult> {
-  const links = [...new Set(payloads.map((payload) => payload.trim()))]
-    .map(matchReceiptQrLink)
-    .filter((link) => link !== null)
-    .slice(0, 2);
+  const supported = payloads.map(matchReceiptQrLink).filter((link) => link !== null);
+  const links = [...new Map(supported.map((link) => [link.url, link])).values()].slice(0, 2);
   if (!links.length) return result(null, "unsupported", UNSUPPORTED_MESSAGE);
   let verification: ReceiptQrFailure | null = null;
   let firstFailure: ReceiptQrFailure | null = null;
