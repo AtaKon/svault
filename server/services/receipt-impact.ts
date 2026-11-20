@@ -331,6 +331,8 @@ export function parseImpactReceiptHtml(html: string): ImpactReceiptParse {
   const taxAmount = parsePrintedNumber(summaryValue(source, "TotalVATAmount"));
   const currencyRaw = summaryValue(source, "CurrencyCode");
   const currency = currencyRaw && /^[A-Za-z]{3}$/.test(currencyRaw.trim()) ? currencyRaw.trim().toUpperCase() : null;
+  // Prefer document totals, which can include adjustments the line sums
+  // do not represent. Use complete line sums only for missing totals.
   const expectedNet = subtotal ?? sumProductAmounts(rows, "net");
   const expectedTax = taxAmount ?? sumProductAmounts(rows, "vat");
   const taxBreakdown = expectedNet != null && expectedTax != null

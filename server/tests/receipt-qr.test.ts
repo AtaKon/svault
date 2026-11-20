@@ -425,12 +425,15 @@ test("matches only the exact IMPACT route and keeps the original path case", () 
   const impact = matchReceiptQrLink(impactUrl);
   assert.ok(impact?.issuer === "impact");
   assert.equal(impact.url, impactUrl);
+  assert.equal(matchReceiptQrLink(` \n${impactUrl}\t`)?.url, impactUrl);
   // The default port and host case normalize away; the path never changes.
   assert.equal(matchReceiptQrLink(impactUrl.replace("https://einvoice.impact.gr/", "HTTPS://EINVOICE.IMPACT.GR:443/"))?.url, impactUrl);
   const mixedCase = impactUrl.replace(impactMarker, "aB".repeat(20));
   assert.equal(matchReceiptQrLink(mixedCase)?.url, mixedCase);
   const uppercaseHex = `https://einvoice.impact.gr/p/EL123456789/${"AB".repeat(20)}/${"CD".repeat(16)}`;
   assert.equal(matchReceiptQrLink(uppercaseHex)?.url, uppercaseHex);
+  const uppercaseMarker = `https://einvoice.impact.gr/p/EL123456789/${"AB".repeat(20)}/${"cd".repeat(16)}`;
+  assert.equal(matchReceiptQrLink(uppercaseMarker)?.url, uppercaseMarker);
   const otherGreekReceipt = `https://einvoice.impact.gr/p/EL987654321/${"cD".repeat(20)}/${"Ef".repeat(16)}`;
   assert.deepEqual(matchReceiptQrLink(otherGreekReceipt), { issuer: "impact", url: otherGreekReceipt });
   for (const rejected of [
@@ -452,6 +455,7 @@ test("matches only the exact IMPACT route and keeps the original path case", () 
     impactUrl.slice(0, -1),
     impactUrl + "2",
     impactUrl + "/",
+    `Scan receipt ${impactUrl}`,
     "javascript:void(0)",
   ]) {
     assert.equal(matchReceiptQrLink(rejected), null, rejected);
@@ -492,7 +496,7 @@ test("normalizes an IMPACT photo QR before one pinned receipt fetch", async () =
   const link = links.values().next().value;
   assert.ok(link);
   assert.equal(link.url, impactUrl);
-  const result = await fetchQrReceiptDraft(link.url);
+  const result = await readQrReceiptScan("normalized-impact-qr", link.url);
   assert.ok(result.status === "ok");
   assert.equal(result.issuer, "impact");
   assert.deepEqual(requests, [impactUrl]);
@@ -519,8 +523,10 @@ test("normalizes an IMPACT photo QR before one pinned receipt fetch", async () =
   ]);
   assert.equal(result.excludedCharges, 0);
   assert.match(result.text, /Example merchant/);
+  assert.match(result.text, /Αρ\. Παραστατικού ΡΤ 123456/);
   assert.match(result.text, /Μήλα Ημαθίας/);
   assert.match(result.text, /ΣΥΝΟΛΟ 4\.63/);
+  assert.match(result.text, /ΦΠΑ 13% 3\.00 0\.39/);
   assert.ok(!JSON.stringify(result).includes(impactUrl));
   assert.ok(!result.text.includes(impactMarker));
 });
@@ -564,6 +570,8 @@ test("offers browser recovery for IMPACT verification and unreadable pages", asy
   const missing = await fetchQrReceiptDraft(impactUrl);
   assert.equal(missing.status, "unavailable");
   assert.equal(missing.message, "The IMPACT receipt could not be read automatically. Open the digital receipt in your browser, or continue with the photo scan.");
+  configureReceiptQrFetcherForTests(async () => new Response(null, { status: 503 }));
+  assert.deepEqual(await fetchQrReceiptDraft(impactUrl), missing);
 
   configureReceiptQrFetcherForTests(async () => html("<p>A receipt page without a product table.</p>"));
   const unrecognizable = await fetchQrReceiptDraft(impactUrl);
@@ -585,8 +593,23 @@ test("offers browser recovery for IMPACT verification and unreadable pages", asy
   }));
   assert.deepEqual(await fetchQrReceiptDraft(impactUrl), missing);
 
-  configureReceiptQrFetcherForTests(async () => html(impactBody(impactProducts) + " ".repeat(2 * 1024 * 1024)));
-  assert.deepEqual(await fetchQrReceiptDraft(impactUrl), missing);
+});
+
+test("cancels an oversized IMPACT HTML stream before the body is complete", { timeout: 2000 }, async () => {
+  let cancelled = false;
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(impactBody(impactProducts)));
+      controller.enqueue(new Uint8Array(2 * 1024 * 1024));
+      // Keep the stream open. Import must stop at the cap rather than wait for EOF.
+    },
+    cancel() { cancelled = true; },
+  });
+  configureReceiptQrFetcherForTests(async () => new Response(stream, { headers: { "content-type": "text/html" } }));
+  const result = await fetchQrReceiptDraft(impactUrl, 1000);
+  assert.equal(result.status, "unavailable");
+  assert.match(result.message ?? "", /could not be read automatically/);
+  assert.ok(cancelled);
 });
 
 test("rejects incomplete and negative IMPACT product lines to photo OCR", async () => {
@@ -602,7 +625,9 @@ test("rejects incomplete and negative IMPACT product lines to photo OCR", async 
     impactLine({ description: "Unrepresentable quantity", quantity: overflow, total: "1,24" }),
     impactLine({ description: "Unrepresentable total", quantity: "1", total: overflow }),
   ]) {
-    configureReceiptQrFetcherForTests(async () => html(impactBody([broken, ...impactProducts.slice(1)])));
+    const document = impactBody([broken, ...impactProducts.slice(1)]);
+    assert.deepEqual(parseImpactReceiptHtml(document), { status: "incomplete" });
+    configureReceiptQrFetcherForTests(async () => html(document));
     const result = await fetchQrReceiptDraft(impactUrl);
     assert.equal(result.status, "unavailable");
     assert.match(result.message ?? "", /incomplete product line/);
@@ -651,10 +676,16 @@ test("parses Greek grouping and accented units on IMPACT product lines", () => {
   const draft = impactDraft(impactBody([
     impactLine({ description: "Weighted product", unit: "ΚΙΛΌ", quantity: "1,250", total: "1.234,56" }),
     impactLine({ description: "Unmapped unit", unit: "ΚΙΒΩΤΙΟ", quantity: "1", total: "2,00" }),
+    impactLine({ description: "Grams", unit: "ΓΡΑΜΜΆΡΙΟ", quantity: "2", total: "1" }),
+    impactLine({ description: "Litres", unit: "ΛΙΤΡΟ", quantity: "1", total: "2" }),
+    impactLine({ description: "Millilitres", unit: "ΧΙΛΙΟΣΤΟΛΙΤΡΟ", quantity: "1", total: "3" }),
   ]));
   assert.deepEqual(draft.lines.map(({ quantity, unit, lineTotal }) => ({ quantity, unit, lineTotal })), [
     { quantity: 1.25, unit: "kg", lineTotal: 1234.56 },
     { quantity: 1, unit: null, lineTotal: 2 },
+    { quantity: 2, unit: "g", lineTotal: 1 },
+    { quantity: 1, unit: "l", lineTotal: 2 },
+    { quantity: 1, unit: "ml", lineTotal: 3 },
   ]);
 });
 
@@ -734,6 +765,14 @@ test("treats the IMPACT VAT breakdown and currency as optional", () => {
   assert.deepEqual(draft.lines.map((line) => line.taxRate), [null, 13]);
   assert.equal(draft.tax, 0.63);
   assert.equal(draft.currency, null);
+  assert.equal(impactDraft(impactBody(impactProducts).replace(">EUR</td>", ">EURO</td>")).currency, null);
+});
+
+test("reads ISO issue dates and leaves unrecognized IMPACT dates unset", () => {
+  const source = impactBody(impactProducts);
+  const date = "20/11/2026 2:22 μ.μ.";
+  assert.equal(impactDraft(source.replace(date, "2026-11-20")).purchasedAt, "2026-11-20");
+  assert.equal(impactDraft(source.replace(date, "Date unavailable")).purchasedAt, null);
 });
 
 test("confirms the printed IMPACT VAT rate against each line's own amounts", () => {
@@ -857,6 +896,24 @@ test("uses product amounts to verify the IMPACT VAT breakdown when summary total
   assert.deepEqual(incompleteEvidence.lines.map((line) => line.taxRate), [null, 13]);
 });
 
+test("uses printed IMPACT summary totals in preference to conflicting line sums", () => {
+  const source = impactBody(impactProducts).replace(
+    impactCell("NetTotal", "1,00", "text-right"),
+    impactCell("NetTotal", "1,04", "text-right"),
+  );
+  const draft = impactDraft(source);
+  assert.equal(draft.subtotal, 4);
+  assert.equal(draft.tax, 0.63);
+  assert.deepEqual(draft.taxBreakdown.map((entry) => entry.rate), [24, 13]);
+  assert.deepEqual(draft.lines.map((line) => line.taxRate), [null, 13]);
+});
+
+test("reports unavailable for pages without an IMPACT product table", () => {
+  for (const source of ["", '<div class="section-details"><p>Empty viewer</p></div>']) {
+    assert.deepEqual(parseImpactReceiptHtml(source), { status: "unavailable" });
+  }
+});
+
 test("reports a recognized IMPACT product table without lines as incomplete", async () => {
   for (const table of [
     impactProductTable([]),
@@ -893,17 +950,21 @@ test("skips empty, spacer-only, and header-only IMPACT tables around the populat
 });
 
 test("does not replace malformed IMPACT products with a later table", () => {
-  const malformed = impactProductTable([impactLine({ description: "Incomplete product", quantity: "1" })]);
+  const incompleteLine = impactLine({ description: "Incomplete product", quantity: "1" });
   const productTable = impactProductTable(impactProducts);
-  const source = impactBody(impactProducts).replace(productTable, malformed + productTable);
-  assert.deepEqual(parseImpactReceiptHtml(source), { status: "incomplete" });
+  for (const rows of [[incompleteLine], [impactProducts[0], incompleteLine]]) {
+    const source = impactBody(impactProducts).replace(productTable, impactProductTable(rows) + productTable);
+    assert.deepEqual(parseImpactReceiptHtml(source), { status: "incomplete" });
+  }
 });
 
-test("ignores tables outside the IMPACT details section", async () => {
+test("ignores myDATA and commented tables and preserves nested IMPACT details", async () => {
   const unrelated = impactProductTable([impactLine({ description: "myDATA detail", quantity: "1", total: "19,00" })])
     .replace('class="table "', 'class="table table-striped InvoiceLineTable"');
   const headerOnly = `<table>${impactProductHead}</table>`;
-  configureReceiptQrFetcherForTests(async () => html(headerOnly + unrelated + impactBody(impactProducts)));
+  const commented = `<!-- <div class="section-details">${headerOnly}</div> -->`;
+  const document = impactBody(impactProducts).replace('<div class="col-12">', `<div class="col-12">${unrelated}<!-- </div> -->`);
+  configureReceiptQrFetcherForTests(async () => html(commented + headerOnly + document));
   const result = await fetchQrReceiptDraft(impactUrl);
   assert.ok(result.status === "ok");
   assert.deepEqual(result.draft.lines.map((line) => line.description), ["Example product", "Μήλα Ημαθίας"]);
