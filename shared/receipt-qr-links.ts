@@ -30,7 +30,7 @@ const EPSILON_PATH = /^\/fd\/([0-9a-f]{8})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{4}
 /** Entersoft: /edocuments/ViewInvoice/{ofenm}/{uuid}_{8 alphanumeric} */
 const ENTERSOFT_PATH =
   /^\/edocuments\/ViewInvoice\/(-?\d{1,4})\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})_([A-Za-z0-9]{8})$/i;
-/** Allow the observed Greek IMPACT viewer route only: EL tax ID, 40 hex and 32 hex, with their original case. */
+/** Match the observed uppercase EL prefix. Hex letters in either case are preserved for the fetch. */
 const IMPACT_PATH = /^\/p\/EL\d{9}\/[0-9a-fA-F]{40}\/[0-9a-fA-F]{32}$/;
 
 /**

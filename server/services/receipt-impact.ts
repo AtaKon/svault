@@ -1,5 +1,5 @@
 import type { ReceiptDraft, TaxBreakdownEntry } from "../../shared/types.js";
-import { detectDate, parseAmount, parseQuantity } from "./receipt-local.js";
+import { detectDate } from "./receipt-local.js";
 
 /**
  * Parser for the receipt page IMPACT eInvoicing's public viewer serves
@@ -82,14 +82,23 @@ function round(value: number, digits = 2): number {
   return Math.round(value * factor) / factor;
 }
 
-function parsePrintedAmount(raw: string | null): number | null {
-  return raw != null && PRINTED_NUMBER.test(raw) ? parseAmount(raw) : null;
+function toCents(amount: number): number {
+  const scaled = amount * 100;
+  // Correct binary noise at a half-cent before rounding the printed amounts.
+  return Math.round(scaled + Math.abs(scaled) * Number.EPSILON);
+}
+
+function parsePrintedNumber(raw: string | null): number | null {
+  if (raw == null || !PRINTED_NUMBER.test(raw)) return null;
+  const value = Number(raw.replaceAll(".", "").replace(",", "."));
+  return Number.isFinite(value) ? value : null;
 }
 
 function decodeEntities(value: string): string {
   return value.replace(/&(?:(nbsp|amp|lt|gt|quot|apos)|#(\d+)|#x([\da-f]+));/gi, (_entity, name, decimal, hex) => {
     if (name) return NAMED_ENTITIES[name.toLowerCase()];
     const code = decimal ? Number(decimal) : Number.parseInt(hex, 16);
+    // stripTags collapses tabs, newlines and carriage returns with other whitespace.
     if ((code > 0 && code < 32 && code !== 9 && code !== 10 && code !== 13) || (code >= 127 && code <= 159)) return " ";
     return code > 0 && code <= 0x10ffff && (code < 0xd800 || code > 0xdfff)
       ? String.fromCodePoint(code)
@@ -200,9 +209,8 @@ function parseProductTable(html: string): ImpactProduct[] | "incomplete" | null 
       // Rows without product cells (spacers, column echoes) are skipped.
       if (!recognized || !Object.values(row).some(Boolean)) continue;
       // Missing, unparseable or negative product lines go back to photo OCR.
-      const printedQuantity = row.quantity ?? "";
-      const quantity = PRINTED_NUMBER.test(printedQuantity) ? parseQuantity(printedQuantity) : null;
-      const total = parsePrintedAmount(row.total);
+      const quantity = parsePrintedNumber(row.quantity);
+      const total = parsePrintedNumber(row.total);
       if (!row.description || quantity == null || quantity <= 0 || total == null || total < 0) return "incomplete";
       products.push({
         code: row.code,
@@ -221,18 +229,18 @@ function parseProductTable(html: string): ImpactProduct[] | "incomplete" | null 
 }
 
 /**
- * Accept valid VAT rows within one cent of the expected net and tax amounts.
+ * Keep valid VAT rows only if they add up to the expected net and tax
+ * amounts within one cent. Unreadable or decorative rows are ignored.
  * Prefer an exact match when both exact and rounded candidates are present.
  * Equally close candidates keep document order.
  */
 function parseTaxBreakdown(html: string, subtotal: number, tax: number): TaxBreakdownEntry[] {
-  const expectedNetCents = Math.round(subtotal * 100);
-  const expectedTaxCents = Math.round(tax * 100);
+  const expectedNetCents = toCents(subtotal);
+  const expectedTaxCents = toCents(tax);
   let closest: TaxBreakdownEntry[] = [];
   let bestDifference = Infinity;
   for (const table of html.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)) {
     const entries: TaxBreakdownEntry[] = [];
-    let invalid = false;
     for (const rowMatch of table[1].matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)) {
       const cells = new Map<string, string>();
       for (const cell of rowMatch[1].matchAll(/<td\b([^>]*)>([\s\S]*?)<\/td>/gi)) {
@@ -242,19 +250,15 @@ function parseTaxBreakdown(html: string, subtotal: number, tax: number): TaxBrea
         if (token) cells.set(token, cellValue(cell[2]) ?? "");
       }
       if (!cells.size) continue;
-      const rateText = cells.get("field-Percentage")?.replace(/\s*%$/, "") ?? "";
-      const rate = PRINTED_NUMBER.test(rateText) ? parseQuantity(rateText) : null;
-      const net = parsePrintedAmount(cells.get("field-UnderlyingValue") ?? null);
-      const tax = parsePrintedAmount(cells.get("field-VatAmount") ?? null);
-      if (rate == null || rate < 0 || rate > 100 || net == null || net < 0 || tax == null || tax < 0) {
-        invalid = true;
-        break;
-      }
+      const rate = parsePrintedNumber(cells.get("field-Percentage")?.replace(/\s*%$/, "") ?? null);
+      const net = parsePrintedNumber(cells.get("field-UnderlyingValue") ?? null);
+      const tax = parsePrintedNumber(cells.get("field-VatAmount") ?? null);
+      if (rate == null || rate < 0 || rate > 100 || net == null || net < 0 || tax == null || tax < 0) continue;
       entries.push({ rate, net, tax, gross: round(net + tax, 2) });
     }
-    if (invalid || !entries.length) continue;
-    const netCents = Math.round(entries.reduce((sum, entry) => sum + entry.net, 0) * 100);
-    const taxCents = Math.round(entries.reduce((sum, entry) => sum + entry.tax, 0) * 100);
+    if (!entries.length) continue;
+    const netCents = toCents(entries.reduce((sum, entry) => sum + entry.net, 0));
+    const taxCents = toCents(entries.reduce((sum, entry) => sum + entry.tax, 0));
     const netDifference = Math.abs(netCents - expectedNetCents);
     const taxDifference = Math.abs(taxCents - expectedTaxCents);
     if (netDifference > 1 || taxDifference > 1) continue;
@@ -272,7 +276,7 @@ function parseTaxBreakdown(html: string, subtotal: number, tax: number): TaxBrea
 function sumProductAmounts(rows: ImpactProduct[], field: "net" | "vat"): number | null {
   let sum = 0;
   for (const row of rows) {
-    const amount = parsePrintedAmount(row[field]);
+    const amount = parsePrintedNumber(row[field]);
     if (amount == null || amount < 0) return null;
     sum += amount;
   }
@@ -293,13 +297,13 @@ function lineVatRate(row: ImpactProduct, breakdown: TaxBreakdownEntry[]): number
   // A percent sign identifies a printed rate. A bare category number needs
   // independent confirmation from the breakdown. Both must fit the line amounts.
   if (!category.endsWith("%") && !breakdown.some((entry) => entry.rate === rate)) return null;
-  const net = parsePrintedAmount(row.net);
-  const vat = parsePrintedAmount(row.vat);
+  const net = parsePrintedNumber(row.net);
+  const vat = parsePrintedNumber(row.vat);
   // A zero net amount cannot corroborate a VAT percentage.
   if (net == null || net <= 0 || vat == null || vat < 0) return null;
   // Different issuer rounding can leave the rate unverified. The printed
   // amounts still import with the rest of the line.
-  return round(net * rate / 100) === vat ? rate : null;
+  return toCents(net * rate / 100) === toCents(vat) ? rate : null;
 }
 
 /**
@@ -319,9 +323,9 @@ export function parseImpactReceiptHtml(html: string): ImpactReceiptParse {
   const purchasedAt = issuedAt ? detectDate(issuedAt) : null;
   const identifier = fieldSpanValue(source, "IssuerFormatedInvoiceSeriesNumber");
 
-  const total = parsePrintedAmount(summaryValue(source, "TotalGrossValue"));
-  const subtotal = parsePrintedAmount(summaryValue(source, "TotalNetAmount"));
-  const taxAmount = parsePrintedAmount(summaryValue(source, "TotalVATAmount"));
+  const total = parsePrintedNumber(summaryValue(source, "TotalGrossValue"));
+  const subtotal = parsePrintedNumber(summaryValue(source, "TotalNetAmount"));
+  const taxAmount = parsePrintedNumber(summaryValue(source, "TotalVATAmount"));
   const currencyRaw = summaryValue(source, "CurrencyCode");
   const currency = currencyRaw && /^[A-Za-z]{3}$/.test(currencyRaw.trim()) ? currencyRaw.trim().toUpperCase() : null;
   const expectedNet = subtotal ?? sumProductAmounts(rows, "net");

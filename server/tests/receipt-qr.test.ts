@@ -427,6 +427,8 @@ test("matches only the exact IMPACT route and keeps the original path case", () 
   assert.equal(matchReceiptQrLink(impactUrl.replace("https://einvoice.impact.gr/", "HTTPS://EINVOICE.IMPACT.GR:443/"))?.url, impactUrl);
   const mixedCase = impactUrl.replace(impactMarker, "aB".repeat(20));
   assert.equal(matchReceiptQrLink(mixedCase)?.url, mixedCase);
+  const uppercaseHex = `https://einvoice.impact.gr/p/EL123456789/${"AB".repeat(20)}/${"CD".repeat(16)}`;
+  assert.equal(matchReceiptQrLink(uppercaseHex)?.url, uppercaseHex);
   const otherGreekReceipt = `https://einvoice.impact.gr/p/EL987654321/${"cD".repeat(20)}/${"Ef".repeat(16)}`;
   assert.deepEqual(matchReceiptQrLink(otherGreekReceipt), { issuer: "impact", url: otherGreekReceipt });
   for (const rejected of [
@@ -623,6 +625,10 @@ test("attributes an IMPACT timeout to the pending issuer", { timeout: 2000 }, as
 test("keeps the IMPACT merchant from company-info and not the customer field", () => {
   const draft = impactDraft(impactBody(impactProducts));
   assert.equal(draft.vendorName, "Example merchant");
+  const wrapped = impactBody(impactProducts).replace("Example merchant</span>", "<span>Example merchant</span></span>");
+  const wrappedDraft = impactDraft(wrapped);
+  assert.equal(wrappedDraft.vendorName, null);
+  assert.equal(wrappedDraft.lines.length, 2);
   // Without .company-info no vendor is guessed — the later same-name field is
   // the customer — but the unambiguous date and identifier are still read.
   const renamed = impactBody(impactProducts).replace('<div class="company-info">', '<div class="none">');
@@ -671,6 +677,18 @@ test("ignores negative IMPACT tax breakdown entries", () => {
   assert.deepEqual(impactDraft(source).taxBreakdown, []);
 });
 
+test("ignores unreadable VAT rows only when the remaining rows reconcile", () => {
+  const source = impactBody(impactProducts);
+  const vatCell = impactCell("VatAmount", "0,39");
+  const extraRows = `<tr>${impactCell("Percentage", "-")}${impactCell("UnderlyingValue", "4,00")}${impactCell("VatAmount", "0,63")}</tr>
+    <tr>${impactCell("Percentage", "6%")}${impactCell("UnderlyingValue", "")}${impactCell("VatAmount", "")}</tr>`;
+  const withExtraRows = source.replace(`${vatCell}</tr>`, `${vatCell}</tr>${extraRows}`);
+  assert.deepEqual(impactDraft(withExtraRows).taxBreakdown.map((entry) => entry.rate), [24, 13]);
+
+  const incomplete = withExtraRows.replace(vatCell, impactCell("VatAmount", ""));
+  assert.deepEqual(impactDraft(incomplete).taxBreakdown, []);
+});
+
 test("finds the complete IMPACT VAT breakdown after a partial table", () => {
   const partial = `<table><tbody>
     <tr>${impactCell("Percentage", "24%")}${impactCell("UnderlyingValue", "1,00")}${impactCell("VatAmount", "0,24")}</tr>
@@ -713,6 +731,16 @@ test("confirms an explicit IMPACT percentage from its line without a matching br
   ]));
   assert.deepEqual(draft.taxBreakdown.map((entry) => entry.rate), [24, 13]);
   assert.deepEqual(draft.lines.map((value) => value.taxRate), [6, null, null]);
+});
+
+test("rounds a half-cent of IMPACT line VAT up before comparing cents", () => {
+  // 0.725 × 20% is exactly 0.145, but binary multiplication can put it below the tie.
+  const line = { description: "Example product", quantity: "1", net: "0,725", vatCategory: "20%" };
+  const draft = impactDraft(impactBody([
+    impactLine({ ...line, vat: "0,15", total: "0,88" }),
+    impactLine({ ...line, vat: "0,14", total: "0,87" }),
+  ]));
+  assert.deepEqual(draft.lines.map((row) => row.taxRate), [20, null]);
 });
 
 test("uses product amounts to verify the IMPACT VAT breakdown when summary totals are missing", () => {
