@@ -38,12 +38,10 @@ export function isUsableDigitalReceipt(data: ReceiptScanResponse): boolean {
 
 /**
  * Photo OCR is the fallback: it runs only when no digital receipt was
- * applied by this scan and the workspace does not already hold one.
+ * applied by this scan and the workspace's existing provider is not QR.
+ * Provider provenance matches the prior scan behavior even if the user has
+ * since removed all lines from an existing QR draft.
  */
-export function shouldRunPhotoOcr(
-  existingDraft: { provider: ReceiptProvider | null; lines: readonly unknown[] },
-  digitalApplied: boolean,
-): boolean {
-  const hasUsableDigitalDraft = existingDraft.provider === "qr" && existingDraft.lines.length > 0;
-  return !hasUsableDigitalDraft && !digitalApplied;
+export function shouldRunPhotoOcr(existingProvider: ReceiptProvider | null, digitalApplied: boolean): boolean {
+  return existingProvider !== "qr" && !digitalApplied;
 }

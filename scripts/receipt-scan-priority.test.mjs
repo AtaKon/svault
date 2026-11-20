@@ -40,11 +40,11 @@ test("a scan response is a usable digital receipt only with QR provenance and pr
 
 test("photo OCR is the fallback: it runs only without a digital receipt to use", () => {
   // No QR decoded, or the issuer import was unusable, challenged or unavailable.
-  assert.equal(shouldRunPhotoOcr({ provider: "local", lines: [] }, false), true);
-  assert.equal(shouldRunPhotoOcr({ provider: "template", lines: [] }, false), true);
+  assert.equal(shouldRunPhotoOcr("local", false), true);
+  assert.equal(shouldRunPhotoOcr("template", false), true);
   // A digital receipt was applied by this scan, or the workspace already holds one.
-  assert.equal(shouldRunPhotoOcr({ provider: "local", lines: [] }, true), false);
-  assert.equal(shouldRunPhotoOcr({ provider: "qr", lines: [{ description: "Milk" }] }, false), false);
-  assert.equal(shouldRunPhotoOcr({ provider: "qr", lines: [] }, false), true);
-  assert.equal(shouldRunPhotoOcr({ provider: "qr", lines: [{ description: "Milk" }] }, true), false);
+  assert.equal(shouldRunPhotoOcr("local", true), false);
+  // Preserve existing behavior for QR provenance, including an empty edited draft.
+  assert.equal(shouldRunPhotoOcr("qr", false), false);
+  assert.equal(shouldRunPhotoOcr("qr", true), false);
 });

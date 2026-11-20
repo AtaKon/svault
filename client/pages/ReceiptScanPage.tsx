@@ -18,6 +18,7 @@ import { ZoomableImage } from "@/components/ZoomableImage";
 import { clearReceiptDraft, loadReceiptDraft, receiptDraftKey, saveReceiptDraft, type StoredReceiptDraft } from "@/receipt-draft-store";
 import { collectReceiptQrLinks, isUsableDigitalReceipt, shouldRunPhotoOcr } from "@/receipt-scan-priority";
 import { reconcileReceipt } from "@shared/receipt-reconcile";
+import type { ReceiptQrLink } from "@shared/receipt-qr-links";
 import type {
   Location,
   OffProduct,
@@ -652,18 +653,18 @@ export function ReceiptScanPage() {
       // Find the receipt QR before any photo is read: a usable digital
       // receipt decides whether the photos are OCR'd at all.
       const decoder = tryDigital ? await import("@/receipt-qr").catch(() => null) : null;
-      const payloads: Array<string | null> = [];
+      const links = new Map<string, ReceiptQrLink>();
       if (decoder) {
         for (const file of files) {
-          payloads.push(await decoder.decodeReceiptQrFile(file));
+          const payload = await decoder.decodeReceiptQrFile(file);
           if (revision !== workspaceRevisionRef.current) return;
+          for (const link of collectReceiptQrLinks([payload]).links) links.set(link.url, link);
+          // Stop decoding as soon as the batch contains two distinct receipts.
+          if (links.size > 1) {
+            toast.error(t("These photos contain different receipt links. Scan one receipt at a time."));
+            return;
+          }
         }
-      }
-      // Identify distinct purchases before appending or uploading any pages.
-      const { links, conflict } = collectReceiptQrLinks(payloads);
-      if (conflict) {
-        toast.error(t("These photos contain different receipt links. Scan one receipt at a time."));
-        return;
       }
       setOcrError(null);
       if (!hasDigitalDraft) setWarning(null);
@@ -693,7 +694,7 @@ export function ReceiptScanPage() {
         }
       }
       let appliedDigital = false;
-      const link = links[0] ?? null;
+      const link = links.values().next().value ?? null;
       if (link) {
         try {
           const data = await api<ReceiptScanResponse>(`/api/houses/${house.id}/receipts/scan`, {
@@ -724,7 +725,7 @@ export function ReceiptScanPage() {
           setDigitalLink(link.url);
         }
       }
-      if (!shouldRunPhotoOcr(existingDraft, appliedDigital)) {
+      if (!shouldRunPhotoOcr(existingDraft.provider, appliedDigital)) {
         commitPages(pagesRef.current.map((page) => addedKeys.includes(page.key) ? { ...page, status: "skipped" } : page), false);
       } else {
         for (const key of addedKeys) {
