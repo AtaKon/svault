@@ -521,7 +521,7 @@ test("pins IMPACT redirects to the QR's own route and nothing broader", async ()
     });
     const result = await fetchQrReceiptDraft(impactUrl);
     assert.equal(result.status, "unavailable");
-    assert.match(result.message, /Open the digital receipt in your browser/);
+    assert.equal(result.message, "IMPACT redirected the receipt link. Open the digital receipt in your browser, or continue with the photo scan.");
     assert.ok(!result.message.includes(impactMarker));
     assert.deepEqual(requests, [impactUrl]);
   }
@@ -656,6 +656,35 @@ test("finds the complete IMPACT VAT breakdown after a partial table", () => {
   assert.deepEqual(draft.taxBreakdown.map((entry) => entry.rate), [24, 13]);
 });
 
+test("retains IMPACT breakdown rates with a one-cent summary difference", () => {
+  const source = impactBody(impactProducts)
+    .replace('>0,63</td></tr>', '>0,64</td></tr>')
+    .replace('>4,00</td></tr>', '>4,01</td></tr>');
+  const draft = impactDraft(source);
+  assert.equal(draft.tax, 0.64);
+  assert.equal(draft.subtotal, 4.01);
+  assert.deepEqual(draft.taxBreakdown.map((entry) => entry.rate), [24, 13]);
+  assert.deepEqual(draft.lines.map((line) => line.taxRate), [24, 13]);
+});
+
+test("prefers an exact IMPACT VAT breakdown over an earlier rounded match", () => {
+  const source = impactBody(impactProducts);
+  const exact = source.match(/<table class="table"><thead><tr>\s*<th class="field field-Percentage[\s\S]*?<\/table>/)?.[0];
+  assert.ok(exact);
+  const rounded = exact.replace(impactCell("VatAmount", "0,24"), impactCell("VatAmount", "0,25"));
+  const draft = impactDraft(source.replace(exact, rounded + exact));
+  assert.equal(draft.taxBreakdown[0].tax, 0.24);
+});
+
+test("keeps a valid IMPACT breakdown when summary totals are missing", () => {
+  const source = impactBody(impactProducts).replace(/<tr class="field field-Total(?:NetAmount|VATAmount) text-right">[\s\S]*?<\/tr>/g, "");
+  const draft = impactDraft(source);
+  assert.equal(draft.subtotal, null);
+  assert.equal(draft.tax, 0.63);
+  assert.deepEqual(draft.taxBreakdown.map((entry) => entry.rate), [24, 13]);
+  assert.deepEqual(draft.lines.map((line) => line.taxRate), [24, 13]);
+});
+
 test("reports a recognized IMPACT product table without lines as incomplete", async () => {
   for (const table of [
     impactProductTable([]),
@@ -682,7 +711,7 @@ test("ignores tables outside the IMPACT details section", async () => {
 });
 
 test("decodes named and numeric entities in IMPACT line descriptions", () => {
-  const source = impactBody([impactLine({ description: "Grocer&#x27;s&#1;&amp; Baker&#8217;s", quantity: "1", total: "1,24" })]);
+  const source = impactBody([impactLine({ description: "Grocer&#x27;s&#1;&amp;&#x81;Baker&#8217;s", quantity: "1", total: "1,24" })]);
   assert.equal(impactDraft(source).lines[0].description, "Grocer's & Baker’s");
 });
 

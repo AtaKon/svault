@@ -90,7 +90,7 @@ function decodeEntities(value: string): string {
   return value.replace(/&(?:(nbsp|amp|lt|gt|quot|apos)|#(\d+)|#x([\da-f]+));/gi, (_entity, name, decimal, hex) => {
     if (name) return NAMED_ENTITIES[name.toLowerCase()];
     const code = decimal ? Number(decimal) : Number.parseInt(hex, 16);
-    if ((code > 0 && code < 32 && code !== 9 && code !== 10 && code !== 13) || code === 127) return " ";
+    if ((code > 0 && code < 32 && code !== 9 && code !== 10 && code !== 13) || (code >= 127 && code <= 159)) return " ";
     return code > 0 && code <= 0x10ffff && (code < 0xd800 || code > 0xdfff)
       ? String.fromCodePoint(code)
       : "\uFFFD";
@@ -215,11 +215,12 @@ function parseProductTable(html: string): ImpactProduct[] | "incomplete" | null 
 }
 
 /**
- * Accept a VAT table when every row is valid and the amounts reconcile to
- * the printed summary totals, where available. If a summary total is
- * missing or unreadable, validate the VAT rows without that comparison.
+ * Accept valid VAT rows within one cent of each available summary total.
+ * Prefer an exact match when both exact and rounded candidates are present.
  */
 function parseTaxBreakdown(html: string, subtotal: number | null, tax: number | null): TaxBreakdownEntry[] {
+  let closest: TaxBreakdownEntry[] = [];
+  let bestDifference = Infinity;
   for (const table of html.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)) {
     const entries: TaxBreakdownEntry[] = [];
     let invalid = false;
@@ -243,11 +244,19 @@ function parseTaxBreakdown(html: string, subtotal: number | null, tax: number | 
       entries.push({ rate, net, tax, gross: round(net + tax, 2) });
     }
     if (invalid || !entries.length) continue;
-    if (subtotal != null && round(entries.reduce((sum, entry) => sum + entry.net, 0)) !== subtotal) continue;
-    if (tax != null && round(entries.reduce((sum, entry) => sum + entry.tax, 0)) !== tax) continue;
-    return entries;
+    const netCents = Math.round(entries.reduce((sum, entry) => sum + entry.net, 0) * 100);
+    const taxCents = Math.round(entries.reduce((sum, entry) => sum + entry.tax, 0) * 100);
+    const netDifference = subtotal == null ? 0 : Math.abs(netCents - Math.round(subtotal * 100));
+    const taxDifference = tax == null ? 0 : Math.abs(taxCents - Math.round(tax * 100));
+    if (netDifference > 1 || taxDifference > 1) continue;
+    const difference = netDifference + taxDifference;
+    if (difference === 0) return entries;
+    if (difference < bestDifference) {
+      closest = entries;
+      bestDifference = difference;
+    }
   }
-  return [];
+  return closest;
 }
 
 function mapUnit(raw: string | null): string | null {
@@ -260,7 +269,8 @@ function lineVatRate(row: ImpactProduct, breakdown: TaxBreakdownEntry[]): number
   const category = row.vatCategory;
   if (!category || !/^\d{1,3}(?:[.,]\d{1,2})?\s*%?$/.test(category)) return null;
   const rate = Number(category.replace(",", ".").replace(/\s*%$/, ""));
-  // A bare number can be a category code. Require a matching breakdown rate.
+  // A bare number can be a category code, and cent rounding can make several
+  // percentages fit the same line. The breakdown confirms the rate is in use.
   if (rate > 100 || (!category.endsWith("%") && !breakdown.some((entry) => entry.rate === rate))) return null;
   const net = parsePrintedAmount(row.net);
   const vat = parsePrintedAmount(row.vat);
@@ -322,7 +332,7 @@ export function parseImpactReceiptHtml(html: string): ImpactReceiptParse {
         description,
         String(quantity),
         row.unit ?? "",
-        unitPrice.toFixed(2),
+        unitPrice.toFixed(4), // Effective price from the draft, at the same precision.
         row.vatCategory ?? "",
         lineTotal.toFixed(2),
       ]
