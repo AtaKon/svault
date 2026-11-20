@@ -427,6 +427,8 @@ test("matches only the exact IMPACT route and keeps the original path case", () 
   assert.equal(matchReceiptQrLink(impactUrl.replace("https://einvoice.impact.gr/", "HTTPS://EINVOICE.IMPACT.GR:443/"))?.url, impactUrl);
   const mixedCase = impactUrl.replace(impactMarker, "aB".repeat(20));
   assert.equal(matchReceiptQrLink(mixedCase)?.url, mixedCase);
+  const otherGreekReceipt = `https://einvoice.impact.gr/p/EL987654321/${"cD".repeat(20)}/${"Ef".repeat(16)}`;
+  assert.deepEqual(matchReceiptQrLink(otherGreekReceipt), { issuer: "impact", url: otherGreekReceipt });
   for (const rejected of [
     impactUrl.replace("https:", "http:"),
     impactUrl + "?extra=1",
@@ -437,10 +439,12 @@ test("matches only the exact IMPACT route and keeps the original path case", () 
     impactUrl.replace("einvoice.impact.gr/", "einvoice.impact.gr:8443/"),
     impactUrl.replace("/p/EL123456789/", "/p/el123456789/"),
     impactUrl.replace("/p/EL123456789/", "/p/EL12345678/"),
+    impactUrl.replace("/p/EL123456789/", "/p/CY123456789/"),
     impactUrl.replace(impactMarker, impactMarker.slice(0, 39)),
     impactUrl.replace(impactMarker, "%31" + impactMarker.slice(1)),
     impactUrl.replace(impactMarker, impactMarker + "0"),
     impactUrl.replace(`${impactMarker}/`, `${impactMarker}/2`),
+    impactUrl.slice(0, -1),
     "javascript:void(0)",
   ]) {
     assert.equal(matchReceiptQrLink(rejected), null, rejected);
@@ -542,7 +546,7 @@ test("offers browser recovery for IMPACT verification and unreadable pages", asy
   configureReceiptQrFetcherForTests(async () => new Response(null, { status: 404 }));
   const missing = await fetchQrReceiptDraft(impactUrl);
   assert.equal(missing.status, "unavailable");
-  assert.match(missing.message ?? "", /Open the digital receipt in your browser/);
+  assert.equal(missing.message, "The IMPACT receipt could not be read automatically. Open the digital receipt in your browser, or continue with the photo scan.");
 
   configureReceiptQrFetcherForTests(async () => html("<p>A receipt page without a product table.</p>"));
   const unrecognizable = await fetchQrReceiptDraft(impactUrl);
@@ -586,6 +590,20 @@ test("keeps the charged price when the IMPACT line VAT cannot be read", () => {
   })]);
   const [line] = impactDraft(source).lines;
   assert.equal(line.quantity, 1);
+  assert.equal(line.lineTotal, 1.24);
+  assert.equal(line.taxRate, null);
+});
+
+test("leaves VAT unset for a zero-net IMPACT line with a charged price", () => {
+  const source = impactBody([impactLine({
+    description: "Zero net product",
+    quantity: "1",
+    net: "0,00",
+    vatCategory: "24",
+    vat: "0,00",
+    total: "1,24",
+  })]);
+  const [line] = impactDraft(source).lines;
   assert.equal(line.lineTotal, 1.24);
   assert.equal(line.taxRate, null);
 });
@@ -677,13 +695,19 @@ test("prefers an exact IMPACT VAT breakdown over an earlier rounded match", () =
   assert.equal(draft.taxBreakdown[0].tax, 0.24);
 });
 
-test("keeps a valid IMPACT breakdown when summary totals are missing", () => {
+test("uses product amounts to verify the IMPACT VAT breakdown when summary totals are missing", () => {
   const source = impactBody(impactProducts).replace(/<tr class="field field-Total(?:NetAmount|VATAmount) text-right">[\s\S]*?<\/tr>/g, "");
   const draft = impactDraft(source);
   assert.equal(draft.subtotal, null);
   assert.equal(draft.tax, 0.63);
   assert.deepEqual(draft.taxBreakdown.map((entry) => entry.rate), [24, 13]);
   assert.deepEqual(draft.lines.map((line) => line.taxRate), [24, 13]);
+
+  const mismatched = source.replace(impactCell("VatAmount", "0,24"), impactCell("VatAmount", "0,30"));
+  const unverified = impactDraft(mismatched);
+  assert.deepEqual(unverified.taxBreakdown, []);
+  assert.equal(unverified.tax, null);
+  assert.deepEqual(unverified.lines.map((line) => line.taxRate), [null, null]);
 });
 
 test("reports a recognized IMPACT product table without lines as incomplete", async () => {
@@ -701,15 +725,17 @@ test("reports a recognized IMPACT product table without lines as incomplete", as
   }
 });
 
-test("skips empty IMPACT table shells before the populated details table", () => {
+test("selects the populated IMPACT details table with empty shells before or after it", () => {
   const productTable = impactProductTable(impactProducts);
   const shells = [
     impactProductTable([]),
     impactProductTable(["<tr><td></td></tr>"]),
     `<table>${impactProductHead}</table>`,
   ].join("");
-  const source = impactBody(impactProducts).replace(productTable, shells + productTable);
-  assert.deepEqual(impactDraft(source).lines.map((line) => line.description), ["Example product", "Μήλα Ημαθίας"]);
+  for (const tables of [shells + productTable, productTable + shells]) {
+    const source = impactBody(impactProducts).replace(productTable, tables);
+    assert.deepEqual(impactDraft(source).lines.map((line) => line.description), ["Example product", "Μήλα Ημαθίας"]);
+  }
 });
 
 test("does not replace malformed IMPACT products with a later table", () => {

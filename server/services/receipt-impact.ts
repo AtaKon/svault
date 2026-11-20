@@ -141,8 +141,9 @@ function fieldSpanValue(source: string, field: string): string | null {
   const fields = /<span\b([^>]*)>\s*<span\b[^>]*>\s*(?:<span\b[^>]*>[^<]*<\/span>\s*)?<span\b([^>]*)>([^<]*)<\/span>/gi;
   for (const match of source.matchAll(fields)) {
     if (!classAttr(match[1])?.split(/\s+/).includes(`field-${field}`)) continue;
-    if (!classAttr(match[2])?.split(/\s+/).includes("value")) return null;
-    return stripTags(match[3]) || null;
+    if (!classAttr(match[2])?.split(/\s+/).includes("value")) continue;
+    const value = stripTags(match[3]);
+    if (value) return value;
   }
   return null;
 }
@@ -156,9 +157,10 @@ function summaryValue(html: string, field: string): string | null {
 }
 
 /**
- * Ignore empty product table shells inside the viewer's details section.
- * A table with malformed product data, or a section with only empty shells,
- * is incomplete and falls back to photo OCR.
+ * Inspect product tables in the viewer's details section. Skip shells with
+ * no product data, including tables without a body. The first table with
+ * product data is authoritative. Malformed rows in it require photo OCR.
+ * If only shells were found, report an incomplete receipt after the search.
  */
 function parseProductTable(html: string): ImpactProduct[] | "incomplete" | null {
   let foundProductHeader = false;
@@ -219,10 +221,12 @@ function parseProductTable(html: string): ImpactProduct[] | "incomplete" | null 
 }
 
 /**
- * Accept valid VAT rows within one cent of each available summary total.
+ * Accept valid VAT rows within one cent of the expected net and tax amounts.
  * Prefer an exact match when both exact and rounded candidates are present.
  */
-function parseTaxBreakdown(html: string, subtotal: number | null, tax: number | null): TaxBreakdownEntry[] {
+function parseTaxBreakdown(html: string, subtotal: number, tax: number): TaxBreakdownEntry[] {
+  const expectedNetCents = Math.round(subtotal * 100);
+  const expectedTaxCents = Math.round(tax * 100);
   let closest: TaxBreakdownEntry[] = [];
   let bestDifference = Infinity;
   for (const table of html.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)) {
@@ -250,8 +254,8 @@ function parseTaxBreakdown(html: string, subtotal: number | null, tax: number | 
     if (invalid || !entries.length) continue;
     const netCents = Math.round(entries.reduce((sum, entry) => sum + entry.net, 0) * 100);
     const taxCents = Math.round(entries.reduce((sum, entry) => sum + entry.tax, 0) * 100);
-    const netDifference = subtotal == null ? 0 : Math.abs(netCents - Math.round(subtotal * 100));
-    const taxDifference = tax == null ? 0 : Math.abs(taxCents - Math.round(tax * 100));
+    const netDifference = Math.abs(netCents - expectedNetCents);
+    const taxDifference = Math.abs(taxCents - expectedTaxCents);
     if (netDifference > 1 || taxDifference > 1) continue;
     const difference = netDifference + taxDifference;
     if (difference === 0) return entries;
@@ -261,6 +265,17 @@ function parseTaxBreakdown(html: string, subtotal: number | null, tax: number | 
     }
   }
   return closest;
+}
+
+/** Only use product sums as evidence when every product amount is readable. */
+function sumProductAmounts(rows: ImpactProduct[], field: "net" | "vat"): number | null {
+  let sum = 0;
+  for (const row of rows) {
+    const amount = parsePrintedAmount(row[field]);
+    if (amount == null || amount < 0) return null;
+    sum += amount;
+  }
+  return Number.isFinite(sum) ? sum : null;
 }
 
 function mapUnit(raw: string | null): string | null {
@@ -278,6 +293,7 @@ function lineVatRate(row: ImpactProduct, breakdown: TaxBreakdownEntry[]): number
   if (rate > 100 || (!category.endsWith("%") && !breakdown.some((entry) => entry.rate === rate))) return null;
   const net = parsePrintedAmount(row.net);
   const vat = parsePrintedAmount(row.vat);
+  // A zero net amount cannot corroborate a VAT percentage.
   if (net == null || net <= 0 || vat == null || vat < 0) return null;
   // Different issuer rounding can leave the rate unverified. The printed
   // amounts still import with the rest of the line.
@@ -301,15 +317,16 @@ export function parseImpactReceiptHtml(html: string): ImpactReceiptParse {
   const purchasedAt = issuedAt ? detectDate(issuedAt) : null;
   const identifier = fieldSpanValue(source, "IssuerFormatedInvoiceSeriesNumber");
 
-  const totalRaw = summaryValue(source, "TotalGrossValue");
-  const total = totalRaw ? parseAmount(totalRaw) : null;
-  const subtotalRaw = summaryValue(source, "TotalNetAmount");
-  const subtotal = subtotalRaw ? parseAmount(subtotalRaw) : null;
-  const taxRaw = summaryValue(source, "TotalVATAmount");
-  const taxAmount = taxRaw ? parseAmount(taxRaw) : null;
+  const total = parsePrintedAmount(summaryValue(source, "TotalGrossValue"));
+  const subtotal = parsePrintedAmount(summaryValue(source, "TotalNetAmount"));
+  const taxAmount = parsePrintedAmount(summaryValue(source, "TotalVATAmount"));
   const currencyRaw = summaryValue(source, "CurrencyCode");
   const currency = currencyRaw && /^[A-Za-z]{3}$/.test(currencyRaw.trim()) ? currencyRaw.trim().toUpperCase() : null;
-  const taxBreakdown = parseTaxBreakdown(divSection(source, "section-taxes"), subtotal, taxAmount);
+  const expectedNet = subtotal ?? sumProductAmounts(rows, "net");
+  const expectedTax = taxAmount ?? sumProductAmounts(rows, "vat");
+  const taxBreakdown = expectedNet != null && expectedTax != null
+    ? parseTaxBreakdown(divSection(source, "section-taxes"), expectedNet, expectedTax)
+    : [];
 
   const lines: ReceiptDraft["lines"] = [];
   const textLines: string[] = [];

@@ -30,7 +30,7 @@ const EPSILON_PATH = /^\/fd\/([0-9a-f]{8})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{4}
 /** Entersoft: /edocuments/ViewInvoice/{ofenm}/{uuid}_{8 alphanumeric} */
 const ENTERSOFT_PATH =
   /^\/edocuments\/ViewInvoice\/(-?\d{1,4})\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})_([A-Za-z0-9]{8})$/i;
-/** The scanned IMPACT QR used uppercase EL. Hex accepts either case and is sent as printed in the path. */
+/** Allow the observed Greek IMPACT viewer route only: EL tax ID, 40 hex and 32 hex, with their original case. */
 const IMPACT_PATH = /^\/p\/EL\d{9}\/[0-9a-fA-F]{40}\/[0-9a-fA-F]{32}$/;
 
 /**
