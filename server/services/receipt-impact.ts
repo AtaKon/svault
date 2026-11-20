@@ -134,7 +134,8 @@ function cellValue(innerHtml: string): string | null {
 
 /**
  * The value of the first `<span class="field field-…">` carrying the given
- * field token, from its nested value span. Used for receipt metadata.
+ * field token, from its nested value span. This follows the observed markup.
+ * Metadata stays optional if IMPACT changes the nesting.
  */
 function fieldSpanValue(source: string, field: string): string | null {
   const fields = /<span\b([^>]*)>\s*<span\b[^>]*>\s*(?:<span\b[^>]*>[^<]*<\/span>\s*)?<span\b([^>]*)>([^<]*)<\/span>/gi;
@@ -155,10 +156,12 @@ function summaryValue(html: string, field: string): string | null {
 }
 
 /**
- * Use the product table in the viewer's designated details section. If it
- * is incomplete, fall back to photo OCR without borrowing lines elsewhere.
+ * Ignore empty product table shells inside the viewer's details section.
+ * A table with malformed product data, or a section with only empty shells,
+ * is incomplete and falls back to photo OCR.
  */
 function parseProductTable(html: string): ImpactProduct[] | "incomplete" | null {
+  let foundProductHeader = false;
   for (const [, attrs, content] of html.matchAll(/<table\b([^>]*)>([\s\S]*?)<\/table>/gi)) {
     if (classAttr(attrs)?.split(/\s+/).includes("InvoiceLineTable")) continue;
     const thead = content.match(/<thead\b[^>]*>([\s\S]*?)<\/thead>/i)?.[1] ?? "";
@@ -167,8 +170,9 @@ function parseProductTable(html: string): ImpactProduct[] | "incomplete" | null 
       for (const token of classAttr(th[1])?.trim().split(/\s+/) ?? []) headerTokens.add(token);
     }
     if (!headerTokens.has("field-Description1") || !headerTokens.has("field-Total") || !headerTokens.has("field-Quantity")) continue;
+    foundProductHeader = true;
     const tbody = content.match(/<tbody\b[^>]*>([\s\S]*?)<\/tbody>/i)?.[1];
-    if (!tbody) return "incomplete";
+    if (!tbody) continue;
     const products: ImpactProduct[] = [];
     for (const rowMatch of tbody.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)) {
       const row: ImpactRow = {
@@ -209,9 +213,9 @@ function parseProductTable(html: string): ImpactProduct[] | "incomplete" | null 
         lineTotal: total,
       });
     }
-    return products.length ? products : "incomplete";
+    if (products.length) return products;
   }
-  return null;
+  return foundProductHeader ? "incomplete" : null;
 }
 
 /**

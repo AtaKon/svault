@@ -634,10 +634,11 @@ test("treats the IMPACT VAT breakdown and currency as optional", () => {
 test("confirms the printed IMPACT VAT rate against each line's own amounts", () => {
   const source = impactBody([
     impactLine({ description: "Discounted product", quantity: "1", net: "0,50", vatCategory: "13", vat: "0,07", total: "0,57" }),
+    impactLine({ description: "Different line rounding", quantity: "1", net: "0,50", vatCategory: "13", vat: "0,06", total: "0,56" }),
     impactLine({ description: "Mismatched rate", quantity: "1", net: "0,50", vatCategory: "13", vat: "0,12", total: "0,62" }),
     impactLine({ description: "Unknown category", quantity: "1", net: "1,00", vatCategory: "Γ1", vat: "0,24", total: "1,24" }),
   ]);
-  assert.deepEqual(impactDraft(source).lines.map((line) => line.taxRate), [13, null, null]);
+  assert.deepEqual(impactDraft(source).lines.map((line) => line.taxRate), [13, null, null, null]);
 });
 
 test("ignores negative IMPACT tax breakdown entries", () => {
@@ -698,6 +699,24 @@ test("reports a recognized IMPACT product table without lines as incomplete", as
     assert.equal(result.status, "unavailable");
     assert.match(result.message ?? "", /incomplete product line/);
   }
+});
+
+test("skips empty IMPACT table shells before the populated details table", () => {
+  const productTable = impactProductTable(impactProducts);
+  const shells = [
+    impactProductTable([]),
+    impactProductTable(["<tr><td></td></tr>"]),
+    `<table>${impactProductHead}</table>`,
+  ].join("");
+  const source = impactBody(impactProducts).replace(productTable, shells + productTable);
+  assert.deepEqual(impactDraft(source).lines.map((line) => line.description), ["Example product", "Μήλα Ημαθίας"]);
+});
+
+test("does not replace malformed IMPACT products with a later table", () => {
+  const malformed = impactProductTable([impactLine({ description: "Incomplete product", quantity: "1" })]);
+  const productTable = impactProductTable(impactProducts);
+  const source = impactBody(impactProducts).replace(productTable, malformed + productTable);
+  assert.deepEqual(parseImpactReceiptHtml(source), { status: "incomplete" });
 });
 
 test("ignores tables outside the IMPACT details section", async () => {
