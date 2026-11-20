@@ -30,7 +30,7 @@ All notable changes to SVault are documented here. The format follows
 - **Digital receipt scans.** SVault checks photos for a receipt QR before running OCR. Supported
   Entersoft links fill the review screen with the issuer's product lines, quantities, prices,
   discounts and VAT. IMPACT eInvoicing links also fill the review screen with the issuer's product
-  lines, prices, VAT and receipt details. For Epsilon Digital links that require browser verification,
+  lines, prices, VAT, merchant and issue date. For Epsilon Digital links that require browser verification,
   open the issuer's viewer and import the downloaded receipt PDF, or continue with photo OCR.
 - **PosoKanei retailer and product matching.** Offers are now filtered by receipt shops an admin marks as
   accessible, so a shopping line only shows shops the house can reach. PosoKanei retailer labels are

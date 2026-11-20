@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { matchReceiptQrLink } from "../../shared/receipt-qr-links.js";
+import { addReceiptQrPayload } from "../../client/receipt-scan-priority.js";
+import { matchReceiptQrLink, type ReceiptQrLink } from "../../shared/receipt-qr-links.js";
+import { limiters } from "../rate-limit.js";
 import { configureReceiptQrFetcherForTests, fetchQrReceiptDraft, readQrReceiptScan } from "../services/receipt-qr.js";
 import { parseEntersoftInvoiceHtml } from "../services/receipt-entersoft.js";
 import { parseImpactReceiptHtml } from "../services/receipt-impact.js";
@@ -445,8 +447,11 @@ test("matches only the exact IMPACT route and keeps the original path case", () 
     impactUrl.replace(impactMarker, impactMarker.slice(0, 39)),
     impactUrl.replace(impactMarker, "%31" + impactMarker.slice(1)),
     impactUrl.replace(impactMarker, impactMarker + "0"),
+    impactUrl.replace(impactMarker, "g" + impactMarker.slice(1)),
     impactUrl.replace(`${impactMarker}/`, `${impactMarker}/2`),
     impactUrl.slice(0, -1),
+    impactUrl + "2",
+    impactUrl + "/",
     "javascript:void(0)",
   ]) {
     assert.equal(matchReceiptQrLink(rejected), null, rejected);
@@ -476,13 +481,18 @@ test("gates the first IMPACT request on the supported URL format", async () => {
   assert.deepEqual(requests, [impactUrl]);
 });
 
-test("reads a server-rendered IMPACT receipt in one pinned fetch", async () => {
+test("normalizes an IMPACT photo QR before one pinned receipt fetch", async () => {
   const requests: string[] = [];
   configureReceiptQrFetcherForTests(async (url) => {
     requests.push(url);
     return html(impactBody(impactProducts));
   });
-  const result = await fetchQrReceiptDraft(impactUrl);
+  const links = new Map<string, ReceiptQrLink>();
+  assert.equal(addReceiptQrPayload(links, impactUrl.replace("einvoice.impact.gr", "EINVOICE.IMPACT.GR:443")), false);
+  const link = links.values().next().value;
+  assert.ok(link);
+  assert.equal(link.url, impactUrl);
+  const result = await fetchQrReceiptDraft(link.url);
   assert.ok(result.status === "ok");
   assert.equal(result.issuer, "impact");
   assert.deepEqual(requests, [impactUrl]);
@@ -565,6 +575,10 @@ test("offers browser recovery for IMPACT verification and unreadable pages", asy
   assert.equal(empty.status, "unavailable");
   assert.match(empty.message ?? "", /Open the digital receipt in your browser/);
   assert.ok(!JSON.stringify(empty).includes(impactUrl));
+
+  configureReceiptQrFetcherForTests(async () => Response.json({ error: "Receipt unavailable" }));
+  const json = await fetchQrReceiptDraft(impactUrl);
+  assert.deepEqual(json, missing);
 });
 
 test("rejects incomplete and negative IMPACT product lines to photo OCR", async () => {
@@ -622,6 +636,37 @@ test("attributes an IMPACT timeout to the pending issuer", { timeout: 2000 }, as
   assert.equal(timeout.issuer, "impact");
 });
 
+test("rate limits IMPACT lookups before fetching the issuer again", async (t) => {
+  const house = "test-impact-limited-house";
+  const env = {
+    SV_RATE_LIMIT: process.env.SV_RATE_LIMIT,
+    SV_RATE_LIMIT_RECEIPT_QR: process.env.SV_RATE_LIMIT_RECEIPT_QR,
+  };
+  t.after(() => {
+    for (const [key, value] of Object.entries(env)) {
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+    limiters.receiptQr.reset(house);
+    limiters.receiptQrGlobal.reset("all");
+  });
+  limiters.receiptQrGlobal.reset("all");
+  process.env.SV_RATE_LIMIT = "on";
+  process.env.SV_RATE_LIMIT_RECEIPT_QR = "1/60";
+  let attempts = 0;
+  configureReceiptQrFetcherForTests(async () => {
+    attempts++;
+    return html(impactBody(impactProducts));
+  });
+  assert.equal((await readQrReceiptScan(house, impactUrl)).status, "ok");
+  assert.deepEqual(await readQrReceiptScan(house, impactUrl), {
+    status: "unavailable",
+    issuer: "impact",
+    message: "Too many digital receipt requests. Try again in a few minutes or scan the photo.",
+  });
+  assert.equal(attempts, 1);
+});
+
 test("keeps the IMPACT merchant from company-info and not the customer field", () => {
   const draft = impactDraft(impactBody(impactProducts));
   assert.equal(draft.vendorName, "Example merchant");
@@ -629,6 +674,8 @@ test("keeps the IMPACT merchant from company-info and not the customer field", (
   const wrappedDraft = impactDraft(wrapped);
   assert.equal(wrappedDraft.vendorName, null);
   assert.equal(wrappedDraft.lines.length, 2);
+  const inline = impactBody(impactProducts).replace("Example merchant", "Example <b>merchant</b>");
+  assert.equal(impactDraft(inline).vendorName, "Example merchant");
   // Without .company-info no vendor is guessed — the later same-name field is
   // the customer — but the unambiguous date and identifier are still read.
   const renamed = impactBody(impactProducts).replace('<div class="company-info">', '<div class="none">');
@@ -701,12 +748,27 @@ test("finds the complete IMPACT VAT breakdown after a partial table", () => {
 test("retains IMPACT breakdown rates with a one-cent summary difference", () => {
   const source = impactBody(impactProducts)
     .replace('>0,63</td></tr>', '>0,64</td></tr>')
-    .replace('>4,00</td></tr>', '>4,01</td></tr>');
+    .replace('>4,00</td></tr>', '>4,01</td></tr>')
+    .replace('>4,63</td></tr>', '>4,65</td></tr>');
   const draft = impactDraft(source);
   assert.equal(draft.tax, 0.64);
   assert.equal(draft.subtotal, 4.01);
-  assert.deepEqual(draft.taxBreakdown.map((entry) => entry.rate), [24, 13]);
+  assert.equal(draft.total, 4.65);
+  assert.deepEqual(draft.taxBreakdown.map(({ rate, tax }) => ({ rate, tax })), [
+    { rate: 24, tax: 0.24 },
+    { rate: 13, tax: 0.39 },
+  ]);
   assert.deepEqual(draft.lines.map((line) => line.taxRate), [24, 13]);
+});
+
+test("keeps the printed IMPACT totals but drops a VAT breakdown outside the tolerance", () => {
+  const source = impactBody(impactProducts).replace(impactCell("VatAmount", "0,24"), impactCell("VatAmount", "0,27"));
+  const draft = impactDraft(source);
+  assert.equal(draft.tax, 0.63);
+  assert.equal(draft.subtotal, 4);
+  assert.equal(draft.total, 4.63);
+  assert.deepEqual(draft.taxBreakdown, []);
+  assert.deepEqual(draft.lines.map((line) => line.taxRate), [null, null]);
 });
 
 test("prefers exact IMPACT VAT breakdowns and keeps the first rounded match on a tie", () => {
@@ -771,6 +833,11 @@ test("reports a recognized IMPACT product table without lines as incomplete", as
     assert.equal(result.status, "unavailable");
     assert.match(result.message ?? "", /incomplete product line/);
   }
+});
+
+test("falls back when IMPACT product rows have no table body", () => {
+  const source = impactBody(impactProducts).replace(impactProductTable(impactProducts), impactProductTable(impactProducts).replace(/<\/?tbody>/g, ""));
+  assert.deepEqual(parseImpactReceiptHtml(source), { status: "incomplete" });
 });
 
 test("skips empty, spacer-only, and header-only IMPACT tables around the populated table", () => {

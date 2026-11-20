@@ -83,9 +83,9 @@ function round(value: number, digits = 2): number {
 }
 
 function toCents(amount: number): number {
-  const scaled = amount * 100;
+  const scaled = Math.abs(amount) * 100;
   // Correct binary noise at a half-cent before rounding the printed amounts.
-  return Math.round(scaled + Math.abs(scaled) * Number.EPSILON);
+  return Math.sign(amount) * Math.round(scaled + scaled * Number.EPSILON);
 }
 
 function parsePrintedNumber(raw: string | null): number | null {
@@ -98,7 +98,7 @@ function decodeEntities(value: string): string {
   return value.replace(/&(?:(nbsp|amp|lt|gt|quot|apos)|#(\d+)|#x([\da-f]+));/gi, (_entity, name, decimal, hex) => {
     if (name) return NAMED_ENTITIES[name.toLowerCase()];
     const code = decimal ? Number(decimal) : Number.parseInt(hex, 16);
-    // stripTags collapses tabs, newlines and carriage returns with other whitespace.
+    // Leave tabs, newlines and carriage returns for stripTags to collapse.
     if ((code > 0 && code < 32 && code !== 9 && code !== 10 && code !== 13) || (code >= 127 && code <= 159)) return " ";
     return code > 0 && code <= 0x10ffff && (code < 0xd800 || code > 0xdfff)
       ? String.fromCodePoint(code)
@@ -147,7 +147,7 @@ function cellValue(innerHtml: string): string | null {
  * Metadata stays optional if IMPACT changes the nesting.
  */
 function fieldSpanValue(source: string, field: string): string | null {
-  const fields = /<span\b([^>]*)>\s*<span\b[^>]*>\s*(?:<span\b[^>]*>[^<]*<\/span>\s*)?<span\b([^>]*)>([^<]*)<\/span>/gi;
+  const fields = /<span\b([^>]*)>\s*<span\b[^>]*>\s*(?:<span\b[^>]*>[^<]*<\/span>\s*)?<span\b([^>]*)>((?:[^<]|<\/?(?:b|strong|em|i|small|br)\b[^>]*>)*)<\/span>/gi;
   for (const match of source.matchAll(fields)) {
     if (!classAttr(match[1])?.split(/\s+/).includes(`field-${field}`)) continue;
     if (!classAttr(match[2])?.split(/\s+/).includes("value")) continue;
@@ -167,8 +167,8 @@ function summaryValue(html: string, field: string): string | null {
 
 /**
  * Inspect product tables in the viewer's details section. Skip shells with
- * no product data, including spacer-only bodies. The first matching table with
- * product data is authoritative. Malformed rows in it require photo OCR.
+ * no populated product fields. Validate the first table with populated
+ * fields, even if its first row is partial. Malformed rows require photo OCR.
  * If only shells were found, report an incomplete receipt after the search.
  */
 function parseProductTable(html: string): ImpactProduct[] | "incomplete" | null {
@@ -231,6 +231,8 @@ function parseProductTable(html: string): ImpactProduct[] | "incomplete" | null 
 /**
  * Keep valid VAT rows only if they add up to the expected net and tax
  * amounts within one cent. Unreadable or decorative rows are ignored.
+ * The draft keeps the issuer's printed totals, so a rounded breakdown
+ * can differ from the printed net or VAT total by one cent.
  * Prefer an exact match when both exact and rounded candidates are present.
  * Equally close candidates keep document order.
  */
@@ -294,8 +296,8 @@ function lineVatRate(row: ImpactProduct, breakdown: TaxBreakdownEntry[]): number
   if (!category || !/^\d{1,3}(?:[.,]\d{1,2})?\s*%?$/.test(category)) return null;
   const rate = Number(category.replace(",", ".").replace(/\s*%$/, ""));
   if (rate > 100) return null;
-  // A percent sign identifies a printed rate. A bare category number needs
-  // independent confirmation from the breakdown. Both must fit the line amounts.
+  // A percent sign identifies a printed rate. Leave bare category numbers
+  // unset when there is no confirmed breakdown. Both must fit the line amounts.
   if (!category.endsWith("%") && !breakdown.some((entry) => entry.rate === rate)) return null;
   const net = parsePrintedNumber(row.net);
   const vat = parsePrintedNumber(row.vat);
