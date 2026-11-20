@@ -14,17 +14,10 @@ import type { ReceiptProvider, ReceiptScanResponse } from "@shared/types";
  * two different receipts, which the scan refuses before reading any page.
  * Payloads without a receipt link are ignored, not treated as conflicts.
  */
-export function collectReceiptQrLinks(payloads: ReadonlyArray<string | null>): {
-  links: ReceiptQrLink[];
-  /** True when the payloads carry more than one distinct receipt link. */
-  conflict: boolean;
-} {
-  const links = new Map<string, ReceiptQrLink>();
-  for (const payload of payloads) {
-    const link = payload ? matchReceiptQrLink(payload) : null;
-    if (link) links.set(link.url, link);
-  }
-  return { links: [...links.values()], conflict: links.size > 1 };
+export function addReceiptQrPayload(links: Map<string, ReceiptQrLink>, payload: string | null): boolean {
+  const link = payload ? matchReceiptQrLink(payload) : null;
+  if (link) links.set(link.url, link);
+  return links.size > 1;
 }
 
 /**

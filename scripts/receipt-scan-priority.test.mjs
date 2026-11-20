@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { collectReceiptQrLinks, isUsableDigitalReceipt, shouldRunPhotoOcr } from "../client/receipt-scan-priority.js";
+import { addReceiptQrPayload, isUsableDigitalReceipt, shouldRunPhotoOcr } from "../client/receipt-scan-priority.js";
 
 const entersoft = "https://e-invoicing.gr/edocuments/ViewInvoice/-1/12345678-1234-1234-1234-123456789abc_tEsTaB12";
 const epsilon = "https://epsilondigital-sklavenitis.epsilonnet.gr/fd/12345678123412341234123456789abc:12";
@@ -9,24 +9,32 @@ const otherEpsilon = "https://epsilondigital-sklavenitis.epsilonnet.gr/fd/fedcba
 const scan = (provider, lines, status = "ok") => ({ provider, qr: { status }, draft: { lines } });
 
 test("collects one receipt link for a batch of photos of the same receipt", () => {
-  const { links, conflict } = collectReceiptQrLinks([entersoft, entersoft]);
-  assert.equal(links.length, 1);
-  assert.equal(links[0].issuer, "entersoft");
-  assert.equal(conflict, false);
+  const links = new Map();
+  assert.equal(addReceiptQrPayload(links, entersoft), false);
+  assert.equal(addReceiptQrPayload(links, entersoft), false);
+  assert.equal(links.size, 1);
+  assert.equal(links.values().next().value.issuer, "entersoft");
 });
 
 test("photos without a receipt QR yield no link", () => {
-  assert.deepEqual(collectReceiptQrLinks([]), { links: [], conflict: false });
-  assert.deepEqual(collectReceiptQrLinks([null, "", "hello", "https://example.com/receipt"]).links, []);
+  const links = new Map();
+  assert.equal(addReceiptQrPayload(links, null), false);
+  assert.equal(addReceiptQrPayload(links, ""), false);
+  assert.equal(addReceiptQrPayload(links, "hello"), false);
+  assert.equal(addReceiptQrPayload(links, "https://example.com/receipt"), false);
+  assert.equal(links.size, 0);
 });
 
-test("flags two distinct receipt links as different receipts", () => {
-  const mixed = collectReceiptQrLinks([entersoft, "not a link", epsilon]);
-  assert.equal(mixed.links.length, 2);
-  assert.equal(mixed.conflict, true);
-  const secondBatch = collectReceiptQrLinks([entersoft, otherEpsilon]);
-  assert.equal(secondBatch.conflict, true);
-  assert.equal(collectReceiptQrLinks([entersoft]).conflict, false);
+test("flags a second distinct receipt QR immediately", () => {
+  const links = new Map();
+  assert.equal(addReceiptQrPayload(links, entersoft), false);
+  assert.equal(addReceiptQrPayload(links, "not a link"), false);
+  // The second photo's payload is added to the same accumulator before conflict is returned.
+  assert.equal(addReceiptQrPayload(links, epsilon), true);
+  assert.equal(links.size, 2);
+  const otherIssuerReceipt = new Map();
+  assert.equal(addReceiptQrPayload(otherIssuerReceipt, entersoft), false);
+  assert.equal(addReceiptQrPayload(otherIssuerReceipt, otherEpsilon), true);
 });
 
 test("a scan response is a usable digital receipt only with QR provenance and product lines", () => {

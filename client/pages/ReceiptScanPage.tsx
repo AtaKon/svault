@@ -16,7 +16,7 @@ import { OffProductPicker } from "@/components/OffProductPicker";
 import { ItemPickerSheet } from "@/components/ItemPickerSheet";
 import { ZoomableImage } from "@/components/ZoomableImage";
 import { clearReceiptDraft, loadReceiptDraft, receiptDraftKey, saveReceiptDraft, type StoredReceiptDraft } from "@/receipt-draft-store";
-import { collectReceiptQrLinks, isUsableDigitalReceipt, shouldRunPhotoOcr } from "@/receipt-scan-priority";
+import { addReceiptQrPayload, isUsableDigitalReceipt, shouldRunPhotoOcr } from "@/receipt-scan-priority";
 import { reconcileReceipt } from "@shared/receipt-reconcile";
 import type { ReceiptQrLink } from "@shared/receipt-qr-links";
 import type {
@@ -658,9 +658,8 @@ export function ReceiptScanPage() {
         for (const file of files) {
           const payload = await decoder.decodeReceiptQrFile(file);
           if (revision !== workspaceRevisionRef.current) return;
-          for (const link of collectReceiptQrLinks([payload]).links) links.set(link.url, link);
-          // Stop decoding as soon as the batch contains two distinct receipts.
-          if (links.size > 1) {
+          // Accumulate each decoded receipt link before checking for conflicts.
+          if (addReceiptQrPayload(links, payload)) {
             toast.error(t("These photos contain different receipt links. Scan one receipt at a time."));
             return;
           }
