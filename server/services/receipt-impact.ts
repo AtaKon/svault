@@ -13,7 +13,8 @@ import { detectDate, parseAmount, parseQuantity } from "./receipt-local.js";
  * breakdown. The page also renders unrelated tables (including the myDATA
  * `InvoiceLineTable` in a separate tab), so only a table whose header cells
  * carry the product field tokens and whose rows nest value spans is parsed;
- * anything else is ignored. The merchant field is in `.company-info`,
+ * anything else is ignored. Product and VAT tables are scoped to the viewer's
+ * `.section-details` and `.section-taxes` blocks. The merchant field is in `.company-info`,
  * while issue date and invoice number appear in the receipt identity fields.
  * Metadata is best effort. Missing metadata does not prevent importing lines.
  *
@@ -83,7 +84,7 @@ function decodeEntities(value: string): string {
   return value.replace(/&(?:(nbsp|amp|lt|gt|quot|apos)|#(\d+)|#x([\da-f]+));/gi, (_entity, name, decimal, hex) => {
     if (name) return NAMED_ENTITIES[name.toLowerCase()];
     const code = decimal ? Number(decimal) : Number.parseInt(hex, 16);
-    if ((code > 0 && code < 32 && code !== 9 && code !== 10 && code !== 13) || code === 127) return "";
+    if ((code > 0 && code < 32 && code !== 9 && code !== 10 && code !== 13) || code === 127) return " ";
     return code > 0 && code <= 0x10ffff && (code < 0xd800 || code > 0xdfff)
       ? String.fromCodePoint(code)
       : "\uFFFD";
@@ -98,6 +99,25 @@ function stripTags(html: string): string {
 function classAttr(openTag: string): string | null {
   const match = openTag.match(/\sclass\s*=\s*(["'])([\s\S]*?)\1/i);
   return match ? match[2] : null;
+}
+
+/** Read one viewer section, keeping nested layout divs inside the section. */
+function divSection(html: string, className: string): string {
+  let start = 0;
+  let depth = 0;
+  for (const { 0: tag, index } of html.matchAll(/<!--[\s\S]*?-->|<\/?div\b[^>]*>/gi)) {
+    if (tag.startsWith("<!--")) continue;
+    if (depth === 0) {
+      if (tag.startsWith("</") || !classAttr(tag)?.split(/\s+/).includes(className)) continue;
+      start = index + tag.length;
+      depth = 1;
+    } else if (tag.startsWith("</")) {
+      if (--depth === 0) return html.slice(start, index);
+    } else {
+      depth++;
+    }
+  }
+  return "";
 }
 
 /** The value nested in `<span class="value">`, falling back to the cell text. */
@@ -120,25 +140,6 @@ function fieldSpanValue(source: string, field: string): string | null {
   return null;
 }
 
-/** The `.company-info` block that precedes `.section-identity`, or "". */
-function companyRegion(html: string): string {
-  const companyAt = html.search(new RegExp(String.raw`\bclass\s*=\s*(["'])[^"']*\bcompany-info\b`, "i"));
-  if (companyAt < 0) return "";
-  const rest = html.slice(companyAt);
-  const boundary = rest.search(/\bclass\s*=\s*(["'])[^"']*\bsection-(?:identity|counterparties|details)\b/i);
-  return boundary > 0 ? rest.slice(0, boundary) : "";
-}
-
-/**
- * The merchant's registered name. Only the `.company-info` occurrence is the
- * merchant — a same-name field later (after `.section-identity`) is the
- * customer — so without that region no vendor is guessed.
- */
-function findVendor(html: string): string | null {
-  const region = companyRegion(html);
-  return region ? fieldSpanValue(region, "RegisteredName") : null;
-}
-
 /** The value cell of the first summary row carrying the field token. */
 function summaryValue(html: string, field: string): string | null {
   const row = html.match(new RegExp(String.raw`<tr\b[^>]*\sclass\s*=\s*(["'])[^"']*\bfield-${field}\b[^"']*\1[^>]*>([\s\S]*?)<\/tr>`, "i"));
@@ -148,9 +149,8 @@ function summaryValue(html: string, field: string): string | null {
 }
 
 /**
- * The first table with the receipt product headers is authoritative, even
- * when it has no body. Skip the myDATA detail tables. An incomplete receipt
- * table goes to photo OCR without substituting lines from another table.
+ * Use the product table in the viewer's designated details section. If it
+ * is incomplete, fall back to photo OCR without borrowing lines elsewhere.
  */
 function parseProductTable(html: string): ImpactRow[] | "incomplete" | null {
   for (const [, attrs, content] of html.matchAll(/<table\b([^>]*)>([\s\S]*?)<\/table>/gi)) {
@@ -188,10 +188,10 @@ function parseProductTable(html: string): ImpactRow[] | "incomplete" | null {
       // Rows without product cells (spacers, column echoes) are skipped.
       if (!recognized || !Object.values(row).some(Boolean)) continue;
       // Missing, unparseable or negative product lines go back to photo OCR.
-      const quantity = parseQuantity(row.quantity ?? "");
+      const printedQuantity = row.quantity ?? "";
+      const quantity = PRINTED_NUMBER.test(printedQuantity) ? parseQuantity(printedQuantity) : null;
       const total = parsePrintedAmount(row.total);
-      if (!row.description || !PRINTED_NUMBER.test(row.quantity ?? "") ||
-          quantity == null || quantity <= 0 || total == null || total < 0) return "incomplete";
+      if (!row.description || quantity == null || quantity <= 0 || total == null || total < 0) return "incomplete";
       rows.push(row);
     }
     return rows.length ? rows : "incomplete";
@@ -200,10 +200,10 @@ function parseProductTable(html: string): ImpactRow[] | "incomplete" | null {
 }
 
 /**
- * The optional VAT breakdown comes from the first table whose VAT rows are
- * all valid. A partial table cannot supply rates or a fallback tax total.
+ * Accept a VAT table when every row is valid and the amounts reconcile to
+ * the printed summary totals, where available.
  */
-function parseTaxBreakdown(html: string): TaxBreakdownEntry[] {
+function parseTaxBreakdown(html: string, subtotal: number | null, tax: number | null): TaxBreakdownEntry[] {
   for (const table of html.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)) {
     const entries: TaxBreakdownEntry[] = [];
     let invalid = false;
@@ -226,7 +226,10 @@ function parseTaxBreakdown(html: string): TaxBreakdownEntry[] {
       }
       entries.push({ rate, net, tax, gross: round(net + tax, 2) });
     }
-    if (!invalid && entries.length) return entries;
+    if (invalid || !entries.length) continue;
+    if (subtotal != null && round(entries.reduce((sum, entry) => sum + entry.net, 0)) !== subtotal) continue;
+    if (tax != null && round(entries.reduce((sum, entry) => sum + entry.tax, 0)) !== tax) continue;
+    return entries;
   }
   return [];
 }
@@ -241,9 +244,8 @@ function lineVatRate(row: ImpactRow, breakdown: TaxBreakdownEntry[]): number | n
   const category = row.vatCategory;
   if (!category || !/^\d{1,3}(?:[.,]\d{1,2})?\s*%?$/.test(category)) return null;
   const rate = Number(category.replace(",", ".").replace(/\s*%$/, ""));
-  // A bare number can be a category code. Cross-check it against the summary
-  // when present, then verify it against the line's own amounts.
-  if (rate > 100 || (!category.endsWith("%") && breakdown.length && !breakdown.some((entry) => entry.rate === rate))) return null;
+  // A bare number can be a category code. Require a matching breakdown rate.
+  if (rate > 100 || (!category.endsWith("%") && !breakdown.some((entry) => entry.rate === rate))) return null;
   const net = parsePrintedAmount(row.net);
   const vat = parsePrintedAmount(row.vat);
   if (net == null || net <= 0 || vat == null || vat < 0) return null;
@@ -260,13 +262,11 @@ function lineVatRate(row: ImpactRow, breakdown: TaxBreakdownEntry[]): number | n
 export function parseImpactReceiptHtml(html: string): ImpactReceiptParse {
   const source = String(html ?? "");
   if (!source.trim()) return { status: "unavailable" };
-  const rows = parseProductTable(source);
+  const rows = parseProductTable(divSection(source, "section-details"));
   if (!rows) return { status: "unavailable" };
   if (rows === "incomplete") return { status: "incomplete" };
 
-  // The merchant is the RegisteredName in .company-info; the same field after
-  // .section-identity is the customer and is never read as the vendor.
-  const vendorName = findVendor(source);
+  const vendorName = fieldSpanValue(divSection(source, "company-info"), "RegisteredName");
   const issuedAt = fieldSpanValue(source, "DateIssued");
   const purchasedAt = issuedAt ? detectDate(issuedAt) : null;
   const identifier = fieldSpanValue(source, "IssuerFormatedInvoiceSeriesNumber");
@@ -279,7 +279,7 @@ export function parseImpactReceiptHtml(html: string): ImpactReceiptParse {
   const taxAmount = taxRaw ? parseAmount(taxRaw) : null;
   const currencyRaw = summaryValue(source, "CurrencyCode");
   const currency = currencyRaw && /^[A-Za-z]{3}$/.test(currencyRaw.trim()) ? currencyRaw.trim().toUpperCase() : null;
-  const taxBreakdown = parseTaxBreakdown(source);
+  const taxBreakdown = parseTaxBreakdown(divSection(source, "section-taxes"), subtotal, taxAmount);
 
   const lines: ReceiptDraft["lines"] = [];
   const textLines: string[] = [];

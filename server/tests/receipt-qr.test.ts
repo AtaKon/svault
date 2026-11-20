@@ -88,16 +88,16 @@ function impactBody(lines: string[]) {
   <div class="section-identity">
     <span class="field field-RegisteredName"><span class="inner"><span class="label">Επωνυμία</span><span class="value">Example customer</span></span></span>
   </div>
-  ${impactProductTable(lines)}
+  <div class="row section section-details"><div class="col-12">${impactProductTable(lines)}</div></div>
   <div id="mydata"><table id="InvoiceLineTable"><thead><tr><th>myDATA</th></tr></thead><tbody><tr><td>unrelated row</td></tr></tbody></table></div>
-  <table class="table"><thead><tr>
+  <div class="section section-taxes"><table class="table"><thead><tr>
     <th class="field field-Percentage"><span class="label">ΦΠΑ</span></th>
     <th class="field field-UnderlyingValue"><span class="label">Αξία</span></th>
     <th class="field field-VatAmount"><span class="label">ΦΠΑ</span></th>
   </tr></thead><tbody>
     <tr>${impactCell("Percentage", "24%")}${impactCell("UnderlyingValue", "1,00")}${impactCell("VatAmount", "0,24")}</tr>
     <tr>${impactCell("Percentage", "13%")}${impactCell("UnderlyingValue", "3,00")}${impactCell("VatAmount", "0,39")}</tr>
-  </tbody></table>
+  </tbody></table></div>
   <table class="table"><tbody>
     <tr class="field field-CurrencyCode text-right"><td class="label">Νόμισμα</td><td class="value">EUR</td></tr>
     <tr class="field field-TotalNetAmount text-right"><td class="label">Καθαρή Αξία</td><td class="value">4,00</td></tr>
@@ -425,7 +425,7 @@ test("matches only the exact IMPACT route and keeps the original path case", () 
   assert.equal(impact.url, impactUrl);
   // The default port and host case normalize away; the path never changes.
   assert.equal(matchReceiptQrLink(impactUrl.replace("https://einvoice.impact.gr/", "HTTPS://EINVOICE.IMPACT.GR:443/"))?.url, impactUrl);
-  const mixedCase = impactUrl.replace(impactMarker, "A".repeat(40));
+  const mixedCase = impactUrl.replace(impactMarker, "aB".repeat(20));
   assert.equal(matchReceiptQrLink(mixedCase)?.url, mixedCase);
   for (const rejected of [
     impactUrl.replace("https:", "http:"),
@@ -521,11 +521,16 @@ test("pins IMPACT redirects to the QR's own route and nothing broader", async ()
 });
 
 test("offers browser recovery for IMPACT verification and unreadable pages", async () => {
-  // Synthetic Turnstile page. Other interstitials follow the unreadable-page path.
-  configureReceiptQrFetcherForTests(async () => html('<script src="https://challenges.cloudflare.com/turnstile/v0/api.js"></script>'));
-  const challenge = await fetchQrReceiptDraft(impactUrl);
-  assert.equal(challenge.status, "challenge");
-  assert.match(challenge.message ?? "", /IMPACT requires browser verification/);
+  // These are Cloudflare's generic markers. Other interstitials use browser recovery too.
+  for (const markup of [
+    '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js"></script>',
+    '<div class="cf-turnstile"></div>',
+  ]) {
+    configureReceiptQrFetcherForTests(async () => html(markup));
+    const challenge = await fetchQrReceiptDraft(impactUrl);
+    assert.equal(challenge.status, "challenge");
+    assert.match(challenge.message ?? "", /IMPACT requires browser verification/);
+  }
 
   configureReceiptQrFetcherForTests(async () => new Response(null, { status: 404 }));
   const missing = await fetchQrReceiptDraft(impactUrl);
@@ -591,12 +596,12 @@ test("keeps the IMPACT merchant from company-info and not the customer field", (
 });
 
 test("treats the IMPACT VAT breakdown and currency as optional", () => {
-  const source = impactBody(impactProducts)
+  const source = impactBody([impactProducts[0], impactProducts[1].replace(impactCell("VatCategory", "13", "text-right"), impactCell("VatCategory", "13%", "text-right"))])
     .replace(/<table class="table"><thead><tr>\s*<th class="field field-Percentage[\s\S]*?<\/table>/, "")
     .replace('<tr class="field field-CurrencyCode text-right"><td class="label">Νόμισμα</td><td class="value">EUR</td></tr>', "");
   const draft = impactDraft(source);
   assert.deepEqual(draft.taxBreakdown, []);
-  assert.deepEqual(draft.lines.map((line) => line.taxRate), [24, 13]);
+  assert.deepEqual(draft.lines.map((line) => line.taxRate), [null, 13]);
   assert.equal(draft.tax, 0.63);
   assert.equal(draft.currency, null);
 });
@@ -619,11 +624,10 @@ test("ignores negative IMPACT tax breakdown entries", () => {
 
 test("finds the complete IMPACT VAT breakdown after a partial table", () => {
   const partial = `<table><tbody>
-    <tr>${impactCell("Percentage", "6%")}${impactCell("UnderlyingValue", "1,00")}${impactCell("VatAmount", "0,06")}</tr>
-    <tr>${impactCell("Percentage", "13%")}${impactCell("UnderlyingValue", "2,00")}</tr>
-    <tr>${impactCell("Percentage", "24%")}${impactCell("UnderlyingValue", "-1,00")}${impactCell("VatAmount", "-0,24")}</tr>
+    <tr>${impactCell("Percentage", "24%")}${impactCell("UnderlyingValue", "1,00")}${impactCell("VatAmount", "0,24")}</tr>
   </tbody></table>`;
-  const draft = impactDraft(partial + impactBody(impactProducts));
+  const source = impactBody(impactProducts).replace('<div class="section section-taxes">', `<div class="section section-taxes">${partial}`);
+  const draft = impactDraft(source);
   assert.deepEqual(draft.taxBreakdown.map((entry) => entry.rate), [24, 13]);
 });
 
@@ -633,7 +637,7 @@ test("reports a recognized IMPACT product table without lines as incomplete", as
     impactProductTable(["<tr><td></td></tr>"]),
     `<table>${impactProductHead}</table>`,
   ]) {
-    const source = table + impactBody(impactProducts);
+    const source = impactBody(impactProducts).replace(impactProductTable(impactProducts), table) + impactProductTable(impactProducts);
     assert.deepEqual(parseImpactReceiptHtml(source), { status: "incomplete" });
     configureReceiptQrFetcherForTests(async () => html(source));
     const result = await fetchQrReceiptDraft(impactUrl);
@@ -642,16 +646,17 @@ test("reports a recognized IMPACT product table without lines as incomplete", as
   }
 });
 
-test("ignores a myDATA table before the IMPACT receipt table", async () => {
+test("ignores tables outside the IMPACT details section", async () => {
   const unrelated = impactProductTable([impactLine({ description: "myDATA detail", quantity: "1", total: "19,00" })])
     .replace('class="table "', 'class="table table-striped InvoiceLineTable"');
-  configureReceiptQrFetcherForTests(async () => html(unrelated + impactBody(impactProducts)));
+  const headerOnly = `<table>${impactProductHead}</table>`;
+  configureReceiptQrFetcherForTests(async () => html(headerOnly + unrelated + impactBody(impactProducts)));
   const result = await fetchQrReceiptDraft(impactUrl);
   assert.ok(result.status === "ok");
   assert.deepEqual(result.draft.lines.map((line) => line.description), ["Example product", "Μήλα Ημαθίας"]);
 });
 
 test("decodes named and numeric entities in IMPACT line descriptions", () => {
-  const source = impactBody([impactLine({ description: "Gro&#1;cer&#x27;s &amp; Baker&#8217;s", quantity: "1", total: "1,24" })]);
+  const source = impactBody([impactLine({ description: "Grocer&#x27;s&#1;&amp; Baker&#8217;s", quantity: "1", total: "1,24" })]);
   assert.equal(impactDraft(source).lines[0].description, "Grocer's & Baker’s");
 });

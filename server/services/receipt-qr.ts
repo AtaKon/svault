@@ -54,8 +54,8 @@ const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 8000;
 const RECEIPT_QR_BUDGET_MS = 12000;
 
-/** Cloudflare Turnstile and the generic challenge script host. */
-const CHALLENGE_MARKERS = /challenges\.cloudflare\.com|cf-turnstile/i;
+/** Cloudflare's Turnstile script host and widget class, independent of issuer. */
+const TURNSTILE_MARKERS = /challenges\.cloudflare\.com|cf-turnstile/i;
 const USER_AGENT = "Mozilla/5.0 (compatible; SVault receipt import)";
 
 const EPSILON_CHALLENGE_MESSAGE =
@@ -253,7 +253,7 @@ async function fetchEpsilon(link: EpsilonLink, signal: AbortSignal): Promise<Rec
     url.hostname === EPSILON_HOST &&
     !url.search && [receiptPath, link.viewerPath].includes(url.pathname.toLowerCase());
   const page = await fetchPage(link.url, allowed, signal);
-  if (CHALLENGE_MARKERS.test(page.html)) {
+  if (TURNSTILE_MARKERS.test(page.html)) {
     return result(link.issuer, "challenge", EPSILON_CHALLENGE_MESSAGE);
   }
   // Without a challenge the page is still a dynamic Blazor viewer whose static
@@ -304,7 +304,7 @@ async function fetchEntersoft(link: EntersoftLink, signal: AbortSignal): Promise
     url.protocol === "https:" && url.hostname === ENTERSOFT_HOST &&
     !url.search && ENTERSOFT_VIEWINVOICE_PATH.test(url.pathname);
   const page = await fetchPage(link.url, allowed, signal);
-  if (CHALLENGE_MARKERS.test(page.html)) {
+  if (TURNSTILE_MARKERS.test(page.html)) {
     return result(link.issuer, "challenge", ENTERSOFT_CHALLENGE_MESSAGE);
   }
   // The document URL is pinned to the QR link's own reference: the iframe only
@@ -315,7 +315,7 @@ async function fetchEntersoft(link: EntersoftLink, signal: AbortSignal): Promise
   }
   const documentUrl = `https://${ENTERSOFT_HOST}/api/GetInvoice?${invoiceParams(ref)}`;
   const document = await fetchPage(documentUrl, (url) => matchesPinnedInvoice(url, ref), signal);
-  if (CHALLENGE_MARKERS.test(document.html)) {
+  if (TURNSTILE_MARKERS.test(document.html)) {
     return result(link.issuer, "challenge", ENTERSOFT_CHALLENGE_MESSAGE);
   }
   const parsed = parseEntersoftInvoiceHtml(document.html);
@@ -337,7 +337,7 @@ async function fetchImpact(link: ImpactLink, signal: AbortSignal): Promise<Recei
   const page = await fetchPage(link.url, (url) => url.href === link.url, signal);
   // Recognize known Turnstile markup. Unrecognized pages also give the user
   // the original link and photo scan options.
-  if (CHALLENGE_MARKERS.test(page.html)) {
+  if (TURNSTILE_MARKERS.test(page.html)) {
     return result(link.issuer, "challenge", IMPACT_CHALLENGE_MESSAGE);
   }
   const parsed = parseImpactReceiptHtml(page.html);
