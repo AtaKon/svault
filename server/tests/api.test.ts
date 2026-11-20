@@ -5187,6 +5187,67 @@ describe("receipts and shops", () => {
     }
   });
 
+  it("returns IMPACT issuer provenance for digital receipts and photo fallback", async () => {
+    const path = `/api/houses/${houseId}/receipts/scan`;
+    const qr = `https://einvoice.impact.gr/p/EL123456789/${"a".repeat(40)}/${"b".repeat(32)}`;
+    const field = (name: string, value: string) =>
+      `<span class="field field-${name}"><span class="inner"><span class="value">${value}</span></span></span>`;
+    const summary = (name: string, value: string) => `<tr class="field field-${name}"><td class="value">${value}</td></tr>`;
+    const document = `<div class="company-info">${field("RegisteredName", "Example IMPACT merchant")}</div>
+      <div class="section-identity">${field("DateIssued", "15/10/2026")}${field("IssuerFormatedInvoiceSeriesNumber", "A-123")}</div>
+      <div class="section-details"><table><thead><tr>
+      <th class="field-Description1">Product</th><th class="field-Quantity">Quantity</th><th class="field-Total">Total</th>
+      </tr></thead><tbody><tr><td class="field-Description1">Sample IMPACT product</td>
+      <td class="field-Quantity">1</td><td class="field-NetTotal">2,12</td><td class="field-VATTotal">0,28</td>
+      <td class="field-VatCategory">13</td><td class="field-Total">2,40</td></tr></tbody></table></div>
+      <div class="section-taxes"><table><tbody><tr><td class="field-Percentage">13%</td>
+      <td class="field-UnderlyingValue">2,12</td><td class="field-VatAmount">0,28</td></tr></tbody></table></div>
+      <table><tbody>${summary("CurrencyCode", "EUR")}${summary("TotalNetAmount", "2,12")}
+      ${summary("TotalVATAmount", "0,28")}${summary("TotalGrossValue", "2,40")}</tbody></table>`;
+    configureReceiptQrFetcherForTests(async () => new Response(document, { headers: { "content-type": "text/html" } }));
+    try {
+      const imported = await request(path, { body: { qr } });
+      assert.equal(imported.status, 200);
+      assert.equal(imported.data.provider, "qr");
+      assert.deepEqual(imported.data.qr, { issuer: "impact", status: "ok", message: null });
+      const { draft } = imported.data;
+      assert.equal(draft.lines[0].description, "Sample IMPACT product");
+      assert.equal(draft.lines[0].lineTotal, 2.4);
+      assert.equal(draft.lines[0].taxRate, 13);
+      assert.equal(draft.vendorName, "Example IMPACT merchant");
+      assert.equal(draft.purchasedAt, "2026-10-15");
+      assert.equal(draft.notes, "Αρ. Παραστατικού A-123");
+      assert.equal(draft.currency, "EUR");
+      assert.equal(draft.total, 2.4);
+      assert.equal(draft.subtotal, 2.12);
+      assert.equal(draft.tax, 0.28);
+      assert.deepEqual(draft.taxBreakdown, [{ rate: 13, net: 2.12, tax: 0.28, gross: 2.4 }]);
+
+      configureReceiptQrFetcherForTests(async () => new Response(null, { status: 404 }));
+      const fallback = await request(path, { body: { qr, text: "CORNER MARKET\n12/10/2026\nMilk 2.40\nTOTAL 2.40" } });
+      assert.equal(fallback.status, 200);
+      assert.equal(fallback.data.provider, "local");
+      assert.deepEqual(fallback.data.qr, {
+        issuer: "impact",
+        status: "unavailable",
+        message: "The IMPACT receipt could not be read automatically. Open the digital receipt in your browser, or continue with the photo scan.",
+      });
+      assert.equal(fallback.data.draft.lines[0].description, "Milk");
+
+      configureReceiptQrFetcherForTests(async () => new Response(null, { status: 302, headers: { location: qr + "/" } }));
+      const redirect = await request(path, { body: { qr, text: "CORNER MARKET\n12/10/2026\nMilk 2.40\nTOTAL 2.40" } });
+      assert.equal(redirect.status, 200);
+      assert.equal(redirect.data.provider, "local");
+      assert.deepEqual(redirect.data.qr, {
+        issuer: "impact",
+        status: "unavailable",
+        message: "IMPACT redirected the receipt link. Open the digital receipt in your browser, or continue with the photo scan.",
+      });
+    } finally {
+      configureReceiptQrFetcherForTests(null);
+    }
+  });
+
   it("uses the Lidl template on a full Lidl receipt", async () => {
     const res = await request(`/api/houses/${houseId}/receipts/scan`, {
       method: "POST",

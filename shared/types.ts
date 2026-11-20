@@ -3,6 +3,7 @@
 import type { RecipeReasoningMode } from "./ai-reasoning.js";
 import type { BillType } from "./bill-types.js";
 import type { RecipeCost, RecipeCostBasis } from "./recipe-cost.js";
+import type { ReceiptQrIssuer } from "./receipt-qr-links.js";
 
 export type Role = "owner" | "admin" | "member" | "viewer";
 
@@ -909,7 +910,7 @@ export type ReceiptProvider = "ai" | "local" | "template" | "qr";
 
 /** Outcome of the server-side fetch behind an issuer QR receipt link. */
 export interface ReceiptQrInfo {
-  issuer: "epsilon-sklavenitis" | "entersoft" | null;
+  issuer: ReceiptQrIssuer | null;
   status: "ok" | "challenge" | "unsupported" | "unavailable";
   /** Safe user-facing note; never contains the bearer link itself. */
   message: string | null;
