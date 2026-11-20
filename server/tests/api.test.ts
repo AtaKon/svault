@@ -5155,6 +5155,38 @@ describe("receipts and shops", () => {
     }
   });
 
+  it("prefers a usable digital receipt over the scanned photo text", async () => {
+    const path = `/api/houses/${houseId}/receipts/scan`;
+    const ref = "12345678-1234-1234-1234-123456789abc";
+    const token = "tEsTaB12";
+    const entersoft = `https://e-invoicing.gr/edocuments/ViewInvoice/-1/${ref}_${token}`;
+    const frame = `/api/GetInvoice?contentType=PEPPOL&amp;intRefDocID=${ref}&amp;hashToken=${token}&amp;ofenm=-1&amp;isPreview=True`;
+    const text = "CORNER MARKET\n12/10/2026\nMilk 2.40\nTOTAL 2.40";
+    configureReceiptQrFetcherForTests(async (url) => {
+      if (url === entersoft) {
+        return new Response(`<iframe id="iframeContent" src="${frame}"></iframe>`, { headers: { "content-type": "text/html" } });
+      }
+      return new Response(`<table><tbody><tr><td data-title="Κωδικός">SKU</td>
+         <td data-title="Περιγραφή">Sample digital product</td>
+         <td data-title="Ποσότητα">1</td><td data-title="Συνολική Αξία">2,40</td></tr></tbody></table>
+         <div>ΤΕΛΙΚΗ ΑΞΙΑ 2,40EUR</div>`, { headers: { "content-type": "text/html" } });
+    });
+    try {
+      const res = await request(path, { body: { qr: entersoft, text } });
+      assert.equal(res.status, 200);
+      assert.equal(res.data.provider, "qr");
+      assert.equal(res.data.qr.status, "ok");
+      assert.equal(res.data.draft.lines.length, 1);
+      assert.equal(res.data.draft.lines[0].description, "Sample digital product");
+      assert.equal(res.data.draft.total, 2.4);
+      // The photo text is only a fallback: a usable digital receipt replaces it.
+      assert.match(res.data.selectedText, /Sample digital product/);
+      assert.ok(!res.data.selectedText.includes("Milk"));
+    } finally {
+      configureReceiptQrFetcherForTests(null);
+    }
+  });
+
   it("uses the Lidl template on a full Lidl receipt", async () => {
     const res = await request(`/api/houses/${houseId}/receipts/scan`, {
       method: "POST",

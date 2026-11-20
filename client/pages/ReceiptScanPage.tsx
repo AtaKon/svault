@@ -16,8 +16,8 @@ import { OffProductPicker } from "@/components/OffProductPicker";
 import { ItemPickerSheet } from "@/components/ItemPickerSheet";
 import { ZoomableImage } from "@/components/ZoomableImage";
 import { clearReceiptDraft, loadReceiptDraft, receiptDraftKey, saveReceiptDraft, type StoredReceiptDraft } from "@/receipt-draft-store";
+import { collectReceiptQrLinks, isUsableDigitalReceipt, shouldRunPhotoOcr } from "@/receipt-scan-priority";
 import { reconcileReceipt } from "@shared/receipt-reconcile";
-import { matchReceiptQrLink, type ReceiptQrLink } from "@shared/receipt-qr-links";
 import type {
   Location,
   OffProduct,
@@ -645,20 +645,20 @@ export function ReceiptScanPage() {
     // Only resetting the workspace invalidates a read. Reset also removes its pages.
     const revision = workspaceRevisionRef.current;
     const addedKeys: string[] = [];
-    const links = new Map<string, ReceiptQrLink>();
     const existingDraft = snapshotRef.current() ?? snapshot();
     const hasDigitalDraft = existingDraft.provider === "qr";
     const tryDigital = !hasReceiptDetails(existingDraft, house.currency);
     try {
+      // Find the receipt QR before any photo is read: a usable digital
+      // receipt decides whether the photos are OCR'd at all.
       const decoder = tryDigital ? await import("@/receipt-qr").catch(() => null) : null;
+      const payloads: Array<string | null> = [];
       if (decoder) {
         for (const file of files) {
-          const payload = await decoder.decodeReceiptQrFile(file);
+          payloads.push(await decoder.decodeReceiptQrFile(file));
           if (revision !== workspaceRevisionRef.current) return;
-          const link = payload ? matchReceiptQrLink(payload) : null;
-          if (link) links.set(link.url, link);
           // Identify distinct purchases before appending or uploading any pages.
-          if (links.size > 1) {
+          if (collectReceiptQrLinks(payloads).conflict) {
             toast.error(t("These photos contain different receipt links. Scan one receipt at a time."));
             return;
           }
@@ -692,7 +692,7 @@ export function ReceiptScanPage() {
         }
       }
       let appliedDigital = false;
-      const link = links.values().next().value;
+      const link = collectReceiptQrLinks(payloads).links[0] ?? null;
       if (link) {
         try {
           const data = await api<ReceiptScanResponse>(`/api/houses/${house.id}/receipts/scan`, {
@@ -700,7 +700,7 @@ export function ReceiptScanPage() {
             body: { qr: link.url },
           });
           if (revision !== workspaceRevisionRef.current) return;
-          if (data.provider === "qr" && data.draft.lines.length) {
+          if (isUsableDigitalReceipt(data)) {
             if (hasReceiptDetails(snapshotRef.current() ?? snapshot(), house.currency)) {
               setWarning("Your edits were kept. Start over to import the digital receipt.");
               setDigitalLink(link.url);
@@ -723,7 +723,7 @@ export function ReceiptScanPage() {
           setDigitalLink(link.url);
         }
       }
-      if (hasDigitalDraft || appliedDigital) {
+      if (!shouldRunPhotoOcr(existingDraft.provider, appliedDigital)) {
         commitPages(pagesRef.current.map((page) => addedKeys.includes(page.key) ? { ...page, status: "skipped" } : page), false);
       } else {
         for (const key of addedKeys) {
