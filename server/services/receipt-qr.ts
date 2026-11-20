@@ -71,6 +71,8 @@ const DIGITAL_INCOMPLETE_MESSAGE =
   "The digital receipt contains an incomplete product line. Use a photo to read the full receipt.";
 const IMPACT_CHALLENGE_MESSAGE =
   "IMPACT requires browser verification. Open the digital receipt to verify it, or continue with the photo scan.";
+const IMPACT_REDIRECT_MESSAGE =
+  "IMPACT redirected the receipt link. Open the digital receipt in your browser, or continue with the photo scan.";
 const UNSUPPORTED_MESSAGE = "That QR code or link is not from a supported digital receipt issuer.";
 const GENERIC_UNAVAILABLE_MESSAGE = "The digital receipt could not be fetched from the issuer.";
 const RATE_LIMIT_MESSAGE = "Too many digital receipt requests. Try again in a few minutes or scan the photo.";
@@ -326,9 +328,8 @@ async function fetchEntersoft(link: EntersoftLink, signal: AbortSignal): Promise
 
 /**
  * IMPACT eInvoicing renders the receipt server-side at the QR's own route, so
- * one bounded fetch is all there is: redirects are only followed back to that
- * exact route (original path case preserved), and no reference the page
- * carries — styles, scripts, other tabs — is ever fetched.
+ * one bounded fetch is enough. The shared fetcher rejects every redirect,
+ * because the only allowed URL has already been visited.
  */
 async function fetchImpact(link: ImpactLink, signal: AbortSignal): Promise<ReceiptQrFetchResult> {
   const page = await fetchPage(link.url, (url) => url.href === link.url, signal);
@@ -347,6 +348,7 @@ async function fetchImpact(link: ImpactLink, signal: AbortSignal): Promise<Recei
 
 function messageForError(issuer: ReceiptQrIssuer, error: IssuerPageError): string {
   if (issuer === "epsilon-sklavenitis") return EPSILON_UNAVAILABLE_MESSAGE;
+  if (issuer === "impact" && error.reason === "redirect") return IMPACT_REDIRECT_MESSAGE;
   if (issuer === "entersoft" && error.reason === "status" && error.status === 404) return ENTERSOFT_EXPIRED_MESSAGE;
   return DIGITAL_UNAVAILABLE_MESSAGE;
 }

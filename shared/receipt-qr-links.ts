@@ -30,7 +30,7 @@ const EPSILON_PATH = /^\/fd\/([0-9a-f]{8})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{4}
 /** Entersoft: /edocuments/ViewInvoice/{ofenm}/{uuid}_{8 alphanumeric} */
 const ENTERSOFT_PATH =
   /^\/edocuments\/ViewInvoice\/(-?\d{1,4})\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})_([A-Za-z0-9]{8})$/i;
-/** IMPACT eInvoicing: /p/EL{9 digits}/{40 hex}/{32 hex} — fetched with the path's original case. */
+/** IMPACT eInvoicing QR links use literal hex segments. Preserve their case and reject escaped segments. */
 const IMPACT_PATH = /^\/p\/EL\d{9}\/[0-9a-fA-F]{40}\/[0-9a-fA-F]{32}$/;
 
 /**

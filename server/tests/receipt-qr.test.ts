@@ -75,8 +75,8 @@ const impactProductTable = (lines: string[]) =>
   `<table class="table ">${impactProductHead}<tbody>${lines.join("")}</tbody></table>`;
 
 const impactProducts = [
-  impactLine({ code: "5201001100017", description: "Example product", unit: "Τεμάχιο", quantity: "1", net: "1,00", vatCategory: "Γ1", vat: "0,24", total: "1,24" }),
-  impactLine({ description: "Μήλα Ημαθίας", unit: "Κιλό", quantity: "1,250", net: "3,00", vatCategory: "Γ2", vat: "0,39", total: "3,39" }),
+  impactLine({ code: "5201001100017", description: "Example product", unit: "Τεμάχιο", quantity: "1", net: "1,00", vatCategory: "24", vat: "0,24", total: "1,24" }),
+  impactLine({ description: "Μήλα Ημαθίας", unit: "Κιλό", quantity: "1,250", net: "3,00", vatCategory: "13", vat: "0,39", total: "3,39" }),
 ];
 
 function impactBody(lines: string[]) {
@@ -439,12 +439,24 @@ test("matches only the exact IMPACT route and keeps the original path case", () 
     impactUrl.replace("/p/EL123456789/", "/p/el123456789/"),
     impactUrl.replace("/p/EL123456789/", "/p/EL12345678/"),
     impactUrl.replace(impactMarker, impactMarker.slice(0, 39)),
+    impactUrl.replace(impactMarker, "%31" + impactMarker.slice(1)),
     impactUrl.replace(impactMarker, impactMarker + "0"),
     impactUrl.replace(`${impactMarker}/`, `${impactMarker}/2`),
     "javascript:void(0)",
   ]) {
     assert.equal(matchReceiptQrLink(rejected), null, rejected);
   }
+});
+
+test("reports an escaped IMPACT path as unsupported without fetching it", async () => {
+  const requests: string[] = [];
+  configureReceiptQrFetcherForTests(async (url) => {
+    requests.push(url);
+    return html("");
+  });
+  const result = await fetchQrReceiptDraft(impactUrl.replace(impactMarker, "%31" + impactMarker.slice(1)));
+  assert.equal(result.status, "unsupported");
+  assert.deepEqual(requests, []);
 });
 
 test("reads a server-rendered IMPACT receipt in one pinned fetch", async () => {
@@ -493,24 +505,20 @@ test("pins IMPACT redirects to the QR's own route and nothing broader", async ()
     `https://einvoice.impact.gr:8080/p/EL123456789/${impactMarker}/${"2".repeat(32)}`,
     `https://einvoice.impact.gr/unrelated`,
     impactUrl,
+    `${impactUrl}/`,
+    `${new URL(impactUrl).pathname}?tab=receipt`,
   ]) {
     const requests: string[] = [];
     configureReceiptQrFetcherForTests(async (url) => {
       requests.push(url);
       return new Response(null, { status: 302, headers: { location } });
     });
-    assert.equal((await fetchQrReceiptDraft(impactUrl)).status, "unavailable");
+    const result = await fetchQrReceiptDraft(impactUrl);
+    assert.equal(result.status, "unavailable");
+    assert.match(result.message, /Open the digital receipt in your browser/);
+    assert.ok(!result.message.includes(impactMarker));
     assert.deepEqual(requests, [impactUrl]);
   }
-
-  // A same-route redirect with a query is equally refused.
-  const requests: string[] = [];
-  configureReceiptQrFetcherForTests(async (url) => {
-    requests.push(url);
-    return new Response(null, { status: 302, headers: { location: `${new URL(impactUrl).pathname}?tab=receipt` } });
-  });
-  assert.equal((await fetchQrReceiptDraft(impactUrl)).status, "unavailable");
-  assert.deepEqual(requests, [impactUrl]);
 });
 
 test("reports IMPACT verification, expiry and unavailable pages safely", async () => {
@@ -585,7 +593,37 @@ test("treats the IMPACT VAT breakdown and currency as optional", () => {
   assert.equal(draft.currency, null);
 });
 
-test("leaves the IMPACT line tax rate unset when rounding matches more than one rate", () => {
-  const source = impactBody([impactLine({ description: "Sample", quantity: "1", net: "0,05", vat: "0,01", total: "0,06" })]);
-  assert.equal(impactDraft(source).lines[0].taxRate, null);
+test("confirms the printed IMPACT VAT rate against each line's own amounts", () => {
+  const source = impactBody([
+    impactLine({ description: "Discounted product", quantity: "1", net: "0,50", vatCategory: "13", vat: "0,07", total: "0,57" }),
+    impactLine({ description: "Mismatched rate", quantity: "1", net: "0,50", vatCategory: "13", vat: "0,12", total: "0,62" }),
+    impactLine({ description: "Unknown category", quantity: "1", net: "1,00", vatCategory: "Γ1", vat: "0,24", total: "1,24" }),
+  ]);
+  assert.deepEqual(impactDraft(source).lines.map((line) => line.taxRate), [13, null, null]);
+});
+
+test("ignores negative IMPACT tax breakdown entries", () => {
+  const source = impactBody(impactProducts)
+    .replace(impactCell("UnderlyingValue", "1,00"), impactCell("UnderlyingValue", "-1,00"))
+    .replace(impactCell("VatAmount", "0,39"), impactCell("VatAmount", "-0,39"));
+  assert.deepEqual(impactDraft(source).taxBreakdown, []);
+});
+
+test("does not substitute a second table when the IMPACT product table is empty", () => {
+  const source = impactBody(["<tr><td></td></tr>"]) + impactProductTable(impactProducts);
+  assert.deepEqual(parseImpactReceiptHtml(source), { status: "unavailable" });
+});
+
+test("ignores a myDATA table before the IMPACT receipt table", async () => {
+  const unrelated = impactProductTable([impactLine({ description: "myDATA detail", quantity: "1", total: "19,00" })])
+    .replace('class="table "', 'class="table table-striped InvoiceLineTable"');
+  configureReceiptQrFetcherForTests(async () => html(unrelated + impactBody(impactProducts)));
+  const result = await fetchQrReceiptDraft(impactUrl);
+  assert.ok(result.status === "ok");
+  assert.deepEqual(result.draft.lines.map((line) => line.description), ["Example product", "Μήλα Ημαθίας"]);
+});
+
+test("decodes named and numeric entities in IMPACT line descriptions", () => {
+  const source = impactBody([impactLine({ description: "Grocer&#x27;s &amp; Baker&#8217;s", quantity: "1", total: "1,24" })]);
+  assert.equal(impactDraft(source).lines[0].description, "Grocer's & Baker’s");
 });

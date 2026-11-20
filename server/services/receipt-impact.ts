@@ -67,6 +67,7 @@ const UNIT_MAP: Record<string, string> = {
 
 // The Greek viewer uses decimal commas and optional dots between thousands.
 const PRINTED_NUMBER = /^-?(?:\d{1,3}(?:\.\d{3})+|\d+)(?:,\d+)?$/;
+const NAMED_ENTITIES: Record<string, string> = { nbsp: " ", amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
 
 function round(value: number, digits = 2): number {
   const factor = 10 ** digits;
@@ -74,13 +75,13 @@ function round(value: number, digits = 2): number {
 }
 
 function decodeEntities(value: string): string {
-  return value
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/&quot;/gi, '"')
-    .replace(/&#0?39;/g, "'");
+  return value.replace(/&(?:(nbsp|amp|lt|gt|quot|apos)|#(\d+)|#x([\da-f]+));/gi, (_entity, name, decimal, hex) => {
+    if (name) return NAMED_ENTITIES[name.toLowerCase()];
+    const code = decimal ? Number(decimal) : Number.parseInt(hex, 16);
+    return code > 0 && code <= 0x10ffff && (code < 0xd800 || code > 0xdfff)
+      ? String.fromCodePoint(code)
+      : "\uFFFD";
+  });
 }
 
 function stripTags(html: string): string {
@@ -141,22 +142,20 @@ function summaryValue(html: string, field: string): string | null {
 }
 
 /**
- * Parse the product table rows. The table is recognized only by its header
- * cells carrying the product field tokens; rows of any other table — the
- * myDATA tab included — never match. Returns null when no recognizable
- * product table exists, and "incomplete" when a recognized row is missing,
- * unparseable or negative, so the caller can fall back to photo OCR.
+ * Parse the first receipt table with the product headers. Ignore the myDATA
+ * detail table. An empty or incomplete receipt table goes to photo OCR.
  */
 function parseProductTable(html: string): ImpactRow[] | "incomplete" | null {
-  for (const table of html.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)) {
-    const thead = table[1].match(/<thead\b[^>]*>([\s\S]*?)<\/thead>/i)?.[1] ?? "";
+  for (const [, attrs, content] of html.matchAll(/<table\b([^>]*)>([\s\S]*?)<\/table>/gi)) {
+    if (classAttr(attrs)?.split(/\s+/).includes("InvoiceLineTable")) continue;
+    const thead = content.match(/<thead\b[^>]*>([\s\S]*?)<\/thead>/i)?.[1] ?? "";
     const headerTokens = new Set<string>();
     for (const th of thead.matchAll(/<th\b([^>]*)>/gi)) {
       for (const token of classAttr(th[1])?.trim().split(/\s+/) ?? []) headerTokens.add(token);
     }
     if (!headerTokens.has("field-Description1") || !headerTokens.has("field-Total") || !headerTokens.has("field-Quantity")) continue;
-    const tbody = table[1].match(/<tbody\b[^>]*>([\s\S]*?)<\/tbody>/i)?.[1];
-    if (!tbody) continue;
+    const tbody = content.match(/<tbody\b[^>]*>([\s\S]*?)<\/tbody>/i)?.[1];
+    if (!tbody) return null;
     const rows: ImpactRow[] = [];
     for (const rowMatch of tbody.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)) {
       const row: ImpactRow = {
@@ -188,7 +187,7 @@ function parseProductTable(html: string): ImpactRow[] | "incomplete" | null {
           !PRINTED_NUMBER.test(row.total ?? "") || quantity == null || quantity <= 0 || total == null || total < 0) return "incomplete";
       rows.push(row);
     }
-    if (rows.length) return rows;
+    return rows.length ? rows : null;
   }
   return null;
 }
@@ -213,7 +212,7 @@ function parseTaxBreakdown(html: string): TaxBreakdownEntry[] {
       const rate = parseQuantity(cells.get("field-Percentage")!);
       const net = parseAmount(cells.get("field-UnderlyingValue")!);
       const tax = parseAmount(cells.get("field-VatAmount")!);
-      if (rate == null || rate < 0 || rate > 100 || net == null || tax == null) continue;
+      if (rate == null || rate < 0 || rate > 100 || net == null || net < 0 || tax == null || tax < 0) continue;
       entries.push({ rate, net, tax, gross: round(net + tax, 2) });
     }
     if (entries.length) return entries;
@@ -226,14 +225,17 @@ function mapUnit(raw: string | null): string | null {
   return UNIT_MAP[raw.normalize("NFD").replace(/\p{M}/gu, "").toUpperCase().replace(/[\s.]+/g, "")] ?? null;
 }
 
-/** Only an all-digit 8–14 character code is treated as a barcode. */
+/** Confirm the printed line rate with its own amounts and the issuer's VAT rates. */
 function lineVatRate(row: ImpactRow, breakdown: TaxBreakdownEntry[]): number | null {
+  const category = row.vatCategory;
+  if (!category || !/^\d{1,3}(?:[.,]\d{1,2})?\s*%?$/.test(category)) return null;
+  const rate = Number(category.replace(",", ".").replace(/\s*%$/, ""));
+  // An unmarked number can be a category code. Require a matching rate in the summary.
+  if (rate > 100 || (!category.endsWith("%") && !breakdown.some((entry) => entry.rate === rate))) return null;
   const net = row.net ? parseAmount(row.net) : null;
   const vat = row.vat ? parseAmount(row.vat) : null;
   if (net == null || net <= 0 || vat == null || vat < 0) return null;
-  const rates = [...new Set(breakdown.map((entry) => entry.rate))]
-    .filter((rate) => rate != null && round(net * rate / 100) === vat);
-  return rates.length === 1 ? rates[0] : null;
+  return round(net * rate / 100) === vat ? rate : null;
 }
 
 /**
