@@ -166,10 +166,10 @@ function summaryValue(html: string, field: string): string | null {
 }
 
 /**
- * Inspect product tables in the viewer's details section. Skip shells with
- * no populated product fields. Validate the first table with populated
- * fields, even if its first row is partial. Malformed rows require photo OCR.
- * If only shells were found, report an incomplete receipt after the search.
+ * Validate the first table in the details section with product identity,
+ * quantity, or amounts. Unit and VAT category alone are decorative.
+ * Skip header-only and decorative shells while searching. A malformed
+ * product row, or a recognized section with only shells, requires photo OCR.
  */
 function parseProductTable(html: string): ImpactProduct[] | "incomplete" | null {
   let foundProductHeader = false;
@@ -196,18 +196,15 @@ function parseProductTable(html: string): ImpactProduct[] | "incomplete" | null 
         vat: null,
         total: null,
       };
-      let recognized = false;
       for (const cell of rowMatch[1].matchAll(/<td\b([^>]*)>([\s\S]*?)<\/td>/gi)) {
         const attr = classAttr(cell[1]);
         if (!attr) continue;
         const token = attr.trim().split(/\s+/)
           .find((candidate) => candidate.startsWith("field-") && CELL_TO_ROW[candidate.slice("field-".length)]);
         if (!token) continue;
-        recognized = true;
         row[CELL_TO_ROW[token.slice("field-".length)]] = cellValue(cell[2]);
       }
-      // Rows without product cells (spacers, column echoes) are skipped.
-      if (!recognized || !Object.values(row).some(Boolean)) continue;
+      if (!(row.code || row.description || row.quantity || row.total || row.net || row.vat)) continue;
       // Missing, unparseable or negative product lines go back to photo OCR.
       const quantity = parsePrintedNumber(row.quantity);
       const total = parsePrintedNumber(row.total);

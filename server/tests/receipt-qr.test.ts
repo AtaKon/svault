@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { addReceiptQrPayload } from "../../client/receipt-scan-priority.js";
 import { matchReceiptQrLink, type ReceiptQrLink } from "../../shared/receipt-qr-links.js";
+import { reconcileReceipt } from "../../shared/receipt-reconcile.js";
 import { limiters } from "../rate-limit.js";
 import { configureReceiptQrFetcherForTests, fetchQrReceiptDraft, readQrReceiptScan } from "../services/receipt-qr.js";
 import { parseEntersoftInvoiceHtml } from "../services/receipt-entersoft.js";
@@ -496,6 +497,7 @@ test("normalizes an IMPACT photo QR before one pinned receipt fetch", async () =
   const link = links.values().next().value;
   assert.ok(link);
   assert.equal(link.url, impactUrl);
+  assert.equal(new URL(link.url).href, link.url);
   const result = await readQrReceiptScan("normalized-impact-qr", link.url);
   assert.ok(result.status === "ok");
   assert.equal(result.issuer, "impact");
@@ -563,7 +565,7 @@ test("offers browser recovery for IMPACT verification and unreadable pages", asy
     configureReceiptQrFetcherForTests(async () => html(markup));
     const challenge = await fetchQrReceiptDraft(impactUrl);
     assert.equal(challenge.status, "challenge");
-    assert.match(challenge.message ?? "", /IMPACT requires browser verification/);
+    assert.equal(challenge.message, "IMPACT requires browser verification. Open the digital receipt to verify it, or continue with the photo scan.");
   }
 
   configureReceiptQrFetcherForTests(async () => new Response(null, { status: 404 }));
@@ -573,10 +575,9 @@ test("offers browser recovery for IMPACT verification and unreadable pages", asy
   configureReceiptQrFetcherForTests(async () => new Response(null, { status: 503 }));
   assert.deepEqual(await fetchQrReceiptDraft(impactUrl), missing);
 
-  configureReceiptQrFetcherForTests(async () => html("<p>A receipt page without a product table.</p>"));
+  configureReceiptQrFetcherForTests(async () => html("<p>Verify that you are human to access this receipt.</p>"));
   const unrecognizable = await fetchQrReceiptDraft(impactUrl);
-  assert.equal(unrecognizable.status, "unavailable");
-  assert.match(unrecognizable.message ?? "", /Open the digital receipt in your browser/);
+  assert.deepEqual(unrecognizable, missing);
 
   configureReceiptQrFetcherForTests(async () => html(" \n\t"));
   const empty = await fetchQrReceiptDraft(impactUrl);
@@ -591,8 +592,11 @@ test("offers browser recovery for IMPACT verification and unreadable pages", asy
   configureReceiptQrFetcherForTests(async () => new Response(impactBody(impactProducts), {
     headers: { "content-type": "text/plain" },
   }));
-  assert.deepEqual(await fetchQrReceiptDraft(impactUrl), missing);
-
+  assert.deepEqual(await fetchQrReceiptDraft(impactUrl), {
+    status: "unavailable",
+    issuer: "impact",
+    message: "The IMPACT receipt could not be read automatically. Open the digital receipt in your browser, or continue with the photo scan.",
+  });
 });
 
 test("cancels an oversized IMPACT HTML stream before the body is complete", { timeout: 2000 }, async () => {
@@ -665,11 +669,16 @@ test("leaves VAT unset for a zero-net IMPACT line with a charged price", () => {
 
 test("retains an explicit zero rate for an IMPACT line with zero net and VAT", () => {
   const line = { description: "Free product", quantity: "1", net: "0,00", vat: "0,00", total: "0,00" };
-  const draft = impactDraft(impactBody([
+  const endOfVatRow = `${impactCell("VatAmount", "0,39")}</tr>`;
+  const zeroVatRow = `<tr>${impactCell("Percentage", "0%")}${impactCell("UnderlyingValue", "0,00")}${impactCell("VatAmount", "0,00")}</tr>`;
+  const source = impactBody([
     impactLine({ ...line, vatCategory: "0%" }),
     impactLine({ ...line, vatCategory: "13%" }),
-  ]));
-  assert.deepEqual(draft.lines.map((row) => row.taxRate), [0, null]);
+    impactLine({ ...line, vatCategory: "0" }),
+  ]).replace(endOfVatRow, endOfVatRow + zeroVatRow);
+  const draft = impactDraft(source);
+  assert.ok(draft.taxBreakdown.some((entry) => entry.rate === 0));
+  assert.deepEqual(draft.lines.map((row) => row.taxRate), [0, null, null]);
 });
 
 test("parses Greek grouping and accented units on IMPACT product lines", () => {
@@ -826,6 +835,10 @@ test("retains IMPACT breakdown rates with a one-cent summary difference", () => 
     { rate: 24, tax: 0.24 },
     { rate: 13, tax: 0.39 },
   ]);
+  assert.equal(Number(draft.taxBreakdown.reduce((sum, entry) => sum + entry.gross, 0).toFixed(2)), 4.63);
+  const reconciliation = reconcileReceipt({ total: draft.total, savings: draft.savings, lines: draft.lines });
+  assert.equal(reconciliation.difference, 0.02);
+  assert.equal(reconciliation.ok, true);
   assert.deepEqual(draft.lines.map((line) => line.taxRate), [24, 13]);
 });
 
@@ -918,6 +931,7 @@ test("reports a recognized IMPACT product table without lines as incomplete", as
   for (const table of [
     impactProductTable([]),
     impactProductTable(["<tr><td></td></tr>"]),
+    impactProductTable([impactLine({ unit: "Τεμάχιο", vatCategory: "24" })]),
     `<table>${impactProductHead}</table>`,
   ]) {
     const source = impactBody(impactProducts).replace(impactProductTable(impactProducts), table) + impactProductTable(impactProducts);
@@ -939,6 +953,7 @@ test("skips empty, spacer-only, and header-only IMPACT tables around the populat
   const shells = [
     impactProductTable([]),
     impactProductTable(["<tr><td></td></tr>"]),
+    impactProductTable([impactLine({ unit: "Τεμάχιο", vatCategory: "24" })]),
     `<table>${impactProductHead}</table>`,
   ];
   for (const shell of shells) {
@@ -951,8 +966,9 @@ test("skips empty, spacer-only, and header-only IMPACT tables around the populat
 
 test("does not replace malformed IMPACT products with a later table", () => {
   const incompleteLine = impactLine({ description: "Incomplete product", quantity: "1" });
+  const skuOnly = impactLine({ code: "PRODUCT-ID" });
   const productTable = impactProductTable(impactProducts);
-  for (const rows of [[incompleteLine], [impactProducts[0], incompleteLine]]) {
+  for (const rows of [[incompleteLine], [skuOnly], [impactProducts[0], incompleteLine]]) {
     const source = impactBody(impactProducts).replace(productTable, impactProductTable(rows) + productTable);
     assert.deepEqual(parseImpactReceiptHtml(source), { status: "incomplete" });
   }
