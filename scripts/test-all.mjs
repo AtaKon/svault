@@ -10,6 +10,7 @@ const steps = [
   [...shared, "--test", "server/tests/ocr-benchmark.test.mjs"],
   [...shared, "--test", "server/tests/receipt-qr.test.ts"],
   ["--test", "scripts/receipt-qr-recovery.test.mjs"],
+  [...shared, "--test", "scripts/receipt-scan-priority.test.mjs"],
   [...shared, "--test", "server/tests/ai-reasoning.test.ts"],
   [...shared, "--test", "server/tests/recipe-vision.test.ts"],
   [...shared, "--test", "server/tests/recipe-vision-env.test.ts"],
