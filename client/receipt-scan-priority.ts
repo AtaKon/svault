@@ -6,8 +6,8 @@
  * scripts/receipt-scan-priority.test.mjs).
  */
 
-import { matchReceiptQrLink, type ReceiptQrLink } from "../shared/receipt-qr-links.js";
-import type { ReceiptProvider, ReceiptScanResponse } from "../shared/types.js";
+import { matchReceiptQrLink, type ReceiptQrLink } from "@shared/receipt-qr-links";
+import type { ReceiptProvider, ReceiptScanResponse } from "@shared/types";
 
 /**
  * The receipt links decoded from a batch of photos. Two distinct links mean
@@ -33,13 +33,17 @@ export function collectReceiptQrLinks(payloads: ReadonlyArray<string | null>): {
  * challenge page, an empty draft — falls back to reading the photos.
  */
 export function isUsableDigitalReceipt(data: ReceiptScanResponse): boolean {
-  return data.provider === "qr" && data.draft.lines.length > 0;
+  return data.provider === "qr" && data.qr?.status === "ok" && data.draft.lines.length > 0;
 }
 
 /**
  * Photo OCR is the fallback: it runs only when no digital receipt was
  * applied by this scan and the workspace does not already hold one.
  */
-export function shouldRunPhotoOcr(existingProvider: ReceiptProvider | null, digitalApplied: boolean): boolean {
-  return existingProvider !== "qr" && !digitalApplied;
+export function shouldRunPhotoOcr(
+  existingDraft: { provider: ReceiptProvider | null; lines: readonly unknown[] },
+  digitalApplied: boolean,
+): boolean {
+  const hasUsableDigitalDraft = existingDraft.provider === "qr" && existingDraft.lines.length > 0;
+  return !hasUsableDigitalDraft && !digitalApplied;
 }

@@ -657,12 +657,13 @@ export function ReceiptScanPage() {
         for (const file of files) {
           payloads.push(await decoder.decodeReceiptQrFile(file));
           if (revision !== workspaceRevisionRef.current) return;
-          // Identify distinct purchases before appending or uploading any pages.
-          if (collectReceiptQrLinks(payloads).conflict) {
-            toast.error(t("These photos contain different receipt links. Scan one receipt at a time."));
-            return;
-          }
         }
+      }
+      // Identify distinct purchases before appending or uploading any pages.
+      const { links, conflict } = collectReceiptQrLinks(payloads);
+      if (conflict) {
+        toast.error(t("These photos contain different receipt links. Scan one receipt at a time."));
+        return;
       }
       setOcrError(null);
       if (!hasDigitalDraft) setWarning(null);
@@ -692,7 +693,7 @@ export function ReceiptScanPage() {
         }
       }
       let appliedDigital = false;
-      const link = collectReceiptQrLinks(payloads).links[0] ?? null;
+      const link = links[0] ?? null;
       if (link) {
         try {
           const data = await api<ReceiptScanResponse>(`/api/houses/${house.id}/receipts/scan`, {
@@ -723,7 +724,7 @@ export function ReceiptScanPage() {
           setDigitalLink(link.url);
         }
       }
-      if (!shouldRunPhotoOcr(existingDraft.provider, appliedDigital)) {
+      if (!shouldRunPhotoOcr(existingDraft, appliedDigital)) {
         commitPages(pagesRef.current.map((page) => addedKeys.includes(page.key) ? { ...page, status: "skipped" } : page), false);
       } else {
         for (const key of addedKeys) {
