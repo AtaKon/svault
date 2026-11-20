@@ -84,7 +84,7 @@ function round(value: number, digits = 2): number {
 
 function toCents(amount: number): number {
   const scaled = Math.abs(amount) * 100;
-  // Correct binary noise at a half-cent before rounding the printed amounts.
+  // Nudge values very close to a half-cent to account for binary rounding.
   return Math.sign(amount) * Math.round(scaled + scaled * Number.EPSILON);
 }
 
@@ -301,8 +301,9 @@ function lineVatRate(row: ImpactProduct, breakdown: TaxBreakdownEntry[]): number
   if (!category.endsWith("%") && !breakdown.some((entry) => entry.rate === rate)) return null;
   const net = parsePrintedNumber(row.net);
   const vat = parsePrintedNumber(row.vat);
-  // A zero net amount cannot corroborate a VAT percentage.
-  if (net == null || net <= 0 || vat == null || vat < 0) return null;
+  if (net == null || net < 0 || vat == null || vat < 0) return null;
+  // A zero net amount only supports an explicitly printed zero rate.
+  if (net === 0) return category.endsWith("%") && rate === 0 && vat === 0 ? 0 : null;
   // Different issuer rounding can leave the rate unverified. The printed
   // amounts still import with the rest of the line.
   return toCents(net * rate / 100) === toCents(vat) ? rate : null;

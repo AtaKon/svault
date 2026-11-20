@@ -525,7 +525,7 @@ test("normalizes an IMPACT photo QR before one pinned receipt fetch", async () =
   assert.ok(!result.text.includes(impactMarker));
 });
 
-test("pins IMPACT redirects to the QR's own route and nothing broader", async () => {
+test("reports an IMPACT redirect without fetching a second URL, including self-redirects", async () => {
   for (const location of [
     "https://wrong.example/elsewhere",
     `https://einvoice.impact.gr/p/EL123456789/${impactMarker}/${"3".repeat(32)}`,
@@ -579,6 +579,14 @@ test("offers browser recovery for IMPACT verification and unreadable pages", asy
   configureReceiptQrFetcherForTests(async () => Response.json({ error: "Receipt unavailable" }));
   const json = await fetchQrReceiptDraft(impactUrl);
   assert.deepEqual(json, missing);
+
+  configureReceiptQrFetcherForTests(async () => new Response(impactBody(impactProducts), {
+    headers: { "content-type": "text/plain" },
+  }));
+  assert.deepEqual(await fetchQrReceiptDraft(impactUrl), missing);
+
+  configureReceiptQrFetcherForTests(async () => html(impactBody(impactProducts) + " ".repeat(2 * 1024 * 1024)));
+  assert.deepEqual(await fetchQrReceiptDraft(impactUrl), missing);
 });
 
 test("rejects incomplete and negative IMPACT product lines to photo OCR", async () => {
@@ -588,6 +596,7 @@ test("rejects incomplete and negative IMPACT product lines to photo OCR", async 
     impactLine({ description: "Absent quantity cell", total: "1,24" }).replace(impactCell("Quantity", "", "text-right"), ""),
     impactLine({ code: "SKU", description: "Missing total", unit: "Τεμάχιο", quantity: "1", net: "1,00", vat: "0,24" }),
     impactLine({ code: "SKU", description: "Invalid total", unit: "Τεμάχιο", quantity: "1", total: "-" }),
+    impactLine({ description: "Malformed decimal", quantity: "1", total: "12,3,4" }),
     impactLine({ code: "SKU", description: "Negative total", unit: "Τεμάχιο", quantity: "1", net: "-1,00", vat: "0,24", total: "-1,24" }),
     impactLine({ code: "SKU", description: "Negative quantity", unit: "Κιλό", quantity: "-0,500", net: "1,00", vat: "0,24", total: "1,24" }),
     impactLine({ description: "Unrepresentable quantity", quantity: overflow, total: "1,24" }),
@@ -627,6 +636,26 @@ test("leaves VAT unset for a zero-net IMPACT line with a charged price", () => {
   const [line] = impactDraft(source).lines;
   assert.equal(line.lineTotal, 1.24);
   assert.equal(line.taxRate, null);
+});
+
+test("retains an explicit zero rate for an IMPACT line with zero net and VAT", () => {
+  const line = { description: "Free product", quantity: "1", net: "0,00", vat: "0,00", total: "0,00" };
+  const draft = impactDraft(impactBody([
+    impactLine({ ...line, vatCategory: "0%" }),
+    impactLine({ ...line, vatCategory: "13%" }),
+  ]));
+  assert.deepEqual(draft.lines.map((row) => row.taxRate), [0, null]);
+});
+
+test("parses Greek grouping and accented units on IMPACT product lines", () => {
+  const draft = impactDraft(impactBody([
+    impactLine({ description: "Weighted product", unit: "ΚΙΛΌ", quantity: "1,250", total: "1.234,56" }),
+    impactLine({ description: "Unmapped unit", unit: "ΚΙΒΩΤΙΟ", quantity: "1", total: "2,00" }),
+  ]));
+  assert.deepEqual(draft.lines.map(({ quantity, unit, lineTotal }) => ({ quantity, unit, lineTotal })), [
+    { quantity: 1.25, unit: "kg", lineTotal: 1234.56 },
+    { quantity: 1, unit: null, lineTotal: 2 },
+  ]);
 });
 
 test("attributes an IMPACT timeout to the pending issuer", { timeout: 2000 }, async () => {
@@ -818,6 +847,14 @@ test("uses product amounts to verify the IMPACT VAT breakdown when summary total
   assert.deepEqual(unverified.taxBreakdown, []);
   assert.equal(unverified.tax, null);
   assert.deepEqual(unverified.lines.map((line) => line.taxRate), [null, null]);
+
+  const unreadableNet = source
+    .replace(impactCell("NetTotal", "1,00", "text-right"), impactCell("NetTotal", "", "text-right"))
+    .replace(impactCell("VatCategory", "13", "text-right"), impactCell("VatCategory", "13%", "text-right"));
+  const incompleteEvidence = impactDraft(unreadableNet);
+  assert.deepEqual(incompleteEvidence.taxBreakdown, []);
+  assert.equal(incompleteEvidence.tax, null);
+  assert.deepEqual(incompleteEvidence.lines.map((line) => line.taxRate), [null, 13]);
 });
 
 test("reports a recognized IMPACT product table without lines as incomplete", async () => {
