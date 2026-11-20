@@ -447,15 +447,22 @@ test("matches only the exact IMPACT route and keeps the original path case", () 
   }
 });
 
-test("reports an escaped IMPACT path as unsupported without fetching it", async () => {
+test("gates the first IMPACT request on the supported URL format", async () => {
   const requests: string[] = [];
   configureReceiptQrFetcherForTests(async (url) => {
     requests.push(url);
     return html("");
   });
-  const result = await fetchQrReceiptDraft(impactUrl.replace(impactMarker, "%31" + impactMarker.slice(1)));
-  assert.equal(result.status, "unsupported");
+  for (const url of [
+    impactUrl.replace(impactMarker, "%31" + impactMarker.slice(1)),
+    impactUrl.replace("/p/EL", "/p/el"),
+    impactUrl.replace("einvoice.impact.gr", "einvoice.impact.gr.example"),
+  ]) {
+    assert.equal((await fetchQrReceiptDraft(url)).status, "unsupported");
+  }
   assert.deepEqual(requests, []);
+  await fetchQrReceiptDraft(impactUrl.replace("einvoice.impact.gr", "EINVOICE.IMPACT.GR:443"));
+  assert.deepEqual(requests, [impactUrl]);
 });
 
 test("reads a server-rendered IMPACT receipt in one pinned fetch", async () => {
@@ -550,6 +557,7 @@ test("offers browser recovery for IMPACT verification and unreadable pages", asy
 });
 
 test("rejects incomplete and negative IMPACT product lines to photo OCR", async () => {
+  const overflow = "9".repeat(310);
   for (const broken of [
     impactLine({ code: "SKU", description: "Blank quantity", unit: "Τεμάχιο", net: "1,00", vat: "0,24", total: "1,24" }),
     impactLine({ description: "Absent quantity cell", total: "1,24" }).replace(impactCell("Quantity", "", "text-right"), ""),
@@ -557,12 +565,29 @@ test("rejects incomplete and negative IMPACT product lines to photo OCR", async 
     impactLine({ code: "SKU", description: "Invalid total", unit: "Τεμάχιο", quantity: "1", total: "-" }),
     impactLine({ code: "SKU", description: "Negative total", unit: "Τεμάχιο", quantity: "1", net: "-1,00", vat: "0,24", total: "-1,24" }),
     impactLine({ code: "SKU", description: "Negative quantity", unit: "Κιλό", quantity: "-0,500", net: "1,00", vat: "0,24", total: "1,24" }),
+    impactLine({ description: "Unrepresentable quantity", quantity: overflow, total: "1,24" }),
+    impactLine({ description: "Unrepresentable total", quantity: "1", total: overflow }),
   ]) {
     configureReceiptQrFetcherForTests(async () => html(impactBody([broken, ...impactProducts.slice(1)])));
     const result = await fetchQrReceiptDraft(impactUrl);
     assert.equal(result.status, "unavailable");
     assert.match(result.message ?? "", /incomplete product line/);
   }
+});
+
+test("keeps the charged price when the IMPACT line VAT cannot be read", () => {
+  const source = impactBody([impactLine({
+    description: "Product with unreadable VAT",
+    quantity: "1",
+    net: "unknown",
+    vatCategory: "24",
+    vat: "-",
+    total: "1,24",
+  })]);
+  const [line] = impactDraft(source).lines;
+  assert.equal(line.quantity, 1);
+  assert.equal(line.lineTotal, 1.24);
+  assert.equal(line.taxRate, null);
 });
 
 test("attributes an IMPACT timeout to the pending issuer", { timeout: 2000 }, async () => {
@@ -659,4 +684,10 @@ test("ignores tables outside the IMPACT details section", async () => {
 test("decodes named and numeric entities in IMPACT line descriptions", () => {
   const source = impactBody([impactLine({ description: "Grocer&#x27;s&#1;&amp; Baker&#8217;s", quantity: "1", total: "1,24" })]);
   assert.equal(impactDraft(source).lines[0].description, "Grocer's & Baker’s");
+});
+
+test("does not cut an IMPACT description in the middle of a Unicode character", () => {
+  const description = "a".repeat(159);
+  const source = impactBody([impactLine({ description: description + "&#x1F34E;", quantity: "1", total: "1,24" })]);
+  assert.equal(impactDraft(source).lines[0].description, description);
 });

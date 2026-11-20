@@ -47,6 +47,12 @@ interface ImpactRow {
   total: string | null;
 }
 
+type ImpactProduct = Omit<ImpactRow, "description" | "quantity" | "total"> & {
+  description: string;
+  quantity: number;
+  lineTotal: number;
+};
+
 /** Product cell class tokens observed on IMPACT receipt pages. */
 const CELL_TO_ROW: Record<string, keyof ImpactRow> = {
   Code: "code",
@@ -152,7 +158,7 @@ function summaryValue(html: string, field: string): string | null {
  * Use the product table in the viewer's designated details section. If it
  * is incomplete, fall back to photo OCR without borrowing lines elsewhere.
  */
-function parseProductTable(html: string): ImpactRow[] | "incomplete" | null {
+function parseProductTable(html: string): ImpactProduct[] | "incomplete" | null {
   for (const [, attrs, content] of html.matchAll(/<table\b([^>]*)>([\s\S]*?)<\/table>/gi)) {
     if (classAttr(attrs)?.split(/\s+/).includes("InvoiceLineTable")) continue;
     const thead = content.match(/<thead\b[^>]*>([\s\S]*?)<\/thead>/i)?.[1] ?? "";
@@ -163,7 +169,7 @@ function parseProductTable(html: string): ImpactRow[] | "incomplete" | null {
     if (!headerTokens.has("field-Description1") || !headerTokens.has("field-Total") || !headerTokens.has("field-Quantity")) continue;
     const tbody = content.match(/<tbody\b[^>]*>([\s\S]*?)<\/tbody>/i)?.[1];
     if (!tbody) return "incomplete";
-    const rows: ImpactRow[] = [];
+    const products: ImpactProduct[] = [];
     for (const rowMatch of tbody.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)) {
       const row: ImpactRow = {
         code: null,
@@ -192,16 +198,26 @@ function parseProductTable(html: string): ImpactRow[] | "incomplete" | null {
       const quantity = PRINTED_NUMBER.test(printedQuantity) ? parseQuantity(printedQuantity) : null;
       const total = parsePrintedAmount(row.total);
       if (!row.description || quantity == null || quantity <= 0 || total == null || total < 0) return "incomplete";
-      rows.push(row);
+      products.push({
+        code: row.code,
+        description: row.description,
+        unit: row.unit,
+        quantity,
+        net: row.net,
+        vatCategory: row.vatCategory,
+        vat: row.vat,
+        lineTotal: total,
+      });
     }
-    return rows.length ? rows : "incomplete";
+    return products.length ? products : "incomplete";
   }
   return null;
 }
 
 /**
  * Accept a VAT table when every row is valid and the amounts reconcile to
- * the printed summary totals, where available.
+ * the printed summary totals, where available. If a summary total is
+ * missing or unreadable, validate the VAT rows without that comparison.
  */
 function parseTaxBreakdown(html: string, subtotal: number | null, tax: number | null): TaxBreakdownEntry[] {
   for (const table of html.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)) {
@@ -239,8 +255,8 @@ function mapUnit(raw: string | null): string | null {
   return UNIT_MAP[raw.normalize("NFD").replace(/\p{M}/gu, "").toUpperCase().replace(/[\s.]+/g, "")] ?? null;
 }
 
-/** Confirm the printed line rate with its own amounts and the issuer's VAT rates. */
-function lineVatRate(row: ImpactRow, breakdown: TaxBreakdownEntry[]): number | null {
+/** VAT is optional. Keep the product and charged amount when its rate cannot be verified. */
+function lineVatRate(row: ImpactProduct, breakdown: TaxBreakdownEntry[]): number | null {
   const category = row.vatCategory;
   if (!category || !/^\d{1,3}(?:[.,]\d{1,2})?\s*%?$/.test(category)) return null;
   const rate = Number(category.replace(",", ".").replace(/\s*%$/, ""));
@@ -284,12 +300,11 @@ export function parseImpactReceiptHtml(html: string): ImpactReceiptParse {
   const lines: ReceiptDraft["lines"] = [];
   const textLines: string[] = [];
   for (const row of rows) {
-    const description = (row.description ?? "").trim().slice(0, 160);
-    const quantity = parseQuantity(row.quantity ?? "") ?? 1;
-    const lineTotal = Math.max(0, parseAmount(row.total ?? "") ?? 0);
+    const description = row.description.slice(0, 160).replace(/[\uD800-\uDBFF]$/, "");
+    const { quantity, lineTotal } = row;
     // Effective VAT-inclusive unit price from the charged amount, exactly
     // like the other digital receipt parsers.
-    const unitPrice = quantity > 0 ? round(lineTotal / quantity, 4) : null;
+    const unitPrice = round(lineTotal / quantity, 4);
     lines.push({
       description,
       rawDescription: description,
@@ -305,9 +320,9 @@ export function parseImpactReceiptHtml(html: string): ImpactReceiptParse {
       [
         row.code ?? "",
         description,
-        (row.quantity ?? "").trim(),
-        (row.unit ?? "").trim(),
-        unitPrice != null ? unitPrice.toFixed(2) : "",
+        String(quantity),
+        row.unit ?? "",
+        unitPrice.toFixed(2),
         row.vatCategory ?? "",
         lineTotal.toFixed(2),
       ]
