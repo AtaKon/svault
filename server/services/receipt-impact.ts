@@ -75,10 +75,15 @@ function round(value: number, digits = 2): number {
   return Math.round(value * factor) / factor;
 }
 
+function parsePrintedAmount(raw: string | null): number | null {
+  return raw != null && PRINTED_NUMBER.test(raw) ? parseAmount(raw) : null;
+}
+
 function decodeEntities(value: string): string {
   return value.replace(/&(?:(nbsp|amp|lt|gt|quot|apos)|#(\d+)|#x([\da-f]+));/gi, (_entity, name, decimal, hex) => {
     if (name) return NAMED_ENTITIES[name.toLowerCase()];
     const code = decimal ? Number(decimal) : Number.parseInt(hex, 16);
+    if ((code > 0 && code < 32 && code !== 9 && code !== 10 && code !== 13) || code === 127) return "";
     return code > 0 && code <= 0x10ffff && (code < 0xd800 || code > 0xdfff)
       ? String.fromCodePoint(code)
       : "\uFFFD";
@@ -143,8 +148,9 @@ function summaryValue(html: string, field: string): string | null {
 }
 
 /**
- * Parse the first receipt table with the product headers. Ignore the myDATA
- * detail table. An empty or incomplete receipt table goes to photo OCR.
+ * The first table with the receipt product headers is authoritative, even
+ * when it has no body. Skip the myDATA detail tables. An incomplete receipt
+ * table goes to photo OCR without substituting lines from another table.
  */
 function parseProductTable(html: string): ImpactRow[] | "incomplete" | null {
   for (const [, attrs, content] of html.matchAll(/<table\b([^>]*)>([\s\S]*?)<\/table>/gi)) {
@@ -183,9 +189,9 @@ function parseProductTable(html: string): ImpactRow[] | "incomplete" | null {
       if (!recognized || !Object.values(row).some(Boolean)) continue;
       // Missing, unparseable or negative product lines go back to photo OCR.
       const quantity = parseQuantity(row.quantity ?? "");
-      const total = parseAmount(row.total ?? "");
+      const total = parsePrintedAmount(row.total);
       if (!row.description || !PRINTED_NUMBER.test(row.quantity ?? "") ||
-          !PRINTED_NUMBER.test(row.total ?? "") || quantity == null || quantity <= 0 || total == null || total < 0) return "incomplete";
+          quantity == null || quantity <= 0 || total == null || total < 0) return "incomplete";
       rows.push(row);
     }
     return rows.length ? rows : "incomplete";
@@ -194,13 +200,13 @@ function parseProductTable(html: string): ImpactRow[] | "incomplete" | null {
 }
 
 /**
- * The VAT breakdown is optional: rows whose cells carry the Percentage,
- * UnderlyingValue and VatAmount tokens, taken from the first table that has
- * valid ones so a myDATA duplicate never overwrites the receipt view.
+ * The optional VAT breakdown comes from the first table whose VAT rows are
+ * all valid. A partial table cannot supply rates or a fallback tax total.
  */
 function parseTaxBreakdown(html: string): TaxBreakdownEntry[] {
   for (const table of html.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)) {
     const entries: TaxBreakdownEntry[] = [];
+    let invalid = false;
     for (const rowMatch of table[1].matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)) {
       const cells = new Map<string, string>();
       for (const cell of rowMatch[1].matchAll(/<td\b([^>]*)>([\s\S]*?)<\/td>/gi)) {
@@ -209,14 +215,18 @@ function parseTaxBreakdown(html: string): TaxBreakdownEntry[] {
           .find((candidate) => candidate === "field-Percentage" || candidate === "field-UnderlyingValue" || candidate === "field-VatAmount");
         if (token) cells.set(token, cellValue(cell[2]) ?? "");
       }
-      if (cells.size < 3) continue;
-      const rate = parseQuantity(cells.get("field-Percentage")!);
-      const net = parseAmount(cells.get("field-UnderlyingValue")!);
-      const tax = parseAmount(cells.get("field-VatAmount")!);
-      if (rate == null || rate < 0 || rate > 100 || net == null || net < 0 || tax == null || tax < 0) continue;
+      if (!cells.size) continue;
+      const rateText = cells.get("field-Percentage")?.replace(/\s*%$/, "") ?? "";
+      const rate = PRINTED_NUMBER.test(rateText) ? parseQuantity(rateText) : null;
+      const net = parsePrintedAmount(cells.get("field-UnderlyingValue") ?? null);
+      const tax = parsePrintedAmount(cells.get("field-VatAmount") ?? null);
+      if (rate == null || rate < 0 || rate > 100 || net == null || net < 0 || tax == null || tax < 0) {
+        invalid = true;
+        break;
+      }
       entries.push({ rate, net, tax, gross: round(net + tax, 2) });
     }
-    if (entries.length) return entries;
+    if (!invalid && entries.length) return entries;
   }
   return [];
 }
@@ -231,10 +241,11 @@ function lineVatRate(row: ImpactRow, breakdown: TaxBreakdownEntry[]): number | n
   const category = row.vatCategory;
   if (!category || !/^\d{1,3}(?:[.,]\d{1,2})?\s*%?$/.test(category)) return null;
   const rate = Number(category.replace(",", ".").replace(/\s*%$/, ""));
-  // An unmarked number can be a category code. Require a matching rate in the summary.
-  if (rate > 100 || (!category.endsWith("%") && !breakdown.some((entry) => entry.rate === rate))) return null;
-  const net = row.net ? parseAmount(row.net) : null;
-  const vat = row.vat ? parseAmount(row.vat) : null;
+  // A bare number can be a category code. Cross-check it against the summary
+  // when present, then verify it against the line's own amounts.
+  if (rate > 100 || (!category.endsWith("%") && breakdown.length && !breakdown.some((entry) => entry.rate === rate))) return null;
+  const net = parsePrintedAmount(row.net);
+  const vat = parsePrintedAmount(row.vat);
   if (net == null || net <= 0 || vat == null || vat < 0) return null;
   // Different issuer rounding can leave the rate unverified. The printed
   // amounts still import with the rest of the line.

@@ -112,7 +112,6 @@ function impactDraft(source: string) {
   return parsed.draft;
 }
 
-
 function invoiceDraft(body: string) {
   const parsed = parseEntersoftInvoiceHtml(body);
   assert.ok(parsed.status === "ok");
@@ -521,8 +520,9 @@ test("pins IMPACT redirects to the QR's own route and nothing broader", async ()
   }
 });
 
-test("reports IMPACT verification, expiry and unavailable pages safely", async () => {
-  configureReceiptQrFetcherForTests(async () => html('<div id="cf-turnstile"></div>'));
+test("offers browser recovery for IMPACT verification and unreadable pages", async () => {
+  // Synthetic Turnstile page. Other interstitials follow the unreadable-page path.
+  configureReceiptQrFetcherForTests(async () => html('<script src="https://challenges.cloudflare.com/turnstile/v0/api.js"></script>'));
   const challenge = await fetchQrReceiptDraft(impactUrl);
   assert.equal(challenge.status, "challenge");
   assert.match(challenge.message ?? "", /IMPACT requires browser verification/);
@@ -530,17 +530,17 @@ test("reports IMPACT verification, expiry and unavailable pages safely", async (
   configureReceiptQrFetcherForTests(async () => new Response(null, { status: 404 }));
   const missing = await fetchQrReceiptDraft(impactUrl);
   assert.equal(missing.status, "unavailable");
-  assert.match(missing.message ?? "", /photo scan and AI re-read/);
+  assert.match(missing.message ?? "", /Open the digital receipt in your browser/);
 
   configureReceiptQrFetcherForTests(async () => html("<p>A receipt page without a product table.</p>"));
   const unrecognizable = await fetchQrReceiptDraft(impactUrl);
   assert.equal(unrecognizable.status, "unavailable");
-  assert.match(unrecognizable.message ?? "", /photo scan and AI re-read/);
+  assert.match(unrecognizable.message ?? "", /Open the digital receipt in your browser/);
 
   configureReceiptQrFetcherForTests(async () => html(" \n\t"));
   const empty = await fetchQrReceiptDraft(impactUrl);
   assert.equal(empty.status, "unavailable");
-  assert.match(empty.message ?? "", /photo scan and AI re-read/);
+  assert.match(empty.message ?? "", /Open the digital receipt in your browser/);
   assert.ok(!JSON.stringify(empty).includes(impactUrl));
 });
 
@@ -596,6 +596,7 @@ test("treats the IMPACT VAT breakdown and currency as optional", () => {
     .replace('<tr class="field field-CurrencyCode text-right"><td class="label">Νόμισμα</td><td class="value">EUR</td></tr>', "");
   const draft = impactDraft(source);
   assert.deepEqual(draft.taxBreakdown, []);
+  assert.deepEqual(draft.lines.map((line) => line.taxRate), [24, 13]);
   assert.equal(draft.tax, 0.63);
   assert.equal(draft.currency, null);
 });
@@ -616,12 +617,13 @@ test("ignores negative IMPACT tax breakdown entries", () => {
   assert.deepEqual(impactDraft(source).taxBreakdown, []);
 });
 
-test("finds the valid IMPACT tax breakdown after a table with only invalid rows", () => {
-  const invalid = `<table><tbody>
+test("finds the complete IMPACT VAT breakdown after a partial table", () => {
+  const partial = `<table><tbody>
+    <tr>${impactCell("Percentage", "6%")}${impactCell("UnderlyingValue", "1,00")}${impactCell("VatAmount", "0,06")}</tr>
     <tr>${impactCell("Percentage", "13%")}${impactCell("UnderlyingValue", "2,00")}</tr>
     <tr>${impactCell("Percentage", "24%")}${impactCell("UnderlyingValue", "-1,00")}${impactCell("VatAmount", "-0,24")}</tr>
   </tbody></table>`;
-  const draft = impactDraft(invalid + impactBody(impactProducts));
+  const draft = impactDraft(partial + impactBody(impactProducts));
   assert.deepEqual(draft.taxBreakdown.map((entry) => entry.rate), [24, 13]);
 });
 
@@ -650,6 +652,6 @@ test("ignores a myDATA table before the IMPACT receipt table", async () => {
 });
 
 test("decodes named and numeric entities in IMPACT line descriptions", () => {
-  const source = impactBody([impactLine({ description: "Grocer&#x27;s &amp; Baker&#8217;s", quantity: "1", total: "1,24" })]);
+  const source = impactBody([impactLine({ description: "Gro&#1;cer&#x27;s &amp; Baker&#8217;s", quantity: "1", total: "1,24" })]);
   assert.equal(impactDraft(source).lines[0].description, "Grocer's & Baker’s");
 });

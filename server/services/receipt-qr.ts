@@ -73,6 +73,8 @@ const IMPACT_CHALLENGE_MESSAGE =
   "IMPACT requires browser verification. Open the digital receipt to verify it, or continue with the photo scan.";
 const IMPACT_REDIRECT_MESSAGE =
   "IMPACT redirected the receipt link. Open the digital receipt in your browser, or continue with the photo scan.";
+const IMPACT_UNAVAILABLE_MESSAGE =
+  "The IMPACT receipt could not be read automatically. Open the digital receipt in your browser, or continue with the photo scan.";
 const UNSUPPORTED_MESSAGE = "That QR code or link is not from a supported digital receipt issuer.";
 const GENERIC_UNAVAILABLE_MESSAGE = "The digital receipt could not be fetched from the issuer.";
 const RATE_LIMIT_MESSAGE = "Too many digital receipt requests. Try again in a few minutes or scan the photo.";
@@ -333,6 +335,8 @@ async function fetchEntersoft(link: EntersoftLink, signal: AbortSignal): Promise
  */
 async function fetchImpact(link: ImpactLink, signal: AbortSignal): Promise<ReceiptQrFetchResult> {
   const page = await fetchPage(link.url, (url) => url.href === link.url, signal);
+  // Recognize known Turnstile markup. Unrecognized pages also give the user
+  // the original link and photo scan options.
   if (CHALLENGE_MARKERS.test(page.html)) {
     return result(link.issuer, "challenge", IMPACT_CHALLENGE_MESSAGE);
   }
@@ -341,14 +345,14 @@ async function fetchImpact(link: ImpactLink, signal: AbortSignal): Promise<Recei
     return result(link.issuer, "unavailable", DIGITAL_INCOMPLETE_MESSAGE);
   }
   if (parsed.status !== "ok" || !parsed.draft.lines.length || !parsed.text.trim()) {
-    return result(link.issuer, "unavailable", DIGITAL_UNAVAILABLE_MESSAGE);
+    return result(link.issuer, "unavailable", IMPACT_UNAVAILABLE_MESSAGE);
   }
   return { ...parsed, issuer: link.issuer, message: null };
 }
 
 function messageForError(issuer: ReceiptQrIssuer, error: IssuerPageError): string {
   if (issuer === "epsilon-sklavenitis") return EPSILON_UNAVAILABLE_MESSAGE;
-  if (issuer === "impact" && error.reason === "redirect") return IMPACT_REDIRECT_MESSAGE;
+  if (issuer === "impact") return error.reason === "redirect" ? IMPACT_REDIRECT_MESSAGE : IMPACT_UNAVAILABLE_MESSAGE;
   if (issuer === "entersoft" && error.reason === "status" && error.status === 404) return ENTERSOFT_EXPIRED_MESSAGE;
   return DIGITAL_UNAVAILABLE_MESSAGE;
 }
