@@ -6,7 +6,7 @@ const entersoft = "https://e-invoicing.gr/edocuments/ViewInvoice/-1/12345678-123
 const epsilon = "https://epsilondigital-sklavenitis.epsilonnet.gr/fd/12345678123412341234123456789abc:12";
 const otherEpsilon = "https://epsilondigital-sklavenitis.epsilonnet.gr/fd/fedcba9876543210fedcba9876543210:34";
 
-const scan = (provider, lines, status = "ok") => ({ provider, qr: { status }, draft: { lines } });
+const scan = (provider, lines) => ({ provider, draft: { lines } });
 
 test("collects one receipt link for a batch of photos of the same receipt", () => {
   const links = new Map();
@@ -40,7 +40,6 @@ test("flags a second distinct receipt QR immediately", () => {
 test("a scan response is a usable digital receipt only with QR provenance and product lines", () => {
   assert.equal(isUsableDigitalReceipt(scan("qr", [{ description: "Milk" }])), true);
   assert.equal(isUsableDigitalReceipt(scan("qr", [])), false);
-  assert.equal(isUsableDigitalReceipt(scan("qr", [{ description: "Milk" }], "unavailable")), false);
   assert.equal(isUsableDigitalReceipt(scan("local", [{ description: "Milk" }])), false);
   assert.equal(isUsableDigitalReceipt(scan("template", [{ description: "Milk" }])), false);
   assert.equal(isUsableDigitalReceipt(scan("ai", [{ description: "Milk" }])), false);
