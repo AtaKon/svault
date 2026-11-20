@@ -334,7 +334,8 @@ async function fetchEntersoft(link: EntersoftLink, signal: AbortSignal): Promise
  * because the only allowed URL has already been visited.
  */
 async function fetchImpact(link: ImpactLink, signal: AbortSignal): Promise<ReceiptQrFetchResult> {
-  // fetchPage checks the pinned, allowlisted URL before the initial GET as well.
+  // matchReceiptQrLink stores URL.href, so parsing it again in fetchPage
+  // yields the same canonical string before the initial GET.
   const page = await fetchPage(link.url, (url) => url.href === link.url, signal);
   // Recognize known Turnstile markup. Unrecognized pages also give the user
   // the original link and photo scan options.

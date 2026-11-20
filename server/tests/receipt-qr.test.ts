@@ -452,6 +452,7 @@ test("matches only the exact IMPACT route and keeps the original path case", () 
     impactUrl.replace(impactMarker, "%31" + impactMarker.slice(1)),
     impactUrl.replace(impactMarker, impactMarker + "0"),
     impactUrl.replace(impactMarker, "g" + impactMarker.slice(1)),
+    impactUrl.replace(impactMarker, impactMarker.slice(0, 20) + " " + impactMarker.slice(20)),
     impactUrl.replace(`${impactMarker}/`, `${impactMarker}/2`),
     impactUrl.slice(0, -1),
     impactUrl + "2",
@@ -490,7 +491,7 @@ test("normalizes an IMPACT photo QR before one pinned receipt fetch", async () =
   const requests: string[] = [];
   configureReceiptQrFetcherForTests(async (url) => {
     requests.push(url);
-    return html(impactBody(impactProducts));
+    return new Response(impactBody(impactProducts), { headers: { "content-type": "text/html; charset=utf-8" } });
   });
   const links = new Map<string, ReceiptQrLink>();
   assert.equal(addReceiptQrPayload(links, impactUrl.replace("einvoice.impact.gr", "EINVOICE.IMPACT.GR:443")), false);
@@ -597,6 +598,9 @@ test("offers browser recovery for IMPACT verification and unreadable pages", asy
     issuer: "impact",
     message: "The IMPACT receipt could not be read automatically. Open the digital receipt in your browser, or continue with the photo scan.",
   });
+
+  configureReceiptQrFetcherForTests(async () => new Response(new TextEncoder().encode(impactBody(impactProducts))));
+  assert.deepEqual(await fetchQrReceiptDraft(impactUrl), missing);
 });
 
 test("cancels an oversized IMPACT HTML stream before the body is complete", { timeout: 2000 }, async () => {
@@ -698,11 +702,26 @@ test("parses Greek grouping and accented units on IMPACT product lines", () => {
   ]);
 });
 
-test("attributes an IMPACT timeout to the pending issuer", { timeout: 2000 }, async () => {
-  configureReceiptQrFetcherForTests(() => new Promise<Response>(() => undefined));
-  const timeout = await readQrReceiptScan("test-impact-timeout-house", impactUrl, 30);
-  assert.equal(timeout.status, "unavailable");
-  assert.equal(timeout.issuer, "impact");
+test("aborts slow IMPACT responses and preserves the issuer recovery message", { timeout: 2000 }, async () => {
+  const fetchers = [
+    () => readQrReceiptScan("test-impact-timeout-house", impactUrl, 30),
+    () => fetchQrReceiptDraft(impactUrl, 30),
+  ];
+  for (const fetchReceipt of fetchers) {
+    let aborted = false;
+    configureReceiptQrFetcherForTests((_url, signal) => new Promise<Response>((_resolve, reject) => {
+      signal.addEventListener("abort", () => {
+        aborted = true;
+        reject(signal.reason);
+      }, { once: true });
+    }));
+    assert.deepEqual(await fetchReceipt(), {
+      status: "unavailable",
+      issuer: "impact",
+      message: "The IMPACT receipt could not be read automatically. Open the digital receipt in your browser, or continue with the photo scan.",
+    });
+    assert.ok(aborted);
+  }
 });
 
 test("rate limits IMPACT lookups before fetching the issuer again", async (t) => {
