@@ -3,11 +3,12 @@ import type { ReceiptDraft } from "../../shared/types.js";
 import { outboundFetch } from "../lib/outbound.js";
 import { limiters } from "../rate-limit.js";
 import { parseEntersoftInvoiceHtml } from "./receipt-entersoft.js";
+import { parseImpactReceiptHtml } from "./receipt-impact.js";
 
 /**
  * Server-side retrieval of digital receipts behind known issuer QR links.
  *
- * Only exact https routes on the two supported issuers are fetched; every
+ * Only exact https routes on the three supported issuers are fetched; every
  * redirect hop is re-validated against the same allowlist before it is
  * followed. Responses are bounded in time and size, no cookies or SVault
  * credentials are ever sent (Node's fetch has no cookie jar and none is added),
@@ -39,6 +40,7 @@ type QrFetch = (url: string, signal: AbortSignal) => Promise<Response>;
 type EpsilonLink = Extract<ReceiptQrLink, { issuer: "epsilon-sklavenitis" }>;
 type EntersoftLink = Extract<ReceiptQrLink, { issuer: "entersoft" }>;
 type EntersoftRef = EntersoftLink["entersoft"];
+type ImpactLink = Extract<ReceiptQrLink, { issuer: "impact" }>;
 
 const EPSILON_HOST = "epsilondigital-sklavenitis.epsilonnet.gr";
 const ENTERSOFT_HOST = "e-invoicing.gr";
@@ -63,10 +65,12 @@ const EPSILON_UNAVAILABLE_MESSAGE =
 const ENTERSOFT_EXPIRED_MESSAGE = "The digital receipt link has expired or is no longer available from the issuer.";
 const ENTERSOFT_CHALLENGE_MESSAGE =
   "Entersoft requires browser verification. Open the digital receipt to verify it, or continue with the photo scan.";
-const ENTERSOFT_UNAVAILABLE_MESSAGE =
+const DIGITAL_UNAVAILABLE_MESSAGE =
   "The digital receipt could not be read automatically. The photo scan and AI re-read remain available.";
-const ENTERSOFT_INCOMPLETE_MESSAGE =
+const DIGITAL_INCOMPLETE_MESSAGE =
   "The digital receipt contains an incomplete product line. Use a photo to read the full receipt.";
+const IMPACT_CHALLENGE_MESSAGE =
+  "IMPACT requires browser verification. Open the digital receipt to verify it, or continue with the photo scan.";
 const UNSUPPORTED_MESSAGE = "That QR code or link is not from a supported digital receipt issuer.";
 const GENERIC_UNAVAILABLE_MESSAGE = "The digital receipt could not be fetched from the issuer.";
 const RATE_LIMIT_MESSAGE = "Too many digital receipt requests. Try again in a few minutes or scan the photo.";
@@ -303,7 +307,7 @@ async function fetchEntersoft(link: EntersoftLink, signal: AbortSignal): Promise
   // confirms the page is the expected viewer. Anything else on the page (such
   // as the issuer's ΑΑΔΕ link) is never fetched.
   if (!iframeMatchesPinnedSource(page.html, ref)) {
-    return result(link.issuer, "unavailable", ENTERSOFT_UNAVAILABLE_MESSAGE);
+    return result(link.issuer, "unavailable", DIGITAL_UNAVAILABLE_MESSAGE);
   }
   const documentUrl = `https://${ENTERSOFT_HOST}/api/GetInvoice?${invoiceParams(ref)}`;
   const document = await fetchPage(documentUrl, (url) => matchesPinnedInvoice(url, ref), signal);
@@ -312,18 +316,39 @@ async function fetchEntersoft(link: EntersoftLink, signal: AbortSignal): Promise
   }
   const parsed = parseEntersoftInvoiceHtml(document.html);
   if (parsed.status === "incomplete") {
-    return result(link.issuer, "unavailable", ENTERSOFT_INCOMPLETE_MESSAGE);
+    return result(link.issuer, "unavailable", DIGITAL_INCOMPLETE_MESSAGE);
   }
   if (parsed.status !== "ok" || !parsed.draft.lines.length || !parsed.text.trim()) {
-    return result(link.issuer, "unavailable", ENTERSOFT_UNAVAILABLE_MESSAGE);
+    return result(link.issuer, "unavailable", DIGITAL_UNAVAILABLE_MESSAGE);
+  }
+  return { ...parsed, issuer: link.issuer, message: null };
+}
+
+/**
+ * IMPACT eInvoicing renders the receipt server-side at the QR's own route, so
+ * one bounded fetch is all there is: redirects are only followed back to that
+ * exact route (original path case preserved), and no reference the page
+ * carries — styles, scripts, other tabs — is ever fetched.
+ */
+async function fetchImpact(link: ImpactLink, signal: AbortSignal): Promise<ReceiptQrFetchResult> {
+  const page = await fetchPage(link.url, (url) => url.href === link.url, signal);
+  if (CHALLENGE_MARKERS.test(page.html)) {
+    return result(link.issuer, "challenge", IMPACT_CHALLENGE_MESSAGE);
+  }
+  const parsed = parseImpactReceiptHtml(page.html);
+  if (parsed.status === "incomplete") {
+    return result(link.issuer, "unavailable", DIGITAL_INCOMPLETE_MESSAGE);
+  }
+  if (parsed.status !== "ok" || !parsed.draft.lines.length || !parsed.text.trim()) {
+    return result(link.issuer, "unavailable", DIGITAL_UNAVAILABLE_MESSAGE);
   }
   return { ...parsed, issuer: link.issuer, message: null };
 }
 
 function messageForError(issuer: ReceiptQrIssuer, error: IssuerPageError): string {
   if (issuer === "epsilon-sklavenitis") return EPSILON_UNAVAILABLE_MESSAGE;
-  if (error.reason === "status" && error.status === 404) return ENTERSOFT_EXPIRED_MESSAGE;
-  return ENTERSOFT_UNAVAILABLE_MESSAGE;
+  if (issuer === "entersoft" && error.reason === "status" && error.status === 404) return ENTERSOFT_EXPIRED_MESSAGE;
+  return DIGITAL_UNAVAILABLE_MESSAGE;
 }
 
 /**
@@ -342,9 +367,14 @@ export function fetchQrReceiptDraft(
 
 async function fetchIssuerReceipt(link: ReceiptQrLink, signal: AbortSignal): Promise<ReceiptQrFetchResult> {
   try {
-    return link.issuer === "epsilon-sklavenitis"
-      ? await fetchEpsilon(link, signal)
-      : await fetchEntersoft(link, signal);
+    switch (link.issuer) {
+      case "epsilon-sklavenitis":
+        return await fetchEpsilon(link, signal);
+      case "entersoft":
+        return await fetchEntersoft(link, signal);
+      case "impact":
+        return await fetchImpact(link, signal);
+    }
   } catch (error) {
     if (error instanceof IssuerPageError) {
       return result(link.issuer, "unavailable", messageForError(link.issuer, error));

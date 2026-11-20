@@ -3,6 +3,7 @@ import { afterEach, test } from "node:test";
 import { matchReceiptQrLink } from "../../shared/receipt-qr-links.js";
 import { configureReceiptQrFetcherForTests, fetchQrReceiptDraft, readQrReceiptScan } from "../services/receipt-qr.js";
 import { parseEntersoftInvoiceHtml } from "../services/receipt-entersoft.js";
+import { parseImpactReceiptHtml } from "../services/receipt-impact.js";
 
 const ref = "12345678-1234-1234-1234-123456789abc";
 const token = "testAB12";
@@ -42,6 +43,75 @@ const invoice = `<div class="BoldBlueHeader">ΔΟΚΙΜΑΣΤΙΚΟ ΚΑΤΑΣΤ
 function html(body: string) {
   return new Response(body, { headers: { "content-type": "text/html" } });
 }
+
+/* IMPACT eInvoicing: synthetic fixtures shaped exactly like the observed
+ * einvoice.impact.gr/p/EL… viewer markup. */
+
+const impactMarker = "1".repeat(40);
+const impactUrl = `https://einvoice.impact.gr/p/EL123456789/${impactMarker}/${"2".repeat(32)}`;
+
+function impactCell(field: string, text: string, extra = "") {
+  return `<td class="${extra} field-${field}" data-header="${field}"><span class="field field-${field}"><span class="inner"><span class="value">${text}</span></span></span></td>`;
+}
+
+function impactLine(line: Partial<Record<"code" | "description" | "unit" | "quantity" | "net" | "vatCategory" | "vat" | "total", string>>) {
+  const cell = (field: string, key: keyof typeof line) =>
+    impactCell(field, line[key] ?? "", field === "Description1" || field === "Code" ? "text-left" : "text-right");
+  return `<tr>${cell("Code", "code")}${cell("Description1", "description")}${cell("Quantity", "quantity")}${cell("MeasurementUnit", "unit")}${cell("NetTotal", "net")}${cell("VatCategory", "vatCategory")}${cell("VATTotal", "vat")}${cell("Total", "total")}</tr>`;
+}
+
+const impactProductHead = `<thead><tr>
+    <th class="field field-Code text-left"><span class="label">Κωδικός</span></th>
+    <th class="field field-Description1 text-left"><span class="label">Περιγραφή</span></th>
+    <th class="field field-Quantity text-right"><span class="label">Ποσότητα</span></th>
+    <th class="field field-MeasurementUnit"><span class="label">Μ.Μ.</span></th>
+    <th class="field field-NetTotal text-right"><span class="label">Αξία</span></th>
+    <th class="field field-VatCategory"><span class="label">Κατηγορία ΦΠΑ</span></th>
+    <th class="field field-VATTotal text-right"><span class="label">ΦΠΑ</span></th>
+    <th class="field field-Total text-right"><span class="label">Σύνολο</span></th>
+  </tr></thead>`;
+
+const impactProductTable = (lines: string[]) =>
+  `<table class="table ">${impactProductHead}<tbody>${lines.join("")}</tbody></table>`;
+
+const impactProducts = [
+  impactLine({ code: "5201001100017", description: "Example product", unit: "Τεμάχιο", quantity: "1", net: "1,00", vatCategory: "Γ1", vat: "0,24", total: "1,24" }),
+  impactLine({ description: "Μήλα Ημαθίας", unit: "Κιλό", quantity: "1,250", net: "3,00", vatCategory: "Γ2", vat: "0,39", total: "3,39" }),
+];
+
+function impactBody(lines: string[]) {
+  return `<div class="company-info">
+    <span class="field field-RegisteredName"><span class="inner"><span class="label">Επωνυμία επιχείρησης</span><span class="value">Example merchant</span></span></span>
+    <span class="field field-DateIssued"><span class="inner"><span class="label">Ημ/νία έκδοσης</span><span class="value">20/11/2026 2:22 μ.μ.</span></span></span>
+    <span class="field field-IssuerFormatedInvoiceSeriesNumber"><span class="inner"><span class="label">Αρ. Παραστατικού</span><span class="value">ΡΤ 123456</span></span></span>
+  </div>
+  <div class="section-identity">
+    <span class="field field-RegisteredName"><span class="inner"><span class="label">Επωνυμία</span><span class="value">Example customer</span></span></span>
+  </div>
+  ${impactProductTable(lines)}
+  <div id="mydata"><table id="InvoiceLineTable"><thead><tr><th>myDATA</th></tr></thead><tbody><tr><td>unrelated row</td></tr></tbody></table></div>
+  <table class="table"><thead><tr>
+    <th class="field field-Percentage"><span class="label">ΦΠΑ</span></th>
+    <th class="field field-UnderlyingValue"><span class="label">Αξία</span></th>
+    <th class="field field-VatAmount"><span class="label">ΦΠΑ</span></th>
+  </tr></thead><tbody>
+    <tr>${impactCell("Percentage", "24%")}${impactCell("UnderlyingValue", "1,00")}${impactCell("VatAmount", "0,24")}</tr>
+    <tr>${impactCell("Percentage", "13%")}${impactCell("UnderlyingValue", "3,00")}${impactCell("VatAmount", "0,39")}</tr>
+  </tbody></table>
+  <table class="table"><tbody>
+    <tr class="field field-CurrencyCode text-right"><td class="label">Νόμισμα</td><td class="value">EUR</td></tr>
+    <tr class="field field-TotalNetAmount text-right"><td class="label">Καθαρή Αξία</td><td class="value">4,00</td></tr>
+    <tr class="field field-TotalVATAmount text-right"><td class="label">ΦΠΑ</td><td class="value">0,63</td></tr>
+    <tr class="field field-TotalGrossValue text-right"><td class="label">Συνολική Αξία</td><td class="value">4,63</td></tr>
+  </tbody></table>`;
+}
+
+function impactDraft(source: string) {
+  const parsed = parseImpactReceiptHtml(source);
+  assert.ok(parsed.status === "ok");
+  return parsed.draft;
+}
+
 
 function invoiceDraft(body: string) {
   const parsed = parseEntersoftInvoiceHtml(body);
@@ -348,4 +418,174 @@ test("recognizes a blank total with an explicitly zero unit price", () => {
   assert.equal(invoiceDraft(wrap(free)).lines[0].lineTotal, 0);
   const unpriced = free.replace('data-title="Τιμή μονάδας">0,00', 'data-title="Τιμή μονάδας">');
   assert.equal(parseEntersoftInvoiceHtml(wrap(unpriced)).status, "incomplete");
+});
+
+test("matches only the exact IMPACT route and keeps the original path case", () => {
+  const impact = matchReceiptQrLink(impactUrl);
+  assert.ok(impact?.issuer === "impact");
+  assert.equal(impact.url, impactUrl);
+  // The default port and host case normalize away; the path never changes.
+  assert.equal(matchReceiptQrLink(impactUrl.replace("https://einvoice.impact.gr/", "HTTPS://EINVOICE.IMPACT.GR:443/"))?.url, impactUrl);
+  const mixedCase = impactUrl.replace(impactMarker, "A".repeat(40));
+  assert.equal(matchReceiptQrLink(mixedCase)?.url, mixedCase);
+  for (const rejected of [
+    impactUrl.replace("https:", "http:"),
+    impactUrl + "?extra=1",
+    impactUrl + "?",
+    impactUrl + "#fragment",
+    impactUrl + "#",
+    impactUrl.replace("einvoice.impact.gr", "einvoice.impact.gr.example"),
+    impactUrl.replace("einvoice.impact.gr/", "einvoice.impact.gr:8443/"),
+    impactUrl.replace("/p/EL123456789/", "/p/el123456789/"),
+    impactUrl.replace("/p/EL123456789/", "/p/EL12345678/"),
+    impactUrl.replace(impactMarker, impactMarker.slice(0, 39)),
+    impactUrl.replace(impactMarker, impactMarker + "0"),
+    impactUrl.replace(`${impactMarker}/`, `${impactMarker}/2`),
+    "javascript:void(0)",
+  ]) {
+    assert.equal(matchReceiptQrLink(rejected), null, rejected);
+  }
+});
+
+test("reads a server-rendered IMPACT receipt in one pinned fetch", async () => {
+  const requests: string[] = [];
+  configureReceiptQrFetcherForTests(async (url) => {
+    requests.push(url);
+    return html(impactBody(impactProducts));
+  });
+  const result = await fetchQrReceiptDraft(impactUrl);
+  assert.ok(result.status === "ok");
+  assert.equal(result.issuer, "impact");
+  assert.deepEqual(requests, [impactUrl]);
+  assert.equal(result.draft.vendorName, "Example merchant");
+  assert.equal(result.draft.purchasedAt, "2026-11-20");
+  assert.equal(result.draft.currency, "EUR");
+  assert.equal(result.draft.notes, "Αρ. Παραστατικού ΡΤ 123456");
+  assert.equal(result.draft.total, 4.63);
+  assert.equal(result.draft.subtotal, 4.00);
+  assert.equal(result.draft.tax, 0.63);
+  assert.deepEqual(result.draft.taxBreakdown, [
+    { rate: 24, net: 1, tax: 0.24, gross: 1.24 },
+    { rate: 13, net: 3, tax: 0.39, gross: 3.39 },
+  ]);
+  assert.deepEqual(result.draft.lines, [
+    {
+      description: "Example product", rawDescription: "Example product",
+      quantity: 1, unit: null, unitPrice: 1.24, lineTotal: 1.24, taxRate: 24, discount: 0, barcode: null,
+    },
+    {
+      description: "Μήλα Ημαθίας", rawDescription: "Μήλα Ημαθίας",
+      quantity: 1.25, unit: "kg", unitPrice: 2.712, lineTotal: 3.39, taxRate: 13, discount: 0, barcode: null,
+    },
+  ]);
+  assert.equal(result.excludedCharges, 0);
+  assert.match(result.text, /Example merchant/);
+  assert.match(result.text, /Μήλα Ημαθίας/);
+  assert.match(result.text, /ΣΥΝΟΛΟ 4\.63/);
+  assert.ok(!JSON.stringify(result).includes(impactUrl));
+  assert.ok(!result.text.includes(impactMarker));
+});
+
+test("pins IMPACT redirects to the QR's own route and nothing broader", async () => {
+  for (const location of [
+    "https://wrong.example/elsewhere",
+    `https://einvoice.impact.gr/p/EL123456789/${impactMarker}/${"3".repeat(32)}`,
+    `https://einvoice.impact.gr:8080/p/EL123456789/${impactMarker}/${"2".repeat(32)}`,
+    `https://einvoice.impact.gr/unrelated`,
+    impactUrl,
+  ]) {
+    const requests: string[] = [];
+    configureReceiptQrFetcherForTests(async (url) => {
+      requests.push(url);
+      return new Response(null, { status: 302, headers: { location } });
+    });
+    assert.equal((await fetchQrReceiptDraft(impactUrl)).status, "unavailable");
+    assert.deepEqual(requests, [impactUrl]);
+  }
+
+  // A same-route redirect with a query is equally refused.
+  const requests: string[] = [];
+  configureReceiptQrFetcherForTests(async (url) => {
+    requests.push(url);
+    return new Response(null, { status: 302, headers: { location: `${new URL(impactUrl).pathname}?tab=receipt` } });
+  });
+  assert.equal((await fetchQrReceiptDraft(impactUrl)).status, "unavailable");
+  assert.deepEqual(requests, [impactUrl]);
+});
+
+test("reports IMPACT verification, expiry and unavailable pages safely", async () => {
+  configureReceiptQrFetcherForTests(async () => html('<div id="cf-turnstile"></div>'));
+  const challenge = await fetchQrReceiptDraft(impactUrl);
+  assert.equal(challenge.status, "challenge");
+  assert.match(challenge.message ?? "", /IMPACT requires browser verification/);
+
+  configureReceiptQrFetcherForTests(async () => new Response(null, { status: 404 }));
+  const missing = await fetchQrReceiptDraft(impactUrl);
+  assert.equal(missing.status, "unavailable");
+  assert.match(missing.message ?? "", /photo scan and AI re-read/);
+
+  configureReceiptQrFetcherForTests(async () => html("<p>A receipt page without a product table.</p>"));
+  const unrecognizable = await fetchQrReceiptDraft(impactUrl);
+  assert.equal(unrecognizable.status, "unavailable");
+  assert.match(unrecognizable.message ?? "", /photo scan and AI re-read/);
+});
+
+test("rejects incomplete and negative IMPACT product lines to photo OCR", async () => {
+  for (const broken of [
+    impactLine({ code: "SKU", description: "Missing quantity", unit: "Τεμάχιο", net: "1,00", vat: "0,24", total: "1,24" }),
+    impactLine({ code: "SKU", description: "Missing total", unit: "Τεμάχιο", quantity: "1", net: "1,00", vat: "0,24" }),
+    impactLine({ code: "SKU", description: "Invalid total", unit: "Τεμάχιο", quantity: "1", total: "-" }),
+    impactLine({ code: "SKU", description: "Negative total", unit: "Τεμάχιο", quantity: "1", net: "-1,00", vat: "0,24", total: "-1,24" }),
+    impactLine({ code: "SKU", description: "Negative quantity", unit: "Κιλό", quantity: "-0,500", net: "1,00", vat: "0,24", total: "1,24" }),
+  ]) {
+    configureReceiptQrFetcherForTests(async () => html(impactBody([broken, ...impactProducts.slice(1)])));
+    const result = await fetchQrReceiptDraft(impactUrl);
+    assert.equal(result.status, "unavailable");
+    assert.match(result.message ?? "", /incomplete product line/);
+  }
+});
+
+test("attributes an IMPACT timeout to the pending issuer", { timeout: 2000 }, async () => {
+  configureReceiptQrFetcherForTests(() => new Promise<Response>(() => undefined));
+  const timeout = await readQrReceiptScan("test-impact-timeout-house", impactUrl, 30);
+  assert.equal(timeout.status, "unavailable");
+  assert.equal(timeout.issuer, "impact");
+});
+
+test("keeps the IMPACT merchant from company-info and not the customer field", () => {
+  const draft = impactDraft(impactBody(impactProducts));
+  assert.equal(draft.vendorName, "Example merchant");
+  // Without .company-info no vendor is guessed — the later same-name field is
+  // the customer — but the unambiguous date and identifier are still read.
+  const renamed = impactBody(impactProducts).replace('<div class="company-info">', '<div class="none">');
+  const renamedDraft = impactDraft(renamed);
+  assert.equal(renamedDraft.vendorName, null);
+  assert.equal(renamedDraft.purchasedAt, "2026-11-20");
+  assert.equal(renamedDraft.notes, "Αρ. Παραστατικού ΡΤ 123456");
+  assert.equal(renamedDraft.lines.length, 2);
+  // Fully absent metadata leaves the product lines intact and nothing invented.
+  const bare = renamed
+    .replace(/<span class="field field-RegisteredName">[\s\S]*?<\/span><\/span><\/span>/g, "")
+    .replace(/<span class="field field-DateIssued">[\s\S]*?<\/span><\/span><\/span>/, "")
+    .replace(/<span class="field field-IssuerFormatedInvoiceSeriesNumber">[\s\S]*?<\/span><\/span><\/span>/, "");
+  const bareDraft = impactDraft(bare);
+  assert.equal(bareDraft.vendorName, null);
+  assert.equal(bareDraft.purchasedAt, null);
+  assert.equal(bareDraft.notes, null);
+  assert.equal(bareDraft.lines.length, 2);
+});
+
+test("treats the IMPACT VAT breakdown and currency as optional", () => {
+  const source = impactBody(impactProducts)
+    .replace(/<table class="table"><thead><tr>\s*<th class="field field-Percentage[\s\S]*?<\/table>/, "")
+    .replace('<tr class="field field-CurrencyCode text-right"><td class="label">Νόμισμα</td><td class="value">EUR</td></tr>', "");
+  const draft = impactDraft(source);
+  assert.deepEqual(draft.taxBreakdown, []);
+  assert.equal(draft.tax, 0.63);
+  assert.equal(draft.currency, null);
+});
+
+test("leaves the IMPACT line tax rate unset when rounding matches more than one rate", () => {
+  const source = impactBody([impactLine({ description: "Sample", quantity: "1", net: "0,05", vat: "0,01", total: "0,06" })]);
+  assert.equal(impactDraft(source).lines[0].taxRate, null);
 });

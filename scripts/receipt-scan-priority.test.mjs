@@ -5,6 +5,7 @@ import { addReceiptQrPayload, isUsableDigitalReceipt, shouldRunPhotoOcr } from "
 const entersoft = "https://e-invoicing.gr/edocuments/ViewInvoice/-1/12345678-1234-1234-1234-123456789abc_tEsTaB12";
 const epsilon = "https://epsilondigital-sklavenitis.epsilonnet.gr/fd/12345678123412341234123456789abc:12";
 const otherEpsilon = "https://epsilondigital-sklavenitis.epsilonnet.gr/fd/fedcba9876543210fedcba9876543210:34";
+const impact = `https://einvoice.impact.gr/p/EL123456789/${"1".repeat(40)}/${"2".repeat(32)}`;
 
 const scan = (provider, lines) => ({ provider, draft: { lines } });
 
@@ -14,6 +15,14 @@ test("collects one receipt link for a batch of photos of the same receipt", () =
   assert.equal(addReceiptQrPayload(links, entersoft), false);
   assert.equal(links.size, 1);
   assert.equal(links.values().next().value.issuer, "entersoft");
+});
+
+test("collects a single IMPACT receipt link like any other issuer", () => {
+  const links = new Map();
+  assert.equal(addReceiptQrPayload(links, impact), false);
+  assert.equal(addReceiptQrPayload(links, impact), false);
+  assert.equal(links.size, 1);
+  assert.equal(links.values().next().value.issuer, "impact");
 });
 
 test("photos without a receipt QR yield no link", () => {
@@ -35,6 +44,9 @@ test("flags a second distinct receipt QR immediately", () => {
   const otherIssuerReceipt = new Map();
   assert.equal(addReceiptQrPayload(otherIssuerReceipt, entersoft), false);
   assert.equal(addReceiptQrPayload(otherIssuerReceipt, otherEpsilon), true);
+  const impactWithAnother = new Map();
+  assert.equal(addReceiptQrPayload(impactWithAnother, impact), false);
+  assert.equal(addReceiptQrPayload(impactWithAnother, entersoft), true);
 });
 
 test("a scan response is a usable digital receipt only with QR provenance and product lines", () => {

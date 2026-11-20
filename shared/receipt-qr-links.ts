@@ -10,7 +10,7 @@
  * fetchable.
  */
 
-export type ReceiptQrIssuer = "epsilon-sklavenitis" | "entersoft";
+export type ReceiptQrIssuer = "epsilon-sklavenitis" | "entersoft" | "impact";
 
 export type ReceiptQrLink = {
   /** The parsed and validated HTTPS URL used for retrieval. */
@@ -18,16 +18,20 @@ export type ReceiptQrLink = {
 } & (
   | { issuer: "epsilon-sklavenitis"; viewerPath: string }
   | { issuer: "entersoft"; entersoft: { ofenm: string; uuid: string; token: string } }
+  | { issuer: "impact" }
 );
 
 const EPSILON_HOST = "epsilondigital-sklavenitis.epsilonnet.gr";
 const ENTERSOFT_HOST = "e-invoicing.gr";
+const IMPACT_HOST = "einvoice.impact.gr";
 
 /** Epsilon Digital (Sklavenitis): /fd/{32 hex}:{register digits} */
 const EPSILON_PATH = /^\/fd\/([0-9a-f]{8})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{12}):\d{1,10}$/i;
 /** Entersoft: /edocuments/ViewInvoice/{ofenm}/{uuid}_{8 alphanumeric} */
 const ENTERSOFT_PATH =
   /^\/edocuments\/ViewInvoice\/(-?\d{1,4})\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})_([A-Za-z0-9]{8})$/i;
+/** IMPACT eInvoicing: /p/EL{9 digits}/{40 hex}/{32 hex} — fetched with the path's original case. */
+const IMPACT_PATH = /^\/p\/EL\d{9}\/[0-9a-fA-F]{40}\/[0-9a-fA-F]{32}$/;
 
 /**
  * Match a QR payload or pasted text against the supported issuer links.
@@ -67,6 +71,10 @@ export function matchReceiptQrLink(payload: string): ReceiptQrLink | null {
         token: entersoft[3],
       },
     };
+  }
+  // Keep the IMPACT path case and reject even empty query or fragment markers.
+  if (url.hostname === IMPACT_HOST && IMPACT_PATH.test(url.pathname) && url.href === url.origin + url.pathname) {
+    return { issuer: "impact", url: url.href };
   }
   return null;
 }
