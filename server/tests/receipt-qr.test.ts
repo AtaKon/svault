@@ -536,11 +536,18 @@ test("reports IMPACT verification, expiry and unavailable pages safely", async (
   const unrecognizable = await fetchQrReceiptDraft(impactUrl);
   assert.equal(unrecognizable.status, "unavailable");
   assert.match(unrecognizable.message ?? "", /photo scan and AI re-read/);
+
+  configureReceiptQrFetcherForTests(async () => html(" \n\t"));
+  const empty = await fetchQrReceiptDraft(impactUrl);
+  assert.equal(empty.status, "unavailable");
+  assert.match(empty.message ?? "", /photo scan and AI re-read/);
+  assert.ok(!JSON.stringify(empty).includes(impactUrl));
 });
 
 test("rejects incomplete and negative IMPACT product lines to photo OCR", async () => {
   for (const broken of [
-    impactLine({ code: "SKU", description: "Missing quantity", unit: "Τεμάχιο", net: "1,00", vat: "0,24", total: "1,24" }),
+    impactLine({ code: "SKU", description: "Blank quantity", unit: "Τεμάχιο", net: "1,00", vat: "0,24", total: "1,24" }),
+    impactLine({ description: "Absent quantity cell", total: "1,24" }).replace(impactCell("Quantity", "", "text-right"), ""),
     impactLine({ code: "SKU", description: "Missing total", unit: "Τεμάχιο", quantity: "1", net: "1,00", vat: "0,24" }),
     impactLine({ code: "SKU", description: "Invalid total", unit: "Τεμάχιο", quantity: "1", total: "-" }),
     impactLine({ code: "SKU", description: "Negative total", unit: "Τεμάχιο", quantity: "1", net: "-1,00", vat: "0,24", total: "-1,24" }),
@@ -609,9 +616,28 @@ test("ignores negative IMPACT tax breakdown entries", () => {
   assert.deepEqual(impactDraft(source).taxBreakdown, []);
 });
 
-test("does not substitute a second table when the IMPACT product table is empty", () => {
-  const source = impactBody(["<tr><td></td></tr>"]) + impactProductTable(impactProducts);
-  assert.deepEqual(parseImpactReceiptHtml(source), { status: "unavailable" });
+test("finds the valid IMPACT tax breakdown after a table with only invalid rows", () => {
+  const invalid = `<table><tbody>
+    <tr>${impactCell("Percentage", "13%")}${impactCell("UnderlyingValue", "2,00")}</tr>
+    <tr>${impactCell("Percentage", "24%")}${impactCell("UnderlyingValue", "-1,00")}${impactCell("VatAmount", "-0,24")}</tr>
+  </tbody></table>`;
+  const draft = impactDraft(invalid + impactBody(impactProducts));
+  assert.deepEqual(draft.taxBreakdown.map((entry) => entry.rate), [24, 13]);
+});
+
+test("reports a recognized IMPACT product table without lines as incomplete", async () => {
+  for (const table of [
+    impactProductTable([]),
+    impactProductTable(["<tr><td></td></tr>"]),
+    `<table>${impactProductHead}</table>`,
+  ]) {
+    const source = table + impactBody(impactProducts);
+    assert.deepEqual(parseImpactReceiptHtml(source), { status: "incomplete" });
+    configureReceiptQrFetcherForTests(async () => html(source));
+    const result = await fetchQrReceiptDraft(impactUrl);
+    assert.equal(result.status, "unavailable");
+    assert.match(result.message ?? "", /incomplete product line/);
+  }
 });
 
 test("ignores a myDATA table before the IMPACT receipt table", async () => {

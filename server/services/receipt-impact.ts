@@ -15,6 +15,7 @@ import { detectDate, parseAmount, parseQuantity } from "./receipt-local.js";
  * carry the product field tokens and whose rows nest value spans is parsed;
  * anything else is ignored. The merchant field is in `.company-info`,
  * while issue date and invoice number appear in the receipt identity fields.
+ * Metadata is best effort. Missing metadata does not prevent importing lines.
  *
  * Sign conventions follow the existing receipt parsers: `lineTotal` is the
  * VAT-inclusive amount actually charged (the `field-Total` cell) and
@@ -155,7 +156,7 @@ function parseProductTable(html: string): ImpactRow[] | "incomplete" | null {
     }
     if (!headerTokens.has("field-Description1") || !headerTokens.has("field-Total") || !headerTokens.has("field-Quantity")) continue;
     const tbody = content.match(/<tbody\b[^>]*>([\s\S]*?)<\/tbody>/i)?.[1];
-    if (!tbody) return null;
+    if (!tbody) return "incomplete";
     const rows: ImpactRow[] = [];
     for (const rowMatch of tbody.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)) {
       const row: ImpactRow = {
@@ -187,7 +188,7 @@ function parseProductTable(html: string): ImpactRow[] | "incomplete" | null {
           !PRINTED_NUMBER.test(row.total ?? "") || quantity == null || quantity <= 0 || total == null || total < 0) return "incomplete";
       rows.push(row);
     }
-    return rows.length ? rows : null;
+    return rows.length ? rows : "incomplete";
   }
   return null;
 }
@@ -235,6 +236,8 @@ function lineVatRate(row: ImpactRow, breakdown: TaxBreakdownEntry[]): number | n
   const net = row.net ? parseAmount(row.net) : null;
   const vat = row.vat ? parseAmount(row.vat) : null;
   if (net == null || net <= 0 || vat == null || vat < 0) return null;
+  // Different issuer rounding can leave the rate unverified. The printed
+  // amounts still import with the rest of the line.
   return round(net * rate / 100) === vat ? rate : null;
 }
 
