@@ -158,7 +158,7 @@ function summaryValue(html: string, field: string): string | null {
 
 /**
  * Inspect product tables in the viewer's details section. Skip shells with
- * no product data, including tables without a body. The first table with
+ * no product data, including spacer-only bodies. The first matching table with
  * product data is authoritative. Malformed rows in it require photo OCR.
  * If only shells were found, report an incomplete receipt after the search.
  */
@@ -223,6 +223,7 @@ function parseProductTable(html: string): ImpactProduct[] | "incomplete" | null 
 /**
  * Accept valid VAT rows within one cent of the expected net and tax amounts.
  * Prefer an exact match when both exact and rounded candidates are present.
+ * Equally close candidates keep document order.
  */
 function parseTaxBreakdown(html: string, subtotal: number, tax: number): TaxBreakdownEntry[] {
   const expectedNetCents = Math.round(subtotal * 100);
@@ -288,9 +289,10 @@ function lineVatRate(row: ImpactProduct, breakdown: TaxBreakdownEntry[]): number
   const category = row.vatCategory;
   if (!category || !/^\d{1,3}(?:[.,]\d{1,2})?\s*%?$/.test(category)) return null;
   const rate = Number(category.replace(",", ".").replace(/\s*%$/, ""));
-  // A bare number can be a category code, and cent rounding can make several
-  // percentages fit the same line. The breakdown confirms the rate is in use.
-  if (rate > 100 || (!category.endsWith("%") && !breakdown.some((entry) => entry.rate === rate))) return null;
+  if (rate > 100) return null;
+  // A percent sign identifies a printed rate. A bare category number needs
+  // independent confirmation from the breakdown. Both must fit the line amounts.
+  if (!category.endsWith("%") && !breakdown.some((entry) => entry.rate === rate)) return null;
   const net = parsePrintedAmount(row.net);
   const vat = parsePrintedAmount(row.vat);
   // A zero net amount cannot corroborate a VAT percentage.

@@ -460,9 +460,14 @@ test("gates the first IMPACT request on the supported URL format", async () => {
   for (const url of [
     impactUrl.replace(impactMarker, "%31" + impactMarker.slice(1)),
     impactUrl.replace("/p/EL", "/p/el"),
+    impactUrl.replace("/p/EL", "/p/CY"),
     impactUrl.replace("einvoice.impact.gr", "einvoice.impact.gr.example"),
   ]) {
-    assert.equal((await fetchQrReceiptDraft(url)).status, "unsupported");
+    assert.deepEqual(await fetchQrReceiptDraft(url), {
+      status: "unsupported",
+      issuer: null,
+      message: "That QR code or link is not from a supported digital receipt issuer.",
+    });
   }
   assert.deepEqual(requests, []);
   await fetchQrReceiptDraft(impactUrl.replace("einvoice.impact.gr", "EINVOICE.IMPACT.GR:443"));
@@ -686,13 +691,28 @@ test("retains IMPACT breakdown rates with a one-cent summary difference", () => 
   assert.deepEqual(draft.lines.map((line) => line.taxRate), [24, 13]);
 });
 
-test("prefers an exact IMPACT VAT breakdown over an earlier rounded match", () => {
+test("prefers exact IMPACT VAT breakdowns and keeps the first rounded match on a tie", () => {
   const source = impactBody(impactProducts);
   const exact = source.match(/<table class="table"><thead><tr>\s*<th class="field field-Percentage[\s\S]*?<\/table>/)?.[0];
   assert.ok(exact);
-  const rounded = exact.replace(impactCell("VatAmount", "0,24"), impactCell("VatAmount", "0,25"));
-  const draft = impactDraft(source.replace(exact, rounded + exact));
-  assert.equal(draft.taxBreakdown[0].tax, 0.24);
+  const above = exact.replace(impactCell("VatAmount", "0,24"), impactCell("VatAmount", "0,25"));
+  const below = exact.replace(impactCell("VatAmount", "0,24"), impactCell("VatAmount", "0,23"));
+  for (const tables of [exact + above + exact, above + exact + below]) {
+    assert.equal(impactDraft(source.replace(exact, tables)).taxBreakdown[0].tax, 0.24);
+  }
+  assert.equal(impactDraft(source.replace(exact, above + below)).taxBreakdown[0].tax, 0.25);
+  assert.equal(impactDraft(source.replace(exact, below + above)).taxBreakdown[0].tax, 0.23);
+});
+
+test("confirms an explicit IMPACT percentage from its line without a matching breakdown entry", () => {
+  const line = { description: "Example product", quantity: "1", net: "1,00", vat: "0,06", total: "1,06" };
+  const draft = impactDraft(impactBody([
+    impactLine({ ...line, vatCategory: "6%" }),
+    impactLine({ ...line, vatCategory: "6" }),
+    impactLine({ ...line, vatCategory: "6%", vat: "0,08" }),
+  ]));
+  assert.deepEqual(draft.taxBreakdown.map((entry) => entry.rate), [24, 13]);
+  assert.deepEqual(draft.lines.map((value) => value.taxRate), [6, null, null]);
 });
 
 test("uses product amounts to verify the IMPACT VAT breakdown when summary totals are missing", () => {
@@ -725,16 +745,18 @@ test("reports a recognized IMPACT product table without lines as incomplete", as
   }
 });
 
-test("selects the populated IMPACT details table with empty shells before or after it", () => {
+test("skips empty, spacer-only, and header-only IMPACT tables around the populated table", () => {
   const productTable = impactProductTable(impactProducts);
   const shells = [
     impactProductTable([]),
     impactProductTable(["<tr><td></td></tr>"]),
     `<table>${impactProductHead}</table>`,
-  ].join("");
-  for (const tables of [shells + productTable, productTable + shells]) {
-    const source = impactBody(impactProducts).replace(productTable, tables);
-    assert.deepEqual(impactDraft(source).lines.map((line) => line.description), ["Example product", "Μήλα Ημαθίας"]);
+  ];
+  for (const shell of shells) {
+    for (const tables of [shell + productTable, productTable + shell]) {
+      const source = impactBody(impactProducts).replace(productTable, tables);
+      assert.deepEqual(impactDraft(source).lines.map((line) => line.description), ["Example product", "Μήλα Ημαθίας"]);
+    }
   }
 });
 
@@ -758,6 +780,11 @@ test("ignores tables outside the IMPACT details section", async () => {
 test("decodes named and numeric entities in IMPACT line descriptions", () => {
   const source = impactBody([impactLine({ description: "Grocer&#x27;s&#1;&amp;&#x81;Baker&#8217;s", quantity: "1", total: "1,24" })]);
   assert.equal(impactDraft(source).lines[0].description, "Grocer's & Baker’s");
+});
+
+test("replaces null and surrogate numeric entities with replacement characters", () => {
+  const source = impactBody([impactLine({ description: "A&#0;B&#xD800;C", quantity: "1", total: "1,24" })]);
+  assert.equal(impactDraft(source).lines[0].description, "A\uFFFDB\uFFFDC");
 });
 
 test("does not cut an IMPACT description in the middle of a Unicode character", () => {
