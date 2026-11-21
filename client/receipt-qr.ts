@@ -1,5 +1,5 @@
 /**
- * Still-image QR decoding for the receipt scan flow.
+ * QR decoding for the receipt scan flow: still photos and live camera frames.
  *
  * Receipt photos carry a QR with the issuer's digital receipt link. The photo
  * is decoded at its original resolution before any straightening or
@@ -7,10 +7,13 @@
  * resampling. Standard ZXing runs first across a small ladder of
  * binarizer/downscale variants; when every quick attempt fails, the
  * low-resolution recovery sampler is loaded lazily and retried on the
- * untouched pixels (see client/receipt-qr-recovery.ts).
+ * untouched pixels (see client/receipt-qr-recovery.ts). Live capture (see
+ * client/receipt-qr-live.ts) instead decodes many frames with the standard
+ * passes only, at a small per-frame budget.
  *
- * The module never throws: a photo without a readable QR simply yields null.
- * Only QR is decoded — other barcode formats are not receipt links.
+ * The module never throws: an image or frame without a readable QR simply
+ * yields null. Only QR is decoded — other barcode formats are not receipt
+ * links.
  */
 
 import {
@@ -123,6 +126,28 @@ export async function decodeReceiptQrPixels(
   return null;
 }
 
+const DEFAULT_FRAME_BUDGET_MS = 350;
+
+/**
+ * Decode one live camera frame: the standard fast passes only, with a tight
+ * budget. Live scanning favors many cheap attempts over the expensive recovery
+ * sampler — focus, exposure and framing change from frame to frame, so a code
+ * that is unreadable now is usually read cleanly a few frames later. Only QR
+ * is decoded, like every other entry point in this module.
+ */
+export function decodeReceiptQrFrame(pixels: GrayPixels, options: ReceiptQrDecodeOptions = {}): string | null {
+  return decodeStandard(pixels, Date.now() + (options.budgetMs ?? DEFAULT_FRAME_BUDGET_MS));
+}
+
+/** RGBA image data to row-major grayscale luminance (ITU-R 601). */
+export function rgbaToGray(rgba: Uint8ClampedArray, width: number, height: number): GrayPixels {
+  const gray = new Uint8ClampedArray(width * height);
+  for (let i = 0, p = 0; i < gray.length; i++, p += 4) {
+    gray[i] = (rgba[p] * 299 + rgba[p + 1] * 587 + rgba[p + 2] * 114) / 1000;
+  }
+  return { gray, width, height };
+}
+
 /** Draw a decoded image to grayscale, capping extreme resolutions. */
 function bitmapToGray(bitmap: ImageBitmap): GrayPixels {
   const scale = Math.min(1, MAX_SOURCE_SIDE / Math.max(bitmap.width, bitmap.height));
@@ -134,14 +159,10 @@ function bitmapToGray(bitmap: ImageBitmap): GrayPixels {
   const context = canvas.getContext("2d", { willReadFrequently: true });
   if (!context) throw new Error("no 2d context");
   context.drawImage(bitmap, 0, 0, width, height);
-  const rgba = context.getImageData(0, 0, width, height).data;
-  const gray = new Uint8ClampedArray(width * height);
-  for (let i = 0, p = 0; i < gray.length; i++, p += 4) {
-    gray[i] = (rgba[p] * 299 + rgba[p + 1] * 587 + rgba[p + 2] * 114) / 1000;
-  }
+  const pixels = rgbaToGray(context.getImageData(0, 0, width, height).data, width, height);
   canvas.width = 0;
   canvas.height = 0;
-  return { gray, width, height };
+  return pixels;
 }
 
 /**

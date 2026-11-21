@@ -17,6 +17,7 @@ import { ItemPickerSheet } from "@/components/ItemPickerSheet";
 import { ZoomableImage } from "@/components/ZoomableImage";
 import { clearReceiptDraft, loadReceiptDraft, receiptDraftKey, saveReceiptDraft, type StoredReceiptDraft } from "@/receipt-draft-store";
 import { addReceiptQrPayload, isUsableDigitalReceipt, shouldRunPhotoOcr } from "@/receipt-scan-priority";
+import { ReceiptQrScanner } from "@/components/ReceiptQrScanner";
 import { reconcileReceipt } from "@shared/receipt-reconcile";
 import type { ReceiptQrLink } from "@shared/receipt-qr-links";
 import type {
@@ -295,6 +296,7 @@ export function ReceiptScanPage() {
   const [busy, setBusy] = useState(false);
   const [digitalLink, setDigitalLink] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [qrScanning, setQrScanning] = useState(false);
 
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
@@ -695,34 +697,12 @@ export function ReceiptScanPage() {
       let appliedDigital = false;
       const link = links.values().next().value ?? null;
       if (link) {
-        try {
-          const data = await api<ReceiptScanResponse>(`/api/houses/${house.id}/receipts/scan`, {
-            method: "POST",
-            body: { qr: link.url },
-          });
-          if (revision !== workspaceRevisionRef.current) return;
-          if (isUsableDigitalReceipt(data)) {
-            if (hasReceiptDetails(snapshotRef.current() ?? snapshot(), house.currency)) {
-              setWarning("Your edits were kept. Start over to import the digital receipt.");
-              setDigitalLink(link.url);
-            } else {
-              applyScan(data);
-              setManualMode(true);
-              setDigitalLink(null);
-              setText(data.selectedText ?? "");
-              setMergeRemoved(0);
-              appliedDigital = true;
-            }
-          } else if (data.qr?.message) {
-            setWarning(data.qr.message);
-            setDigitalLink(link.url);
-          }
-        } catch {
-          // The original photo can still be parsed locally when the issuer is unavailable.
-          if (revision !== workspaceRevisionRef.current) return;
-          setWarning("The digital receipt could not be loaded. Reading the photo instead.");
-          setDigitalLink(link.url);
-        }
+        const outcome = await importDigitalLink(link, {
+          revision,
+          notLoadedMessage: "The digital receipt could not be loaded. Reading the photo instead.",
+        });
+        if (outcome === "aborted") return;
+        appliedDigital = outcome === "applied";
       }
       if (!shouldRunPhotoOcr(existingDraft.provider, appliedDigital)) {
         commitPages(pagesRef.current.map((page) => addedKeys.includes(page.key) ? { ...page, status: "skipped" } : page), false);
@@ -785,6 +765,80 @@ export function ReceiptScanPage() {
     setAiAvailable(Boolean(data.aiAvailable));
     // Each result replaces the previous source's warning, including a null warning.
     setWarning(data.warning ?? null);
+  };
+
+  /** Outcome of importing a decoded receipt link through the scan API. */
+  type DigitalLinkOutcome = "applied" | "kept" | "failed" | "aborted";
+
+  /**
+   * Imports the issuer's digital receipt for a decoded QR link — the same
+   * path for a link decoded from a photo and one read by the live scanner.
+   * "aborted" means the workspace was reset mid-import, so photo callers stop
+   * instead of reading pages nobody is looking at.
+   */
+  const importDigitalLink = async (
+    link: ReceiptQrLink,
+    options: { revision: number; notLoadedMessage: string },
+  ): Promise<DigitalLinkOutcome> => {
+    try {
+      const data = await api<ReceiptScanResponse>(`/api/houses/${house.id}/receipts/scan`, {
+        method: "POST",
+        body: { qr: link.url },
+      });
+      if (options.revision !== workspaceRevisionRef.current) return "aborted";
+      if (isUsableDigitalReceipt(data)) {
+        if (hasReceiptDetails(snapshotRef.current() ?? snapshot(), house.currency)) {
+          setWarning("Your edits were kept. Start over to import the digital receipt.");
+          setDigitalLink(link.url);
+          return "kept";
+        }
+        applyScan(data);
+        setManualMode(true);
+        setDigitalLink(null);
+        setText(data.selectedText ?? "");
+        setMergeRemoved(0);
+        return "applied";
+      }
+      if (data.qr?.message) {
+        setWarning(data.qr.message);
+        setDigitalLink(link.url);
+      }
+      return "failed";
+    } catch {
+      if (options.revision !== workspaceRevisionRef.current) return "aborted";
+      setWarning(options.notLoadedMessage);
+      setDigitalLink(link.url);
+      return "failed";
+    }
+  };
+
+  /**
+   * A receipt link read by the live scanner: import the digital receipt
+   * through the same API a decoded photo uses. When the workspace is still
+   * empty and the import fails, the manual workspace opens anyway so the
+   * warning and the issuer link stay visible while the photo fallback is
+   * offered.
+   */
+  const handleLiveQrLink = async (link: ReceiptQrLink) => {
+    setQrScanning(false);
+    if (readingRef.current || busy || ocrRunning || saving || pendingDraft) return;
+    readingRef.current = true;
+    setBusy(true);
+    try {
+      const outcome = await importDigitalLink(link, {
+        revision: workspaceRevisionRef.current,
+        notLoadedMessage: "The digital receipt could not be loaded. Photograph the receipt instead.",
+      });
+      if (outcome === "applied") {
+        toast.success(t("Digital receipt imported"));
+      } else if (outcome === "failed") {
+        toast.error(t("The digital receipt could not be loaded. Photograph the receipt instead."));
+        if (!pagesRef.current.length) setManualMode(true);
+      }
+    } finally {
+      readingRef.current = false;
+      setBusy(false);
+    }
   };
 
   const handlePdf = async (file: File | undefined) => {
@@ -1144,6 +1198,7 @@ export function ReceiptScanPage() {
     setOcrStatus("");
     setOcrProgress(0);
     setManualMode(false);
+    setQrScanning(false);
     if (cameraRef.current) cameraRef.current.value = "";
     if (libraryRef.current) libraryRef.current.value = "";
   };
@@ -1276,7 +1331,7 @@ export function ReceiptScanPage() {
         back={() => navigate("/receipts")}
         eyebrow={t("Receipt intake")}
         title={t("Scan a shopping receipt")}
-        subtitle={t("Photograph the receipt — one shot or several for a long one — check the lines, and the whole shop lands in inventory with the shop recorded.")}
+        subtitle={t("Scan the receipt’s QR code or add photos, then review the items before saving them to inventory.")}
         actions={
           showWorkspace ? (
             <Button variant="ghost" size="sm" icon="refresh" onClick={reset} disabled={saving}>
@@ -1325,11 +1380,24 @@ export function ReceiptScanPage() {
               <Icon name="receipt" size={28} />
             </span>
             <div>
-              <div className="font-display text-xl">{t("Add the receipt photos")}</div>
+              <div className="font-display text-xl">{t("Add the receipt")}</div>
               <div className="mt-1 text-xs text-muted">{t("Any angle · each paper is straightened on this device")}</div>
             </div>
             <div className="flex flex-wrap justify-center gap-2">
-              <Button type="button" icon="camera" disabled={busy || Boolean(pendingDraft)} onClick={() => cameraRef.current?.click()}>
+              <Button
+                type="button"
+                icon="scan"
+                disabled={busy || saving || ocrRunning || Boolean(pendingDraft)}
+                onClick={() => setQrScanning(true)}
+              >
+                {t("Scan receipt code")}</Button>
+              <Button
+                type="button"
+                variant="secondary"
+                icon="camera"
+                disabled={busy || Boolean(pendingDraft)}
+                onClick={() => cameraRef.current?.click()}
+              >
                 {t("Take photo")}</Button>
               <Button
                 type="button"
@@ -1530,6 +1598,14 @@ export function ReceiptScanPage() {
                         : t("No photo")}
                 </span>
                 <span className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={busy || ocrRunning || saving || Boolean(pendingDraft)}
+                    onClick={() => setQrScanning(true)}
+                    className="font-medium text-brand hover:underline"
+                  >
+                    {t("Scan code")}</button>
+                  <span>·</span>
                   <button type="button" disabled={busy} onClick={() => cameraRef.current?.click()} className="font-medium text-brand hover:underline">
                     {t("Camera")}</button>
                   <span>·</span>
@@ -2038,6 +2114,17 @@ export function ReceiptScanPage() {
         initialQuery={offLine?.barcode ?? offLine?.description ?? ""}
         title={t("Match receipt line")}
       />
+
+      {qrScanning && (
+        <ReceiptQrScanner
+          onLink={(link) => void handleLiveQrLink(link)}
+          onClose={() => setQrScanning(false)}
+          onPhotograph={() => {
+            setQrScanning(false);
+            cameraRef.current?.click();
+          }}
+        />
+      )}
 
       <ItemPickerSheet
         open={Boolean(pickerLine)}
