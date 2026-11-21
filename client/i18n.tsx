@@ -1963,6 +1963,7 @@ const EL: Record<string, string> = {
   "Could not read the receipt": "Δεν ήταν δυνατή η ανάγνωση της απόδειξης",
   "Could not read the receipt PDF": "Δεν ήταν δυνατή η ανάγνωση του PDF της απόδειξης",
   "Could not start the camera. You can photograph the receipt instead.": "Δεν ήταν δυνατή η εκκίνηση της κάμερας. Μπορείς να φωτογραφήσεις την απόδειξη αντ' αυτού.",
+  "Could not decode receipt QR codes. Photograph the receipt instead.": "Δεν ήταν δυνατή η ανάγνωση κωδικών QR. Φωτογράφισε την απόδειξη.",
   "Digital receipt imported": "Η ψηφιακή απόδειξη εισήχθη",
   "No product lines found in the receipt PDF.": "Δεν βρέθηκαν γραμμές προϊόντων στο PDF της απόδειξης.",
   "Replace the current receipt details and line edits with the PDF?": "Να αντικατασταθούν τα τρέχοντα στοιχεία και οι αλλαγές στις γραμμές της απόδειξης από το PDF;",

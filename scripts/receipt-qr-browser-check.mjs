@@ -1,9 +1,13 @@
 // Run against a seeded, throwaway instance. Uses a simulated camera and issuer.
 import assert from "node:assert/strict";
 import { chromium } from "playwright-core";
+import zxing from "@zxing/library";
 
 const base = (process.argv[2] ?? "http://localhost:4201").replace(/\/$/, "");
 const qr = "https://e-invoicing.gr/edocuments/ViewInvoice/-1/12345678-1234-1234-1234-123456789abc_testAB12";
+const bitmap = new zxing.QRCodeWriter().encode(qr, zxing.BarcodeFormat.QR_CODE, 0, 0, new Map());
+const modules = Array.from({ length: bitmap.getHeight() }, (_, y) =>
+  Array.from({ length: bitmap.getWidth() }, (_, x) => bitmap.get(x, y)));
 const browser = await chromium.launch({
   channel: process.env.SV_BROWSER_CHANNEL ?? "chrome",
   args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"],
@@ -12,17 +16,37 @@ try {
   const context = await browser.newContext({ locale: "en-US", viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   const page = await context.newPage();
   page.setDefaultTimeout(10000);
-  await page.addInitScript((text) => {
+  await page.addInitScript(({ text, modules }) => {
     Object.assign(globalThis, { qrRequests: [], holdDetector: false, denyCamera: false, failNextPlayback: true });
     globalThis.detectedQr = text;
     globalThis.BarcodeDetector = class {
       static async getSupportedFormats() { return ["qr_code"]; }
       async detect() {
+        if (globalThis.forceSoftware) throw new Error("Native scanner unavailable for test");
         if (globalThis.holdDetector) {
           await new Promise((resolve) => { globalThis.resolveDetection = resolve; });
         }
-        return [{ format: "qr_code", rawValue: globalThis.detectedQr }];
+        const codes = [{ format: "qr_code", rawValue: globalThis.detectedQr }];
+        if (globalThis.detectedQr === text) codes.push({ format: "qr_code", rawValue: text.replace("testAB12", "testCD34") });
+        return codes;
       }
+    };
+    const postFrame = Worker.prototype.postMessage;
+    Worker.prototype.postMessage = function (frame, transfer) {
+      if (!globalThis.forceSoftware || !(frame instanceof ImageData)) return postFrame.call(this, frame, transfer);
+      // Feed a printed-code fixture through the actual decoder worker.
+      const canvas = document.createElement("canvas");
+      const scale = 5;
+      canvas.width = canvas.height = modules.length * scale;
+      const context = canvas.getContext("2d");
+      context.fillStyle = "white";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.fillStyle = "black";
+      modules.forEach((row, y) => row.forEach((dark, x) => {
+        if (dark) context.fillRect(x * scale, y * scale, scale, scale);
+      }));
+      const image = context.getImageData(0, 0, canvas.width, canvas.height);
+      return postFrame.call(this, image, [image.data.buffer]);
     };
     const realFetch = window.fetch.bind(window);
     window.fetch = (resource, init) => {
@@ -47,7 +71,7 @@ try {
       }
       return play.call(this);
     };
-  }, qr);
+  }, { text: qr, modules });
 
   await page.goto(base + "/login");
   await page.getByLabel("Email or username").fill("demo@svault.local");
@@ -78,10 +102,13 @@ try {
   await page.getByRole("dialog").getByText("This QR code is not a receipt link.").waitFor();
   await page.evaluate((text) => { globalThis.detectedQr = text; }, qr);
   await waitForRequest(1);
+  await page.locator("dialog").waitFor({ state: "detached" });
+  assert.equal(await page.evaluate(() => qrRequests.length), 1);
+  assert.equal(await page.evaluate(() => qrRequests[0].signal.aborted), false);
   assert.equal(await page.evaluate(() => lastQrCamera.getTracks().every((track) => track.readyState === "ended")), true);
   assert.equal(await scan.isDisabled(), true);
   assert.equal(await page.getByRole("button", { name: "Import receipt PDF", exact: true }).isDisabled(), true);
-  console.log("PASS: a playback failure releases the camera and Retry starts a new scan");
+  console.log("PASS: Retry starts a new camera and a two-code frame imports one receipt");
   await reset.click();
   assert.equal(await page.evaluate(() => qrRequests[0].signal.aborted), true);
   await scan.click();
@@ -128,15 +155,32 @@ try {
   assert.equal(await scan.isDisabled(), false);
   console.log("PASS: resetting while a frame is decoding sends no QR request");
 
+  const choosePhoto = async () => {
+    const [chooser] = await Promise.all([
+      page.waitForEvent("filechooser"),
+      page.getByRole("button", { name: "Photograph instead" }).click(),
+    ]);
+    assert.equal(await chooser.element().getAttribute("capture"), "environment");
+    await page.locator("dialog").waitFor({ state: "detached" });
+  };
+  await page.evaluate(() => { globalThis.holdDetector = false; globalThis.detectedQr = "https://example.com/menu"; });
+  await scan.click();
+  await choosePhoto();
+  assert.equal(await page.evaluate(() => lastQrCamera.getTracks().every((track) => track.readyState === "ended")), true);
+  await page.evaluate(() => { globalThis.forceSoftware = true; });
+  await scan.click();
+  await waitForRequest(5);
+  assert.equal(await page.evaluate(() => qrRequests[4].qr), qr);
+  await resolve(4, digital("Software decoded"));
+  await vendor.waitFor();
+  assert.equal(await vendor.inputValue(), "Software decoded");
+  console.log("PASS: the built worker decodes the QR when native detection fails");
+
+  await reset.click();
   await page.evaluate(() => { globalThis.denyCamera = true; });
   await scan.click();
-  const [chooser] = await Promise.all([
-    page.waitForEvent("filechooser"),
-    page.getByRole("button", { name: "Photograph instead" }).click(),
-  ]);
-  assert.equal(await chooser.element().getAttribute("capture"), "environment");
-  await page.locator("dialog").waitFor({ state: "detached" });
-  console.log("PASS: camera denial fallback opens the receipt photo chooser");
+  await choosePhoto();
+  console.log("PASS: the photo chooser opens during scanning and after camera denial");
 } finally {
   await browser.close();
 }

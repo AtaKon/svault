@@ -60,6 +60,7 @@ export function ReceiptQrScanner({
     const element = videoRef.current;
     if (!element) return;
     const scan = new AbortController();
+    let handled = false;
     let lastPayload = "";
     let lastPayloadAt = 0;
     let noticeTimer: number | undefined;
@@ -79,6 +80,7 @@ export function ReceiptQrScanner({
     };
 
     const onPayload = (payload: string) => {
+      if (handled) return;
       const now = Date.now();
       if (lastPayload === payload && now - lastPayloadAt < 2500) return;
       lastPayload = payload;
@@ -90,12 +92,17 @@ export function ReceiptQrScanner({
         noticeTimer = window.setTimeout(() => setNotice(null), 4000);
         return;
       }
+      handled = true;
       stopScan();
       callbacks.current.onLink(link);
     };
 
     import("@/receipt-qr-live")
-      .then(({ startLiveQrScan }) => startLiveQrScan(element, onPayload, scan.signal))
+      .then(({ startLiveQrScan }) => startLiveQrScan(element, onPayload, scan.signal, () => {
+        stopScan();
+        setTorchAvailable(false);
+        setError(callbacks.current.t("Could not decode receipt QR codes. Photograph the receipt instead."));
+      }))
       .then((handle) => {
         if (scan.signal.aborted) return;
         scanRef.current = handle;
@@ -113,6 +120,12 @@ export function ReceiptQrScanner({
       window.clearTimeout(noticeTimer);
     };
   }, [attempt]);
+
+  const photograph = () => {
+    scanRef.current?.stop();
+    dialogRef.current?.close();
+    onPhotograph();
+  };
 
   const toggleTorch = async () => {
     const handle = scanRef.current;
@@ -141,17 +154,9 @@ export function ReceiptQrScanner({
             <>
               <Icon name="alert" size={26} className="text-amber-300" />
               <p className="max-w-xs text-xs leading-relaxed">{error}</p>
-              <div className="flex gap-2">
-                <Button size="sm" variant="secondary" icon="refresh" onClick={() => setAttempt((n) => n + 1)}>
-                  {t("Retry")}
-                </Button>
-                <Button size="sm" variant="secondary" icon="camera" onClick={() => {
-                  dialogRef.current?.close();
-                  onPhotograph();
-                }}>
-                  {t("Photograph instead")}
-                </Button>
-              </div>
+              <Button size="sm" variant="secondary" icon="refresh" onClick={() => setAttempt((n) => n + 1)}>
+                {t("Retry")}
+              </Button>
             </>
           ) : (
             <>
@@ -165,9 +170,17 @@ export function ReceiptQrScanner({
       {!starting && !error && (
         <div className="pointer-events-none absolute inset-0">
           <div className="absolute left-1/2 top-[42%] aspect-square w-[68%] max-w-[340px] -translate-x-1/2 -translate-y-1/2 rounded-2xl border-2 border-white/70" />
-          <div className="absolute inset-x-0 bottom-8 px-6 text-center text-[11px] font-medium leading-relaxed text-white/70">
+          <div className="absolute inset-x-0 bottom-20 px-6 text-center text-[11px] font-medium leading-relaxed text-white/70">
             {t("Point the camera at the receipt's QR code")}
           </div>
+        </div>
+      )}
+
+      {!starting && (
+        <div className="absolute inset-x-0 bottom-6 flex justify-center">
+          <Button size="sm" variant="secondary" icon="camera" onClick={photograph}>
+            {t("Photograph instead")}
+          </Button>
         </div>
       )}
 

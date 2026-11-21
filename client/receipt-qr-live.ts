@@ -1,4 +1,4 @@
-import { decodeReceiptQrFrame, rgbaToGray } from "./receipt-qr.js";
+import ReceiptQrWorker from "./receipt-qr-worker.ts?worker";
 
 type DetectedCode = { rawValue: string; format: string };
 
@@ -32,6 +32,7 @@ export async function startLiveQrScan(
   video: HTMLVideoElement,
   onPayload: (text: string) => void,
   signal: AbortSignal,
+  onDecoderError?: () => void,
 ): Promise<LiveQrScanHandle> {
   signal.throwIfAborted();
   const Detector = (globalThis as { BarcodeDetector?: NativeQrDetectorClass }).BarcodeDetector;
@@ -51,7 +52,8 @@ export async function startLiveQrScan(
   let scanning = false;
   let nativeFailures = 0;
   let canvas: HTMLCanvasElement | null = null;
-  let grayBuffer: Uint8ClampedArray | undefined;
+  let worker: Worker | undefined;
+  let cancelSoftwareDecode: (() => void) | undefined;
   let interval: number | undefined;
   const stop = () => {
     if (stopped) return;
@@ -67,7 +69,9 @@ export async function startLiveQrScan(
       stream = undefined;
     }
     canvas = null;
-    grayBuffer = undefined;
+    cancelSoftwareDecode?.();
+    worker?.terminate();
+    worker = undefined;
   };
 
   signal.addEventListener("abort", stop, { once: true });
@@ -108,6 +112,24 @@ export async function startLiveQrScan(
     // Cameras can use their default focus mode if constraints are unavailable.
   }
 
+  const decodeInWorker = async (frame: ImageData) => {
+    const decoder = worker ??= new ReceiptQrWorker();
+    try {
+      return await new Promise<string | null>((resolve, reject) => {
+        cancelSoftwareDecode = () => resolve(null);
+        decoder.onmessage = ({ data }: MessageEvent<string | null>) => resolve(data);
+        decoder.onerror = reject;
+        decoder.onmessageerror = reject;
+        decoder.postMessage(frame, [frame.data.buffer]);
+      });
+    } finally {
+      cancelSoftwareDecode = undefined;
+      decoder.onmessage = null;
+      decoder.onerror = null;
+      decoder.onmessageerror = null;
+    }
+  };
+
   const scanFrame = async () => {
     if (stopped || scanning || video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
     scanning = true;
@@ -139,10 +161,15 @@ export async function startLiveQrScan(
         }
       }
       if (stopped) return;
-      const frame = rgbaToGray(context.getImageData(0, 0, width, height).data, width, height, grayBuffer);
-      grayBuffer = frame.gray;
-      const text = decodeReceiptQrFrame(frame);
-      if (text) onPayload(text);
+      const frame = context.getImageData(0, 0, width, height);
+      const text = await decodeInWorker(frame).catch(() => {
+        if (!stopped) {
+          stop();
+          onDecoderError?.();
+        }
+        return null;
+      });
+      if (!stopped && text) onPayload(text);
     } catch {
       // Continue with the next frame if the current one cannot be read.
     } finally {

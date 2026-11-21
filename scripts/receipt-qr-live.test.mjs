@@ -78,7 +78,16 @@ test("live frames are bounded and serialized, with native retry before switching
     if (reply instanceof Error) throw reply;
     return reply;
   });
-  const getImageData = t.mock.fn(() => ({ data: rgba }));
+  const getImageData = t.mock.fn(() => ({ data: rgba, width, height }));
+  const terminateWorker = t.mock.fn();
+  let holdSoftwareFrame = false;
+  const postFrame = t.mock.fn(function (frame, transfer) {
+    assert.deepEqual(transfer, [frame.data.buffer]);
+    if (!holdSoftwareFrame) {
+      const pixels = qr.rgbaToGray(frame.data, frame.width, frame.height);
+      this.onmessage({ data: qr.decodeReceiptQrFrame(pixels) });
+    }
+  });
   const clearInterval = t.mock.fn();
   replaceGlobal(t, "navigator", { mediaDevices: { getUserMedia: async () => stream } });
   replaceGlobal(t, "window", {
@@ -95,6 +104,10 @@ test("live frames are bounded and serialized, with native retry before switching
   replaceGlobal(t, "BarcodeDetector", class {
     static async getSupportedFormats() { return ["qr_code"]; }
     detect = detect;
+  });
+  replaceGlobal(t, "Worker", class {
+    postMessage = postFrame;
+    terminate = terminateWorker;
   });
 
   const video = { videoWidth: 1920, videoHeight: 1080, readyState: 2, play: async () => {} };
@@ -121,13 +134,19 @@ test("live frames are bounded and serialized, with native retry before switching
   assert.deepEqual(found, expected);
   assert.equal(detect.mock.callCount(), 5);
   assert.deepEqual(getImageData.mock.calls.map((call) => call.arguments), Array(4).fill([0, 0, width, height]));
+  holdSoftwareFrame = true;
+  const pendingSoftware = frame();
+  await frame();
+  assert.equal(postFrame.mock.callCount(), 5);
   handle.stop();
   handle.stop();
   scan.abort();
+  await pendingSoftware;
   await frame();
   assert.deepEqual(found, expected);
   assert.equal(track.stop.mock.callCount(), 1);
   assert.equal(clearInterval.mock.callCount(), 1);
+  assert.equal(terminateWorker.mock.callCount(), 1);
   assert.equal(video.srcObject, null);
 });
 
