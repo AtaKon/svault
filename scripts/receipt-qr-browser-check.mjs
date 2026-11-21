@@ -65,6 +65,7 @@ try {
       if (globalThis.denyCamera) throw new DOMException("Denied for test", "NotAllowedError");
       const stream = await getUserMedia(constraints);
       globalThis.lastQrCamera = stream;
+      if (globalThis.holdCamera) await new Promise((resolve) => { globalThis.releaseCamera = resolve; });
       return stream;
     };
     const play = HTMLMediaElement.prototype.play;
@@ -146,8 +147,8 @@ try {
   await reset.click();
   await scan.click();
   await waitForRequest(4);
-  await resolve(3, { provider: "local", qr: { message: "Issuer unavailable" }, draft: { lines: [] } });
-  await page.getByText("Issuer unavailable", { exact: true }).waitFor();
+  await resolve(3, { provider: "local", draft: { lines: [] } });
+  await page.locator("p").filter({ hasText: "The digital receipt could not be loaded." }).waitFor();
   assert.equal(await page.getByRole("link", { name: "Open digital receipt" }).getAttribute("href"), qr);
   assert.equal(await vendor.inputValue(), "");
 
@@ -164,6 +165,14 @@ try {
   assert.equal(await page.evaluate(() => qrRequests.length), 4);
   assert.equal(await scan.isDisabled(), false);
 
+  await page.getByRole("button", { name: "Type or paste the receipt" }).click();
+  await setFixture({ finishCompetingPdf: null });
+  await pdfInput.setInputFiles({ name: "competing.pdf", mimeType: "application/pdf", buffer: Buffer.from("test") });
+  await page.waitForFunction(() => Boolean(globalThis.finishCompetingPdf));
+  await reset.click();
+  assert.equal(await scan.isDisabled(), true);
+  await page.evaluate(() => globalThis.finishCompetingPdf());
+
   const choosePhoto = async () => {
     const [chooser] = await Promise.all([
       page.waitForEvent("filechooser"),
@@ -172,6 +181,13 @@ try {
     assert.equal(await chooser.element().getAttribute("capture"), "environment");
     await page.locator("dialog").waitFor({ state: "detached" });
   };
+  await setFixture({ holdCamera: true });
+  await scan.click();
+  await page.waitForFunction(() => Boolean(globalThis.releaseCamera));
+  await choosePhoto();
+  await page.evaluate(() => globalThis.releaseCamera());
+  await page.waitForFunction(() => lastQrCamera.getTracks().every((track) => track.readyState === "ended"));
+  await setFixture({ holdCamera: false });
   await setFixture({ holdDetector: false, detectedQr: "https://example.com/menu" });
   await scan.click();
   await choosePhoto();

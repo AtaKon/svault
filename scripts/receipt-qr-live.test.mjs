@@ -94,6 +94,12 @@ test("live frames are bounded and serialized, with native retry before switching
     }
   });
   const clearInterval = t.mock.fn();
+  const setInterval = t.mock.fn((callback, delay) => {
+    assert.equal(delay, 250);
+    frame = callback;
+    return 1;
+  });
+  const createCanvas = t.mock.fn(() => ({ getContext: () => ({ drawImage() {}, getImageData }) }));
   const timers = new Map();
   let timeoutId = 0;
   const expireFrame = () => {
@@ -102,11 +108,7 @@ test("live frames are bounded and serialized, with native retry before switching
   };
   replaceGlobal(t, "navigator", { mediaDevices: { getUserMedia: async () => stream } });
   replaceGlobal(t, "window", {
-    setInterval(callback, delay) {
-      assert.equal(delay, 250);
-      frame = callback;
-      return 1;
-    },
+    setInterval,
     clearInterval,
     setTimeout(callback, delay) {
       assert.equal(delay, 4000);
@@ -115,9 +117,7 @@ test("live frames are bounded and serialized, with native retry before switching
     },
     clearTimeout(id) { timers.delete(id); },
   });
-  replaceGlobal(t, "document", {
-    createElement: () => ({ getContext: () => ({ drawImage() {}, getImageData }) }),
-  });
+  replaceGlobal(t, "document", { createElement: createCanvas });
   const supportedFormats = t.mock.fn(async () => ["qr_code"]);
   replaceGlobal(t, "BarcodeDetector", class {
     static getSupportedFormats = supportedFormats;
@@ -169,9 +169,13 @@ test("live frames are bounded and serialized, with native retry before switching
   softwareStarted = Promise.withResolvers();
   const onDecoderError = t.mock.fn();
   await startLiveQrScan(video, () => assert.fail("Unexpected QR payload"), new AbortController().signal, onDecoderError);
-  const stalledFrame = frame();
+  const pendingNativeTimeout = frame();
   expireFrame();
+  await pendingNativeTimeout;
+  const capturesBeforeFallback = createCanvas.mock.callCount();
+  const stalledFrame = frame();
   await softwareStarted.promise;
+  assert.equal(createCanvas.mock.callCount(), capturesBeforeFallback + 1);
   timedOutNative.reject(failure);
   expireFrame();
   await stalledFrame;
@@ -227,6 +231,14 @@ test("live frames are bounded and serialized, with native retry before switching
   assert.equal(detect.mock.callCount(), lastNativeCallCount);
   assert.equal(onDecoderError.mock.callCount(), 4);
   assert.equal(timers.size, 0);
+
+  const closing = new AbortController();
+  track.getCapabilities = () => { closing.abort(); return {}; };
+  supportedFormats.mock.mockImplementation(async () => []);
+  const intervalsBeforeClose = setInterval.mock.callCount();
+  await assert.rejects(startLiveQrScan(video, () => {}, closing.signal), { name: "AbortError" });
+  assert.equal(setInterval.mock.callCount(), intervalsBeforeClose);
+  assert.equal(video.srcObject, null);
 });
 
 test("closing while awaiting camera permission releases the late stream", async (t) => {
@@ -304,6 +316,12 @@ test("torch checks the reported state and ignores a completion after stop", asyn
     assert.equal(handle.torchAvailable, true);
     assert.equal(await handle.setTorch(true), true);
     assert.deepEqual(track.applyConstraints.mock.calls[0].arguments, [{ advanced: [{ torch: true }] }]);
+    const readSettings = track.getSettings;
+    track.getSettings = undefined;
+    assert.equal(await handle.setTorch(true), true);
+    track.getSettings = () => { throw error; };
+    assert.equal(await handle.setTorch(true), true);
+    track.getSettings = readSettings;
     torchSetting = false;
     assert.equal(await handle.setTorch(true), false);
     torchSetting = true;

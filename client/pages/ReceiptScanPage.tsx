@@ -655,10 +655,10 @@ export function ReceiptScanPage() {
     // Only resetting the workspace invalidates a read. Reset also removes its pages.
     const revision = workspaceRevisionRef.current;
     const addedKeys: string[] = [];
-    const existingDraft = snapshotRef.current() ?? snapshot();
-    const hasDigitalDraft = existingDraft.provider === "qr";
-    const tryDigital = !hasReceiptDetails(existingDraft, house.currency);
     try {
+      const existingDraft = snapshotRef.current() ?? snapshot();
+      const hasDigitalDraft = existingDraft.provider === "qr";
+      const tryDigital = !hasReceiptDetails(existingDraft, house.currency);
       // Find the receipt QR before any photo is read: a usable digital
       // receipt decides whether the photos are OCR'd at all.
       const decoder = tryDigital ? await import("@/receipt-qr").catch(() => null) : null;
@@ -786,11 +786,8 @@ export function ReceiptScanPage() {
     }).catch(() => null);
     if (options.signal?.aborted || options.revision !== workspaceRevisionRef.current) return "aborted";
     if (!data || !isUsableDigitalReceipt(data)) {
-      const warning = data ? data.qr?.message : options.notLoadedMessage;
-      if (warning) {
-        setWarning(warning);
-        setDigitalLink(link.url);
-      }
+      setWarning(data?.qr?.message || options.notLoadedMessage);
+      setDigitalLink(link.url);
       return "failed";
     }
     if (hasReceiptDetails(snapshotRef.current() ?? snapshot(), house.currency)) {

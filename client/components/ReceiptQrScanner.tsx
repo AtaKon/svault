@@ -32,6 +32,7 @@ export function ReceiptQrScanner({
   const dialogRef = useRef<HTMLDialogElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const scanRef = useRef<LiveQrScanHandle | null>(null);
+  const stopScanRef = useRef<(() => void) | null>(null);
   const callbacks = useRef({ onLink, t });
   const [starting, setStarting] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -79,6 +80,7 @@ export function ReceiptQrScanner({
       if (handle) handle.stop();
       else scan.abort();
     };
+    stopScanRef.current = stopScan;
 
     const onPayload = (payload: string) => {
       if (handled) return;
@@ -118,11 +120,14 @@ export function ReceiptQrScanner({
         setError(friendlyCameraError(err, callbacks.current.t));
       });
 
-    return stopScan;
+    return () => {
+      stopScanRef.current = null;
+      stopScan();
+    };
   }, [attempt]);
 
   const photograph = () => {
-    scanRef.current?.stop();
+    stopScanRef.current?.();
     dialogRef.current?.close();
     onPhotograph();
   };
@@ -176,13 +181,11 @@ export function ReceiptQrScanner({
         </div>
       )}
 
-      {!starting && (
-        <div className="absolute inset-x-0 bottom-6 flex justify-center">
-          <Button size="sm" variant="secondary" icon="camera" onClick={photograph}>
-            {t("Photograph instead")}
-          </Button>
-        </div>
-      )}
+      <div className="absolute inset-x-0 bottom-6 flex justify-center">
+        <Button size="sm" variant="secondary" icon="camera" onClick={photograph}>
+          {t("Photograph instead")}
+        </Button>
+      </div>
 
       {notice && (
         <div

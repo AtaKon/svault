@@ -23,6 +23,7 @@ export interface LiveQrScanHandle {
 const FRAME_INTERVAL_MS = 250;
 const FRAME_RESPONSE_TIMEOUT_MS = 4000;
 const FRAME_TIMED_OUT = Symbol("QR frame timed out");
+const SCAN_STOPPED = Symbol("QR scan stopped");
 const MAX_FRAME_SIDE = 1280;
 const MAX_CONSECUTIVE_NATIVE_FAILURES = 2;
 
@@ -68,12 +69,13 @@ export async function startLiveQrScan(
 
   const waitForDecoder = async <T>(request: () => Promise<T>) => {
     let timeout: number | undefined;
-    const interrupted = new Promise<undefined>((resolve, reject) => {
-      cancelDecoderWait = () => resolve(undefined);
+    const interrupted = new Promise<never>((_, reject) => {
+      cancelDecoderWait = () => reject(SCAN_STOPPED);
       timeout = window.setTimeout(() => reject(FRAME_TIMED_OUT), FRAME_RESPONSE_TIMEOUT_MS);
     });
     try {
-      return await Promise.race([request(), interrupted]);
+      const reply = new Promise<T>((resolve) => resolve(request()));
+      return await Promise.race([reply, interrupted]);
     } finally {
       window.clearTimeout(timeout);
       cancelDecoderWait = undefined;
@@ -172,8 +174,14 @@ export async function startLiveQrScan(
           codes = await waitForDecoder(() => native.detect(frameCanvas));
           nativeFailures = 0;
         } catch (error) {
-          // A timed-out native call may still be running, so do not start another.
-          if (error === FRAME_TIMED_OUT || ++nativeFailures >= MAX_CONSECUTIVE_NATIVE_FAILURES) detector = null;
+          if (error === SCAN_STOPPED) return;
+          if (error === FRAME_TIMED_OUT) {
+            // The pending native call may still be reading this canvas.
+            detector = null;
+            canvas = null;
+            return;
+          }
+          if (++nativeFailures >= MAX_CONSECUTIVE_NATIVE_FAILURES) detector = null;
         }
         if (stopped) return;
         if (codes) {
@@ -196,6 +204,7 @@ export async function startLiveQrScan(
       scanning = false;
     }
   };
+  signal.throwIfAborted();
   interval = window.setInterval(scanFrame, FRAME_INTERVAL_MS);
 
   return {
@@ -204,11 +213,15 @@ export async function startLiveQrScan(
       if (!torchSupported || stopped) return false;
       try {
         await track.applyConstraints(cameraConstraint({ torch: on }));
-        if (stopped) return false;
+      } catch {
+        return false;
+      }
+      if (stopped) return false;
+      try {
         const settings: CameraTrackSettings | undefined = track.getSettings?.();
         return settings?.torch === undefined || settings.torch === on;
       } catch {
-        return false;
+        return true;
       }
     },
     torchAvailable: torchSupported,
