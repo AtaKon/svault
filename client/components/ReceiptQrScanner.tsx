@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Button, IconButton, Spinner } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { useI18n } from "@/i18n";
-import type { LiveQrScanHandle } from "@/receipt-qr-live";
+import type { LiveQrScanHandle, TorchState } from "@/receipt-qr-live";
 import { matchReceiptQrLink, type ReceiptQrLink } from "@shared/receipt-qr-links";
 
 function friendlyCameraError(error: unknown, t: (key: string) => string): string {
@@ -33,12 +33,13 @@ export function ReceiptQrScanner({
   const videoRef = useRef<HTMLVideoElement>(null);
   const scanRef = useRef<LiveQrScanHandle | null>(null);
   const stopScanRef = useRef<(() => void) | null>(null);
+  const pendingTorchRef = useRef<LiveQrScanHandle | null>(null);
   const callbacks = useRef({ onLink, t });
   const [starting, setStarting] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [torchOn, setTorchOn] = useState(false);
-  const [pendingTorchHandle, setPendingTorchHandle] = useState<LiveQrScanHandle | null>(null);
+  const [torch, setTorch] = useState<TorchState>({ requested: false, reported: false });
+  const [torchPending, setTorchPending] = useState(false);
   const [torchAvailable, setTorchAvailable] = useState(false);
   const [attempt, setAttempt] = useState(0);
 
@@ -69,8 +70,9 @@ export function ReceiptQrScanner({
     setError(null);
     setNotice(null);
     setTorchAvailable(false);
-    setTorchOn(false);
-    setPendingTorchHandle(null);
+    setTorch({ requested: false, reported: false });
+    pendingTorchRef.current = null;
+    setTorchPending(false);
 
     const stopScan = () => {
       window.clearTimeout(noticeTimer);
@@ -134,14 +136,18 @@ export function ReceiptQrScanner({
 
   const toggleTorch = async () => {
     const handle = scanRef.current;
-    if (!handle || pendingTorchHandle === handle) return;
-    const next = !torchOn;
-    setPendingTorchHandle(handle);
+    if (!handle || pendingTorchRef.current === handle) return;
+    const next = !(torch.reported ?? torch.requested);
+    pendingTorchRef.current = handle;
+    setTorchPending(true);
     try {
-      const applied = await handle.setTorch(next);
-      if (applied && scanRef.current === handle) setTorchOn(next);
+      const state = await handle.setTorch(next);
+      if (state && scanRef.current === handle) setTorch(state);
     } finally {
-      setPendingTorchHandle((pending) => pending === handle ? null : pending);
+      if (pendingTorchRef.current === handle) {
+        pendingTorchRef.current = null;
+        setTorchPending(false);
+      }
     }
   };
 
@@ -209,11 +215,11 @@ export function ReceiptQrScanner({
         <IconButton
           type="button"
           onClick={() => void toggleTorch()}
-          disabled={pendingTorchHandle !== null}
-          aria-pressed={torchOn}
+          disabled={torchPending}
+          aria-pressed={torch.reported ?? "mixed"}
           icon="sun"
           label={t("Light")}
-          variant={torchOn ? "primary" : "secondary"}
+          variant={torch.reported ? "primary" : "secondary"}
           className="absolute right-3 top-3"
         />
       )}

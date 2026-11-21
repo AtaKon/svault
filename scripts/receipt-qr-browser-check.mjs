@@ -35,6 +35,10 @@ try {
     const postFrame = Worker.prototype.postMessage;
     Worker.prototype.postMessage = function (frame, transfer) {
       if (!globalThis.forceSoftware || !(frame instanceof ImageData)) return postFrame.call(this, frame, transfer);
+      if (globalThis.badWorkerFrame) {
+        globalThis.badWorkerFrame = false;
+        return postFrame.call(this, { width: 1, height: 1 });
+      }
       // Feed a printed-code fixture through the actual decoder worker.
       const rgba = new Uint8ClampedArray(pixels.length * 4).fill(255);
       pixels.forEach((value, i) => rgba.fill(value, i * 4, i * 4 + 3));
@@ -64,6 +68,12 @@ try {
     navigator.mediaDevices.getUserMedia = async (constraints) => {
       if (globalThis.denyCamera) throw new DOMException("Denied for test", "NotAllowedError");
       const stream = await getUserMedia(constraints);
+      if (globalThis.torchRequests) {
+        const [track] = stream.getVideoTracks();
+        track.getCapabilities = () => ({ torch: true });
+        track.getSettings = () => ({});
+        track.applyConstraints = async ({ advanced }) => { globalThis.torchRequests.push(advanced[0].torch); };
+      }
       globalThis.lastQrCamera = stream;
       if (globalThis.holdCamera) await new Promise((resolve) => { globalThis.releaseCamera = resolve; });
       return stream;
@@ -188,11 +198,16 @@ try {
   await page.evaluate(() => globalThis.releaseCamera());
   await page.waitForFunction(() => lastQrCamera.getTracks().every((track) => track.readyState === "ended"));
   await setFixture({ holdCamera: false });
-  await setFixture({ holdDetector: false, detectedQr: "https://example.com/menu" });
+  await setFixture({ holdDetector: false, detectedQr: "https://example.com/menu", torchRequests: [] });
   await scan.click();
+  const light = page.getByRole("button", { name: "Light", exact: true });
+  await light.click();
+  await page.locator('button[aria-label="Light"][aria-pressed="mixed"]:enabled').waitFor();
+  await light.click();
+  assert.deepEqual(await page.evaluate(() => torchRequests), [true, false]);
   await choosePhoto();
   assert.equal(await page.evaluate(() => lastQrCamera.getTracks().every((track) => track.readyState === "ended")), true);
-  await setFixture({ forceSoftware: true });
+  await setFixture({ forceSoftware: true, badWorkerFrame: true, torchRequests: null });
   await scan.click();
   await waitForRequest(5);
   assert.equal(await page.evaluate(() => qrRequests[4].qr), qr);

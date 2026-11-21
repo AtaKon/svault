@@ -12,11 +12,13 @@ type CameraSettings = MediaTrackConstraintSet & { torch?: boolean; focusMode?: "
 type CameraTrackSettings = MediaTrackSettings & { torch?: boolean };
 const cameraConstraint = (setting: CameraSettings): MediaTrackConstraints => ({ advanced: [setting] });
 
+export type TorchState = { requested: boolean; reported?: boolean };
+
 export interface LiveQrScanHandle {
   /** Release the camera and stop reading frames. Safe to call again. */
   stop(): void;
-  /** Report whether the torch setting was applied while the scan was active. */
-  setTorch(on: boolean): Promise<boolean>;
+  /** Report the request and any camera read-back. Null means the request failed or was canceled. */
+  setTorch(on: boolean): Promise<TorchState | null>;
   torchAvailable: boolean;
 }
 
@@ -213,18 +215,18 @@ export async function startLiveQrScan(
   return {
     stop,
     setTorch: async (on) => {
-      if (!torchSupported || sessionSignal.aborted) return false;
+      if (!torchSupported || sessionSignal.aborted) return null;
       try {
         await track.applyConstraints(cameraConstraint({ torch: on }));
       } catch {
-        return false;
+        return null;
       }
-      if (sessionSignal.aborted) return false;
+      if (sessionSignal.aborted) return null;
       try {
         const settings: CameraTrackSettings | undefined = track.getSettings?.();
-        return settings?.torch === undefined || settings.torch === on;
+        return { requested: on, reported: settings?.torch };
       } catch {
-        return true;
+        return { requested: on };
       }
     },
     torchAvailable: torchSupported,
