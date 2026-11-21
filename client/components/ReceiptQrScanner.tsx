@@ -37,7 +37,7 @@ export function ReceiptQrScanner({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [torchOn, setTorchOn] = useState(false);
-  const [torchPending, setTorchPending] = useState(false);
+  const [pendingTorchHandle, setPendingTorchHandle] = useState<LiveQrScanHandle | null>(null);
   const [torchAvailable, setTorchAvailable] = useState(false);
   const [attempt, setAttempt] = useState(0);
 
@@ -48,11 +48,10 @@ export function ReceiptQrScanner({
   useEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog) return;
-    dialog.showModal();
+    if (!dialog.open) dialog.showModal();
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
-      dialog.close();
       document.body.style.overflow = previousOverflow;
     };
   }, []);
@@ -69,7 +68,7 @@ export function ReceiptQrScanner({
     setNotice(null);
     setTorchAvailable(false);
     setTorchOn(false);
-    setTorchPending(false);
+    setPendingTorchHandle(null);
 
     const onPayload = (payload: string) => {
       const now = Date.now();
@@ -110,22 +109,22 @@ export function ReceiptQrScanner({
 
   const toggleTorch = async () => {
     const handle = scanRef.current;
-    if (!handle || torchPending) return;
+    if (!handle || pendingTorchHandle === handle) return;
     const next = !torchOn;
-    setTorchPending(true);
-    const applied = await handle.setTorch(next);
-    if (scanRef.current !== handle) return;
-    if (applied) setTorchOn(next);
-    setTorchPending(false);
+    setPendingTorchHandle(handle);
+    try {
+      const applied = await handle.setTorch(next);
+      if (applied && scanRef.current === handle) setTorchOn(next);
+    } finally {
+      setPendingTorchHandle((pending) => pending === handle ? null : pending);
+    }
   };
 
   return (
     <dialog
       ref={dialogRef}
       aria-label={t("Scan receipt code")}
-      onClose={(event) => {
-        if (!event.currentTarget.open) onClose();
-      }}
+      onClose={onClose}
       className="fixed inset-0 m-0 h-full max-h-none w-full max-w-none overflow-hidden bg-black p-0"
     >
       <video ref={videoRef} className="h-full w-full object-cover" muted playsInline autoPlay />
@@ -197,7 +196,7 @@ export function ReceiptQrScanner({
         <button
           type="button"
           onClick={() => void toggleTorch()}
-          disabled={torchPending}
+          disabled={pendingTorchHandle !== null}
           aria-pressed={torchOn}
           aria-label={t("Light")}
           className={cn(

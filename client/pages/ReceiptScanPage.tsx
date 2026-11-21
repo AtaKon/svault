@@ -277,7 +277,7 @@ export function ReceiptScanPage() {
   const stitchedPathRef = useRef<string | null>(null);
   const stitchSeqRef = useRef(0);
   const workspaceRevisionRef = useRef(0);
-  const readingRef = useRef(false);
+  const readingRef = useRef<symbol | null>(null);
   const pageUploadsRef = useRef(new Map<string, Promise<string | null>>());
   const validationSeqRef = useRef(0);
   const draftKey = receiptDraftKey(user?.id, house.id);
@@ -573,7 +573,7 @@ export function ReceiptScanPage() {
 
   const rerunOcr = async (key?: string) => {
     if (readingRef.current || busy || ocrRunning) return;
-    readingRef.current = true;
+    readingRef.current = Symbol();
     const revision = workspaceRevisionRef.current;
     const current = [...pagesRef.current];
     try {
@@ -582,7 +582,7 @@ export function ReceiptScanPage() {
         if (!key || key === page.key) await runPageOcr(page.key, index, current.length);
       }
     } finally {
-      readingRef.current = false;
+      readingRef.current = null;
     }
   };
 
@@ -647,7 +647,7 @@ export function ReceiptScanPage() {
 
   const handleFiles = async (files: File[]) => {
     if (!files.length || pendingDraft || readingRef.current || busy || ocrRunning) return;
-    readingRef.current = true;
+    readingRef.current = Symbol();
     setBusy(true);
     // Only resetting the workspace invalidates a read. Reset also removes its pages.
     const revision = workspaceRevisionRef.current;
@@ -719,7 +719,7 @@ export function ReceiptScanPage() {
       }
       if (revision === workspaceRevisionRef.current) await rebuildStitch();
     } finally {
-      readingRef.current = false;
+      readingRef.current = null;
       setBusy(false);
     }
   };
@@ -829,7 +829,8 @@ export function ReceiptScanPage() {
       setQrScannerRevision(null);
       return;
     }
-    readingRef.current = true;
+    const importLock = Symbol();
+    readingRef.current = importLock;
     setBusy(true);
     setQrScannerRevision(null);
     try {
@@ -847,14 +848,16 @@ export function ReceiptScanPage() {
         if (!pagesRef.current.length) setManualMode(true);
       }
     } finally {
-      readingRef.current = false;
-      setBusy(false);
+      if (readingRef.current === importLock) {
+        readingRef.current = null;
+        setBusy(false);
+      }
     }
   };
 
   const handlePdf = async (file: File | undefined) => {
     if (!file || pendingDraft || readingRef.current || busy || ocrRunning) return;
-    readingRef.current = true;
+    readingRef.current = Symbol();
     setBusy(true);
     const revision = workspaceRevisionRef.current;
     try {
@@ -887,7 +890,7 @@ export function ReceiptScanPage() {
     } catch {
       toast.error(t("Could not read the receipt PDF"));
     } finally {
-      readingRef.current = false;
+      readingRef.current = null;
       setBusy(false);
     }
   };
@@ -913,7 +916,7 @@ export function ReceiptScanPage() {
     if (pagesRef.current.length > MAX_VISION_PAGES) {
       toast.push(t("Only the first {count} photos are sent to the vision model.", { count: MAX_VISION_PAGES }));
     }
-    readingRef.current = true;
+    readingRef.current = Symbol();
     const revision = workspaceRevisionRef.current;
     setBusy(true);
     try {
@@ -939,7 +942,7 @@ export function ReceiptScanPage() {
     } catch (err) {
       toast.error(err instanceof Error ? t(err.message) : t("Could not read the receipt"));
     } finally {
-      readingRef.current = false;
+      readingRef.current = null;
       setBusy(false);
     }
   };
@@ -1113,7 +1116,7 @@ export function ReceiptScanPage() {
       return;
     }
     const rows = included;
-    readingRef.current = true;
+    readingRef.current = Symbol();
     setSaving(true);
     try {
       const check = await validate(rows).catch((err) => {
@@ -1158,7 +1161,7 @@ export function ReceiptScanPage() {
       }
       toast.error(receiptErrorMessage(err, t));
     } finally {
-      readingRef.current = false;
+      readingRef.current = null;
       setSaving(false);
     }
   };

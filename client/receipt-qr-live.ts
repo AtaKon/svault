@@ -141,7 +141,7 @@ export async function startLiveQrScan(
           }
         }
         if (stopped) return;
-        // ZXing finishes synchronously before the grayscale buffer is reused.
+        // The live decoder runs synchronously without recovery, so no later attempt reads this buffer.
         const pixels = rgbaToGray(context.getImageData(0, 0, width, height).data, width, height, grayBuffer);
         grayBuffer = pixels.gray;
         const text = decodeReceiptQrFrame(pixels);
