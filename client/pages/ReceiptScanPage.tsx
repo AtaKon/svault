@@ -116,6 +116,8 @@ interface SavedDraft {
   warning: string | null;
 }
 
+type DigitalLinkOutcome = "applied" | "kept" | "failed" | "aborted";
+
 /** Suggestions this certain are pre-selected; weaker ones wait for a tap. */
 const AUTO_SELECT_SCORE = 0.9;
 const MAX_VISION_PAGES = 8;
@@ -327,6 +329,7 @@ export function ReceiptScanPage() {
   const [draftReady, setDraftReady] = useState(false);
   const [pendingDraft, setPendingDraft] = useState<StoredReceiptDraft<SavedDraft> | null>(null);
   const [resuming, setResuming] = useState(false);
+  const qrScanUnavailable = busy || ocrRunning || saving || Boolean(pendingDraft);
 
   useEffect(() => {
     Promise.all([
@@ -767,9 +770,6 @@ export function ReceiptScanPage() {
     setWarning(data.warning ?? null);
   };
 
-  /** Outcome of importing a decoded receipt link through the scan API. */
-  type DigitalLinkOutcome = "applied" | "kept" | "failed" | "aborted";
-
   /**
    * Imports the issuer's digital receipt for a decoded QR link — the same
    * path for a link decoded from a photo and one read by the live scanner.
@@ -812,16 +812,19 @@ export function ReceiptScanPage() {
     }
   };
 
-  /**
-   * A receipt link read by the live scanner: import the digital receipt
-   * through the same API a decoded photo uses. When the workspace is still
-   * empty and the import fails, the manual workspace opens anyway so the
-   * warning and the issuer link stay visible while the photo fallback is
-   * offered.
-   */
+  const canScanQr = () => {
+    if (!readingRef.current && !qrScanUnavailable) return true;
+    toast.push(t("Wait for the current receipt operation to finish, then scan again."));
+    return false;
+  };
+
+  const openQrScanner = () => {
+    if (canScanQr()) setQrScanning(true);
+  };
+
   const handleLiveQrLink = async (link: ReceiptQrLink) => {
     setQrScanning(false);
-    if (readingRef.current || busy || ocrRunning || saving || pendingDraft) return;
+    if (!canScanQr()) return;
     readingRef.current = true;
     setBusy(true);
     try {
@@ -833,6 +836,7 @@ export function ReceiptScanPage() {
         toast.success(t("Digital receipt imported"));
       } else if (outcome === "failed") {
         toast.error(t("The digital receipt could not be loaded. Photograph the receipt instead."));
+        // Show the issuer link and warning even when no photo has been added.
         if (!pagesRef.current.length) setManualMode(true);
       }
     } finally {
@@ -1387,8 +1391,8 @@ export function ReceiptScanPage() {
               <Button
                 type="button"
                 icon="scan"
-                disabled={busy || saving || ocrRunning || Boolean(pendingDraft)}
-                onClick={() => setQrScanning(true)}
+                disabled={qrScanUnavailable}
+                onClick={openQrScanner}
               >
                 {t("Scan receipt code")}</Button>
               <Button
@@ -1600,8 +1604,8 @@ export function ReceiptScanPage() {
                 <span className="flex items-center gap-2">
                   <button
                     type="button"
-                    disabled={busy || ocrRunning || saving || Boolean(pendingDraft)}
-                    onClick={() => setQrScanning(true)}
+                    disabled={qrScanUnavailable}
+                    onClick={openQrScanner}
                     className="font-medium text-brand hover:underline"
                   >
                     {t("Scan code")}</button>

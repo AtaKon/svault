@@ -34,12 +34,11 @@ export function ReceiptQrScanner({
   const scanRef = useRef<LiveQrScanHandle | null>(null);
   const onLinkRef = useRef(onLink);
   onLinkRef.current = onLink;
-  const lastRef = useRef<{ code: string; at: number }>({ code: "", at: 0 });
-  const noticeTimer = useRef<number | null>(null);
   const [starting, setStarting] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [torchOn, setTorchOn] = useState(false);
+  const [torchPending, setTorchPending] = useState(false);
   const [torchAvailable, setTorchAvailable] = useState(false);
   const [attempt, setAttempt] = useState(0);
 
@@ -59,22 +58,26 @@ export function ReceiptQrScanner({
     const element = videoRef.current;
     if (!element) return;
     const scan = new AbortController();
+    let lastPayload = "";
+    let lastPayloadAt = 0;
+    let noticeTimer: number | undefined;
     setStarting(true);
     setError(null);
     setNotice(null);
     setTorchAvailable(false);
     setTorchOn(false);
-    lastRef.current = { code: "", at: 0 };
+    setTorchPending(false);
 
     const onPayload = (payload: string) => {
       const now = Date.now();
-      if (lastRef.current.code === payload && now - lastRef.current.at < 2500) return;
-      lastRef.current = { code: payload, at: now };
+      if (lastPayload === payload && now - lastPayloadAt < 2500) return;
+      lastPayload = payload;
+      lastPayloadAt = now;
       const link = matchReceiptQrLink(payload);
+      window.clearTimeout(noticeTimer);
       if (!link) {
         setNotice(t("This QR code is not a receipt link."));
-        if (noticeTimer.current) window.clearTimeout(noticeTimer.current);
-        noticeTimer.current = window.setTimeout(() => setNotice(null), 4000);
+        noticeTimer = window.setTimeout(() => setNotice(null), 4000);
         return;
       }
       scan.abort();
@@ -97,10 +100,21 @@ export function ReceiptQrScanner({
 
     return () => {
       scan.abort();
-      if (noticeTimer.current) window.clearTimeout(noticeTimer.current);
+      window.clearTimeout(noticeTimer);
       scanRef.current = null;
     };
   }, [attempt, t]);
+
+  const toggleTorch = async () => {
+    const handle = scanRef.current;
+    if (!handle || torchPending) return;
+    const next = !torchOn;
+    setTorchPending(true);
+    const applied = await handle.setTorch(next);
+    if (scanRef.current !== handle) return;
+    if (applied) setTorchOn(next);
+    setTorchPending(false);
+  };
 
   return (
     <dialog
@@ -180,11 +194,8 @@ export function ReceiptQrScanner({
       {torchAvailable && (
         <button
           type="button"
-          onClick={() => {
-            const next = !torchOn;
-            setTorchOn(next);
-            scanRef.current?.setTorch(next);
-          }}
+          onClick={() => void toggleTorch()}
+          disabled={torchPending}
           aria-pressed={torchOn}
           aria-label={t("Light")}
           className={cn(

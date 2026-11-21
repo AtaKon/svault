@@ -140,8 +140,8 @@ export function decodeReceiptQrFrame(pixels: GrayPixels, options: ReceiptQrDecod
 }
 
 /** RGBA image data to row-major grayscale luminance (ITU-R 601). */
-export function rgbaToGray(rgba: Uint8ClampedArray, width: number, height: number): GrayPixels {
-  const gray = new Uint8ClampedArray(width * height);
+export function rgbaToGray(rgba: Uint8ClampedArray, width: number, height: number, buffer?: Uint8ClampedArray): GrayPixels {
+  const gray = buffer?.length === width * height ? buffer : new Uint8ClampedArray(width * height);
   for (let i = 0, p = 0; i < gray.length; i++, p += 4) {
     gray[i] = (rgba[p] * 299 + rgba[p + 1] * 587 + rgba[p + 2] * 114) / 1000;
   }

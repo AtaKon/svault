@@ -26,8 +26,8 @@ const FOCUS_CONTINUOUS = { advanced: [{ focusMode: "continuous" }] } as unknown 
 const torchConstraint = (on: boolean) => ({ advanced: [{ torch: on }] }) as unknown as MediaTrackConstraints;
 
 export interface LiveQrScanHandle {
-  /** Toggle the torch when the track supports it; ignored otherwise. */
-  setTorch(on: boolean): void;
+  /** Apply the torch setting and report whether the camera accepted it. */
+  setTorch(on: boolean): Promise<boolean>;
   /** True when the camera track can control the torch. */
   torchAvailable: boolean;
 }
@@ -61,6 +61,7 @@ export async function startLiveQrScan(
   let stopped = false;
   let scanning = false;
   let canvas: HTMLCanvasElement | null = null;
+  let grayBuffer: Uint8ClampedArray | undefined;
   let interval: number | undefined;
   const stop = () => {
     if (stopped) return;
@@ -70,6 +71,7 @@ export async function startLiveQrScan(
     for (const item of stream.getTracks()) item.stop();
     if (video.srcObject === stream) video.srcObject = null;
     canvas = null;
+    grayBuffer = undefined;
   };
 
   signal.addEventListener("abort", stop, { once: true });
@@ -109,6 +111,7 @@ export async function startLiveQrScan(
             }
             return;
           } catch {
+            // A native detection failure switches this session to ZXing.
             detector = null;
           }
         }
@@ -124,7 +127,8 @@ export async function startLiveQrScan(
         const context = canvas.getContext("2d", { willReadFrequently: true });
         if (!context) return;
         context.drawImage(video, 0, 0, width, height);
-        const pixels = rgbaToGray(context.getImageData(0, 0, width, height).data, width, height);
+        const pixels = rgbaToGray(context.getImageData(0, 0, width, height).data, width, height, grayBuffer);
+        grayBuffer = pixels.gray;
         const text = decodeReceiptQrFrame(pixels);
         if (text) onPayload(text);
       } catch {
@@ -136,11 +140,13 @@ export async function startLiveQrScan(
   }, FRAME_INTERVAL_MS);
 
   return {
-    setTorch: (on) => {
+    setTorch: async (on) => {
+      if (!torchSupported || stopped) return false;
       try {
-        void track?.applyConstraints(torchConstraint(on)).catch(() => undefined);
+        await track.applyConstraints(torchConstraint(on));
+        return !stopped;
       } catch {
-        /* Unsupported or already stopped. */
+        return false;
       }
     },
     torchAvailable: torchSupported,

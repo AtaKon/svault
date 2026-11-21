@@ -123,6 +123,12 @@ test("live camera uses the software decoder if native detection throws after sta
     static async getSupportedFormats() { return ["qr_code"]; }
     async detect() {
       nativeAttempts++;
+      if (nativeAttempts === 1) {
+        return [
+          { format: "ean_13", rawValue: "0123456789012" },
+          { format: "qr_code", rawValue: "" },
+        ];
+      }
       throw new Error("Native detector unavailable");
     }
   });
@@ -135,7 +141,10 @@ test("live camera uses the software decoder if native detection throws after sta
   assert.equal(video.srcObject, stream);
   frame();
   await Promise.resolve();
-  assert.equal(nativeAttempts, 1);
+  assert.deepEqual(found, []);
+  frame();
+  await Promise.resolve();
+  assert.equal(nativeAttempts, 2);
   assert.deepEqual(found, [text]);
   scan.abort();
   frame();
@@ -161,6 +170,65 @@ test("closing while awaiting camera permission releases the late stream", async 
   assert.equal(track.stop.mock.callCount(), 1);
   assert.equal(video.play.mock.callCount(), 0);
   assert.equal(video.srcObject, null);
+});
+
+for (const abortDuringPlay of [false, true]) {
+  test(`releases the stream when video playback rejects${abortDuringPlay ? " after closing" : ""}`, async (t) => {
+    const track = { stop: t.mock.fn() };
+    const stream = { getTracks: () => [track] };
+    const playing = Promise.withResolvers();
+    const playback = Promise.withResolvers();
+    replaceGlobal(t, "BarcodeDetector", undefined);
+    replaceGlobal(t, "navigator", { mediaDevices: { getUserMedia: async () => stream } });
+    const video = {
+      srcObject: null,
+      play() {
+        playing.resolve();
+        return playback.promise;
+      },
+    };
+    const scan = new AbortController();
+    const pending = startLiveQrScan(video, () => assert.fail("Unexpected QR payload"), scan.signal);
+    await playing.promise;
+    assert.equal(video.srcObject, stream);
+
+    if (abortDuringPlay) {
+      scan.abort();
+      assert.equal(track.stop.mock.callCount(), 1);
+      assert.equal(video.srcObject, null);
+    }
+    const error = new DOMException("Playback failed", "NotAllowedError");
+    playback.reject(error);
+    await assert.rejects(pending, error);
+    assert.equal(track.stop.mock.callCount(), 1);
+    assert.equal(video.srcObject, null);
+  });
+}
+
+test("torch reports camera constraint failures without throwing", async (t) => {
+  const error = new Error("Cannot set torch");
+  const track = {
+    stop() {},
+    getCapabilities: () => ({ torch: true }),
+    applyConstraints: t.mock.fn(async () => undefined),
+  };
+  const stream = { getTracks: () => [track], getVideoTracks: () => [track] };
+  replaceGlobal(t, "BarcodeDetector", undefined);
+  replaceGlobal(t, "navigator", { mediaDevices: { getUserMedia: async () => stream } });
+  replaceGlobal(t, "window", { setInterval: () => 1, clearInterval() {} });
+  const scan = new AbortController();
+  try {
+    const handle = await startLiveQrScan({ play: async () => {} }, () => {}, scan.signal);
+    assert.equal(handle.torchAvailable, true);
+    assert.equal(await handle.setTorch(true), true);
+    assert.deepEqual(track.applyConstraints.mock.calls[0].arguments, [{ advanced: [{ torch: true }] }]);
+    track.applyConstraints.mock.mockImplementation(() => { throw error; });
+    assert.equal(await handle.setTorch(false), false);
+    track.applyConstraints.mock.mockImplementation(async () => { throw error; });
+    assert.equal(await handle.setTorch(false), false);
+  } finally {
+    scan.abort();
+  }
 });
 
 test("live frame: blank or exhausted frames yield null without throwing", () => {
