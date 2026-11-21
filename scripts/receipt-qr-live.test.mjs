@@ -94,7 +94,12 @@ test("live frames are bounded and serialized, with native retry before switching
     }
   });
   const clearInterval = t.mock.fn();
-  let expireFrame;
+  const timers = new Map();
+  let timeoutId = 0;
+  const expireFrame = () => {
+    assert.equal(timers.size, 1);
+    timers.values().next().value();
+  };
   replaceGlobal(t, "navigator", { mediaDevices: { getUserMedia: async () => stream } });
   replaceGlobal(t, "window", {
     setInterval(callback, delay) {
@@ -105,16 +110,17 @@ test("live frames are bounded and serialized, with native retry before switching
     clearInterval,
     setTimeout(callback, delay) {
       assert.equal(delay, 4000);
-      expireFrame = callback;
-      return 1;
+      timers.set(++timeoutId, callback);
+      return timeoutId;
     },
-    clearTimeout() { expireFrame = undefined; },
+    clearTimeout(id) { timers.delete(id); },
   });
   replaceGlobal(t, "document", {
     createElement: () => ({ getContext: () => ({ drawImage() {}, getImageData }) }),
   });
+  const supportedFormats = t.mock.fn(async () => ["qr_code"]);
   replaceGlobal(t, "BarcodeDetector", class {
-    static async getSupportedFormats() { return ["qr_code"]; }
+    static getSupportedFormats = supportedFormats;
     detect = detect;
   });
   replaceGlobal(t, "Worker", class {
@@ -158,19 +164,21 @@ test("live frames are bounded and serialized, with native retry before switching
   assert.equal(video.srcObject, null);
 
   // A new session survives the previous cancellation, then bounds both missing replies.
-  detect.mock.mockImplementation(() => new Promise(() => {}));
+  const timedOutNative = Promise.withResolvers();
+  detect.mock.mockImplementation(() => timedOutNative.promise);
   softwareStarted = Promise.withResolvers();
   const onDecoderError = t.mock.fn();
   await startLiveQrScan(video, () => assert.fail("Unexpected QR payload"), new AbortController().signal, onDecoderError);
   const stalledFrame = frame();
   expireFrame();
   await softwareStarted.promise;
+  timedOutNative.reject(failure);
   expireFrame();
   await stalledFrame;
   assert.equal(onDecoderError.mock.callCount(), 1);
   assert.equal(track.stop.mock.callCount(), 2);
   assert.equal(terminateWorker.mock.callCount(), 2);
-  assert.equal(expireFrame, undefined);
+  assert.equal(timers.size, 0);
 
   const lateReply = replyToWorker;
   const previousReads = getImageData.mock.callCount();
@@ -196,6 +204,29 @@ test("live frames are bounded and serialized, with native retry before switching
   await nextFrame;
   assert.deepEqual(received, [text]);
   restarted.stop();
+
+  const lastNativeCallCount = detect.mock.callCount();
+  postFrame.mock.mockImplementation(() => { throw new DOMException("Invalid frame", "DataCloneError"); });
+  const probeStarted = Promise.withResolvers();
+  const pendingFormats = new Promise(() => {});
+  for (const formats of [[], failure, pendingFormats]) {
+    supportedFormats.mock.mockImplementation(async () => {
+      if (formats instanceof Error) throw formats;
+      if (formats === pendingFormats) probeStarted.resolve();
+      return formats;
+    });
+    const scan = startLiveQrScan(video, () => assert.fail("Unexpected QR payload"), new AbortController().signal, onDecoderError);
+    if (formats === pendingFormats) {
+      await probeStarted.promise;
+      expireFrame();
+    }
+    await scan;
+    await frame();
+    assert.equal(video.srcObject, null);
+  }
+  assert.equal(detect.mock.callCount(), lastNativeCallCount);
+  assert.equal(onDecoderError.mock.callCount(), 4);
+  assert.equal(timers.size, 0);
 });
 
 test("closing while awaiting camera permission releases the late stream", async (t) => {

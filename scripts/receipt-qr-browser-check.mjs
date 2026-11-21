@@ -6,9 +6,9 @@ import zxing from "@zxing/library";
 
 const base = (process.argv[2] ?? "http://localhost:4201").replace(/\/$/, "");
 const qr = "https://e-invoicing.gr/edocuments/ViewInvoice/-1/12345678-1234-1234-1234-123456789abc_testAB12";
-const bitmap = new zxing.QRCodeWriter().encode(qr, zxing.BarcodeFormat.QR_CODE, 0, 0, new Map());
-const modules = Array.from({ length: bitmap.getHeight() }, (_, y) =>
-  Array.from({ length: bitmap.getWidth() }, (_, x) => bitmap.get(x, y)));
+const side = 180;
+const bitmap = new zxing.QRCodeWriter().encode(qr, zxing.BarcodeFormat.QR_CODE, side, side, new Map());
+const pixels = Array.from({ length: side * side }, (_, i) => bitmap.get(i % side, Math.floor(i / side)) ? 0 : 255);
 const browser = await chromium.launch({
   channel: process.env.SV_BROWSER_CHANNEL ?? "chrome",
   args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"],
@@ -17,7 +17,7 @@ try {
   const context = await browser.newContext({ locale: "en-US", viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   const page = await context.newPage();
   page.setDefaultTimeout(10000);
-  await page.addInitScript(({ text, modules }) => {
+  await page.addInitScript(({ text, side, pixels }) => {
     Object.assign(globalThis, { qrRequests: [], holdDetector: false, denyCamera: false, failNextPlayback: true });
     globalThis.detectedQr = text;
     globalThis.BarcodeDetector = class {
@@ -36,18 +36,9 @@ try {
     Worker.prototype.postMessage = function (frame, transfer) {
       if (!globalThis.forceSoftware || !(frame instanceof ImageData)) return postFrame.call(this, frame, transfer);
       // Feed a printed-code fixture through the actual decoder worker.
-      const canvas = document.createElement("canvas");
-      const scale = 5;
-      canvas.width = canvas.height = modules.length * scale;
-      const context = canvas.getContext("2d");
-      context.fillStyle = "white";
-      context.fillRect(0, 0, canvas.width, canvas.height);
-      context.fillStyle = "black";
-      modules.forEach((row, y) => row.forEach((dark, x) => {
-        if (dark) context.fillRect(x * scale, y * scale, scale, scale);
-      }));
-      const image = context.getImageData(0, 0, canvas.width, canvas.height);
-      return postFrame.call(this, image, [image.data.buffer]);
+      const rgba = new Uint8ClampedArray(pixels.length * 4).fill(255);
+      pixels.forEach((value, i) => rgba.fill(value, i * 4, i * 4 + 3));
+      return postFrame.call(this, new ImageData(rgba, side), [rgba.buffer]);
     };
     const readCanvas = CanvasRenderingContext2D.prototype.getImageData;
     CanvasRenderingContext2D.prototype.getImageData = function (...args) {
@@ -84,7 +75,7 @@ try {
       }
       return play.call(this);
     };
-  }, { text: qr, modules });
+  }, { text: qr, side, pixels });
 
   await page.goto(base + "/login");
   await page.getByLabel("Email or username").fill("demo@svault.local");
@@ -97,9 +88,12 @@ try {
   await page.waitForURL((url) => !url.pathname.includes("login"));
   await page.goto(base + "/receipts/scan");
   const scan = page.getByRole("button", { name: "Scan receipt code", exact: true });
+  const scanCode = page.getByRole("button", { name: "Scan code", exact: true });
   const reset = page.getByRole("button", { name: "Start over" });
+  const pdfInput = page.locator('input[accept^="application/pdf"]');
   const vendor = page.locator('input[list="receipt-vendor-options"]');
   const waitForRequest = (count) => page.waitForFunction((expected) => qrRequests.length === expected, count);
+  const setFixture = (values) => page.evaluate((settings) => { Object.assign(globalThis, settings); }, values);
   const resolve = (index, body) => page.evaluate(([i, json]) => qrRequests[i].resolve(Response.json(json)), [index, body]);
   const digital = (name) => ({
     provider: "qr", selectedText: "Receipt test line 1.25",
@@ -110,12 +104,12 @@ try {
   const retry = page.getByRole("button", { name: "Retry", exact: true });
   await retry.waitFor();
   assert.equal(await page.evaluate(() => lastQrCamera.getTracks().every((track) => track.readyState === "ended")), true);
-  await page.evaluate(() => { globalThis.detectedQr = "https://example.com/menu"; });
+  await setFixture({ detectedQr: "https://example.com/menu" });
   await retry.click();
   await page.getByRole("dialog").getByText("This QR code is not a receipt link.").waitFor();
-  await page.locator('input[accept^="application/pdf"]').setInputFiles({ name: "competing.pdf", mimeType: "application/pdf", buffer: Buffer.from("test") });
+  await pdfInput.setInputFiles({ name: "competing.pdf", mimeType: "application/pdf", buffer: Buffer.from("test") });
   await page.waitForFunction(() => Boolean(globalThis.finishCompetingPdf));
-  await page.evaluate((text) => { globalThis.detectedQr = text; }, qr);
+  await setFixture({ detectedQr: qr });
   await page.getByRole("dialog").getByText("Wait for the current receipt operation to finish.").waitFor();
   assert.equal(await page.evaluate(() => qrRequests.length), 0);
   await page.evaluate(() => globalThis.finishCompetingPdf());
@@ -126,9 +120,8 @@ try {
   assert.equal(await page.evaluate(() => lastQrCamera.getTracks().every((track) => track.readyState === "ended")), true);
   assert.equal(await scan.isDisabled(), true);
   assert.equal(await page.getByRole("button", { name: "Import receipt PDF", exact: true }).isDisabled(), true);
-  await page.locator('input[accept^="application/pdf"]').setInputFiles({ name: "receipt.pdf", mimeType: "application/pdf", buffer: Buffer.from("test") });
+  await pdfInput.setInputFiles({ name: "receipt.pdf", mimeType: "application/pdf", buffer: Buffer.from("test") });
   await page.locator('input[capture="environment"]').setInputFiles({ name: "receipt.jpg", mimeType: "image/jpeg", buffer: Buffer.from("test") });
-  console.log("PASS: Retry starts a new camera and a two-code frame imports one receipt");
   await reset.click();
   assert.equal(await page.evaluate(() => qrRequests[0].signal.aborted), true);
   await scan.click();
@@ -141,16 +134,14 @@ try {
   await resolve(1, digital("Fresh result"));
   await vendor.waitFor();
   assert.equal(await vendor.inputValue(), "Fresh result");
-  console.log("PASS: reset aborts an initial QR import and a late result cannot unlock or populate the second import");
 
   await vendor.fill("Edited merchant");
-  await page.getByRole("button", { name: "Scan code", exact: true }).click();
+  await scanCode.click();
   await waitForRequest(3);
   await resolve(2, digital("Replacement"));
   await page.getByRole("status").filter({ hasText: "Your edits were kept. Start over to import the digital receipt." }).waitFor();
   assert.equal(await vendor.inputValue(), "Edited merchant");
   assert.equal(await page.getByRole("link", { name: "Open digital receipt" }).getAttribute("href"), qr);
-  console.log("PASS: retained edits have both a notification and an issuer link");
 
   await reset.click();
   await scan.click();
@@ -159,10 +150,9 @@ try {
   await page.getByText("Issuer unavailable", { exact: true }).waitFor();
   assert.equal(await page.getByRole("link", { name: "Open digital receipt" }).getAttribute("href"), qr);
   assert.equal(await vendor.inputValue(), "");
-  console.log("PASS: failed live import exposes the issuer link and photo workspace");
 
-  await page.evaluate(() => { globalThis.holdDetector = true; });
-  await page.getByRole("button", { name: "Scan code", exact: true }).click();
+  await setFixture({ holdDetector: true });
+  await scanCode.click();
   await page.waitForFunction(() => Boolean(globalThis.resolveDetection));
   await page.evaluate(() => {
     const reset = Array.from(document.querySelectorAll("button")).find((button) => button.textContent.trim() === "Start over");
@@ -173,7 +163,6 @@ try {
   await page.waitForFunction(() => lastQrCamera.getTracks().every((track) => track.readyState === "ended"));
   assert.equal(await page.evaluate(() => qrRequests.length), 4);
   assert.equal(await scan.isDisabled(), false);
-  console.log("PASS: resetting while a frame is decoding sends no QR request");
 
   const choosePhoto = async () => {
     const [chooser] = await Promise.all([
@@ -183,29 +172,28 @@ try {
     assert.equal(await chooser.element().getAttribute("capture"), "environment");
     await page.locator("dialog").waitFor({ state: "detached" });
   };
-  await page.evaluate(() => { globalThis.holdDetector = false; globalThis.detectedQr = "https://example.com/menu"; });
+  await setFixture({ holdDetector: false, detectedQr: "https://example.com/menu" });
   await scan.click();
   await choosePhoto();
   assert.equal(await page.evaluate(() => lastQrCamera.getTracks().every((track) => track.readyState === "ended")), true);
-  await page.evaluate(() => { globalThis.forceSoftware = true; });
+  await setFixture({ forceSoftware: true });
   await scan.click();
   await waitForRequest(5);
   assert.equal(await page.evaluate(() => qrRequests[4].qr), qr);
   await resolve(4, digital("Software decoded"));
   await vendor.waitFor();
   assert.equal(await vendor.inputValue(), "Software decoded");
-  console.log("PASS: the built worker decodes the QR when native detection fails");
 
   await reset.click();
-  await page.evaluate(() => { globalThis.failReadback = true; });
+  await setFixture({ failReadback: true });
   await scan.click();
   await page.getByText("Could not scan the QR code.").waitFor();
   assert.equal(await page.evaluate(() => lastQrCamera.getTracks().every((track) => track.readyState === "ended")), true);
   await choosePhoto();
-  await page.evaluate(() => { globalThis.failReadback = false; globalThis.denyCamera = true; });
+  await setFixture({ failReadback: false, denyCamera: true });
   await scan.click();
   await choosePhoto();
-  console.log("PASS: the photo chooser opens during scanning and after camera or frame-read failure");
+  console.log("Receipt QR browser check passed.");
 } finally {
   await browser.close();
 }

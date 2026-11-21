@@ -39,23 +39,13 @@ export async function startLiveQrScan(
   signal.throwIfAborted();
   const Detector = (globalThis as { BarcodeDetector?: NativeQrDetectorClass }).BarcodeDetector;
   let detector: InstanceType<NativeQrDetectorClass> | null = null;
-  if (Detector) {
-    try {
-      if ((await Detector.getSupportedFormats()).includes("qr_code")) {
-        detector = new Detector({ formats: ["qr_code"] });
-      }
-    } catch {
-      // Fall back to ZXing when the native detector cannot start.
-    }
-  }
-
   let stream: MediaStream | undefined;
   let stopped = false;
   let scanning = false;
   let nativeFailures = 0;
   let canvas: HTMLCanvasElement | null = null;
   let worker: Worker | undefined;
-  let cancelFrame: (() => void) | undefined; // One in-flight frame per camera session.
+  let cancelDecoderWait: (() => void) | undefined;
   let interval: number | undefined;
   const stop = () => {
     if (stopped) return;
@@ -71,9 +61,23 @@ export async function startLiveQrScan(
       stream = undefined;
     }
     canvas = null;
-    cancelFrame?.();
+    cancelDecoderWait?.();
     worker?.terminate();
     worker = undefined;
+  };
+
+  const waitForDecoder = async <T>(request: () => Promise<T>) => {
+    let timeout: number | undefined;
+    const interrupted = new Promise<undefined>((resolve, reject) => {
+      cancelDecoderWait = () => resolve(undefined);
+      timeout = window.setTimeout(() => reject(FRAME_TIMED_OUT), FRAME_RESPONSE_TIMEOUT_MS);
+    });
+    try {
+      return await Promise.race([request(), interrupted]);
+    } finally {
+      window.clearTimeout(timeout);
+      cancelDecoderWait = undefined;
+    }
   };
 
   signal.addEventListener("abort", stop, { once: true });
@@ -96,6 +100,15 @@ export async function startLiveQrScan(
       throw new Error("Could not play the camera preview", { cause: error });
     }
     signal.throwIfAborted();
+    if (Detector) {
+      try {
+        const formats = await waitForDecoder(() => Detector.getSupportedFormats());
+        if (formats?.includes("qr_code")) detector = new Detector({ formats: ["qr_code"] });
+      } catch {
+        // Use ZXing if the native detector cannot start.
+      }
+    }
+    signal.throwIfAborted();
   } catch (error) {
     stop();
     signal.throwIfAborted();
@@ -114,25 +127,11 @@ export async function startLiveQrScan(
     // Cameras can use their default focus mode if constraints are unavailable.
   }
 
-  const waitForFrame = async <T>(request: () => Promise<T>) => {
-    let timeout: number | undefined;
-    const interrupted = new Promise<undefined>((resolve, reject) => {
-      cancelFrame = () => resolve(undefined);
-      timeout = window.setTimeout(() => reject(FRAME_TIMED_OUT), FRAME_RESPONSE_TIMEOUT_MS);
-    });
-    try {
-      return await Promise.race([request(), interrupted]);
-    } finally {
-      window.clearTimeout(timeout);
-      cancelFrame = undefined;
-    }
-  };
-
   const decodeInWorker = async (frame: ImageData) => {
     if (stopped) return;
     const decoder = worker ??= new ReceiptQrWorker();
     try {
-      return await waitForFrame(() => new Promise<string | null>((resolve, reject) => {
+      return await waitForDecoder(() => new Promise<string | null>((resolve, reject) => {
         decoder.onmessage = ({ data }: MessageEvent<string | null>) => resolve(data);
         decoder.onerror = reject;
         decoder.onmessageerror = reject;
@@ -170,7 +169,7 @@ export async function startLiveQrScan(
         const native = detector;
         let codes: DetectedCode[] | undefined;
         try {
-          codes = await waitForFrame(() => native.detect(frameCanvas));
+          codes = await waitForDecoder(() => native.detect(frameCanvas));
           nativeFailures = 0;
         } catch (error) {
           // A timed-out native call may still be running, so do not start another.

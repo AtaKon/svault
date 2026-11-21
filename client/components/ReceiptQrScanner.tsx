@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Button, Spinner, cn } from "@/components/ui";
+import { Button, IconButton, Spinner } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { useI18n } from "@/i18n";
 import type { LiveQrScanHandle } from "@/receipt-qr-live";
@@ -8,15 +8,15 @@ import { matchReceiptQrLink, type ReceiptQrLink } from "@shared/receipt-qr-links
 function friendlyCameraError(error: unknown, t: (key: string) => string): string {
   const name = (error as { name?: string } | null)?.name ?? "";
   if (name === "NotAllowedError" || name === "SecurityError") {
-    return t("Camera access was blocked. Allow the camera in your browser settings, or photograph the receipt instead.");
+    return t("Allow camera access in your browser settings.");
   }
   if (name === "NotFoundError" || name === "OverconstrainedError") {
-    return t("No camera found on this device. You can still photograph the receipt.");
+    return t("No camera found on this device.");
   }
   if (name === "NotReadableError") {
-    return t("The camera is busy in another app. Close it and try again, or photograph the receipt instead.");
+    return t("The camera is busy. Close other apps and retry.");
   }
-  return t("Could not start the camera. You can photograph the receipt instead.");
+  return t("Could not start the camera.");
 }
 
 export function ReceiptQrScanner({
@@ -193,29 +193,26 @@ export function ReceiptQrScanner({
         </div>
       )}
 
-      <button
+      <IconButton
         type="button"
         onClick={() => dialogRef.current?.close()}
-        aria-label={t("Close")}
-        className="absolute left-3 top-3 flex h-9 w-9 items-center justify-center rounded-full bg-black/50 text-white/90 backdrop-blur transition-colors hover:bg-black/65"
-      >
-        <Icon name="close" size={16} />
-      </button>
+        icon="close"
+        label={t("Close")}
+        variant="secondary"
+        className="absolute left-3 top-3"
+      />
 
       {torchAvailable && (
-        <button
+        <IconButton
           type="button"
           onClick={() => void toggleTorch()}
           disabled={pendingTorchHandle !== null}
           aria-pressed={torchOn}
-          aria-label={t("Light")}
-          className={cn(
-            "absolute right-3 top-3 flex h-9 w-9 items-center justify-center rounded-full bg-black/50 text-white/90 backdrop-blur transition-colors hover:bg-black/65",
-            torchOn && "text-amber-300",
-          )}
-        >
-          <Icon name="sun" size={16} />
-        </button>
+          icon="sun"
+          label={t("Light")}
+          variant={torchOn ? "primary" : "secondary"}
+          className="absolute right-3 top-3"
+        />
       )}
     </dialog>
   );
