@@ -71,7 +71,8 @@ test("live frames are bounded and serialized, with native retry before switching
   const firstDetection = Promise.withResolvers();
   const failure = new Error("Native detector unavailable");
   const nativeQr = "native QR payload";
-  const replies = [firstDetection.promise, failure, [{ format: "qr_code", rawValue: nativeQr }], failure, failure];
+  const replies = [firstDetection.promise, failure, [], failure, [{ format: "qr_code", rawValue: nativeQr }], failure, failure];
+  const expectedNativeAttempts = replies.length;
   const detect = t.mock.fn(async (source) => {
     assert.equal(source.width * source.height, width * height);
     const reply = replies.shift();
@@ -125,19 +126,15 @@ test("live frames are bounded and serialized, with native retry before switching
   assert.deepEqual(found, []);
   video.videoWidth = 1080;
   video.videoHeight = 1920;
-  await frame();
-  await frame();
-  await frame();
-  await frame();
-  await frame();
-  const expected = [text, nativeQr, text, text, text];
+  for (let tick = 0; tick < expectedNativeAttempts; tick++) await frame();
+  const expected = [text, text, nativeQr, text, text, text];
   assert.deepEqual(found, expected);
-  assert.equal(detect.mock.callCount(), 5);
-  assert.deepEqual(getImageData.mock.calls.map((call) => call.arguments), Array(4).fill([0, 0, width, height]));
+  assert.equal(detect.mock.callCount(), expectedNativeAttempts);
+  assert.deepEqual(getImageData.mock.calls.map((call) => call.arguments), Array(5).fill([0, 0, width, height]));
   holdSoftwareFrame = true;
   const pendingSoftware = frame();
   await frame();
-  assert.equal(postFrame.mock.callCount(), 5);
+  assert.equal(postFrame.mock.callCount(), 6);
   handle.stop();
   handle.stop();
   scan.abort();
@@ -206,11 +203,13 @@ for (const abortDuringPlay of [false, true]) {
   });
 }
 
-test("torch survives constraint failures and ignores a completion after stop", async (t) => {
+test("torch checks the reported state and ignores a completion after stop", async (t) => {
   const error = new Error("Cannot set torch");
+  let torchSetting;
   const track = {
     stop: t.mock.fn(),
     getCapabilities: () => ({ torch: true }),
+    getSettings: () => ({ torch: torchSetting }),
     applyConstraints: t.mock.fn(async () => undefined),
   };
   const stream = { getTracks: () => [track], getVideoTracks: () => [track] };
@@ -223,11 +222,16 @@ test("torch survives constraint failures and ignores a completion after stop", a
     assert.equal(handle.torchAvailable, true);
     assert.equal(await handle.setTorch(true), true);
     assert.deepEqual(track.applyConstraints.mock.calls[0].arguments, [{ advanced: [{ torch: true }] }]);
+    torchSetting = false;
+    assert.equal(await handle.setTorch(true), false);
+    torchSetting = true;
+    assert.equal(await handle.setTorch(true), true);
     track.applyConstraints.mock.mockImplementation(() => { throw error; });
     assert.equal(await handle.setTorch(false), false);
     track.applyConstraints.mock.mockImplementation(async () => { throw error; });
     assert.equal(await handle.setTorch(false), false);
     track.applyConstraints.mock.mockImplementation(async () => undefined);
+    torchSetting = false;
     assert.equal(await handle.setTorch(false), true);
     const change = Promise.withResolvers();
     track.applyConstraints.mock.mockImplementation(() => change.promise);

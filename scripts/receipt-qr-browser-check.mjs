@@ -48,6 +48,11 @@ try {
       const image = context.getImageData(0, 0, canvas.width, canvas.height);
       return postFrame.call(this, image, [image.data.buffer]);
     };
+    const readCanvas = CanvasRenderingContext2D.prototype.getImageData;
+    CanvasRenderingContext2D.prototype.getImageData = function (...args) {
+      if (globalThis.failReadback) throw new DOMException("Unreadable frame", "SecurityError");
+      return readCanvas.apply(this, args);
+    };
     const realFetch = window.fetch.bind(window);
     window.fetch = (resource, init) => {
       if (!String(resource).endsWith("/receipts/scan") || init?.method !== "POST") return realFetch(resource, init);
@@ -177,10 +182,15 @@ try {
   console.log("PASS: the built worker decodes the QR when native detection fails");
 
   await reset.click();
-  await page.evaluate(() => { globalThis.denyCamera = true; });
+  await page.evaluate(() => { globalThis.failReadback = true; });
+  await scan.click();
+  await page.getByText("Could not decode receipt QR codes. Photograph the receipt instead.").waitFor();
+  assert.equal(await page.evaluate(() => lastQrCamera.getTracks().every((track) => track.readyState === "ended")), true);
+  await choosePhoto();
+  await page.evaluate(() => { globalThis.failReadback = false; globalThis.denyCamera = true; });
   await scan.click();
   await choosePhoto();
-  console.log("PASS: the photo chooser opens during scanning and after camera denial");
+  console.log("PASS: the photo chooser opens during scanning and after camera or frame-read failure");
 } finally {
   await browser.close();
 }

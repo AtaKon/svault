@@ -9,6 +9,7 @@ interface NativeQrDetectorClass {
 
 type CameraCapabilities = MediaTrackCapabilities & { torch?: boolean; focusMode?: string[] };
 type CameraSettings = MediaTrackConstraintSet & { torch?: boolean; focusMode?: "continuous" };
+type CameraTrackSettings = MediaTrackSettings & { torch?: boolean };
 const cameraConstraint = (setting: CameraSettings): MediaTrackConstraints => ({ advanced: [setting] });
 
 export interface LiveQrScanHandle {
@@ -141,18 +142,18 @@ export async function startLiveQrScan(
       if (canvas.width !== width) canvas.width = width;
       if (canvas.height !== height) canvas.height = height;
       const context = canvas.getContext("2d", { willReadFrequently: true });
-      if (!context) return;
+      if (!context) throw new Error("Could not read the camera preview");
       context.drawImage(video, 0, 0, width, height);
 
       if (detector) {
         let codes: DetectedCode[] | undefined;
         try {
           codes = await detector.detect(canvas);
+          nativeFailures = 0;
         } catch {
           if (++nativeFailures >= MAX_CONSECUTIVE_NATIVE_FAILURES) detector = null;
         }
         if (codes) {
-          nativeFailures = 0;
           for (const code of codes) {
             if (stopped) return;
             if (code.format === "qr_code" && code.rawValue) onPayload(code.rawValue);
@@ -161,17 +162,13 @@ export async function startLiveQrScan(
         }
       }
       if (stopped) return;
-      const frame = context.getImageData(0, 0, width, height);
-      const text = await decodeInWorker(frame).catch(() => {
-        if (!stopped) {
-          stop();
-          onDecoderError?.();
-        }
-        return null;
-      });
+      const text = await decodeInWorker(context.getImageData(0, 0, width, height));
       if (!stopped && text) onPayload(text);
     } catch {
-      // Continue with the next frame if the current one cannot be read.
+      if (!stopped) {
+        stop();
+        onDecoderError?.();
+      }
     } finally {
       scanning = false;
     }
@@ -184,7 +181,9 @@ export async function startLiveQrScan(
       if (!torchSupported || stopped) return false;
       try {
         await track.applyConstraints(cameraConstraint({ torch: on }));
-        return !stopped;
+        if (stopped) return false;
+        const settings: CameraTrackSettings | undefined = track.getSettings?.();
+        return settings?.torch === undefined || settings.torch === on;
       } catch {
         return false;
       }
