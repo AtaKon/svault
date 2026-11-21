@@ -38,19 +38,19 @@ export async function startLiveQrScan(
   onDecoderError?: () => void,
 ): Promise<LiveQrScanHandle> {
   signal.throwIfAborted();
+  const session = new AbortController();
+  const sessionSignal = session.signal;
   const Detector = (globalThis as { BarcodeDetector?: NativeQrDetectorClass }).BarcodeDetector;
   let detector: InstanceType<NativeQrDetectorClass> | null = null;
   let stream: MediaStream | undefined;
-  let stopped = false;
   let scanning = false;
   let nativeFailures = 0;
   let canvas: HTMLCanvasElement | null = null;
   let worker: Worker | undefined;
-  let cancelDecoderWait: (() => void) | undefined;
   let interval: number | undefined;
   const stop = () => {
-    if (stopped) return;
-    stopped = true;
+    if (sessionSignal.aborted) return;
+    session.abort(SCAN_STOPPED);
     signal.removeEventListener("abort", stop);
     if (interval !== undefined) {
       window.clearInterval(interval);
@@ -62,15 +62,17 @@ export async function startLiveQrScan(
       stream = undefined;
     }
     canvas = null;
-    cancelDecoderWait?.();
     worker?.terminate();
     worker = undefined;
   };
 
   const waitForDecoder = async <T>(request: () => Promise<T>) => {
+    sessionSignal.throwIfAborted();
+    let cancelWait: (() => void) | undefined;
     let timeout: number | undefined;
     const interrupted = new Promise<never>((_, reject) => {
-      cancelDecoderWait = () => reject(SCAN_STOPPED);
+      cancelWait = () => reject(SCAN_STOPPED);
+      sessionSignal.addEventListener("abort", cancelWait, { once: true });
       timeout = window.setTimeout(() => reject(FRAME_TIMED_OUT), FRAME_RESPONSE_TIMEOUT_MS);
     });
     try {
@@ -78,7 +80,7 @@ export async function startLiveQrScan(
       return await Promise.race([reply, interrupted]);
     } finally {
       window.clearTimeout(timeout);
-      cancelDecoderWait = undefined;
+      if (cancelWait) sessionSignal.removeEventListener("abort", cancelWait);
     }
   };
 
@@ -130,7 +132,7 @@ export async function startLiveQrScan(
   }
 
   const decodeInWorker = async (frame: ImageData) => {
-    if (stopped) return;
+    if (sessionSignal.aborted) return;
     const decoder = worker ??= new ReceiptQrWorker();
     try {
       return await waitForDecoder(() => new Promise<string | null>((resolve, reject) => {
@@ -154,7 +156,7 @@ export async function startLiveQrScan(
   };
 
   const scanFrame = async () => {
-    if (stopped || scanning || video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
+    if (sessionSignal.aborted || scanning || video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
     scanning = true;
     try {
       const scale = Math.min(1, MAX_FRAME_SIDE / Math.max(video.videoWidth, video.videoHeight));
@@ -183,20 +185,20 @@ export async function startLiveQrScan(
           }
           if (++nativeFailures >= MAX_CONSECUTIVE_NATIVE_FAILURES) detector = null;
         }
-        if (stopped) return;
+        if (sessionSignal.aborted) return;
         if (codes) {
           for (const code of codes) {
-            if (stopped) return;
+            if (sessionSignal.aborted) return;
             if (code.format === "qr_code" && code.rawValue) onPayload(code.rawValue);
           }
           return;
         }
       }
-      if (stopped) return;
+      if (sessionSignal.aborted) return;
       const text = await decodeInWorker(context.getImageData(0, 0, width, height));
-      if (!stopped && text) onPayload(text);
+      if (!sessionSignal.aborted && text) onPayload(text);
     } catch {
-      if (!stopped) {
+      if (!sessionSignal.aborted) {
         stop();
         onDecoderError?.();
       }
@@ -210,13 +212,13 @@ export async function startLiveQrScan(
   return {
     stop,
     setTorch: async (on) => {
-      if (!torchSupported || stopped) return false;
+      if (!torchSupported || sessionSignal.aborted) return false;
       try {
         await track.applyConstraints(cameraConstraint({ torch: on }));
       } catch {
         return false;
       }
-      if (stopped) return false;
+      if (sessionSignal.aborted) return false;
       try {
         const settings: CameraTrackSettings | undefined = track.getSettings?.();
         return settings?.torch === undefined || settings.torch === on;

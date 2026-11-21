@@ -106,7 +106,8 @@ test("live frames are bounded and serialized, with native retry before switching
     assert.equal(timers.size, 1);
     timers.values().next().value();
   };
-  replaceGlobal(t, "navigator", { mediaDevices: { getUserMedia: async () => stream } });
+  const getUserMedia = t.mock.fn(async () => stream);
+  replaceGlobal(t, "navigator", { mediaDevices: { getUserMedia } });
   replaceGlobal(t, "window", {
     setInterval,
     clearInterval,
@@ -238,6 +239,35 @@ test("live frames are bounded and serialized, with native retry before switching
   const intervalsBeforeClose = setInterval.mock.callCount();
   await assert.rejects(startLiveQrScan(video, () => {}, closing.signal), { name: "AbortError" });
   assert.equal(setInterval.mock.callCount(), intervalsBeforeClose);
+  assert.equal(video.srcObject, null);
+
+  supportedFormats.mock.mockImplementation(async () => ["qr_code"]);
+  detect.mock.mockImplementation(() => new Promise(() => {}));
+  const first = await startLiveQrScan(video, () => {}, new AbortController().signal);
+  const firstWait = frame();
+  const secondTrack = { stop: t.mock.fn() };
+  const secondStream = { getTracks: () => [secondTrack], getVideoTracks: () => [secondTrack] };
+  const secondVideo = { ...video };
+  getUserMedia.mock.mockImplementationOnce(async () => secondStream);
+  const second = await startLiveQrScan(secondVideo, () => {}, new AbortController().signal);
+  const secondWait = frame();
+  assert.equal(timers.size, 2);
+  first.stop();
+  await firstWait;
+  assert.equal(timers.size, 1);
+  assert.equal(secondVideo.srcObject, secondStream);
+  second.stop();
+  await secondWait;
+  assert.equal(timers.size, 0);
+  assert.equal(secondTrack.stop.mock.callCount(), 1);
+});
+
+test("camera permission denial rejects before a stream can attach", async (t) => {
+  const error = new DOMException("Permission denied", "NotAllowedError");
+  replaceGlobal(t, "navigator", { mediaDevices: { getUserMedia: async () => { throw error; } } });
+  const video = { play: t.mock.fn(), srcObject: null };
+  await assert.rejects(startLiveQrScan(video, () => {}, new AbortController().signal), error);
+  assert.equal(video.play.mock.callCount(), 0);
   assert.equal(video.srcObject, null);
 });
 

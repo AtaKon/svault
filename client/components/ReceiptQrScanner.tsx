@@ -10,7 +10,7 @@ function friendlyCameraError(error: unknown, t: (key: string) => string): string
   if (name === "NotAllowedError" || name === "SecurityError") {
     return t("Allow camera access in your browser settings.");
   }
-  if (name === "NotFoundError" || name === "OverconstrainedError") {
+  if (name === "NotFoundError") {
     return t("No camera found on this device.");
   }
   if (name === "NotReadableError") {
