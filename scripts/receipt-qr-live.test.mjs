@@ -139,7 +139,7 @@ test("live camera caps native frame size, ignores non-QR results and falls back 
   const scan = new AbortController();
   t.after(() => scan.abort());
   const found = [];
-  await startLiveQrScan(video, (payload) => found.push(payload), scan.signal);
+  const handle = await startLiveQrScan(video, (payload) => found.push(payload), scan.signal);
   assert.equal(video.srcObject, stream);
   frame();
   await Promise.resolve();
@@ -151,6 +151,8 @@ test("live camera caps native frame size, ignores non-QR results and falls back 
   await Promise.resolve();
   assert.deepEqual(nativeFrames, Array(3).fill({ width, height }));
   assert.deepEqual(found, [text]);
+  handle.stop();
+  handle.stop();
   scan.abort();
   frame();
   assert.deepEqual(found, [text]);
@@ -209,7 +211,7 @@ for (const abortDuringPlay of [false, true]) {
     }
     const error = new DOMException("Playback failed", "NotAllowedError");
     playback.reject(error);
-    await assert.rejects(pending, abortDuringPlay ? { name: "AbortError" } : error);
+    await assert.rejects(pending, abortDuringPlay ? { name: "AbortError" } : (failure) => failure.cause === error);
     assert.equal(track.stop.mock.callCount(), 1);
     assert.equal(video.srcObject, null);
   });

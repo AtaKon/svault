@@ -70,6 +70,14 @@ export function ReceiptQrScanner({
     setTorchOn(false);
     setPendingTorchHandle(null);
 
+    const stopScan = () => {
+      const handle = scanRef.current;
+      scanRef.current = null;
+      // The handle starts owning the stream after initialization completes.
+      if (handle) handle.stop();
+      else scan.abort();
+    };
+
     const onPayload = (payload: string) => {
       const now = Date.now();
       if (lastPayload === payload && now - lastPayloadAt < 2500) return;
@@ -82,7 +90,7 @@ export function ReceiptQrScanner({
         noticeTimer = window.setTimeout(() => setNotice(null), 4000);
         return;
       }
-      scan.abort();
+      stopScan();
       callbacks.current.onLink(link);
     };
 
@@ -101,9 +109,8 @@ export function ReceiptQrScanner({
       });
 
     return () => {
-      scan.abort();
+      stopScan();
       window.clearTimeout(noticeTimer);
-      scanRef.current = null;
     };
   }, [attempt]);
 

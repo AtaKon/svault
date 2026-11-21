@@ -26,6 +26,8 @@ const FOCUS_CONTINUOUS = { advanced: [{ focusMode: "continuous" }] } as unknown 
 const torchConstraint = (on: boolean) => ({ advanced: [{ torch: on }] }) as unknown as MediaTrackConstraints;
 
 export interface LiveQrScanHandle {
+  /** Release the camera and stop reading frames. Safe to call again. */
+  stop(): void;
   /** Report whether the torch setting was applied while the scan was active. */
   setTorch(on: boolean): Promise<boolean>;
   /** True when the camera track can control the torch. */
@@ -64,6 +66,7 @@ export async function startLiveQrScan(
   let grayBuffer: Uint8ClampedArray | undefined;
   let interval: number | undefined;
   const stop = () => {
+    if (stopped) return;
     stopped = true;
     signal.removeEventListener("abort", stop);
     if (interval !== undefined) {
@@ -93,7 +96,11 @@ export async function startLiveQrScan(
     }
     stream = acquired;
     video.srcObject = stream;
-    await video.play();
+    try {
+      await video.play();
+    } catch (error) {
+      throw new Error("Could not play the camera preview", { cause: error });
+    }
     signal.throwIfAborted();
   } catch (error) {
     stop();
@@ -156,6 +163,7 @@ export async function startLiveQrScan(
   }, FRAME_INTERVAL_MS);
 
   return {
+    stop,
     setTorch: async (on) => {
       if (!torchSupported || stopped) return false;
       try {

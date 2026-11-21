@@ -1186,6 +1186,7 @@ export function ReceiptScanPage() {
     const qrImport = liveQrImportRef.current;
     if (qrImport) {
       qrImport.controller.abort();
+      // Release the workspace immediately. The canceled import's finally may run after a new scan starts.
       finishLiveQrImport(qrImport);
     }
     stitchSeqRef.current++;
