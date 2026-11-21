@@ -121,6 +121,7 @@ type DigitalLinkOutcome = "applied" | "kept" | "failed" | "aborted";
 /** Suggestions this certain are pre-selected; weaker ones wait for a tap. */
 const AUTO_SELECT_SCORE = 0.9;
 const MAX_VISION_PAGES = 8;
+const DIGITAL_RECEIPT_EDITS_KEPT = "Your edits were kept. Start over to import the digital receipt.";
 
 function hasEditedReceiptText(draft: SavedDraft): boolean {
   return Boolean(draft.text.trim()) && draft.text.trim() !== mergeOcrTexts(draft.pages.map((page) => page.text)).text.trim();
@@ -329,7 +330,7 @@ export function ReceiptScanPage() {
   const [draftReady, setDraftReady] = useState(false);
   const [pendingDraft, setPendingDraft] = useState<StoredReceiptDraft<SavedDraft> | null>(null);
   const [resuming, setResuming] = useState(false);
-  const qrScanUnavailable = busy || ocrRunning || saving || Boolean(pendingDraft);
+  const qrScanUnavailable = !draftReady || resuming || busy || ocrRunning || saving || Boolean(pendingDraft);
 
   useEffect(() => {
     Promise.all([
@@ -788,7 +789,7 @@ export function ReceiptScanPage() {
       if (options.revision !== workspaceRevisionRef.current) return "aborted";
       if (isUsableDigitalReceipt(data)) {
         if (hasReceiptDetails(snapshotRef.current() ?? snapshot(), house.currency)) {
-          setWarning("Your edits were kept. Start over to import the digital receipt.");
+          setWarning(DIGITAL_RECEIPT_EDITS_KEPT);
           setDigitalLink(link.url);
           return "kept";
         }
@@ -824,10 +825,13 @@ export function ReceiptScanPage() {
 
   const handleLiveQrLink = async (link: ReceiptQrLink, revision: number) => {
     if (revision !== workspaceRevisionRef.current) return;
-    setQrScannerRevision(null);
-    if (!canScanQr()) return;
+    if (!canScanQr()) {
+      setQrScannerRevision(null);
+      return;
+    }
     readingRef.current = true;
     setBusy(true);
+    setQrScannerRevision(null);
     try {
       const outcome = await importDigitalLink(link, {
         revision,
@@ -835,6 +839,8 @@ export function ReceiptScanPage() {
       });
       if (outcome === "applied") {
         toast.success(t("Digital receipt imported"));
+      } else if (outcome === "kept") {
+        toast.push(t(DIGITAL_RECEIPT_EDITS_KEPT));
       } else if (outcome === "failed") {
         toast.error(t("The digital receipt could not be loaded. Photograph the receipt instead."));
         // Show the issuer link and warning even when no photo has been added.
@@ -2124,10 +2130,7 @@ export function ReceiptScanPage() {
         <ReceiptQrScanner
           onLink={(link) => void handleLiveQrLink(link, qrScannerRevision)}
           onClose={() => setQrScannerRevision(null)}
-          onPhotograph={() => {
-            setQrScannerRevision(null);
-            cameraRef.current?.click();
-          }}
+          onPhotograph={() => cameraRef.current?.click()}
         />
       )}
 

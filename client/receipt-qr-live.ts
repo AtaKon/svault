@@ -35,6 +35,10 @@ export interface LiveQrScanHandle {
 const FRAME_INTERVAL_MS = 250;
 const MAX_FRAME_SIDE = 1280;
 
+function stopCamera(stream: MediaStream) {
+  for (const track of stream.getTracks()) track.stop();
+}
+
 export async function startLiveQrScan(
   video: HTMLVideoElement,
   onPayload: (text: string) => void,
@@ -67,7 +71,7 @@ export async function startLiveQrScan(
       interval = undefined;
     }
     if (stream) {
-      for (const track of stream.getTracks()) track.stop();
+      stopCamera(stream);
       if (video.srcObject === stream) video.srcObject = null;
       stream = undefined;
     }
@@ -78,12 +82,16 @@ export async function startLiveQrScan(
   signal.addEventListener("abort", stop, { once: true });
   try {
     signal.throwIfAborted();
-    stream = await navigator.mediaDevices.getUserMedia({
+    const acquired = await navigator.mediaDevices.getUserMedia({
       audio: false,
       video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } },
     });
-    // The permission prompt can resolve after the abort handler ran without a stream.
-    signal.throwIfAborted();
+    // Release a stream that arrived after cancellation before attaching it to the video.
+    if (signal.aborted) {
+      stopCamera(acquired);
+      throw signal.reason;
+    }
+    stream = acquired;
     video.srcObject = stream;
     await video.play();
     signal.throwIfAborted();
@@ -105,13 +113,23 @@ export async function startLiveQrScan(
   }
 
   interval = window.setInterval(() => {
-    if (stopped || scanning || video.readyState < 2) return;
+    if (stopped || scanning || video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
     scanning = true;
     void (async () => {
       try {
+        const scale = Math.min(1, MAX_FRAME_SIDE / Math.max(video.videoWidth, video.videoHeight));
+        const width = Math.round(video.videoWidth * scale);
+        const height = Math.round(video.videoHeight * scale);
+        canvas ??= document.createElement("canvas");
+        if (canvas.width !== width) canvas.width = width;
+        if (canvas.height !== height) canvas.height = height;
+        const context = canvas.getContext("2d", { willReadFrequently: true });
+        if (!context) return;
+        context.drawImage(video, 0, 0, width, height);
+
         if (detector) {
           try {
-            const codes = await detector.detect(video);
+            const codes = await detector.detect(canvas);
             for (const code of codes) {
               if (stopped) return;
               if (code.format === "qr_code" && code.rawValue) onPayload(code.rawValue);
@@ -122,18 +140,8 @@ export async function startLiveQrScan(
             detector = null;
           }
         }
-        // ZXing fallback (iOS Safari and friends): one downscaled grayscale
-        // frame through the still decoder's fast passes.
-        if (stopped || !video.videoWidth || !video.videoHeight) return;
-        const scale = Math.min(1, MAX_FRAME_SIDE / Math.max(video.videoWidth, video.videoHeight));
-        const width = Math.round(video.videoWidth * scale);
-        const height = Math.round(video.videoHeight * scale);
-        canvas ??= document.createElement("canvas");
-        if (canvas.width !== width) canvas.width = width;
-        if (canvas.height !== height) canvas.height = height;
-        const context = canvas.getContext("2d", { willReadFrequently: true });
-        if (!context) return;
-        context.drawImage(video, 0, 0, width, height);
+        if (stopped) return;
+        // ZXing finishes synchronously before the grayscale buffer is reused.
         const pixels = rgbaToGray(context.getImageData(0, 0, width, height).data, width, height, grayBuffer);
         grayBuffer = pixels.gray;
         const text = decodeReceiptQrFrame(pixels);

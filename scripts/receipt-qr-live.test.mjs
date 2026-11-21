@@ -100,9 +100,9 @@ function replaceGlobal(t, name, value) {
   });
 }
 
-test("live camera uses the software decoder if native detection throws after startup", async (t) => {
-  const width = 640;
-  const height = 480;
+test("live camera caps native frame size, ignores non-QR results and falls back if detection throws", async (t) => {
+  const width = 1280;
+  const height = 720;
   const gray = renderPhoto(qrModules(text, 5), width, height, 4, false);
   const rgba = new Uint8ClampedArray(gray.length * 4);
   for (let i = 0; i < gray.length; i++) rgba.set([gray[i], gray[i], gray[i], 255], i * 4);
@@ -110,6 +110,7 @@ test("live camera uses the software decoder if native detection throws after sta
   const stream = { getTracks: () => [track], getVideoTracks: () => [track] };
   let frame;
   let nativeAttempts = 0;
+  const nativeFrames = [];
   const clearInterval = t.mock.fn();
   replaceGlobal(t, "navigator", { mediaDevices: { getUserMedia: async () => stream } });
   replaceGlobal(t, "window", {
@@ -121,19 +122,20 @@ test("live camera uses the software decoder if native detection throws after sta
   });
   replaceGlobal(t, "BarcodeDetector", class {
     static async getSupportedFormats() { return ["qr_code"]; }
-    async detect() {
+    async detect(source) {
       nativeAttempts++;
+      nativeFrames.push({ width: source.width, height: source.height });
       if (nativeAttempts === 1) {
-        return [
-          { format: "ean_13", rawValue: "0123456789012" },
-          { format: "qr_code", rawValue: "" },
-        ];
+        return [{ format: "ean_13", rawValue: "0123456789012" }];
+      }
+      if (nativeAttempts === 2) {
+        return [{ format: "qr_code", rawValue: "" }];
       }
       throw new Error("Native detector unavailable");
     }
   });
 
-  const video = { videoWidth: width, videoHeight: height, readyState: 2, play: async () => {} };
+  const video = { videoWidth: 1920, videoHeight: 1080, readyState: 2, play: async () => {} };
   const scan = new AbortController();
   t.after(() => scan.abort());
   const found = [];
@@ -144,7 +146,10 @@ test("live camera uses the software decoder if native detection throws after sta
   assert.deepEqual(found, []);
   frame();
   await Promise.resolve();
-  assert.equal(nativeAttempts, 2);
+  assert.deepEqual(found, []);
+  frame();
+  await Promise.resolve();
+  assert.deepEqual(nativeFrames, Array(3).fill({ width, height }));
   assert.deepEqual(found, [text]);
   scan.abort();
   frame();

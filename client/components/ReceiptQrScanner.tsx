@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Button, Spinner, cn } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { useI18n } from "@/i18n";
@@ -33,7 +33,6 @@ export function ReceiptQrScanner({
   const videoRef = useRef<HTMLVideoElement>(null);
   const scanRef = useRef<LiveQrScanHandle | null>(null);
   const callbacks = useRef({ onLink, t });
-  callbacks.current = { onLink, t };
   const [starting, setStarting] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -41,6 +40,10 @@ export function ReceiptQrScanner({
   const [torchPending, setTorchPending] = useState(false);
   const [torchAvailable, setTorchAvailable] = useState(false);
   const [attempt, setAttempt] = useState(0);
+
+  useLayoutEffect(() => {
+    callbacks.current = { onLink, t };
+  }, [onLink, t]);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -120,10 +123,6 @@ export function ReceiptQrScanner({
     <dialog
       ref={dialogRef}
       aria-label={t("Scan receipt code")}
-      onCancel={(event) => {
-        event.preventDefault();
-        onClose();
-      }}
       onClose={(event) => {
         if (!event.currentTarget.open) onClose();
       }}
@@ -187,7 +186,7 @@ export function ReceiptQrScanner({
 
       <button
         type="button"
-        onClick={onClose}
+        onClick={() => dialogRef.current?.close()}
         aria-label={t("Close")}
         className="absolute left-3 top-3 flex h-9 w-9 items-center justify-center rounded-full bg-black/50 text-white/90 backdrop-blur transition-colors hover:bg-black/65"
       >
