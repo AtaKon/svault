@@ -210,8 +210,21 @@ test("live frames are bounded and serialized, with native retry before switching
   assert.deepEqual(received, [text]);
   restarted.stop();
 
+  const cloneError = new DOMException("Invalid frame", "DataCloneError");
+  const recovered = [];
+  supportedFormats.mock.mockImplementation(async () => []);
+  holdSoftwareFrame = false;
+  postFrame.mock.mockImplementationOnce(() => { throw cloneError; });
+  const recovering = await startLiveQrScan(video, (payload) => recovered.push(payload), new AbortController().signal, onDecoderError);
+  await frame();
+  assert.equal(video.srcObject, stream);
+  await frame();
+  assert.deepEqual(recovered, [text]);
+  assert.equal(onDecoderError.mock.callCount(), 1);
+  recovering.stop();
+
   const lastNativeCallCount = detect.mock.callCount();
-  postFrame.mock.mockImplementation(() => { throw new DOMException("Invalid frame", "DataCloneError"); });
+  postFrame.mock.mockImplementation(() => { throw cloneError; });
   const probeStarted = Promise.withResolvers();
   const pendingFormats = new Promise(() => {});
   for (const formats of [[], failure, pendingFormats]) {
@@ -226,6 +239,8 @@ test("live frames are bounded and serialized, with native retry before switching
       expireFrame();
     }
     await scan;
+    await frame();
+    assert.equal(video.srcObject, stream);
     await frame();
     assert.equal(video.srcObject, null);
   }
@@ -287,6 +302,17 @@ test("camera permission denial rejects before a stream can attach", async (t) =>
   assert.equal(video.srcObject, null);
 });
 
+test("a stream without a video track is released before playback", async (t) => {
+  const stop = t.mock.fn();
+  const stream = { getTracks: () => [{ stop }], getVideoTracks: () => [] };
+  replaceGlobal(t, "navigator", { mediaDevices: { getUserMedia: async () => stream } });
+  const video = { play: t.mock.fn(), srcObject: null };
+  await assert.rejects(startLiveQrScan(video, () => {}, new AbortController().signal), { name: "NotFoundError" });
+  assert.equal(stop.mock.callCount(), 1);
+  assert.equal(video.play.mock.callCount(), 0);
+  assert.equal(video.srcObject, null);
+});
+
 test("closing while awaiting camera permission releases the late stream", async (t) => {
   const track = { stop: t.mock.fn() };
   const stream = { getTracks: () => [track] };
@@ -313,7 +339,7 @@ test("closing while awaiting camera permission releases the late stream", async 
 for (const abortDuringPlay of [false, true]) {
   test(abortDuringPlay ? "closing settles startup even when playback is stalled" : "failed playback releases the stream", async (t) => {
     const track = { stop: t.mock.fn() };
-    const stream = { getTracks: () => [track] };
+    const stream = { getTracks: () => [track], getVideoTracks: () => [track] };
     const playing = Promise.withResolvers();
     const playback = Promise.withResolvers();
     replaceGlobal(t, "BarcodeDetector", undefined);

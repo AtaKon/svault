@@ -35,6 +35,10 @@ try {
     const postFrame = Worker.prototype.postMessage;
     Worker.prototype.postMessage = function (frame, transfer) {
       if (!globalThis.forceSoftware || !(frame instanceof ImageData)) return postFrame.call(this, frame, transfer);
+      if (globalThis.failWorkerPost) {
+        globalThis.failWorkerPost = false;
+        throw new DOMException("Test frame could not be transferred", "DataCloneError");
+      }
       if (globalThis.badWorkerFrame) {
         globalThis.badWorkerFrame = false;
         return postFrame.call(this, { width: 1, height: 1 });
@@ -105,7 +109,9 @@ try {
   const vendor = page.locator('input[list="receipt-vendor-options"]');
   const waitForRequest = (count) => page.waitForFunction((expected) => qrRequests.length === expected, count);
   const setFixture = (values) => page.evaluate((settings) => { Object.assign(globalThis, settings); }, values);
-  const resolve = (index, body) => page.evaluate(([i, json]) => qrRequests[i].resolve(Response.json(json)), [index, body]);
+  const resolve = (index, body, status = 200) => page.evaluate(([i, json, status]) => {
+    qrRequests[i].resolve(Response.json(json, { status }));
+  }, [index, body, status]);
   const digital = (name) => ({
     provider: "qr", selectedText: "Receipt test line 1.25",
     draft: { vendorName: name, currency: "EUR", total: 1.25, lines: [{ description: "Receipt test line", quantity: 1, total: 1.25, unit: "ea" }] },
@@ -207,13 +213,20 @@ try {
   assert.deepEqual(await page.evaluate(() => torchRequests), [true, false]);
   await choosePhoto();
   assert.equal(await page.evaluate(() => lastQrCamera.getTracks().every((track) => track.readyState === "ended")), true);
-  await setFixture({ forceSoftware: true, badWorkerFrame: true, torchRequests: null });
+  await setFixture({ forceSoftware: true, failWorkerPost: true, badWorkerFrame: true, torchRequests: null });
   await scan.click();
   await waitForRequest(5);
   assert.equal(await page.evaluate(() => qrRequests[4].qr), qr);
   await resolve(4, digital("Software decoded"));
   await vendor.waitFor();
   assert.equal(await vendor.inputValue(), "Software decoded");
+
+  await reset.click();
+  await scan.click();
+  await waitForRequest(6);
+  await resolve(5, { error: "Test server error" }, 500);
+  assert.equal(await page.getByRole("link", { name: "Open digital receipt" }).getAttribute("href"), qr);
+  await page.getByRole("status").filter({ hasText: "The digital receipt could not be loaded." }).waitFor();
 
   await reset.click();
   await setFixture({ failReadback: true });

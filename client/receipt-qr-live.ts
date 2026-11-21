@@ -28,6 +28,7 @@ const RESPONSE_TIMED_OUT = Symbol("QR scanner response timed out");
 const SCAN_STOPPED = Symbol("QR scan stopped");
 const MAX_FRAME_SIDE = 1280;
 const MAX_CONSECUTIVE_NATIVE_FAILURES = 2;
+const MAX_CONSECUTIVE_WORKER_FAILURES = 2;
 
 function stopCamera(stream: MediaStream) {
   for (const track of stream.getTracks()) track.stop();
@@ -47,6 +48,7 @@ export async function startLiveQrScan(
   let stream: MediaStream | undefined;
   let scanning = false;
   let nativeFailures = 0;
+  let workerFailures = 0;
   let canvas: HTMLCanvasElement | null = null;
   let worker: Worker | undefined;
   let interval: number | undefined;
@@ -87,6 +89,7 @@ export async function startLiveQrScan(
   };
 
   signal.addEventListener("abort", stop, { once: true });
+  let track: MediaStreamTrack;
   try {
     signal.throwIfAborted();
     const acquired = await navigator.mediaDevices.getUserMedia({
@@ -99,6 +102,8 @@ export async function startLiveQrScan(
       throw signal.reason;
     }
     stream = acquired;
+    track = stream.getVideoTracks()[0];
+    if (!track) throw new DOMException("The camera stream contains no video", "NotFoundError");
     video.srcObject = stream;
     try {
       await waitForResponse(() => video.play());
@@ -121,7 +126,6 @@ export async function startLiveQrScan(
     throw error;
   }
 
-  const track = stream.getVideoTracks()[0];
   let torchSupported = false;
   try {
     const capabilities = track?.getCapabilities?.() as CameraCapabilities | undefined;
@@ -197,7 +201,16 @@ export async function startLiveQrScan(
         }
       }
       if (sessionSignal.aborted) return;
-      const text = await decodeInWorker(context.getImageData(0, 0, width, height));
+      const frame = context.getImageData(0, 0, width, height);
+      let text: string | null | undefined;
+      try {
+        text = await decodeInWorker(frame);
+        workerFailures = 0;
+      } catch (error) {
+        if (error === SCAN_STOPPED) return;
+        if (error === RESPONSE_TIMED_OUT || ++workerFailures >= MAX_CONSECUTIVE_WORKER_FAILURES) throw error;
+        return;
+      }
       if (!sessionSignal.aborted && text) onPayload(text);
     } catch {
       if (!sessionSignal.aborted) {
