@@ -54,6 +54,13 @@ try {
       if (globalThis.failReadback) throw new DOMException("Unreadable frame", "SecurityError");
       return readCanvas.apply(this, args);
     };
+    const readFile = File.prototype.arrayBuffer;
+    File.prototype.arrayBuffer = function () {
+      if (this.name !== "competing.pdf") return readFile.call(this);
+      return new Promise((_, reject) => {
+        globalThis.finishCompetingPdf = () => reject(new Error("Test PDF read finished"));
+      });
+    };
     const realFetch = window.fetch.bind(window);
     window.fetch = (resource, init) => {
       if (!String(resource).endsWith("/receipts/scan") || init?.method !== "POST") return realFetch(resource, init);
@@ -106,7 +113,12 @@ try {
   await page.evaluate(() => { globalThis.detectedQr = "https://example.com/menu"; });
   await retry.click();
   await page.getByRole("dialog").getByText("This QR code is not a receipt link.").waitFor();
+  await page.locator('input[accept^="application/pdf"]').setInputFiles({ name: "competing.pdf", mimeType: "application/pdf", buffer: Buffer.from("test") });
+  await page.waitForFunction(() => Boolean(globalThis.finishCompetingPdf));
   await page.evaluate((text) => { globalThis.detectedQr = text; }, qr);
+  await page.getByRole("dialog").getByText("Wait for the current receipt operation to finish.").waitFor();
+  assert.equal(await page.evaluate(() => qrRequests.length), 0);
+  await page.evaluate(() => globalThis.finishCompetingPdf());
   await waitForRequest(1);
   await page.locator("dialog").waitFor({ state: "detached" });
   assert.equal(await page.evaluate(() => qrRequests.length), 1);

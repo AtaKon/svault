@@ -55,7 +55,7 @@ export async function startLiveQrScan(
   let nativeFailures = 0;
   let canvas: HTMLCanvasElement | null = null;
   let worker: Worker | undefined;
-  let cancelFrame: (() => void) | undefined;
+  let cancelFrame: (() => void) | undefined; // One in-flight frame per camera session.
   let interval: number | undefined;
   const stop = () => {
     if (stopped) return;
@@ -129,6 +129,7 @@ export async function startLiveQrScan(
   };
 
   const decodeInWorker = async (frame: ImageData) => {
+    if (stopped) return;
     const decoder = worker ??= new ReceiptQrWorker();
     try {
       return await waitForFrame(() => new Promise<string | null>((resolve, reject) => {
@@ -137,6 +138,13 @@ export async function startLiveQrScan(
         decoder.onmessageerror = reject;
         decoder.postMessage(frame, [frame.data.buffer]);
       }));
+    } catch (error) {
+      // A timed-out worker must never deliver a reply to a later frame.
+      if (worker === decoder) {
+        decoder.terminate();
+        worker = undefined;
+      }
+      throw error;
     } finally {
       decoder.onmessage = null;
       decoder.onerror = null;
@@ -168,6 +176,7 @@ export async function startLiveQrScan(
           // A timed-out native call may still be running, so do not start another.
           if (error === FRAME_TIMED_OUT || ++nativeFailures >= MAX_CONSECUTIVE_NATIVE_FAILURES) detector = null;
         }
+        if (stopped) return;
         if (codes) {
           for (const code of codes) {
             if (stopped) return;

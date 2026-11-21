@@ -24,7 +24,7 @@ export function ReceiptQrScanner({
   onClose,
   onPhotograph,
 }: {
-  onLink: (link: ReceiptQrLink) => void;
+  onLink: (link: ReceiptQrLink) => boolean;
   onClose: () => void;
   onPhotograph: () => void;
 }) {
@@ -82,20 +82,22 @@ export function ReceiptQrScanner({
 
     const onPayload = (payload: string) => {
       if (handled) return;
+      const link = matchReceiptQrLink(payload);
+      if (link && callbacks.current.onLink(link)) {
+        handled = true;
+        stopScan();
+        return;
+      }
       const now = Date.now();
       if (lastPayload === payload && now - lastPayloadAt < 2500) return;
       lastPayload = payload;
       lastPayloadAt = now;
-      const link = matchReceiptQrLink(payload);
-      if (!link) {
-        window.clearTimeout(noticeTimer);
-        setNotice(callbacks.current.t("This QR code is not a receipt link."));
-        noticeTimer = window.setTimeout(() => setNotice(null), 4000);
-        return;
-      }
-      handled = true;
-      stopScan();
-      callbacks.current.onLink(link);
+      window.clearTimeout(noticeTimer);
+      const { t } = callbacks.current;
+      setNotice(link
+        ? t("Wait for the current receipt operation to finish.")
+        : t("This QR code is not a receipt link."));
+      noticeTimer = window.setTimeout(() => setNotice(null), 4000);
     };
 
     import("@/receipt-qr-live")

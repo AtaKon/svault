@@ -806,14 +806,11 @@ export function ReceiptScanPage() {
     return "applied";
   };
 
-  const canScanQr = () => {
-    if (!readingRef.current && !qrScanUnavailable) return true;
-    toast.push(t("Wait for the current receipt operation to finish, then scan again."));
-    return false;
-  };
+  const canScanQr = () => !readingRef.current && !qrScanUnavailable;
 
   const openQrScanner = () => {
     if (canScanQr()) setQrScannerRevision(workspaceRevisionRef.current);
+    else toast.push(t("Wait for the current receipt operation to finish."));
   };
 
   const finishLiveQrImport = (controller: AbortController) => {
@@ -822,16 +819,18 @@ export function ReceiptScanPage() {
     setLiveQrImporting(false);
   };
 
-  const handleLiveQrLink = async (link: ReceiptQrLink, revision: number) => {
-    if (revision !== workspaceRevisionRef.current || !canScanQr()) {
-      setQrScannerRevision((openRevision) => openRevision === revision ? null : openRevision);
-      return;
-    }
+  const acceptLiveQrLink = (link: ReceiptQrLink, revision: number) => {
+    if (revision !== workspaceRevisionRef.current || !canScanQr()) return false;
     const controller = new AbortController();
     // Hold the workspace lock before closing the dialog or starting the request.
     readingRef.current = controller;
     setLiveQrImporting(true);
     setQrScannerRevision(null);
+    void importLiveQrLink(link, revision, controller);
+    return true;
+  };
+
+  const importLiveQrLink = async (link: ReceiptQrLink, revision: number, controller: AbortController) => {
     try {
       const outcome = await importDigitalLink(link, {
         revision,
@@ -2135,7 +2134,7 @@ export function ReceiptScanPage() {
 
       {qrScannerRevision !== null && (
         <ReceiptQrScanner
-          onLink={(link) => void handleLiveQrLink(link, qrScannerRevision)}
+          onLink={(link) => acceptLiveQrLink(link, qrScannerRevision)}
           onClose={() => setQrScannerRevision(null)}
           onPhotograph={() => cameraRef.current?.click()}
         />

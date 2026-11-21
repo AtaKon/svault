@@ -83,8 +83,10 @@ test("live frames are bounded and serialized, with native retry before switching
   const terminateWorker = t.mock.fn();
   let holdSoftwareFrame = false;
   let softwareStarted = Promise.withResolvers();
+  let replyToWorker;
   const postFrame = t.mock.fn(function (frame, transfer) {
     assert.deepEqual(transfer, [frame.data.buffer]);
+    replyToWorker = this.onmessage;
     softwareStarted.resolve();
     if (!holdSoftwareFrame) {
       const pixels = qr.rgbaToGray(frame.data, frame.width, frame.height);
@@ -169,6 +171,31 @@ test("live frames are bounded and serialized, with native retry before switching
   assert.equal(track.stop.mock.callCount(), 2);
   assert.equal(terminateWorker.mock.callCount(), 2);
   assert.equal(expireFrame, undefined);
+
+  const lateReply = replyToWorker;
+  const previousReads = getImageData.mock.callCount();
+  const previousPosts = postFrame.mock.callCount();
+  const nativeResponse = Promise.withResolvers();
+  detect.mock.mockImplementation(() => nativeResponse.promise);
+  const canceled = await startLiveQrScan(video, () => assert.fail("Unexpected QR payload"), new AbortController().signal);
+  const pendingNative = frame();
+  canceled.stop();
+  await pendingNative;
+  nativeResponse.resolve([]);
+  assert.equal(getImageData.mock.callCount(), previousReads);
+  assert.equal(postFrame.mock.callCount(), previousPosts);
+
+  const received = [];
+  detect.mock.mockImplementation(async () => { throw failure; });
+  softwareStarted = Promise.withResolvers();
+  const restarted = await startLiveQrScan(video, (payload) => received.push(payload), new AbortController().signal);
+  const nextFrame = frame();
+  await softwareStarted.promise;
+  lateReply({ data: "stale worker reply" });
+  replyToWorker({ data: text });
+  await nextFrame;
+  assert.deepEqual(received, [text]);
+  restarted.stop();
 });
 
 test("closing while awaiting camera permission releases the late stream", async (t) => {

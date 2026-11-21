@@ -2004,7 +2004,7 @@ const EL: Record<string, string> = {
   "Scan the receipt’s QR code or add photos.": "Σκάναρε τον κωδικό QR της απόδειξης ή πρόσθεσε φωτογραφίες.",
   "Scan code": "Σκανάρισμα κωδικού",
   "Scan receipt code": "Σκανάρισμα κωδικού απόδειξης",
-  "Wait for the current receipt operation to finish, then scan again.": "Περίμενε να ολοκληρωθεί η επεξεργασία της απόδειξης και σκάναρε ξανά.",
+  "Wait for the current receipt operation to finish.": "Περίμενε να ολοκληρωθεί η επεξεργασία της απόδειξης.",
   "Point the camera at the receipt's QR code": "Στρέψε την κάμερα στον κωδικό QR της απόδειξης",
   "Light": "Φακός",
   "Pin a line to an existing item and SVault remembers this shop-specific name for your next receipt.": "Αντιστοίχισε μια γραμμή με υπάρχον αντικείμενο και το SVault θα θυμάται την ονομασία του συγκεκριμένου καταστήματος στην επόμενη απόδειξη.",
