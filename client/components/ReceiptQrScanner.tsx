@@ -32,8 +32,8 @@ export function ReceiptQrScanner({
   const dialogRef = useRef<HTMLDialogElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const scanRef = useRef<LiveQrScanHandle | null>(null);
-  const onLinkRef = useRef(onLink);
-  onLinkRef.current = onLink;
+  const callbacks = useRef({ onLink, t });
+  callbacks.current = { onLink, t };
   const [starting, setStarting] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -76,12 +76,12 @@ export function ReceiptQrScanner({
       const link = matchReceiptQrLink(payload);
       window.clearTimeout(noticeTimer);
       if (!link) {
-        setNotice(t("This QR code is not a receipt link."));
+        setNotice(callbacks.current.t("This QR code is not a receipt link."));
         noticeTimer = window.setTimeout(() => setNotice(null), 4000);
         return;
       }
       scan.abort();
-      onLinkRef.current(link);
+      callbacks.current.onLink(link);
     };
 
     import("@/receipt-qr-live")
@@ -95,7 +95,7 @@ export function ReceiptQrScanner({
       .catch((err: unknown) => {
         if (scan.signal.aborted) return;
         setStarting(false);
-        setError(friendlyCameraError(err, t));
+        setError(friendlyCameraError(err, callbacks.current.t));
       });
 
     return () => {
@@ -103,7 +103,7 @@ export function ReceiptQrScanner({
       window.clearTimeout(noticeTimer);
       scanRef.current = null;
     };
-  }, [attempt, t]);
+  }, [attempt]);
 
   const toggleTorch = async () => {
     const handle = scanRef.current;
@@ -123,6 +123,9 @@ export function ReceiptQrScanner({
       onCancel={(event) => {
         event.preventDefault();
         onClose();
+      }}
+      onClose={(event) => {
+        if (!event.currentTarget.open) onClose();
       }}
       className="fixed inset-0 m-0 h-full max-h-none w-full max-w-none overflow-hidden bg-black p-0"
     >

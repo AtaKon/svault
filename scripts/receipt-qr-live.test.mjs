@@ -158,10 +158,14 @@ test("closing while awaiting camera permission releases the late stream", async 
   const track = { stop: t.mock.fn() };
   const stream = { getTracks: () => [track] };
   const { promise, resolve } = Promise.withResolvers();
-  replaceGlobal(t, "BarcodeDetector", undefined);
-  replaceGlobal(t, "navigator", { mediaDevices: { getUserMedia: () => promise } });
-  const video = { srcObject: null, play: t.mock.fn() };
   const scan = new AbortController();
+  const addListener = t.mock.method(scan.signal, "addEventListener");
+  replaceGlobal(t, "BarcodeDetector", undefined);
+  replaceGlobal(t, "navigator", { mediaDevices: { getUserMedia: () => {
+    assert.equal(addListener.mock.calls[0]?.arguments[0], "abort");
+    return promise;
+  } } });
+  const video = { srcObject: null, play: t.mock.fn() };
   const pending = startLiveQrScan(video, () => assert.fail("Unexpected QR payload"), scan.signal);
 
   scan.abort();

@@ -26,7 +26,7 @@ const FOCUS_CONTINUOUS = { advanced: [{ focusMode: "continuous" }] } as unknown 
 const torchConstraint = (on: boolean) => ({ advanced: [{ torch: on }] }) as unknown as MediaTrackConstraints;
 
 export interface LiveQrScanHandle {
-  /** Apply the torch setting and report whether the camera accepted it. */
+  /** Report whether the torch setting was applied while the scan was active. */
   setTorch(on: boolean): Promise<boolean>;
   /** True when the camera track can control the torch. */
   torchAvailable: boolean;
@@ -53,29 +53,36 @@ export async function startLiveQrScan(
     }
   }
 
-  signal.throwIfAborted();
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: false,
-    video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } },
-  });
+  let stream: MediaStream | undefined;
   let stopped = false;
   let scanning = false;
   let canvas: HTMLCanvasElement | null = null;
   let grayBuffer: Uint8ClampedArray | undefined;
   let interval: number | undefined;
   const stop = () => {
-    if (stopped) return;
     stopped = true;
     signal.removeEventListener("abort", stop);
-    if (interval !== undefined) window.clearInterval(interval);
-    for (const item of stream.getTracks()) item.stop();
-    if (video.srcObject === stream) video.srcObject = null;
+    if (interval !== undefined) {
+      window.clearInterval(interval);
+      interval = undefined;
+    }
+    if (stream) {
+      for (const track of stream.getTracks()) track.stop();
+      if (video.srcObject === stream) video.srcObject = null;
+      stream = undefined;
+    }
     canvas = null;
     grayBuffer = undefined;
   };
 
   signal.addEventListener("abort", stop, { once: true });
   try {
+    signal.throwIfAborted();
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+    });
+    // The permission prompt can resolve after the abort handler ran without a stream.
     signal.throwIfAborted();
     video.srcObject = stream;
     await video.play();

@@ -298,7 +298,7 @@ export function ReceiptScanPage() {
   const [busy, setBusy] = useState(false);
   const [digitalLink, setDigitalLink] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [qrScanning, setQrScanning] = useState(false);
+  const [qrScannerRevision, setQrScannerRevision] = useState<number | null>(null);
 
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
@@ -819,17 +819,18 @@ export function ReceiptScanPage() {
   };
 
   const openQrScanner = () => {
-    if (canScanQr()) setQrScanning(true);
+    if (canScanQr()) setQrScannerRevision(workspaceRevisionRef.current);
   };
 
-  const handleLiveQrLink = async (link: ReceiptQrLink) => {
-    setQrScanning(false);
+  const handleLiveQrLink = async (link: ReceiptQrLink, revision: number) => {
+    if (revision !== workspaceRevisionRef.current) return;
+    setQrScannerRevision(null);
     if (!canScanQr()) return;
     readingRef.current = true;
     setBusy(true);
     try {
       const outcome = await importDigitalLink(link, {
-        revision: workspaceRevisionRef.current,
+        revision,
         notLoadedMessage: "The digital receipt could not be loaded. Photograph the receipt instead.",
       });
       if (outcome === "applied") {
@@ -1202,7 +1203,7 @@ export function ReceiptScanPage() {
     setOcrStatus("");
     setOcrProgress(0);
     setManualMode(false);
-    setQrScanning(false);
+    setQrScannerRevision(null);
     if (cameraRef.current) cameraRef.current.value = "";
     if (libraryRef.current) libraryRef.current.value = "";
   };
@@ -2119,12 +2120,12 @@ export function ReceiptScanPage() {
         title={t("Match receipt line")}
       />
 
-      {qrScanning && (
+      {qrScannerRevision !== null && (
         <ReceiptQrScanner
-          onLink={(link) => void handleLiveQrLink(link)}
-          onClose={() => setQrScanning(false)}
+          onLink={(link) => void handleLiveQrLink(link, qrScannerRevision)}
+          onClose={() => setQrScannerRevision(null)}
           onPhotograph={() => {
-            setQrScanning(false);
+            setQrScannerRevision(null);
             cameraRef.current?.click();
           }}
         />
