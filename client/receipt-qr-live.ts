@@ -97,6 +97,7 @@ export async function startLiveQrScan(
     signal.throwIfAborted();
   } catch (error) {
     stop();
+    signal.throwIfAborted();
     throw error;
   }
 

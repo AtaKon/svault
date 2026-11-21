@@ -173,9 +173,10 @@ test("closing while awaiting camera permission releases the late stream", async 
   const video = { srcObject: null, play: t.mock.fn() };
   const pending = startLiveQrScan(video, () => assert.fail("Unexpected QR payload"), scan.signal);
 
-  scan.abort();
+  const reason = new Error("Scanner dismissed");
+  scan.abort(reason);
   resolve(stream);
-  await assert.rejects(pending, { name: "AbortError" });
+  await assert.rejects(pending, (error) => error === reason);
   assert.equal(track.stop.mock.callCount(), 1);
   assert.equal(video.play.mock.callCount(), 0);
   assert.equal(video.srcObject, null);
@@ -208,7 +209,7 @@ for (const abortDuringPlay of [false, true]) {
     }
     const error = new DOMException("Playback failed", "NotAllowedError");
     playback.reject(error);
-    await assert.rejects(pending, error);
+    await assert.rejects(pending, abortDuringPlay ? { name: "AbortError" } : error);
     assert.equal(track.stop.mock.callCount(), 1);
     assert.equal(video.srcObject, null);
   });

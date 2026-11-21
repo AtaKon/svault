@@ -117,6 +117,7 @@ interface SavedDraft {
 }
 
 type DigitalLinkOutcome = "applied" | "kept" | "failed" | "aborted";
+type LiveQrImport = { controller: AbortController; lock: symbol };
 
 /** Suggestions this certain are pre-selected; weaker ones wait for a tap. */
 const AUTO_SELECT_SCORE = 0.9;
@@ -278,6 +279,7 @@ export function ReceiptScanPage() {
   const stitchSeqRef = useRef(0);
   const workspaceRevisionRef = useRef(0);
   const readingRef = useRef<symbol | null>(null);
+  const liveQrImportRef = useRef<LiveQrImport | null>(null);
   const pageUploadsRef = useRef(new Map<string, Promise<string | null>>());
   const validationSeqRef = useRef(0);
   const draftKey = receiptDraftKey(user?.id, house.id);
@@ -296,7 +298,8 @@ export function ReceiptScanPage() {
   const [ocrProgress, setOcrProgress] = useState(0);
   const [ocrStatus, setOcrStatus] = useState("");
   const [ocrError, setOcrError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [receiptBusy, setBusy] = useState(false);
+  const [liveQrImporting, setLiveQrImporting] = useState(false);
   const [digitalLink, setDigitalLink] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [qrScannerRevision, setQrScannerRevision] = useState<number | null>(null);
@@ -330,6 +333,7 @@ export function ReceiptScanPage() {
   const [draftReady, setDraftReady] = useState(false);
   const [pendingDraft, setPendingDraft] = useState<StoredReceiptDraft<SavedDraft> | null>(null);
   const [resuming, setResuming] = useState(false);
+  const busy = receiptBusy || liveQrImporting;
   const qrScanUnavailable = !draftReady || resuming || busy || ocrRunning || saving || Boolean(pendingDraft);
 
   useEffect(() => {
@@ -779,14 +783,16 @@ export function ReceiptScanPage() {
    */
   const importDigitalLink = async (
     link: ReceiptQrLink,
-    options: { revision: number; notLoadedMessage: string },
+    options: { revision: number; notLoadedMessage: string; signal?: AbortSignal },
   ): Promise<DigitalLinkOutcome> => {
+    const isCurrent = () => !options.signal?.aborted && options.revision === workspaceRevisionRef.current;
     try {
       const data = await api<ReceiptScanResponse>(`/api/houses/${house.id}/receipts/scan`, {
         method: "POST",
         body: { qr: link.url },
+        signal: options.signal,
       });
-      if (options.revision !== workspaceRevisionRef.current) return "aborted";
+      if (!isCurrent()) return "aborted";
       if (isUsableDigitalReceipt(data)) {
         if (hasReceiptDetails(snapshotRef.current() ?? snapshot(), house.currency)) {
           setWarning(DIGITAL_RECEIPT_EDITS_KEPT);
@@ -806,7 +812,7 @@ export function ReceiptScanPage() {
       }
       return "failed";
     } catch {
-      if (options.revision !== workspaceRevisionRef.current) return "aborted";
+      if (!isCurrent()) return "aborted";
       setWarning(options.notLoadedMessage);
       setDigitalLink(link.url);
       return "failed";
@@ -823,21 +829,31 @@ export function ReceiptScanPage() {
     if (canScanQr()) setQrScannerRevision(workspaceRevisionRef.current);
   };
 
+  const finishLiveQrImport = (operation: LiveQrImport) => {
+    if (liveQrImportRef.current !== operation) return;
+    liveQrImportRef.current = null;
+    if (readingRef.current === operation.lock) readingRef.current = null;
+    setLiveQrImporting(false);
+  };
+
   const handleLiveQrLink = async (link: ReceiptQrLink, revision: number) => {
     if (revision !== workspaceRevisionRef.current) return;
     if (!canScanQr()) {
       setQrScannerRevision(null);
       return;
     }
-    const importLock = Symbol();
-    readingRef.current = importLock;
-    setBusy(true);
+    const operation = { controller: new AbortController(), lock: Symbol() };
+    readingRef.current = operation.lock;
+    liveQrImportRef.current = operation;
+    setLiveQrImporting(true);
     setQrScannerRevision(null);
     try {
       const outcome = await importDigitalLink(link, {
         revision,
         notLoadedMessage: "The digital receipt could not be loaded. Photograph the receipt instead.",
+        signal: operation.controller.signal,
       });
+      if (operation.controller.signal.aborted) return;
       if (outcome === "applied") {
         toast.success(t("Digital receipt imported"));
       } else if (outcome === "kept") {
@@ -848,10 +864,7 @@ export function ReceiptScanPage() {
         if (!pagesRef.current.length) setManualMode(true);
       }
     } finally {
-      if (readingRef.current === importLock) {
-        readingRef.current = null;
-        setBusy(false);
-      }
+      finishLiveQrImport(operation);
     }
   };
 
@@ -1169,8 +1182,12 @@ export function ReceiptScanPage() {
   /* -------------------------------------------------------- reset & resume */
 
   const clearWorkspace = () => {
-    // An in-flight operation owns readingRef until its finally block releases it.
     workspaceRevisionRef.current++;
+    const qrImport = liveQrImportRef.current;
+    if (qrImport) {
+      qrImport.controller.abort();
+      finishLiveQrImport(qrImport);
+    }
     stitchSeqRef.current++;
     validationSeqRef.current++;
     for (const page of pagesRef.current) URL.revokeObjectURL(page.url);
@@ -1304,6 +1321,9 @@ export function ReceiptScanPage() {
 
   useEffect(() => {
     return () => {
+      const qrImport = liveQrImportRef.current;
+      liveQrImportRef.current = null;
+      qrImport?.controller.abort();
       for (const page of pagesRef.current) URL.revokeObjectURL(page.url);
       if (stitchedUrlRef.current) URL.revokeObjectURL(stitchedUrlRef.current);
     };
@@ -1347,7 +1367,7 @@ export function ReceiptScanPage() {
         title={t("Scan a shopping receipt")}
         subtitle={t("Scan the receipt’s QR code or add photos, then review the items before saving them to inventory.")}
         actions={
-          showWorkspace ? (
+          showWorkspace || liveQrImporting ? (
             <Button variant="ghost" size="sm" icon="refresh" onClick={reset} disabled={saving}>
               {t("Start over")}</Button>
           ) : undefined
@@ -1402,6 +1422,7 @@ export function ReceiptScanPage() {
                 type="button"
                 icon="scan"
                 disabled={qrScanUnavailable}
+                loading={liveQrImporting}
                 onClick={openQrScanner}
               >
                 {t("Scan receipt code")}</Button>
