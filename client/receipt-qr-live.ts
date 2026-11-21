@@ -17,11 +17,12 @@ export interface LiveQrScanHandle {
   stop(): void;
   /** Report whether the torch setting was applied while the scan was active. */
   setTorch(on: boolean): Promise<boolean>;
-  /** True when the camera track can control the torch. */
   torchAvailable: boolean;
 }
 
 const FRAME_INTERVAL_MS = 250;
+const FRAME_RESPONSE_TIMEOUT_MS = 4000;
+const FRAME_TIMED_OUT = Symbol("QR frame timed out");
 const MAX_FRAME_SIDE = 1280;
 const MAX_CONSECUTIVE_NATIVE_FAILURES = 2;
 
@@ -54,7 +55,7 @@ export async function startLiveQrScan(
   let nativeFailures = 0;
   let canvas: HTMLCanvasElement | null = null;
   let worker: Worker | undefined;
-  let cancelSoftwareDecode: (() => void) | undefined;
+  let cancelFrame: (() => void) | undefined;
   let interval: number | undefined;
   const stop = () => {
     if (stopped) return;
@@ -70,7 +71,7 @@ export async function startLiveQrScan(
       stream = undefined;
     }
     canvas = null;
-    cancelSoftwareDecode?.();
+    cancelFrame?.();
     worker?.terminate();
     worker = undefined;
   };
@@ -113,18 +114,30 @@ export async function startLiveQrScan(
     // Cameras can use their default focus mode if constraints are unavailable.
   }
 
+  const waitForFrame = async <T>(request: () => Promise<T>) => {
+    let timeout: number | undefined;
+    const interrupted = new Promise<undefined>((resolve, reject) => {
+      cancelFrame = () => resolve(undefined);
+      timeout = window.setTimeout(() => reject(FRAME_TIMED_OUT), FRAME_RESPONSE_TIMEOUT_MS);
+    });
+    try {
+      return await Promise.race([request(), interrupted]);
+    } finally {
+      window.clearTimeout(timeout);
+      cancelFrame = undefined;
+    }
+  };
+
   const decodeInWorker = async (frame: ImageData) => {
     const decoder = worker ??= new ReceiptQrWorker();
     try {
-      return await new Promise<string | null>((resolve, reject) => {
-        cancelSoftwareDecode = () => resolve(null);
+      return await waitForFrame(() => new Promise<string | null>((resolve, reject) => {
         decoder.onmessage = ({ data }: MessageEvent<string | null>) => resolve(data);
         decoder.onerror = reject;
         decoder.onmessageerror = reject;
         decoder.postMessage(frame, [frame.data.buffer]);
-      });
+      }));
     } finally {
-      cancelSoftwareDecode = undefined;
       decoder.onmessage = null;
       decoder.onerror = null;
       decoder.onmessageerror = null;
@@ -138,20 +151,22 @@ export async function startLiveQrScan(
       const scale = Math.min(1, MAX_FRAME_SIDE / Math.max(video.videoWidth, video.videoHeight));
       const width = Math.max(1, Math.round(video.videoWidth * scale));
       const height = Math.max(1, Math.round(video.videoHeight * scale));
-      canvas ??= document.createElement("canvas");
-      if (canvas.width !== width) canvas.width = width;
-      if (canvas.height !== height) canvas.height = height;
-      const context = canvas.getContext("2d", { willReadFrequently: true });
+      const frameCanvas = canvas ??= document.createElement("canvas");
+      if (frameCanvas.width !== width) frameCanvas.width = width;
+      if (frameCanvas.height !== height) frameCanvas.height = height;
+      const context = frameCanvas.getContext("2d", { willReadFrequently: true });
       if (!context) throw new Error("Could not read the camera preview");
       context.drawImage(video, 0, 0, width, height);
 
       if (detector) {
+        const native = detector;
         let codes: DetectedCode[] | undefined;
         try {
-          codes = await detector.detect(canvas);
+          codes = await waitForFrame(() => native.detect(frameCanvas));
           nativeFailures = 0;
-        } catch {
-          if (++nativeFailures >= MAX_CONSECUTIVE_NATIVE_FAILURES) detector = null;
+        } catch (error) {
+          // A timed-out native call may still be running, so do not start another.
+          if (error === FRAME_TIMED_OUT || ++nativeFailures >= MAX_CONSECUTIVE_NATIVE_FAILURES) detector = null;
         }
         if (codes) {
           for (const code of codes) {

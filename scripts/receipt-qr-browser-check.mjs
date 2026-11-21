@@ -1,4 +1,5 @@
 // Run against a seeded, throwaway instance. Uses a simulated camera and issuer.
+// Set SV_BROWSER_CHANNEL=msedge to use Edge instead of Chrome.
 import assert from "node:assert/strict";
 import { chromium } from "playwright-core";
 import zxing from "@zxing/library";
@@ -113,6 +114,8 @@ try {
   assert.equal(await page.evaluate(() => lastQrCamera.getTracks().every((track) => track.readyState === "ended")), true);
   assert.equal(await scan.isDisabled(), true);
   assert.equal(await page.getByRole("button", { name: "Import receipt PDF", exact: true }).isDisabled(), true);
+  await page.locator('input[accept^="application/pdf"]').setInputFiles({ name: "receipt.pdf", mimeType: "application/pdf", buffer: Buffer.from("test") });
+  await page.locator('input[capture="environment"]').setInputFiles({ name: "receipt.jpg", mimeType: "image/jpeg", buffer: Buffer.from("test") });
   console.log("PASS: Retry starts a new camera and a two-code frame imports one receipt");
   await reset.click();
   assert.equal(await page.evaluate(() => qrRequests[0].signal.aborted), true);
@@ -184,7 +187,7 @@ try {
   await reset.click();
   await page.evaluate(() => { globalThis.failReadback = true; });
   await scan.click();
-  await page.getByText("Could not decode receipt QR codes. Photograph the receipt instead.").waitFor();
+  await page.getByText("Could not scan the QR code.").waitFor();
   assert.equal(await page.evaluate(() => lastQrCamera.getTracks().every((track) => track.readyState === "ended")), true);
   await choosePhoto();
   await page.evaluate(() => { globalThis.failReadback = false; globalThis.denyCamera = true; });

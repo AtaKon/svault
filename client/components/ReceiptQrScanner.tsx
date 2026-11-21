@@ -72,6 +72,7 @@ export function ReceiptQrScanner({
     setPendingTorchHandle(null);
 
     const stopScan = () => {
+      window.clearTimeout(noticeTimer);
       const handle = scanRef.current;
       scanRef.current = null;
       // The handle starts owning the stream after initialization completes.
@@ -86,8 +87,8 @@ export function ReceiptQrScanner({
       lastPayload = payload;
       lastPayloadAt = now;
       const link = matchReceiptQrLink(payload);
-      window.clearTimeout(noticeTimer);
       if (!link) {
+        window.clearTimeout(noticeTimer);
         setNotice(callbacks.current.t("This QR code is not a receipt link."));
         noticeTimer = window.setTimeout(() => setNotice(null), 4000);
         return;
@@ -101,7 +102,7 @@ export function ReceiptQrScanner({
       .then(({ startLiveQrScan }) => startLiveQrScan(element, onPayload, scan.signal, () => {
         stopScan();
         setTorchAvailable(false);
-        setError(callbacks.current.t("Could not decode receipt QR codes. Photograph the receipt instead."));
+        setError(callbacks.current.t("Could not scan the QR code."));
       }))
       .then((handle) => {
         if (scan.signal.aborted) return;
@@ -115,10 +116,7 @@ export function ReceiptQrScanner({
         setError(friendlyCameraError(err, callbacks.current.t));
       });
 
-    return () => {
-      stopScan();
-      window.clearTimeout(noticeTimer);
-    };
+    return stopScan;
   }, [attempt]);
 
   const photograph = () => {

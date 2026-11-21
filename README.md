@@ -393,11 +393,11 @@ npm test                     # API integration + parser + unit tests (temp DB pe
 node scripts/smoke.mjs URL   # black-box smoke test against a running server
 node scripts/visual-check.mjs URL   # Playwright screenshots + console/API error scan
 node scripts/functional-check.mjs URL  # click-through UI checks on a throwaway copy
-node scripts/receipt-qr-browser-check.mjs URL  # live receipt QR with a simulated camera and issuer
+node scripts/receipt-qr-browser-check.mjs URL  # simulated camera on a throwaway instance seeded with npm run seed
 ```
 
-The browser scripts need `npm i --no-save playwright-core` and a local Edge/Chrome install.
-The receipt QR check defaults to Chrome. Set `SV_BROWSER_CHANNEL=msedge` to use Edge.
+The browser scripts need `npm i --no-save playwright-core` and a local Edge/Chrome install
+(the paths are set at the top of each script).
 
 The test suite covers unit conversion, OCR-noise parsing, auth, per-house isolation, membership
 roles, item creation, barcode conflicts and lookup, FIFO consumption, absolute counts, moves, low

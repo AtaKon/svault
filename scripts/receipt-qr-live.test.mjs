@@ -82,14 +82,17 @@ test("live frames are bounded and serialized, with native retry before switching
   const getImageData = t.mock.fn(() => ({ data: rgba, width, height }));
   const terminateWorker = t.mock.fn();
   let holdSoftwareFrame = false;
+  let softwareStarted = Promise.withResolvers();
   const postFrame = t.mock.fn(function (frame, transfer) {
     assert.deepEqual(transfer, [frame.data.buffer]);
+    softwareStarted.resolve();
     if (!holdSoftwareFrame) {
       const pixels = qr.rgbaToGray(frame.data, frame.width, frame.height);
       this.onmessage({ data: qr.decodeReceiptQrFrame(pixels) });
     }
   });
   const clearInterval = t.mock.fn();
+  let expireFrame;
   replaceGlobal(t, "navigator", { mediaDevices: { getUserMedia: async () => stream } });
   replaceGlobal(t, "window", {
     setInterval(callback, delay) {
@@ -98,6 +101,12 @@ test("live frames are bounded and serialized, with native retry before switching
       return 1;
     },
     clearInterval,
+    setTimeout(callback, delay) {
+      assert.equal(delay, 4000);
+      expireFrame = callback;
+      return 1;
+    },
+    clearTimeout() { expireFrame = undefined; },
   });
   replaceGlobal(t, "document", {
     createElement: () => ({ getContext: () => ({ drawImage() {}, getImageData }) }),
@@ -145,6 +154,21 @@ test("live frames are bounded and serialized, with native retry before switching
   assert.equal(clearInterval.mock.callCount(), 1);
   assert.equal(terminateWorker.mock.callCount(), 1);
   assert.equal(video.srcObject, null);
+
+  // A new session survives the previous cancellation, then bounds both missing replies.
+  detect.mock.mockImplementation(() => new Promise(() => {}));
+  softwareStarted = Promise.withResolvers();
+  const onDecoderError = t.mock.fn();
+  await startLiveQrScan(video, () => assert.fail("Unexpected QR payload"), new AbortController().signal, onDecoderError);
+  const stalledFrame = frame();
+  expireFrame();
+  await softwareStarted.promise;
+  expireFrame();
+  await stalledFrame;
+  assert.equal(onDecoderError.mock.callCount(), 1);
+  assert.equal(track.stop.mock.callCount(), 2);
+  assert.equal(terminateWorker.mock.callCount(), 2);
+  assert.equal(expireFrame, undefined);
 });
 
 test("closing while awaiting camera permission releases the late stream", async (t) => {
