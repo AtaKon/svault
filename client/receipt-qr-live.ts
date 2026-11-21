@@ -21,8 +21,8 @@ export interface LiveQrScanHandle {
 }
 
 const FRAME_INTERVAL_MS = 250;
-const FRAME_RESPONSE_TIMEOUT_MS = 4000;
-const FRAME_TIMED_OUT = Symbol("QR frame timed out");
+const RESPONSE_TIMEOUT_MS = 4000;
+const RESPONSE_TIMED_OUT = Symbol("QR scanner response timed out");
 const SCAN_STOPPED = Symbol("QR scan stopped");
 const MAX_FRAME_SIDE = 1280;
 const MAX_CONSECUTIVE_NATIVE_FAILURES = 2;
@@ -66,14 +66,14 @@ export async function startLiveQrScan(
     worker = undefined;
   };
 
-  const waitForDecoder = async <T>(request: () => Promise<T>) => {
+  const waitForResponse = async <T>(request: () => Promise<T>) => {
     sessionSignal.throwIfAborted();
     let cancelWait: (() => void) | undefined;
     let timeout: number | undefined;
     const interrupted = new Promise<never>((_, reject) => {
       cancelWait = () => reject(SCAN_STOPPED);
       sessionSignal.addEventListener("abort", cancelWait, { once: true });
-      timeout = window.setTimeout(() => reject(FRAME_TIMED_OUT), FRAME_RESPONSE_TIMEOUT_MS);
+      timeout = window.setTimeout(() => reject(RESPONSE_TIMED_OUT), RESPONSE_TIMEOUT_MS);
     });
     try {
       const reply = new Promise<T>((resolve) => resolve(request()));
@@ -99,14 +99,14 @@ export async function startLiveQrScan(
     stream = acquired;
     video.srcObject = stream;
     try {
-      await video.play();
+      await waitForResponse(() => video.play());
     } catch (error) {
       throw new Error("Could not play the camera preview", { cause: error });
     }
     signal.throwIfAborted();
     if (Detector) {
       try {
-        const formats = await waitForDecoder(() => Detector.getSupportedFormats());
+        const formats = await waitForResponse(() => Detector.getSupportedFormats());
         if (formats?.includes("qr_code")) detector = new Detector({ formats: ["qr_code"] });
       } catch {
         // Use ZXing if the native detector cannot start.
@@ -135,7 +135,7 @@ export async function startLiveQrScan(
     if (sessionSignal.aborted) return;
     const decoder = worker ??= new ReceiptQrWorker();
     try {
-      return await waitForDecoder(() => new Promise<string | null>((resolve, reject) => {
+      return await waitForResponse(() => new Promise<string | null>((resolve, reject) => {
         decoder.onmessage = ({ data }: MessageEvent<string | null>) => resolve(data);
         decoder.onerror = reject;
         decoder.onmessageerror = reject;
@@ -173,11 +173,11 @@ export async function startLiveQrScan(
         const native = detector;
         let codes: DetectedCode[] | undefined;
         try {
-          codes = await waitForDecoder(() => native.detect(frameCanvas));
+          codes = await waitForResponse(() => native.detect(frameCanvas));
           nativeFailures = 0;
         } catch (error) {
           if (error === SCAN_STOPPED) return;
-          if (error === FRAME_TIMED_OUT) {
+          if (error === RESPONSE_TIMED_OUT) {
             // The pending native call may still be reading this canvas.
             detector = null;
             canvas = null;
@@ -207,6 +207,7 @@ export async function startLiveQrScan(
     }
   };
   signal.throwIfAborted();
+  sessionSignal.throwIfAborted();
   interval = window.setInterval(scanFrame, FRAME_INTERVAL_MS);
 
   return {

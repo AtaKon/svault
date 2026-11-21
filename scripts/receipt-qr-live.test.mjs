@@ -241,6 +241,22 @@ test("live frames are bounded and serialized, with native retry before switching
   assert.equal(setInterval.mock.callCount(), intervalsBeforeClose);
   assert.equal(video.srcObject, null);
 
+  const opening = new AbortController();
+  const probeReached = Promise.withResolvers();
+  const delayedProbe = Promise.withResolvers();
+  supportedFormats.mock.mockImplementation(() => {
+    probeReached.resolve();
+    return delayedProbe.promise;
+  });
+  const pendingStartup = startLiveQrScan(video, () => {}, opening.signal);
+  await probeReached.promise;
+  opening.abort();
+  await assert.rejects(pendingStartup, { name: "AbortError" });
+  delayedProbe.resolve(["qr_code"]);
+  assert.equal(setInterval.mock.callCount(), intervalsBeforeClose);
+  assert.equal(timers.size, 0);
+  assert.equal(video.srcObject, null);
+
   supportedFormats.mock.mockImplementation(async () => ["qr_code"]);
   detect.mock.mockImplementation(() => new Promise(() => {}));
   const first = await startLiveQrScan(video, () => {}, new AbortController().signal);
@@ -295,13 +311,15 @@ test("closing while awaiting camera permission releases the late stream", async 
 });
 
 for (const abortDuringPlay of [false, true]) {
-  test(`releases the stream when video playback rejects${abortDuringPlay ? " after closing" : ""}`, async (t) => {
+  test(abortDuringPlay ? "closing settles startup even when playback is stalled" : "failed playback releases the stream", async (t) => {
     const track = { stop: t.mock.fn() };
     const stream = { getTracks: () => [track] };
     const playing = Promise.withResolvers();
     const playback = Promise.withResolvers();
     replaceGlobal(t, "BarcodeDetector", undefined);
     replaceGlobal(t, "navigator", { mediaDevices: { getUserMedia: async () => stream } });
+    const setInterval = t.mock.fn();
+    replaceGlobal(t, "window", { setTimeout, clearTimeout, setInterval });
     const video = {
       srcObject: null,
       play() {
@@ -314,14 +332,16 @@ for (const abortDuringPlay of [false, true]) {
     await playing.promise;
     assert.equal(video.srcObject, stream);
 
+    const error = new DOMException("Playback failed", "NotAllowedError");
     if (abortDuringPlay) {
       scan.abort();
-      assert.equal(track.stop.mock.callCount(), 1);
-      assert.equal(video.srcObject, null);
+      await assert.rejects(pending, { name: "AbortError" });
+      playback.reject(error);
+    } else {
+      playback.reject(error);
+      await assert.rejects(pending, (failure) => failure.cause === error);
     }
-    const error = new DOMException("Playback failed", "NotAllowedError");
-    playback.reject(error);
-    await assert.rejects(pending, abortDuringPlay ? { name: "AbortError" } : (failure) => failure.cause === error);
+    assert.equal(setInterval.mock.callCount(), 0);
     assert.equal(track.stop.mock.callCount(), 1);
     assert.equal(video.srcObject, null);
   });
@@ -339,7 +359,7 @@ test("torch checks the reported state and ignores a completion after stop", asyn
   const stream = { getTracks: () => [track], getVideoTracks: () => [track] };
   replaceGlobal(t, "BarcodeDetector", undefined);
   replaceGlobal(t, "navigator", { mediaDevices: { getUserMedia: async () => stream } });
-  replaceGlobal(t, "window", { setInterval: () => 1, clearInterval() {} });
+  replaceGlobal(t, "window", { setTimeout, clearTimeout, setInterval: () => 1, clearInterval() {} });
   const scan = new AbortController();
   try {
     const handle = await startLiveQrScan({ play: async () => {} }, () => {}, scan.signal);
