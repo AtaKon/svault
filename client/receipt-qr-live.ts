@@ -1,29 +1,15 @@
 import { decodeReceiptQrFrame, rgbaToGray } from "./receipt-qr.js";
 
-/* Structural types: BarcodeDetector is not part of the TS DOM lib. */
-interface DetectedBarcodeLike {
-  rawValue: string;
-  format: string;
+type DetectedCode = { rawValue: string; format: string };
+
+interface NativeQrDetectorClass {
+  new (options: { formats: string[] }): { detect(source: HTMLCanvasElement): Promise<DetectedCode[]> };
+  getSupportedFormats(): Promise<string[]>;
 }
 
-interface BarcodeDetectorLike {
-  detect(source: CanvasImageSource): Promise<DetectedBarcodeLike[]>;
-}
-
-interface BarcodeDetectorStatic {
-  new (options?: { formats?: string[] }): BarcodeDetectorLike;
-  getSupportedFormats?: () => Promise<string[]>;
-}
-
-/** Capabilities the DOM types do not model yet. */
-interface MediaTrackCapabilityExtras {
-  torch?: boolean;
-  focusMode?: string[];
-}
-
-// applyConstraints payloads defined by browsers but absent from the DOM lib.
-const FOCUS_CONTINUOUS = { advanced: [{ focusMode: "continuous" }] } as unknown as MediaTrackConstraints;
-const torchConstraint = (on: boolean) => ({ advanced: [{ torch: on }] }) as unknown as MediaTrackConstraints;
+type CameraCapabilities = MediaTrackCapabilities & { torch?: boolean; focusMode?: string[] };
+type CameraSettings = MediaTrackConstraintSet & { torch?: boolean; focusMode?: "continuous" };
+const cameraConstraint = (setting: CameraSettings): MediaTrackConstraints => ({ advanced: [setting] });
 
 export interface LiveQrScanHandle {
   /** Release the camera and stop reading frames. Safe to call again. */
@@ -36,6 +22,7 @@ export interface LiveQrScanHandle {
 
 const FRAME_INTERVAL_MS = 250;
 const MAX_FRAME_SIDE = 1280;
+const MAX_CONSECUTIVE_NATIVE_FAILURES = 2;
 
 function stopCamera(stream: MediaStream) {
   for (const track of stream.getTracks()) track.stop();
@@ -47,11 +34,11 @@ export async function startLiveQrScan(
   signal: AbortSignal,
 ): Promise<LiveQrScanHandle> {
   signal.throwIfAborted();
-  const Detector = (globalThis as { BarcodeDetector?: BarcodeDetectorStatic }).BarcodeDetector;
-  let detector: BarcodeDetectorLike | null = null;
+  const Detector = (globalThis as { BarcodeDetector?: NativeQrDetectorClass }).BarcodeDetector;
+  let detector: InstanceType<NativeQrDetectorClass> | null = null;
   if (Detector) {
     try {
-      if ((await Detector.getSupportedFormats?.())?.includes("qr_code")) {
+      if ((await Detector.getSupportedFormats()).includes("qr_code")) {
         detector = new Detector({ formats: ["qr_code"] });
       }
     } catch {
@@ -62,6 +49,7 @@ export async function startLiveQrScan(
   let stream: MediaStream | undefined;
   let stopped = false;
   let scanning = false;
+  let nativeFailures = 0;
   let canvas: HTMLCanvasElement | null = null;
   let grayBuffer: Uint8ClampedArray | undefined;
   let interval: number | undefined;
@@ -111,63 +99,64 @@ export async function startLiveQrScan(
   const track = stream.getVideoTracks()[0];
   let torchSupported = false;
   try {
-    const capabilities = track?.getCapabilities?.() as (MediaTrackCapabilities & MediaTrackCapabilityExtras) | undefined;
+    const capabilities = track?.getCapabilities?.() as CameraCapabilities | undefined;
     torchSupported = capabilities?.torch === true;
     if (capabilities?.focusMode?.includes("continuous")) {
-      void track.applyConstraints(FOCUS_CONTINUOUS).catch(() => undefined);
+      void track.applyConstraints(cameraConstraint({ focusMode: "continuous" })).catch(() => undefined);
     }
   } catch {
     // Cameras can use their default focus mode if constraints are unavailable.
   }
 
-  interval = window.setInterval(() => {
+  const scanFrame = async () => {
     if (stopped || scanning || video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
     scanning = true;
-    void (async () => {
-      try {
-        const scale = Math.min(1, MAX_FRAME_SIDE / Math.max(video.videoWidth, video.videoHeight));
-        const width = Math.round(video.videoWidth * scale);
-        const height = Math.round(video.videoHeight * scale);
-        canvas ??= document.createElement("canvas");
-        if (canvas.width !== width) canvas.width = width;
-        if (canvas.height !== height) canvas.height = height;
-        const context = canvas.getContext("2d", { willReadFrequently: true });
-        if (!context) return;
-        context.drawImage(video, 0, 0, width, height);
+    try {
+      const scale = Math.min(1, MAX_FRAME_SIDE / Math.max(video.videoWidth, video.videoHeight));
+      const width = Math.max(1, Math.round(video.videoWidth * scale));
+      const height = Math.max(1, Math.round(video.videoHeight * scale));
+      canvas ??= document.createElement("canvas");
+      if (canvas.width !== width) canvas.width = width;
+      if (canvas.height !== height) canvas.height = height;
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+      if (!context) return;
+      context.drawImage(video, 0, 0, width, height);
 
-        if (detector) {
-          try {
-            const codes = await detector.detect(canvas);
-            for (const code of codes) {
-              if (stopped) return;
-              if (code.format === "qr_code" && code.rawValue) onPayload(code.rawValue);
-            }
-            return;
-          } catch {
-            // A native detection failure switches this session to ZXing.
-            detector = null;
-          }
+      if (detector) {
+        let codes: DetectedCode[] | undefined;
+        try {
+          codes = await detector.detect(canvas);
+        } catch {
+          if (++nativeFailures >= MAX_CONSECUTIVE_NATIVE_FAILURES) detector = null;
         }
-        if (stopped) return;
-        // The live decoder runs synchronously without recovery, so no later attempt reads this buffer.
-        const pixels = rgbaToGray(context.getImageData(0, 0, width, height).data, width, height, grayBuffer);
-        grayBuffer = pixels.gray;
-        const text = decodeReceiptQrFrame(pixels);
-        if (text) onPayload(text);
-      } catch {
-        /* A single bad frame never ends the scan. */
-      } finally {
-        scanning = false;
+        if (codes) {
+          nativeFailures = 0;
+          for (const code of codes) {
+            if (stopped) return;
+            if (code.format === "qr_code" && code.rawValue) onPayload(code.rawValue);
+          }
+          return;
+        }
       }
-    })();
-  }, FRAME_INTERVAL_MS);
+      if (stopped) return;
+      const frame = rgbaToGray(context.getImageData(0, 0, width, height).data, width, height, grayBuffer);
+      grayBuffer = frame.gray;
+      const text = decodeReceiptQrFrame(frame);
+      if (text) onPayload(text);
+    } catch {
+      // Continue with the next frame if the current one cannot be read.
+    } finally {
+      scanning = false;
+    }
+  };
+  interval = window.setInterval(scanFrame, FRAME_INTERVAL_MS);
 
   return {
     stop,
     setTorch: async (on) => {
       if (!torchSupported || stopped) return false;
       try {
-        await track.applyConstraints(torchConstraint(on));
+        await track.applyConstraints(cameraConstraint({ torch: on }));
         return !stopped;
       } catch {
         return false;

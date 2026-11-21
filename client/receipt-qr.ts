@@ -1,5 +1,5 @@
 /**
- * QR decoding for the receipt scan flow: still photos and live camera frames.
+ * Still-image QR decoding for the receipt scan flow.
  *
  * Receipt photos carry a QR with the issuer's digital receipt link. The photo
  * is decoded at its original resolution before any straightening or
@@ -7,13 +7,10 @@
  * resampling. Standard ZXing runs first across a small ladder of
  * binarizer/downscale variants; when every quick attempt fails, the
  * low-resolution recovery sampler is loaded lazily and retried on the
- * untouched pixels (see client/receipt-qr-recovery.ts). Live capture (see
- * client/receipt-qr-live.ts) instead decodes many frames with the standard
- * passes only, at a small per-frame budget.
+ * untouched pixels (see client/receipt-qr-recovery.ts).
  *
- * The module never throws: an image or frame without a readable QR simply
- * yields null. Only QR is decoded — other barcode formats are not receipt
- * links.
+ * The module never throws: a photo without a readable QR simply yields null.
+ * Only QR is decoded — other barcode formats are not receipt links.
  */
 
 import {
@@ -126,22 +123,17 @@ export async function decodeReceiptQrPixels(
   return null;
 }
 
-const DEFAULT_FRAME_BUDGET_MS = 350;
+const DEFAULT_FRAME_BUDGET_MS = 200;
 
-/**
- * Decode one live camera frame: the standard fast passes only, with a tight
- * budget. Live scanning favors many cheap attempts over the expensive recovery
- * sampler — focus, exposure and framing change from frame to frame, so a code
- * that is unreadable now is usually read cleanly a few frames later. Only QR
- * is decoded, like every other entry point in this module.
- */
+/** Decode a live frame synchronously. Check the soft deadline between passes. */
 export function decodeReceiptQrFrame(pixels: GrayPixels, options: ReceiptQrDecodeOptions = {}): string | null {
   return decodeStandard(pixels, Date.now() + (options.budgetMs ?? DEFAULT_FRAME_BUDGET_MS));
 }
 
 /** RGBA image data to row-major grayscale luminance (ITU-R 601). */
 export function rgbaToGray(rgba: Uint8ClampedArray, width: number, height: number, buffer?: Uint8ClampedArray): GrayPixels {
-  const gray = buffer?.length === width * height ? buffer : new Uint8ClampedArray(width * height);
+  const pixelCount = width * height;
+  const gray = buffer?.length === pixelCount ? buffer : new Uint8ClampedArray(pixelCount);
   for (let i = 0, p = 0; i < gray.length; i++, p += 4) {
     gray[i] = (rgba[p] * 299 + rgba[p + 1] * 587 + rgba[p + 2] * 114) / 1000;
   }

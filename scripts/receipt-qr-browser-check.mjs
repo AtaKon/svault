@@ -52,10 +52,12 @@ try {
   await page.goto(base + "/login");
   await page.getByLabel("Email or username").fill("demo@svault.local");
   await page.locator('input[type="password"]').fill("demo1234");
-  await Promise.all([
-    page.waitForURL((url) => !url.pathname.includes("login")),
+  const [login] = await Promise.all([
+    page.waitForResponse((response) => response.url().endsWith("/api/auth/login") && response.request().method() === "POST"),
     page.locator('button[type="submit"]').click(),
   ]);
+  assert.equal(login.ok(), true, "Seed the throwaway SVault instance with the demo account before running this check");
+  await page.waitForURL((url) => !url.pathname.includes("login"));
   await page.goto(base + "/receipts/scan");
   const scan = page.getByRole("button", { name: "Scan receipt code", exact: true });
   const reset = page.getByRole("button", { name: "Start over" });

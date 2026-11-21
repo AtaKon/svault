@@ -117,7 +117,6 @@ interface SavedDraft {
 }
 
 type DigitalLinkOutcome = "applied" | "kept" | "failed" | "aborted";
-type LiveQrImport = { controller: AbortController; lock: symbol };
 
 /** Suggestions this certain are pre-selected; weaker ones wait for a tap. */
 const AUTO_SELECT_SCORE = 0.9;
@@ -278,8 +277,8 @@ export function ReceiptScanPage() {
   const stitchedPathRef = useRef<string | null>(null);
   const stitchSeqRef = useRef(0);
   const workspaceRevisionRef = useRef(0);
-  const readingRef = useRef<symbol | null>(null);
-  const liveQrImportRef = useRef<LiveQrImport | null>(null);
+  // A live import owns the lock through its abort controller.
+  const readingRef = useRef<boolean | AbortController>(false);
   const pageUploadsRef = useRef(new Map<string, Promise<string | null>>());
   const validationSeqRef = useRef(0);
   const draftKey = receiptDraftKey(user?.id, house.id);
@@ -577,7 +576,7 @@ export function ReceiptScanPage() {
 
   const rerunOcr = async (key?: string) => {
     if (readingRef.current || busy || ocrRunning) return;
-    readingRef.current = Symbol();
+    readingRef.current = true;
     const revision = workspaceRevisionRef.current;
     const current = [...pagesRef.current];
     try {
@@ -586,7 +585,7 @@ export function ReceiptScanPage() {
         if (!key || key === page.key) await runPageOcr(page.key, index, current.length);
       }
     } finally {
-      readingRef.current = null;
+      readingRef.current = false;
     }
   };
 
@@ -651,7 +650,7 @@ export function ReceiptScanPage() {
 
   const handleFiles = async (files: File[]) => {
     if (!files.length || pendingDraft || readingRef.current || busy || ocrRunning) return;
-    readingRef.current = Symbol();
+    readingRef.current = true;
     setBusy(true);
     // Only resetting the workspace invalidates a read. Reset also removes its pages.
     const revision = workspaceRevisionRef.current;
@@ -723,7 +722,7 @@ export function ReceiptScanPage() {
       }
       if (revision === workspaceRevisionRef.current) await rebuildStitch();
     } finally {
-      readingRef.current = null;
+      readingRef.current = false;
       setBusy(false);
     }
   };
@@ -775,12 +774,7 @@ export function ReceiptScanPage() {
     setWarning(data.warning ?? null);
   };
 
-  /**
-   * Imports the issuer's digital receipt for a decoded QR link — the same
-   * path for a link decoded from a photo and one read by the live scanner.
-   * "aborted" means the workspace was reset mid-import, so photo callers stop
-   * instead of reading pages nobody is looking at.
-   */
+  /** Import a receipt link detected in a photo or in the live scanner. */
   const importDigitalLink = async (
     link: ReceiptQrLink,
     options: { revision: number; notLoadedMessage: string; signal?: AbortSignal },
@@ -829,31 +823,28 @@ export function ReceiptScanPage() {
     if (canScanQr()) setQrScannerRevision(workspaceRevisionRef.current);
   };
 
-  const finishLiveQrImport = (operation: LiveQrImport) => {
-    if (liveQrImportRef.current !== operation) return;
-    liveQrImportRef.current = null;
-    if (readingRef.current === operation.lock) readingRef.current = null;
+  const finishLiveQrImport = (controller: AbortController) => {
+    if (readingRef.current !== controller) return;
+    readingRef.current = false;
     setLiveQrImporting(false);
   };
 
   const handleLiveQrLink = async (link: ReceiptQrLink, revision: number) => {
-    if (revision !== workspaceRevisionRef.current) return;
-    if (!canScanQr()) {
-      setQrScannerRevision(null);
+    if (revision !== workspaceRevisionRef.current || !canScanQr()) {
+      setQrScannerRevision((openRevision) => openRevision === revision ? null : openRevision);
       return;
     }
-    const operation = { controller: new AbortController(), lock: Symbol() };
-    readingRef.current = operation.lock;
-    liveQrImportRef.current = operation;
+    const controller = new AbortController();
+    readingRef.current = controller;
     setLiveQrImporting(true);
     setQrScannerRevision(null);
     try {
       const outcome = await importDigitalLink(link, {
         revision,
         notLoadedMessage: "The digital receipt could not be loaded. Photograph the receipt instead.",
-        signal: operation.controller.signal,
+        signal: controller.signal,
       });
-      if (operation.controller.signal.aborted) return;
+      if (controller.signal.aborted) return;
       if (outcome === "applied") {
         toast.success(t("Digital receipt imported"));
       } else if (outcome === "kept") {
@@ -864,13 +855,13 @@ export function ReceiptScanPage() {
         if (!pagesRef.current.length) setManualMode(true);
       }
     } finally {
-      finishLiveQrImport(operation);
+      finishLiveQrImport(controller);
     }
   };
 
   const handlePdf = async (file: File | undefined) => {
     if (!file || pendingDraft || readingRef.current || busy || ocrRunning) return;
-    readingRef.current = Symbol();
+    readingRef.current = true;
     setBusy(true);
     const revision = workspaceRevisionRef.current;
     try {
@@ -903,7 +894,7 @@ export function ReceiptScanPage() {
     } catch {
       toast.error(t("Could not read the receipt PDF"));
     } finally {
-      readingRef.current = null;
+      readingRef.current = false;
       setBusy(false);
     }
   };
@@ -929,7 +920,7 @@ export function ReceiptScanPage() {
     if (pagesRef.current.length > MAX_VISION_PAGES) {
       toast.push(t("Only the first {count} photos are sent to the vision model.", { count: MAX_VISION_PAGES }));
     }
-    readingRef.current = Symbol();
+    readingRef.current = true;
     const revision = workspaceRevisionRef.current;
     setBusy(true);
     try {
@@ -955,7 +946,7 @@ export function ReceiptScanPage() {
     } catch (err) {
       toast.error(err instanceof Error ? t(err.message) : t("Could not read the receipt"));
     } finally {
-      readingRef.current = null;
+      readingRef.current = false;
       setBusy(false);
     }
   };
@@ -1129,7 +1120,7 @@ export function ReceiptScanPage() {
       return;
     }
     const rows = included;
-    readingRef.current = Symbol();
+    readingRef.current = true;
     setSaving(true);
     try {
       const check = await validate(rows).catch((err) => {
@@ -1174,7 +1165,7 @@ export function ReceiptScanPage() {
       }
       toast.error(receiptErrorMessage(err, t));
     } finally {
-      readingRef.current = null;
+      readingRef.current = false;
       setSaving(false);
     }
   };
@@ -1183,10 +1174,9 @@ export function ReceiptScanPage() {
 
   const clearWorkspace = () => {
     workspaceRevisionRef.current++;
-    const qrImport = liveQrImportRef.current;
-    if (qrImport) {
-      qrImport.controller.abort();
-      // Release the workspace immediately. The canceled import's finally may run after a new scan starts.
+    const qrImport = readingRef.current;
+    if (qrImport instanceof AbortController) {
+      qrImport.abort();
       finishLiveQrImport(qrImport);
     }
     stitchSeqRef.current++;
@@ -1322,9 +1312,11 @@ export function ReceiptScanPage() {
 
   useEffect(() => {
     return () => {
-      const qrImport = liveQrImportRef.current;
-      liveQrImportRef.current = null;
-      qrImport?.controller.abort();
+      const qrImport = readingRef.current;
+      if (qrImport instanceof AbortController) {
+        readingRef.current = false;
+        qrImport.abort();
+      }
       for (const page of pagesRef.current) URL.revokeObjectURL(page.url);
       if (stitchedUrlRef.current) URL.revokeObjectURL(stitchedUrlRef.current);
     };

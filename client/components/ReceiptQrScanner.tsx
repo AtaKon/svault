@@ -164,17 +164,7 @@ export function ReceiptQrScanner({
 
       {!starting && !error && (
         <div className="pointer-events-none absolute inset-0">
-          <div className="absolute left-1/2 top-[42%] aspect-square w-[68%] max-w-[340px] -translate-x-1/2 -translate-y-1/2">
-            <div className="absolute inset-0 rounded-2xl border border-white/20" />
-            {[
-              "left-0 top-0 border-l-2 border-t-2",
-              "right-0 top-0 border-r-2 border-t-2",
-              "left-0 bottom-0 border-b-2 border-l-2",
-              "right-0 bottom-0 border-b-2 border-r-2",
-            ].map((corner) => (
-              <div key={corner} className={cn("absolute h-8 w-8 rounded-[6px] border-white/90", corner)} />
-            ))}
-          </div>
+          <div className="absolute left-1/2 top-[42%] aspect-square w-[68%] max-w-[340px] -translate-x-1/2 -translate-y-1/2 rounded-2xl border-2 border-white/70" />
           <div className="absolute inset-x-0 bottom-8 px-6 text-center text-[11px] font-medium leading-relaxed text-white/70">
             {t("Point the camera at the receipt's QR code")}
           </div>
