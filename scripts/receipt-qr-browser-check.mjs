@@ -41,7 +41,7 @@ try {
       }
       if (globalThis.badWorkerFrame) {
         globalThis.badWorkerFrame = false;
-        return postFrame.call(this, { width: 1, height: 1 });
+        return postFrame.call(this, { width: 1, height: 1, data: new Uint8ClampedArray(3) });
       }
       // Feed a printed-code fixture through the actual decoder worker.
       const rgba = new Uint8ClampedArray(pixels.length * 4).fill(255);
@@ -63,9 +63,14 @@ try {
     const realFetch = window.fetch.bind(window);
     window.fetch = (resource, init) => {
       if (!String(resource).endsWith("/receipts/scan") || init?.method !== "POST") return realFetch(resource, init);
-      return new Promise((resolve) => {
-        // Allow a result to arrive even when the completion was already queued at cancellation.
-        qrRequests.push({ signal: init.signal, qr: JSON.parse(init.body).qr, resolve });
+      return new Promise((resolve, reject) => {
+        const request = { signal: init.signal, qr: JSON.parse(init.body).qr, resolve };
+        if (globalThis.rejectOnAbort) init.signal.addEventListener("abort", () => {
+          request.rejectedOnAbort = init.signal.reason.name;
+          reject(init.signal.reason);
+        }, { once: true });
+        // The other cases deliberately allow a result to arrive after cancellation.
+        qrRequests.push(request);
       });
     };
     const getUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
@@ -229,6 +234,13 @@ try {
   await page.getByRole("status").filter({ hasText: "The digital receipt could not be loaded." }).waitFor();
 
   await reset.click();
+  await setFixture({ rejectOnAbort: true });
+  await scan.click();
+  await waitForRequest(7);
+  await reset.click();
+  await page.waitForFunction(() => qrRequests[6].rejectedOnAbort === "AbortError");
+  assert.equal(await scan.isDisabled(), false);
+
   await setFixture({ failReadback: true });
   await scan.click();
   await page.getByText("Could not scan the QR code.").waitFor();

@@ -135,6 +135,7 @@ test("live frames are bounded and serialized, with native retry before switching
   const found = [];
   const handle = await startLiveQrScan(video, (payload) => found.push(payload), scan.signal);
   assert.equal(video.srcObject, stream);
+  assert.equal(await handle.setTorch(true), null);
   const pendingFrame = frame();
   assert.equal(detect.mock.calls[0].arguments[0].width, 1280);
   await frame();
@@ -421,12 +422,24 @@ test("torch checks the reported state and ignores a completion after stop", asyn
   }
 });
 
-test("a live frame with an expired budget skips decoding a readable QR", () => {
+test("live frame decoding checks an absolute deadline before each ZXing pass", (t) => {
   const width = 320;
   const height = 480;
   const frame = { gray: receiptPixels(width, height), width, height };
-  assert.equal(qr.decodeReceiptQrFrame(frame), text);
-  assert.equal(qr.decodeReceiptQrFrame(frame, { budgetMs: -1 }), null);
+  const decodeAt = (pixels, ...times) => {
+    const now = t.mock.method(Date, "now", () => times.shift() ?? 10_201);
+    try {
+      const result = qr.decodeReceiptQrFrame(pixels, { budgetMs: 200 });
+      assert.equal(times.length, 0);
+      return result;
+    } finally {
+      now.mock.restore();
+    }
+  };
+  assert.equal(decodeAt(frame, 10_000, 10_199), text);
+  assert.equal(decodeAt(frame, 10_000, 10_201), null);
+  const blank = { ...frame, gray: new Uint8ClampedArray(width * height) };
+  assert.equal(decodeAt(blank, 10_000, 10_199, 10_201), null);
 });
 
 test("grayscale reuses storage only when it fits the current pixels", () => {

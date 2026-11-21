@@ -65,12 +65,12 @@ function downscale(source: GrayPixels, targetMaxSide: number): GrayPixels {
   return { gray, width, height };
 }
 
-/** Standard ZXing QR decode over one grayscale variant. */
-function decodeStandard(pixels: GrayPixels, deadline: number): string | null {
+/** Standard ZXing QR decode with a Date.now() deadline checked before each pass. */
+function decodeStandard(pixels: GrayPixels, deadlineEpochMs: number): string | null {
   const hints = new Map([[DecodeHintType.TRY_HARDER, true]]);
   const source = new RGBLuminanceSource(pixels.gray, pixels.width, pixels.height);
   for (const Binarizer of [HybridBinarizer, GlobalHistogramBinarizer]) {
-    if (Date.now() > deadline) return null;
+    if (Date.now() > deadlineEpochMs) return null;
     try {
       const bitmap = new BinaryBitmap(new Binarizer(source));
       const text = new QRCodeReader().decode(bitmap, hints).getText();
