@@ -40,6 +40,16 @@ const MAX_FRAME_SIDE = 1280;
 const MAX_CONSECUTIVE_NATIVE_FAILURES = 2;
 const MAX_CONSECUTIVE_WORKER_FAILURES = 2;
 
+/**
+ * Consecutive-failure counter for the frame decoders: any reply, including
+ * "no code found", proves a decoder is alive and resets the count, while
+ * each counted failure steps it toward the threshold that retires the
+ * decoder for the rest of the session.
+ */
+export function nextDecodeFailureCount(previous: number, failed: boolean): number {
+  return failed ? previous + 1 : 0;
+}
+
 function stopCamera(stream: MediaStream) {
   for (const track of stream.getTracks()) track.stop();
 }
@@ -215,7 +225,7 @@ export async function startLiveQrScan(
         let codes: DetectedCode[] | undefined;
         try {
           codes = await waitForResponse(() => native.detect(frameCanvas));
-          nativeFailures = 0;
+          nativeFailures = nextDecodeFailureCount(nativeFailures, false);
         } catch (error) {
           if (error === SCAN_STOPPED) return;
           if (error === RESPONSE_TIMED_OUT) {
@@ -229,7 +239,8 @@ export async function startLiveQrScan(
             return;
           }
           // The other native disable path: repeated failures also retire the detector for this session.
-          if (++nativeFailures >= MAX_CONSECUTIVE_NATIVE_FAILURES) detector = null;
+          nativeFailures = nextDecodeFailureCount(nativeFailures, true);
+          if (nativeFailures >= MAX_CONSECUTIVE_NATIVE_FAILURES) detector = null;
         }
         if (sessionSignal.aborted) return;
         if (codes) {
@@ -245,10 +256,12 @@ export async function startLiveQrScan(
       let text: string | null | undefined;
       try {
         text = await decodeInWorker(frame);
-        workerFailures = 0;
+        workerFailures = nextDecodeFailureCount(workerFailures, false);
       } catch (error) {
         if (error === SCAN_STOPPED) return;
-        if (++workerFailures >= MAX_CONSECUTIVE_WORKER_FAILURES) throw error;
+        workerFailures = nextDecodeFailureCount(workerFailures, true);
+        // Repeated worker failures release the camera; a single one retries on the next frame.
+        if (workerFailures >= MAX_CONSECUTIVE_WORKER_FAILURES) throw error;
         return;
       }
       if (!sessionSignal.aborted && text) onPayload(text);

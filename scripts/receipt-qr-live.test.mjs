@@ -26,7 +26,7 @@ async function importBundled(entry) {
   return import("data:text/javascript;base64," + Buffer.from(chunk.code).toString("base64"));
 }
 
-const [qr, { startLiveQrScan, nextTorchTarget, resolveTorchState }] = await Promise.all([
+const [qr, { startLiveQrScan, nextTorchTarget, resolveTorchState, nextDecodeFailureCount }] = await Promise.all([
   importBundled("client/receipt-qr.ts"),
   importBundled("client/receipt-qr-live.ts"),
 ]);
@@ -644,4 +644,12 @@ test("a failed torch request keeps the last state and a reply replaces it", () =
   // A reply without a read-back leaves the reported state unknown.
   assert.deepEqual(resolveTorchState(last, { requested: false, reported: undefined }), { requested: false, reported: undefined });
   assert.deepEqual(resolveTorchState(last, { requested: false, reported: false }), { requested: false, reported: false });
+});
+
+test("decoder failures count consecutively and any reply resets the count", () => {
+  assert.equal(nextDecodeFailureCount(0, true), 1);
+  assert.equal(nextDecodeFailureCount(1, true), 2);
+  // A reply, including "no code found", proves the decoder is alive again.
+  assert.equal(nextDecodeFailureCount(2, false), 0);
+  assert.equal(nextDecodeFailureCount(0, false), 0);
 });
