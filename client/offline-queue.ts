@@ -171,11 +171,24 @@ export function syncBackoffMs(attempt: number): number {
 }
 
 /** Every stock movement bumps the item's updated_at, so a queued "set" would
- * 409 against the user's own earlier queued movement. Replaying uses the
- * timestamp the server returned for the previous action on that item as the
- * base for the next one; without one the queued baseline stands. */
-export function rebaseQueuedAction(action: QueuedStockAction, latestUpdatedAt: string | null): QueuedStockAction {
-  return latestUpdatedAt ? { ...action, baseUpdatedAt: latestUpdatedAt } : action;
+ * 409 against the user's own earlier queued movement. Replaying may rebase a
+ * later action onto the timestamp the server returned for a previous action on
+ * the same item, but only when both were queued from the same view of the item
+ * (their queued baseUpdatedAt values match): then the only server change
+ * between the two is the user's own, so the rebase is safe. When the views
+ * differ the queued base stands, so a genuine conflict still surfaces as 409.
+ */
+export interface RebaseBaseline {
+  /** The baseUpdatedAt the previous action carried when it was queued. */
+  queuedBase: string | null;
+  /** The updatedAt the server returned after replaying that action. */
+  returnedUpdatedAt: string;
+}
+
+export function rebaseQueuedAction(action: QueuedStockAction, baseline: RebaseBaseline | null): QueuedStockAction {
+  return baseline && baseline.returnedUpdatedAt && baseline.queuedBase === action.baseUpdatedAt
+    ? { ...action, baseUpdatedAt: baseline.returnedUpdatedAt }
+    : action;
 }
 
 /** Replay queued mutations in creation order. Stops on the first permanent
@@ -189,10 +202,12 @@ export async function syncQueue(
 ): Promise<SyncResult> {
   const actions = await listQueuedActions(userId, houseId);
   let synced = 0;
-  const latestByItem = new Map<string, string>();
+  // Per item, the queued baseline and the server timestamp of the last
+  // successfully replayed action; see rebaseQueuedAction for the rebase rule.
+  const baselineByItem = new Map<string, RebaseBaseline>();
   for (const action of actions) {
     try {
-      const rebased = rebaseQueuedAction(action, latestByItem.get(action.itemId) ?? null);
+      const rebased = rebaseQueuedAction(action, baselineByItem.get(action.itemId) ?? null);
       const detail = await api<{ updatedAt?: string }>(`/api/items/${action.itemId}/stock`, {
         method: "POST",
         body: {
@@ -201,7 +216,7 @@ export async function syncQueue(
           baseUpdatedAt: rebased.baseUpdatedAt ?? undefined,
         },
       });
-      if (detail?.updatedAt) latestByItem.set(action.itemId, detail.updatedAt);
+      if (detail?.updatedAt) baselineByItem.set(action.itemId, { queuedBase: action.baseUpdatedAt, returnedUpdatedAt: detail.updatedAt });
       await removeQueuedAction(action.id);
       synced++;
       onProgress?.(synced, actions.length);

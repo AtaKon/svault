@@ -39,21 +39,44 @@ test("transient sync failures back off exponentially and cap at 30 seconds", () 
   assert.equal(syncBackoffMs(0), 1000);
 });
 
-test("a later queued action is rebased onto the timestamp the server just returned", () => {
-  // The user queued "add" and then "set" on the same item; the add bumps
-  // updated_at server-side, so the set must not keep the add's old baseline.
+test("a later queued action from the same view is rebased onto the timestamp the server just returned", () => {
+  // The user queued "add" and then "set" on the same item from the same view
+  // (both carry baseUpdatedAt T0); the add bumps updated_at server-side, so
+  // the set must not keep the add's old baseline.
   const queued = action({ id: "q_2", body: { action: "set", target: 300 } });
-  const rebased = rebaseQueuedAction(queued, "2026-01-02T00:00:00.000Z");
+  const rebased = rebaseQueuedAction(queued, {
+    queuedBase: "2026-01-01T00:00:00.000Z",
+    returnedUpdatedAt: "2026-01-02T00:00:00.000Z",
+  });
   assert.equal(rebased.baseUpdatedAt, "2026-01-02T00:00:00.000Z");
   // The rest of the action is untouched.
   assert.equal(rebased.id, "q_2");
   assert.deepEqual(rebased.body, queued.body);
 });
 
-test("without a fresher timestamp the queued action keeps its own baseline", () => {
+test("a later queued action from a different view keeps its own baseline", () => {
+  // The second action was queued after the app saw a newer item (for example
+  // a change someone else made); rebasing it would hide that change, so the
+  // queued base stands and a genuine conflict can still surface as 409.
+  const queued = action({ id: "q_5", baseUpdatedAt: "2026-01-03T00:00:00.000Z" });
+  const rebased = rebaseQueuedAction(queued, {
+    queuedBase: "2026-01-01T00:00:00.000Z",
+    returnedUpdatedAt: "2026-01-02T00:00:00.000Z",
+  });
+  assert.equal(rebased.baseUpdatedAt, "2026-01-03T00:00:00.000Z");
+});
+
+test("without a previous success the queued action keeps its own baseline", () => {
   const queued = action({ id: "q_3" });
   assert.equal(rebaseQueuedAction(queued, null).baseUpdatedAt, queued.baseUpdatedAt);
   // The first action on an item in a replay batch has nothing to rebase onto.
   const withoutBase = action({ id: "q_4", baseUpdatedAt: null });
   assert.equal(rebaseQueuedAction(withoutBase, null).baseUpdatedAt, null);
+  // A missing server timestamp is not a rebase either: there is nothing newer
+  // to trust, so the queued baseline decides.
+  const noTimestamp = action({ id: "q_6" });
+  assert.equal(
+    rebaseQueuedAction(noTimestamp, { queuedBase: noTimestamp.baseUpdatedAt, returnedUpdatedAt: "" }).baseUpdatedAt,
+    noTimestamp.baseUpdatedAt,
+  );
 });
