@@ -46,14 +46,14 @@ export async function startLiveQrScan(
   const Detector = (globalThis as { BarcodeDetector?: NativeQrDetectorClass }).BarcodeDetector;
   let detector: InstanceType<NativeQrDetectorClass> | null = null;
   let stream: MediaStream | undefined;
-  let track: MediaStreamTrack;
+  let track: MediaStreamTrack | undefined = undefined;
   let scanning = false;
   let nativeFailures = 0;
   let workerFailures = 0;
   let canvas: HTMLCanvasElement | null = null;
   let worker: Worker | undefined;
   let interval: number | undefined;
-  const stop = () => {
+  function stop() {
     signal.removeEventListener("abort", stop);
     track?.removeEventListener("ended", failScan);
     session.abort(SCAN_STOPPED);
@@ -74,12 +74,12 @@ export async function startLiveQrScan(
     canvas = null;
     worker?.terminate();
     worker = undefined;
-  };
-  const failScan = () => {
+  }
+  function failScan() {
     if (sessionSignal.aborted) return;
     stop();
     onScanError?.();
-  };
+  }
 
   const waitForResponse = <T>(request: () => Promise<T>) => {
     sessionSignal.throwIfAborted();

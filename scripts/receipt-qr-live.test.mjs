@@ -377,9 +377,10 @@ for (const [failureMode, testName] of [
   ["throw", "a synchronous playback error preserves the cause and releases the stream"],
   ["abort", "closing settles startup even when playback is stalled"],
   ["timeout", "playback that times out releases the stream"],
+  ["ended", "a camera that ends during startup is released before capture starts"],
 ]) {
   test(testName, async (t) => {
-    const track = Object.assign(new EventTarget(), { stop: t.mock.fn() });
+    const track = Object.assign(new EventTarget(), { stop: t.mock.fn(), readyState: "live" });
     const stream = { getTracks: () => [track], getVideoTracks: () => [track] };
     const playing = Promise.withResolvers();
     const playback = Promise.withResolvers();
@@ -422,6 +423,10 @@ for (const [failureMode, testName] of [
     } else if (failureMode === "timeout") {
       expirePlayback();
       await assert.rejects(pending, { message: "Could not play the camera preview" });
+    } else if (failureMode === "ended") {
+      track.readyState = "ended";
+      playback.resolve();
+      await assert.rejects(pending, { message: "The camera stopped before scanning began" });
     } else {
       if (failureMode === "rejection") playback.reject(error);
       await assert.rejects(pending, (failure) => failure.cause === error);
