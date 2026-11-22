@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useId,
   useState,
   type ButtonHTMLAttributes,
   type HTMLAttributes,
@@ -10,6 +11,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { Icon, type IconName } from "./icons";
+import { useDialogFocus } from "./useDialogFocus";
 import { useI18n } from "@/i18n";
 
 export function cn(...parts: (string | false | null | undefined)[]) {
@@ -416,36 +418,33 @@ export function Sheet({
   wide?: boolean;
 }) {
   const { t } = useI18n();
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", onKey);
-    const previous = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.removeEventListener("keydown", onKey);
-      document.body.style.overflow = previous;
-    };
-  }, [open, onClose]);
+  const dialogRef = useDialogFocus(open, onClose);
+  // A stable id for this sheet instance so the dialog can name its title.
+  const titleId = useId();
 
   if (!open) return null;
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-4">
       <div className="absolute inset-0 bg-black/45 backdrop-blur-[2px] fade-in" onClick={onClose} aria-hidden="true" />
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
+        aria-labelledby={title ? titleId : undefined}
+        tabIndex={-1}
         className={cn(
-          "relative flex max-h-[92dvh] w-full flex-col overflow-hidden rounded-t-3xl border border-line bg-surface sheet-in sm:rounded-3xl",
+          "relative flex max-h-[92dvh] w-full flex-col overflow-hidden rounded-t-3xl border border-line bg-surface sheet-in focus:outline-none sm:rounded-3xl",
           wide ? "sm:max-w-2xl" : "sm:max-w-lg",
         )}
       >
         {(title || description) && (
           <div className="flex items-start justify-between gap-4 border-b border-line px-5 pb-3 pt-4">
             <div className="min-w-0">
-              {title && <div className="font-display text-xl leading-tight">{title}</div>}
+              {title && (
+                <div id={titleId} className="font-display text-xl leading-tight">
+                  {title}
+                </div>
+              )}
               {description && <div className="mt-0.5 text-xs text-muted">{description}</div>}
             </div>
             <IconButton icon="close" label={t("Close")} onClick={onClose} className="-mr-1.5 -mt-0.5" />
