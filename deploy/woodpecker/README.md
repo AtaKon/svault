@@ -180,75 +180,9 @@ esac
 exec sudo -n /mnt/Storage/apps/woodpecker/bin/svault-deploy "$SHA"
 ```
 
-Create `/mnt/Storage/apps/woodpecker/bin/svault-deploy`:
-
-```sh
-#!/bin/sh
-set -eu
-umask 077
-
-SHA=${1:?missing commit}
-case "$SHA" in
-  *[!0-9a-f]*|'') echo "invalid commit" >&2; exit 64 ;;
-esac
-[ "${#SHA}" -eq 40 ] || { echo "invalid commit" >&2; exit 64; }
-
-STACK_DIR=/mnt/Storage/stacks/svault
-ENV_FILE=$STACK_DIR/.env
-COMPOSE_FILE=$STACK_DIR/compose.yaml
-REGISTRY=127.0.0.1:5000
-IMAGE_NAME=registry:5000/svault
-PASSWORD_FILE=/mnt/Storage/stacks/woodpecker/secrets/registry_password
-
-exec 9>/var/lock/svault-deploy.lock
-flock -n 9 || { echo "another deploy is running" >&2; exit 75; }
-
-TMPD=$(mktemp -d)
-trap 'rm -rf "$TMPD"' EXIT
-export DOCKER_CONFIG=$TMPD/docker
-mkdir -p "$DOCKER_CONFIG"
-
-PREV=$(sed -n 's/^SVAULT_IMAGE=//p' "$ENV_FILE" | tail -1)
-[ -n "$PREV" ] || PREV=svault:1.1.10
-
-docker login "$REGISTRY" -u ci --password-stdin < "$PASSWORD_FILE" >/dev/null
-docker pull "$REGISTRY/svault:$SHA"
-docker tag "$REGISTRY/svault:$SHA" "$IMAGE_NAME:$SHA"
-
-TMP_ENV=$(mktemp "$STACK_DIR/.env.XXXXXX")
-sed "s|^SVAULT_IMAGE=.*|SVAULT_IMAGE=$IMAGE_NAME:$SHA|" "$ENV_FILE" > "$TMP_ENV"
-chmod 660 "$TMP_ENV"
-mv "$TMP_ENV" "$ENV_FILE"
-
-cd "$STACK_DIR"
-if ! docker compose -f "$COMPOSE_FILE" up -d --no-deps svault; then
-  echo "compose failed, rolling back to $PREV" >&2
-  sed "s|^SVAULT_IMAGE=.*|SVAULT_IMAGE=$PREV|" "$ENV_FILE" > "$TMP_ENV"
-  chmod 660 "$TMP_ENV"
-  mv "$TMP_ENV" "$ENV_FILE"
-  docker compose -f "$COMPOSE_FILE" up -d --no-deps svault || true
-  exit 1
-fi
-
-for _ in $(seq 1 45); do
-  STATUS=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' svault 2>/dev/null || echo missing)
-  if [ "$STATUS" = healthy ]; then
-    logger -t svault-deploy "deployed $IMAGE_NAME:$SHA"
-    echo "deployed $IMAGE_NAME:$SHA"
-    exit 0
-  fi
-  [ "$STATUS" = exited ] && break
-  sleep 2
-done
-
-echo "health check failed, rolling back to $PREV" >&2
-sed "s|^SVAULT_IMAGE=.*|SVAULT_IMAGE=$PREV|" "$ENV_FILE" > "$TMP_ENV"
-chmod 660 "$TMP_ENV"
-mv "$TMP_ENV" "$ENV_FILE"
-docker compose -f "$COMPOSE_FILE" up -d --no-deps svault || true
-logger -t svault-deploy "deploy failed for $IMAGE_NAME:$SHA, rolled back to $PREV"
-exit 1
-```
+Copy [`svault-deploy.sh`](./svault-deploy.sh) to `/mnt/Storage/apps/woodpecker/bin/svault-deploy` with the
+`install` command below. It is not repeated here so the two copies cannot drift apart. After a healthy
+deploy it also removes old svault images, keeping the current and previous commit for rollback.
 
 Then:
 
@@ -298,6 +232,29 @@ A command like `ssh ... "id"` must be rejected by the forced command.
 
 Keep `./svault-ci-deploy` private. Paste its contents into the Woodpecker repository secret
 `svault_deploy_ssh_key` and delete the local copy.
+
+## Keep the Docker disk from filling up
+
+Kaniko needs free space on the Docker dataset (`Storage/ix-apps`) to snapshot the build. When it
+runs out, the `publish` step dies with `no space left on device` in the Docker daemon log, and
+Woodpecker keeps showing the step as running because the agent never reports a result.
+
+Two things keep the dataset in check:
+
+- `svault-deploy` removes old svault images after every healthy deploy and keeps only the current
+  and previous commit.
+- [`docker-weekly-prune.sh`](./docker-weekly-prune.sh) removes unused images and build cache older
+  than a week. Install it and schedule it weekly as root in TrueNAS under
+  **System > Advanced > Cron Jobs**:
+
+```bash
+sudo install -o root -g root -m 755 docker-weekly-prune.sh \
+  /mnt/Storage/apps/woodpecker/bin/docker-weekly-prune
+```
+
+Check the free space with `zfs list -o name,used,avail Storage/ix-apps`. The pool can show free
+space while this dataset has almost none, because reservations on other datasets (for example
+`Storage/media`) hold space that only those datasets can use.
 
 ## Activate the repository in Woodpecker
 
@@ -412,6 +369,7 @@ are disposable if you keep the source; the Woodpecker database is not.
 | Deploy rolls back | The new image is unhealthy. Inspect `docker logs svault`; the previous image is restored automatically. |
 | Certificate fails while Cloudflare is proxied | Set the record to **DNS only**, issue the certificate, then switch back to **Proxied**. |
 | Agent cannot pull images | The Docker daemon pulls images, not the agent; check the Docker daemon logs and disk space. |
+| `publish` shows running forever, log ends at `Taking snapshot of full filesystem` | The Docker dataset is full. See [Keep the Docker disk from filling up](#keep-the-docker-disk-from-filling-up), free space, cancel and restart the pipeline. |
 
 ## Rotating secrets
 
