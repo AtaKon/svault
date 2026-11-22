@@ -99,6 +99,25 @@ const NATIVE_FORMAT_NAMES: Record<string, string> = {
 };
 
 /**
+ * How long the native detector loop may run without ever detecting a code
+ * before ZXing takes over for the rest of the session.
+ */
+export const NATIVE_IDLE_FALLBACK_MS = 6000;
+
+/**
+ * Some Android BarcodeDetector implementations resolve [] for every 1D
+ * barcode they cannot read instead of throwing, so a session could sit on
+ * a detector that never finds anything. Such a loop hands the frames to
+ * ZXing once it has run this long without a single detection; a detector
+ * that has detected any code in the session is trusted and never retired
+ * on idle.
+ */
+export function nativeIdleFallback(startedAt: number, lastDetectionAt: number | null, now: number): boolean {
+  if (lastDetectionAt !== null) return false;
+  return now - startedAt >= NATIVE_IDLE_FALLBACK_MS;
+}
+
+/**
  * Map a native BarcodeDetector format name to the ZXing BarcodeFormat enum
  * name callers already receive (EAN_13, UPC_A, CODE_128, ...). Unknown names
  * fall back to the same upper-snake-case shape so a new native format still

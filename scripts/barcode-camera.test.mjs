@@ -3,6 +3,8 @@ import { createRequire } from "node:module";
 import { test } from "node:test";
 import {
   nativeFormatName,
+  nativeIdleFallback,
+  NATIVE_IDLE_FALLBACK_MS,
   pickRearCamera,
   PRODUCT_BARCODE_FORMATS,
   rearCameras,
@@ -103,6 +105,26 @@ test("nativeFormatName maps BarcodeDetector names to ZXing enum names", () => {
 
 test("nativeFormatName keeps a familiar shape for unknown native formats", () => {
   assert.equal(nativeFormatName("new_format"), "NEW_FORMAT");
+});
+
+test("nativeIdleFallback retires a detector only after the full grace period", () => {
+  const startedAt = 1_000;
+  assert.equal(nativeIdleFallback(startedAt, null, startedAt + NATIVE_IDLE_FALLBACK_MS - 1), false);
+  assert.equal(nativeIdleFallback(startedAt, null, startedAt + NATIVE_IDLE_FALLBACK_MS), true);
+  assert.equal(nativeIdleFallback(startedAt, null, startedAt + NATIVE_IDLE_FALLBACK_MS + 1), true);
+});
+
+test("nativeIdleFallback never retires a detector that has detected a code", () => {
+  // One detection anywhere in the session trusts the detector for good,
+  // no matter how long a later quiet stretch lasts.
+  const startedAt = 1_000;
+  assert.equal(nativeIdleFallback(startedAt, 4_000, startedAt + NATIVE_IDLE_FALLBACK_MS), false);
+  assert.equal(nativeIdleFallback(startedAt, 4_000, Number.MAX_SAFE_INTEGER), false);
+});
+
+test("nativeIdleFallback keeps waiting while the loop has just started", () => {
+  assert.equal(nativeIdleFallback(1_000, null, 1_001), false);
+  assert.equal(nativeIdleFallback(1_000, null, 999), false);
 });
 
 test("every product format maps to an existing ZXing BarcodeFormat name", () => {

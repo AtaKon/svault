@@ -6,7 +6,7 @@ import { Button, Spinner, cn } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { useI18n } from "@/i18n";
 import { parseLabelScan } from "@shared/label-links";
-import { nativeFormatName, PRODUCT_BARCODE_FORMATS } from "@/barcode-camera";
+import { nativeFormatName, nativeIdleFallback, PRODUCT_BARCODE_FORMATS } from "@/barcode-camera";
 import { openBarcodeCamera, setBarcodeTorch, stopBarcodeStream, storeLensId } from "@/barcode-camera-stream";
 import { nextDecodeFailureCount, nextTorchTarget, resolveTorchState, type TorchState } from "@/receipt-qr-live-state";
 
@@ -123,6 +123,11 @@ export function BarcodeScanner({
     let nativeInterval: number | undefined;
     let detector: InstanceType<NativeBarcodeDetectorClass> | null = null;
     let nativeFailures = 0;
+    // The native loop's own clock: when it started and when it last detected
+    // any code. A detector that never detects anything for long enough is
+    // retired by the idle rule in scanNativeFrame.
+    let nativeStartedAt = 0;
+    let lastNativeDetectionAt: number | null = null;
     let scanning = false;
     let released = false;
 
@@ -222,6 +227,22 @@ export function BarcodeScanner({
       zxingControls = controls;
     };
 
+    // The single path both native fallbacks take over to ZXing: clear the
+    // interval and null the detector BEFORE awaiting startZxing(), so no
+    // further native frame can start while ZXing boots up.
+    const switchToZxing = async () => {
+      if (nativeInterval !== undefined) {
+        window.clearInterval(nativeInterval);
+        nativeInterval = undefined;
+      }
+      detector = null;
+      try {
+        await startZxing();
+      } catch (error) {
+        setError(friendlyCameraError(error, tRef.current));
+      }
+    };
+
     const scanNativeFrame = async () => {
       const active = detector;
       if (!active || released || scanning) return;
@@ -254,27 +275,27 @@ export function BarcodeScanner({
           );
         });
         nativeFailures = nextDecodeFailureCount(nativeFailures, false);
+        // Some Android detectors resolve [] for every 1D barcode they cannot
+        // read instead of throwing, so a session could run on a detector
+        // that never finds anything. After the idle grace period without a
+        // single detection, hand the frames to ZXing for the rest of the
+        // session; a detector that has detected any code is trusted.
+        if (codes.length > 0) {
+          lastNativeDetectionAt = Date.now();
+        } else if (nativeIdleFallback(nativeStartedAt, lastNativeDetectionAt, Date.now())) {
+          // `scanning` stays true until the finally below, so a frame
+          // already in flight bails instead of decoding alongside the
+          // ZXing loop.
+          await switchToZxing();
+          return;
+        }
       } catch {
         if (released) return;
         // Repeated native failures retire the detector for this session and
         // hand the frames to ZXing instead.
         nativeFailures = nextDecodeFailureCount(nativeFailures, true);
         if (nativeFailures >= MAX_CONSECUTIVE_NATIVE_FAILURES) {
-          // Ordering matters: clear the interval and null the detector BEFORE
-          // awaiting startZxing(), so no further native frame can start while
-          // ZXing boots up. `scanning` also stays true until the finally below,
-          // so a frame already in flight bails instead of decoding alongside
-          // the ZXing loop.
-          if (nativeInterval !== undefined) {
-            window.clearInterval(nativeInterval);
-            nativeInterval = undefined;
-          }
-          detector = null;
-          try {
-            await startZxing();
-          } catch (error) {
-            setError(friendlyCameraError(error, tRef.current));
-          }
+          await switchToZxing();
         }
       } finally {
         scanning = false;
@@ -335,6 +356,7 @@ export function BarcodeScanner({
         if (signal.aborted) return;
         if (Detector && formats) {
           detector = new Detector({ formats });
+          nativeStartedAt = Date.now();
           nativeInterval = window.setInterval(() => void scanNativeFrame(), NATIVE_SCAN_INTERVAL_MS);
         } else {
           await startZxing();
