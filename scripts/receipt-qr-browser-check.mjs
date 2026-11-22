@@ -274,6 +274,14 @@ try {
   assert.equal(await scanCode.isEnabled(), true);
   await reset.click();
 
+  await setFixture({ workerFaults: ["post", "error"] });
+  await scan.click();
+  await page.getByText("Could not scan the QR code.").waitFor();
+  await retry.waitFor();
+  assert.deepEqual(await page.evaluate(() => workerFaults), []);
+  assert.equal(await page.evaluate(() => lastQrCamera.getTracks().every((track) => track.readyState === "ended")), true);
+  await choosePhoto();
+
   await setFixture({ failReadback: true });
   await scan.click();
   await page.getByText("Could not scan the QR code.").waitFor();

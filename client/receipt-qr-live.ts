@@ -74,6 +74,7 @@ export async function startLiveQrScan(
     sessionSignal.throwIfAborted();
     return new Promise<T>((resolve, reject) => {
       let settled = false;
+      const timeout = window.setTimeout(() => fail(RESPONSE_TIMED_OUT), RESPONSE_TIMEOUT_MS);
       const finish = (complete: () => void) => {
         if (settled) return;
         settled = true;
@@ -83,7 +84,6 @@ export async function startLiveQrScan(
       };
       const fail = (error: unknown) => finish(() => reject(error));
       const cancel = () => fail(SCAN_STOPPED);
-      const timeout = window.setTimeout(() => fail(RESPONSE_TIMED_OUT), RESPONSE_TIMEOUT_MS);
       sessionSignal.addEventListener("abort", cancel, { once: true });
       try {
         // Keep both reply handlers attached even after timeout or cancellation.
@@ -103,9 +103,9 @@ export async function startLiveQrScan(
       video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } },
     });
     // Release a stream that arrived after cancellation before attaching it to the video.
-    if (signal.aborted) {
+    if (sessionSignal.aborted) {
       stopCamera(acquired);
-      throw signal.reason;
+      throw sessionSignal.reason;
     }
     stream = acquired;
     track = stream.getVideoTracks()[0];

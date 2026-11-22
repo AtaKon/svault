@@ -373,6 +373,7 @@ test("closing while awaiting camera permission releases the late stream", async 
 
 for (const [failureMode, testName] of [
   ["rejection", "failed playback releases the stream"],
+  ["throw", "a synchronous playback error preserves the cause and releases the stream"],
   ["abort", "closing settles startup even when playback is stalled"],
   ["timeout", "playback that times out releases the stream"],
 ]) {
@@ -381,9 +382,11 @@ for (const [failureMode, testName] of [
     const stream = { getTracks: () => [track], getVideoTracks: () => [track] };
     const playing = Promise.withResolvers();
     const playback = Promise.withResolvers();
+    const error = new DOMException("Playback failed", "NotAllowedError");
     replaceGlobal(t, "BarcodeDetector", undefined);
     replaceGlobal(t, "navigator", { mediaDevices: { getUserMedia: async () => stream } });
     const setInterval = t.mock.fn();
+    const clearTimeout = t.mock.fn();
     let expirePlayback;
     replaceGlobal(t, "window", {
       setTimeout(callback, delay) {
@@ -391,13 +394,14 @@ for (const [failureMode, testName] of [
         expirePlayback = callback;
         return 1;
       },
-      clearTimeout() {},
+      clearTimeout,
       setInterval,
     });
     const video = {
       srcObject: null,
       play() {
         playing.resolve();
+        if (failureMode === "throw") throw error;
         return playback.promise;
       },
     };
@@ -406,7 +410,6 @@ for (const [failureMode, testName] of [
     await playing.promise;
     assert.equal(video.srcObject, stream);
 
-    const error = new DOMException("Playback failed", "NotAllowedError");
     if (failureMode === "abort") {
       scan.abort();
       await assert.rejects(pending, { name: "AbortError" });
@@ -416,9 +419,10 @@ for (const [failureMode, testName] of [
       await assert.rejects(pending, { message: "Could not play the camera preview" });
       playback.resolve();
     } else {
-      playback.reject(error);
+      if (failureMode === "rejection") playback.reject(error);
       await assert.rejects(pending, (failure) => failure.cause === error);
     }
+    assert.deepEqual(clearTimeout.mock.calls.map(({ arguments: args }) => args), [[1]]);
     assert.equal(setInterval.mock.callCount(), 0);
     assert.equal(track.stop.mock.callCount(), 1);
     assert.equal(video.srcObject, null);
