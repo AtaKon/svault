@@ -1,5 +1,5 @@
 import { DietWarnings } from "@/components/diet-profile";
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/api";
 import { useHouse } from "@/state";
@@ -51,18 +51,22 @@ export function PlanPage() {
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [ideas, setIdeas] = useState<SavedIdeas[]>([]);
   const [loading, setLoading] = useState(true);
+  // Live refreshes call load() in the background; skeletons are shown only
+  // until the first data arrives, so the week never flashes empty.
+  const hasData = useRef(false);
   const [adding, setAdding] = useState<{ day: string; slot: MealSlot } | null>(null);
   const [moveTarget, setMoveTarget] = useState<MealPlanEntry | null>(null);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
-    setLoading(true);
+    if (!hasData.current) setLoading(true);
     try {
       const [plan, recipeList, ideaList] = await Promise.all([
         api<MealPlanWeek>(`/api/houses/${house.id}/plan?week=${weekStart}`),
         api<Recipe[]>(`/api/houses/${house.id}/recipes`),
         api<SavedIdeas[]>(`/api/houses/${house.id}/ideas`),
       ]);
+      hasData.current = true;
       setWeek(plan);
       setRecipes(recipeList);
       setIdeas(ideaList);
@@ -347,16 +351,32 @@ function AddPlanSheet({
     [ideas],
   );
 
+  // Live refreshes swap the recipe and idea lists while the sheet is open;
+  // the form is seeded only when the target itself changes, reading the lists
+  // through refs so an edit in progress is never wiped.
+  const recipesRef = useRef(recipes);
+  recipesRef.current = recipes;
+  const flatIdeasRef = useRef(flatIdeas);
+  flatIdeasRef.current = flatIdeas;
+  const seeded = useRef(false);
+
   useEffect(() => {
-    if (!target) return;
-    setKind(recipes.length ? "recipe" : flatIdeas.length ? "idea" : "custom");
-    setRecipeId(recipes[0]?.id ?? "");
-    setIdeaKey(flatIdeas[0]?.key ?? "");
+    if (!target) {
+      seeded.current = false;
+      return;
+    }
+    if (seeded.current) return;
+    seeded.current = true;
+    const recipesNow = recipesRef.current;
+    const ideasNow = flatIdeasRef.current;
+    setKind(recipesNow.length ? "recipe" : ideasNow.length ? "idea" : "custom");
+    setRecipeId(recipesNow[0]?.id ?? "");
+    setIdeaKey(ideasNow[0]?.key ?? "");
     setTitle("");
     setServings("");
     setDay(target.day);
     setSlot(target.slot);
-  }, [target, recipes, flatIdeas]);
+  }, [target]);
 
   useEffect(() => {
     if (kind === "recipe") {
@@ -510,9 +530,17 @@ function MovePlanSheet({
   const [day, setDay] = useState("");
   const [slot, setSlot] = useState<MealSlot>("dinner");
   const [busy, setBusy] = useState(false);
+  // A live refresh recreates the entry objects; seed the form only when the
+  // entry itself changes so an edit in progress is never wiped.
+  const seededFor = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!entry) return;
+    if (!entry) {
+      seededFor.current = null;
+      return;
+    }
+    if (seededFor.current === entry.id) return;
+    seededFor.current = entry.id;
     setDay(entry.day);
     setSlot(entry.slot);
   }, [entry]);
