@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Button, IconButton, Spinner } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { useI18n } from "@/i18n";
-import type { LiveQrScanHandle, TorchState } from "@/receipt-qr-live";
+import { nextTorchTarget, resolveTorchState, type LiveQrScanHandle, type TorchState } from "@/receipt-qr-live";
 import { matchReceiptQrLink, type ReceiptQrLink } from "@shared/receipt-qr-links";
 
 function friendlyCameraError(error: unknown, t: (key: string) => string): string {
@@ -139,12 +139,13 @@ export function ReceiptQrScanner({
   const toggleTorch = async () => {
     const handle = scanRef.current;
     if (!handle || pendingTorchRef.current === handle) return;
-    const next = !(torch.reported ?? torch.requested);
+    const next = nextTorchTarget(torch);
     pendingTorchRef.current = handle;
     setTorchPending(true);
     try {
       const state = await handle.setTorch(next);
-      if (state && scanRef.current === handle) setTorch(state);
+      // A failed or canceled request reports null and keeps the last state.
+      if (scanRef.current === handle) setTorch(resolveTorchState(torch, state));
     } catch {
       // Keep the last reported state if the camera request fails.
     } finally {

@@ -14,6 +14,16 @@ const cameraConstraint = (setting: CameraSettings): MediaTrackConstraints => ({ 
 
 export type TorchState = { requested: boolean; reported: boolean | undefined };
 
+/** The torch target the Light button asks for next: whatever is not in effect. */
+export function nextTorchTarget(state: TorchState): boolean {
+  return !(state.reported ?? state.requested);
+}
+
+/** A failed or canceled request keeps the last state; a reply replaces it. */
+export function resolveTorchState(previous: TorchState, outcome: TorchState | null): TorchState {
+  return outcome ?? previous;
+}
+
 export interface LiveQrScanHandle {
   /** Release the camera and stop reading frames. Safe to call again. */
   stop(): void;

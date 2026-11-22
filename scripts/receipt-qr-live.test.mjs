@@ -26,7 +26,7 @@ async function importBundled(entry) {
   return import("data:text/javascript;base64," + Buffer.from(chunk.code).toString("base64"));
 }
 
-const [qr, { startLiveQrScan }] = await Promise.all([
+const [qr, { startLiveQrScan, nextTorchTarget, resolveTorchState }] = await Promise.all([
   importBundled("client/receipt-qr.ts"),
   importBundled("client/receipt-qr-live.ts"),
 ]);
@@ -627,4 +627,21 @@ test("grayscale reuses storage only when it fits the current pixels", () => {
   const wide = qr.rgbaToGray(new Uint8ClampedArray(16), 2, 2, gray);
   assert.notEqual(wide.gray, gray);
   assert.deepEqual([...wide.gray], [0, 0, 0, 0]);
+});
+
+test("the torch target flips whatever state the camera reported or was asked for", () => {
+  assert.equal(nextTorchTarget({ requested: false, reported: false }), true);
+  assert.equal(nextTorchTarget({ requested: true, reported: true }), false);
+  // Without a read-back the requested state is the one in effect.
+  assert.equal(nextTorchTarget({ requested: true, reported: undefined }), false);
+  assert.equal(nextTorchTarget({ requested: false, reported: undefined }), true);
+});
+
+test("a failed torch request keeps the last state and a reply replaces it", () => {
+  const last = { requested: true, reported: true };
+  // setTorch reports a failed or canceled request as null.
+  assert.equal(resolveTorchState(last, null), last);
+  // A reply without a read-back leaves the reported state unknown.
+  assert.deepEqual(resolveTorchState(last, { requested: false, reported: undefined }), { requested: false, reported: undefined });
+  assert.deepEqual(resolveTorchState(last, { requested: false, reported: false }), { requested: false, reported: false });
 });
