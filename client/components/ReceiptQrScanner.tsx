@@ -217,6 +217,9 @@ export function ReceiptQrScanner({
       />
 
       {torchAvailable && (
+        // A successful request can come back without a camera read-back, so
+        // the reported state stays unknown: the button intentionally keeps
+        // showing "mixed" instead of guessing the requested value.
         <IconButton
           type="button"
           onClick={() => void toggleTorch()}
