@@ -166,6 +166,7 @@ test("live frames are bounded and serialized, with native retry before switching
   handle.stop();
   handle.stop();
   scan.abort();
+  track.dispatchEvent(new Event("ended"));
   await pendingSoftware;
   assert.equal(canceledWorker.onmessage, null);
   canceledReply({ data: "reply after stop" });
@@ -253,12 +254,17 @@ test("live frames are bounded and serialized, with native retry before switching
   assert.equal(postFrame.mock.callCount(), previousPosts);
 
   const received = [];
-  detect.mock.mockImplementation(async () => { throw failure; });
+  const lateNative = Promise.withResolvers();
+  detect.mock.mockImplementation(() => lateNative.promise);
   softwareStarted = Promise.withResolvers();
   const restarted = await startLiveQrScan(video, (payload) => received.push(payload), new AbortController().signal);
+  const oldNativeFrame = frame();
+  expireFrame();
+  await oldNativeFrame;
   const nextFrame = frame();
   await softwareStarted.promise;
   assert.notEqual(postFrame.mock.calls.at(-1).this, stalledWorker);
+  lateNative.resolve([{ format: "qr_code", rawValue: "stale native result" }]);
   lateReply({ data: "stale worker reply" });
   await Promise.resolve();
   assert.deepEqual(received, []);
