@@ -288,6 +288,11 @@ export function BarcodeScanner({
         setTorchAvailable(handle.torchAvailable);
         setRearLenses(handle.rearCameras);
         setActiveLensId(handle.deviceId);
+        // The requested lens may have been refused and the stream fallen
+        // back to the automatic pick; drop the stale request so the lens
+        // state matches the camera that is actually open. The null guard
+        // keeps this from looping: a cleared lens never differs again.
+        if (lens !== null && handle.deviceId !== lens) setLens(null);
 
         // Chrome Android's native BarcodeDetector is far faster than ZXing;
         // ZXing takes over when it is missing or fails repeatedly.
