@@ -563,21 +563,22 @@ describe("recipe weight and calorie estimates", () => {
 
 describe("recipe link import", () => {
   it("rejects an oversized streamed page without a Content-Length", async () => {
-    const originalFetch = globalThis.fetch;
-    const previous = process.env.SV_OUTBOUND_ALLOW_PRIVATE;
-    process.env.SV_OUTBOUND_ALLOW_PRIVATE = "true";
-    globalThis.fetch = (async () => new Response(new ReadableStream({
-      start(controller) {
-        controller.enqueue(new Uint8Array(3_000_001));
-        controller.close();
-      },
-    }), { headers: { "content-type": "text/html" } })) as typeof fetch;
+    const { setOutboundResolverForTests } = await import("../lib/outbound.js");
+    // Recipe links refuse private targets unconditionally now, so let the
+    // guarded request reach this test's local server and stream past the cap.
+    const site = http.createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "text/html" });
+      res.write("<html><body>");
+      res.end(Buffer.alloc(3_000_001, 97));
+    });
+    await new Promise<void>((resolve) => site.listen(0, "127.0.0.1", resolve));
+    const port = (site.address() as import("node:net").AddressInfo).port;
+    setOutboundResolverForTests(undefined, () => false);
     try {
-      await assert.rejects(importRecipeFromUrl("https://example.com/recipe"), /page is too large/);
+      await assert.rejects(importRecipeFromUrl(`http://127.0.0.1:${port}/big`), /page is too large/);
     } finally {
-      globalThis.fetch = originalFetch;
-      if (previous === undefined) delete process.env.SV_OUTBOUND_ALLOW_PRIVATE;
-      else process.env.SV_OUTBOUND_ALLOW_PRIVATE = previous;
+      setOutboundResolverForTests();
+      await new Promise<void>((resolve) => site.close(() => resolve()));
     }
   });
 
@@ -747,6 +748,10 @@ describe("recipe link import", () => {
       await new Promise<void>((resolve) => pageServer.listen(0, "127.0.0.1", () => resolve()));
       const pageAddress = pageServer.address();
       if (!pageAddress || typeof pageAddress === "string") throw new Error("no import page address");
+      // Member-supplied links always refuse private targets; let the guarded
+      // request reach this test's local page server.
+      const { setOutboundResolverForTests } = await import("../lib/outbound.js");
+      setOutboundResolverForTests(undefined, () => false);
       try {
         const preview = await request(`/api/houses/${aiHouse}/recipes/import`, {
           method: "POST",
@@ -759,6 +764,7 @@ describe("recipe link import", () => {
         assert.equal(preview.data.draft.ingredients[0].name, "Flour");
         assert.ok(preview.data.aiCost > 0);
       } finally {
+        setOutboundResolverForTests();
         await new Promise<void>((resolve, reject) => pageServer.close((error) => (error ? reject(error) : resolve())));
       }
     } finally {
@@ -786,6 +792,8 @@ describe("recipe link import", () => {
       await new Promise<void>((resolve) => pageServer.listen(0, "127.0.0.1", () => resolve()));
       const pageAddress = pageServer.address();
       if (!pageAddress || typeof pageAddress === "string") throw new Error("no import page address");
+      const { setOutboundResolverForTests } = await import("../lib/outbound.js");
+      setOutboundResolverForTests(undefined, () => false);
       try {
         aiRequests.length = 0;
         const preview = await request(`/api/houses/${aiHouse}/recipes/import`, {
@@ -800,6 +808,7 @@ describe("recipe link import", () => {
         const prompt = String(aiRequests.at(-1)?.body.messages[1].content ?? "");
         assert.match(prompt, /\[The text was cut off at 12000 characters\.\]/);
       } finally {
+        setOutboundResolverForTests();
         await new Promise<void>((resolve, reject) => pageServer.close((error) => (error ? reject(error) : resolve())));
       }
     } finally {
@@ -5852,6 +5861,10 @@ describe("recipes", () => {
     const pageAddress = pageServer.address();
     if (!pageAddress || typeof pageAddress === "string") throw new Error("no import page address");
     const link = `http://127.0.0.1:${pageAddress.port}/moussaka`;
+    const { setOutboundResolverForTests } = await import("../lib/outbound.js");
+    // Member-supplied links always refuse private targets; let the guarded
+    // request reach this test's local page server.
+    setOutboundResolverForTests(undefined, () => false);
     try {
       const preview = await request(`/api/houses/${houseId}/recipes/import`, { method: "POST", body: { url: link } });
       assert.equal(preview.status, 200);
@@ -5876,6 +5889,7 @@ describe("recipes", () => {
       const removed = await request(`/api/recipes/${saved.data.recipe.id}`, { method: "DELETE" });
       assert.equal(removed.status, 200);
     } finally {
+      setOutboundResolverForTests();
       await new Promise<void>((resolve, reject) => pageServer.close((error) => (error ? reject(error) : resolve())));
     }
   });
@@ -5901,6 +5915,8 @@ describe("recipes", () => {
     const pageAddress = pageServer.address();
     if (!pageAddress || typeof pageAddress === "string") throw new Error("no import page address");
     const link = `http://127.0.0.1:${pageAddress.port}/scheme-soup`;
+    const { setOutboundResolverForTests } = await import("../lib/outbound.js");
+    setOutboundResolverForTests(undefined, () => false);
     try {
       const preview = await request(`/api/houses/${houseId}/recipes/import`, { method: "POST", body: { url: link } });
       assert.equal(preview.status, 200);
@@ -5916,6 +5932,7 @@ describe("recipes", () => {
         `http://127.0.0.1:${pageAddress.port}/covers/soup.jpg`,
       );
     } finally {
+      setOutboundResolverForTests();
       await new Promise<void>((resolve, reject) => pageServer.close((error) => (error ? reject(error) : resolve())));
     }
   });
