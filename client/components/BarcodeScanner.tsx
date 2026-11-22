@@ -62,6 +62,10 @@ export function BarcodeScanner({
   const streamRef = useRef<MediaStream | null>(null);
   const sessionRef = useRef<AbortController | null>(null);
   const pausedRef = useRef(false);
+  // Set right before a recognised label QR navigates away: from that moment
+  // the scanner is done, and neither the visibilitychange handler nor the
+  // camera effect may reopen the camera behind the next page.
+  const navigatingRef = useRef(false);
   const torchPendingRef = useRef<MediaStream | null>(null);
   const [starting, setStarting] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -82,6 +86,9 @@ export function BarcodeScanner({
   useEffect(() => {
     const element = videoRef.current;
     if (!element) return;
+    // A label QR already released the camera for navigation; do not open a
+    // new stream for a dep change (facing mode, epoch, …) on the way out.
+    if (navigatingRef.current) return;
     const session = new AbortController();
     const signal = session.signal;
     sessionRef.current = session;
@@ -143,6 +150,7 @@ export function BarcodeScanner({
       if (formatName === "QR_CODE") {
         const target = parseLabelScan(text, window.location.origin);
         if (target) {
+          navigatingRef.current = true;
           releaseCamera();
           navigate(target.path);
           return;
@@ -310,6 +318,10 @@ export function BarcodeScanner({
   // the camera while hidden and open a fresh stream on the way back.
   useEffect(() => {
     const onVisibilityChange = () => {
+      // A label QR navigation already released the camera; reopening it for
+      // a tab switch on the way to the next page would grab the camera
+      // behind the page the user is navigating to.
+      if (navigatingRef.current) return;
       if (document.visibilityState === "hidden") {
         pausedRef.current = true;
         setStarting(true);
