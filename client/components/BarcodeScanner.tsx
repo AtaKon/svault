@@ -183,10 +183,11 @@ export function BarcodeScanner({
       if (!active || released || scanning) return;
       if (element.readyState < 2 || !element.videoWidth) return;
       scanning = true;
+      let codes: DetectedCode[] | null = null;
       try {
         // detect has no cancellation API; a late reply after the timeout
         // guard is dropped, exactly like the receipt QR scanner does.
-        const codes = await new Promise<DetectedCode[]>((resolve, reject) => {
+        codes = await new Promise<DetectedCode[]>((resolve, reject) => {
           let settled = false;
           const timeout = window.setTimeout(() => {
             if (settled) return;
@@ -209,16 +210,17 @@ export function BarcodeScanner({
           );
         });
         nativeFailures = nextDecodeFailureCount(nativeFailures, false);
-        for (const code of codes) {
-          if (released) return;
-          if (code.rawValue) handleResult(code.rawValue, nativeFormatName(code.format));
-        }
       } catch {
         if (released) return;
         // Repeated native failures retire the detector for this session and
         // hand the frames to ZXing instead.
         nativeFailures = nextDecodeFailureCount(nativeFailures, true);
         if (nativeFailures >= MAX_CONSECUTIVE_NATIVE_FAILURES) {
+          // Ordering matters: clear the interval and null the detector BEFORE
+          // awaiting startZxing(), so no further native frame can start while
+          // ZXing boots up. `scanning` also stays true until the finally below,
+          // so a frame already in flight bails instead of decoding alongside
+          // the ZXing loop.
           if (nativeInterval !== undefined) {
             window.clearInterval(nativeInterval);
             nativeInterval = undefined;
@@ -232,6 +234,14 @@ export function BarcodeScanner({
         }
       } finally {
         scanning = false;
+      }
+      // handleResult runs outside the try/catch that counts native failures:
+      // a throw from it (or from navigate) is not evidence that the detector
+      // is broken, so it must not push the session toward the ZXing fallback.
+      if (!codes || released) return;
+      for (const code of codes) {
+        if (released) return;
+        if (code.rawValue) handleResult(code.rawValue, nativeFormatName(code.format));
       }
     };
 
