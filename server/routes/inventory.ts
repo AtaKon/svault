@@ -1229,7 +1229,9 @@ itemRoutes.post(
       // Serialise stock writes per house, including the idempotency check, the
       // same way the cook route does. Checking the key outside the transaction
       // let a retried request apply twice, and an unlocked transaction let two
-      // removals from the same lot lose an update.
+      // removals from the same lot lose an update. The write lock makes SQLite
+      // take the write reservation at BEGIN IMMEDIATE, so the serialisation is
+      // explicit instead of emerging from the first UPDATE.
       await lockHouseholdLedger(session, item.house_id);
       if (body.idempotencyKey) {
         const previous = await get<any>("SELECT response FROM stock_mutations WHERE house_id = ? AND idempotency_key = ?", [
@@ -1287,13 +1289,20 @@ itemRoutes.post(
         });
       const response = { ...(await itemDetail(item.id, req.user!.id)), lastMovementId: movementId };
       if (body.idempotencyKey) {
-        await run(
+        const recorded = await run(
           "INSERT INTO stock_mutations (id, house_id, idempotency_key, user_id, response, created_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
           [newId("mut"), item.house_id, body.idempotencyKey, req.user!.id, JSON.stringify(response), now()],
         );
+        // Defensive invariant: under the write lock the check above is the
+        // only writer for this key in the transaction, so a skipped insert is
+        // unreachable. If it ever happens, the response was not recorded, so
+        // roll back rather than acknowledge a write that cannot be replayed.
+        if (recorded.changes === 0) {
+          throw new Error("The stock mutation could not be recorded");
+        }
       }
       return { applied: true, response };
-    });
+    }, { writeLock: true });
     // An idempotent replay returns the stored response and intentionally skips side effects: the original request already ran them.
     if (result.applied) await afterStockChange(item.id);
     res.json(result.response);
