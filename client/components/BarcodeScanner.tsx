@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { BrowserMultiFormatReader, type IScannerControls } from "@zxing/browser";
 import { BarcodeFormat, DecodeHintType } from "@zxing/library";
 import { Button, Spinner, cn } from "@/components/ui";
@@ -54,6 +54,7 @@ export function BarcodeScanner({
 }) {
   const { t } = useI18n();
   const navigate = useNavigate();
+  const location = useLocation();
   const videoRef = useRef<HTMLVideoElement>(null);
   const callbackRef = useRef(onDetected);
   callbackRef.current = onDetected;
@@ -64,7 +65,9 @@ export function BarcodeScanner({
   const pausedRef = useRef(false);
   // Set right before a recognised label QR navigates away: from that moment
   // the scanner is done, and neither the visibilitychange handler nor the
-  // camera effect may reopen the camera behind the next page.
+  // camera effect may reopen the camera behind the next page. The location
+  // effect below clears it once the navigation settles, for a label whose
+  // target route keeps this component mounted.
   const navigatingRef = useRef(false);
   const torchPendingRef = useRef<MediaStream | null>(null);
   const [starting, setStarting] = useState(true);
@@ -82,6 +85,16 @@ export function BarcodeScanner({
   const [torchAvailable, setTorchAvailable] = useState(false);
   const [rearLenses, setRearLenses] = useState<{ deviceId: string; label: string }[]>([]);
   const [activeLensId, setActiveLensId] = useState<string | null>(null);
+
+  // A label QR whose target route is the one already shown keeps this
+  // component mounted: the navigation pushes a new history entry (a new
+  // location key) without unmounting the scanner. Once it settles, the flag
+  // is cleared and the camera effect re-runs below, so scanning resumes. A
+  // label that points elsewhere unmounts this component, so the flag never
+  // clears behind a different page.
+  useEffect(() => {
+    navigatingRef.current = false;
+  }, [location.key]);
 
   useEffect(() => {
     const element = videoRef.current;
@@ -312,7 +325,9 @@ export function BarcodeScanner({
       session.abort();
       if (noticeTimer.current) window.clearTimeout(noticeTimer.current);
     };
-  }, [facingMode, attempt, lens, cameraEpoch, t, navigate]);
+    // location.key re-runs the effect once a label navigation to the already
+    // shown route settles (see the location effect above).
+  }, [facingMode, attempt, lens, cameraEpoch, t, navigate, location.key]);
 
   // Galaxy Chrome often shows a black preview after app switching: release
   // the camera while hidden and open a fresh stream on the way back.
