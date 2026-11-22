@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { getEventListeners } from "node:events";
 import { test } from "node:test";
 import { build } from "vite";
 import zxing from "@zxing/library";
@@ -177,8 +178,13 @@ test("live frames are bounded and serialized, with native retry before switching
   const onDecoderError = t.mock.fn();
   const afterTimeout = [];
   await startLiveQrScan(video, (payload) => afterTimeout.push(payload), new AbortController().signal, onDecoderError);
+  const addAbortListener = t.mock.method(AbortSignal.prototype, "addEventListener");
   const pendingNativeTimeout = frame();
+  const sessionSignal = addAbortListener.mock.calls[0].this;
+  assert.equal(getEventListeners(sessionSignal, "abort").length, 1);
   expireFrame();
+  assert.equal(getEventListeners(sessionSignal, "abort").length, 0);
+  addAbortListener.mock.restore();
   await pendingNativeTimeout;
   const capturesBeforeFallback = createCanvas.mock.callCount();
   holdSoftwareFrame = false;
@@ -365,8 +371,12 @@ test("closing while awaiting camera permission releases the late stream", async 
   assert.equal(video.srcObject, null);
 });
 
-for (const abortDuringPlay of [false, true]) {
-  test(abortDuringPlay ? "closing settles startup even when playback is stalled" : "failed playback releases the stream", async (t) => {
+for (const [failureMode, testName] of [
+  ["rejection", "failed playback releases the stream"],
+  ["abort", "closing settles startup even when playback is stalled"],
+  ["timeout", "playback that times out releases the stream"],
+]) {
+  test(testName, async (t) => {
     const track = { stop: t.mock.fn() };
     const stream = { getTracks: () => [track], getVideoTracks: () => [track] };
     const playing = Promise.withResolvers();
@@ -374,7 +384,16 @@ for (const abortDuringPlay of [false, true]) {
     replaceGlobal(t, "BarcodeDetector", undefined);
     replaceGlobal(t, "navigator", { mediaDevices: { getUserMedia: async () => stream } });
     const setInterval = t.mock.fn();
-    replaceGlobal(t, "window", { setTimeout, clearTimeout, setInterval });
+    let expirePlayback;
+    replaceGlobal(t, "window", {
+      setTimeout(callback, delay) {
+        assert.equal(delay, 4000);
+        expirePlayback = callback;
+        return 1;
+      },
+      clearTimeout() {},
+      setInterval,
+    });
     const video = {
       srcObject: null,
       play() {
@@ -388,10 +407,14 @@ for (const abortDuringPlay of [false, true]) {
     assert.equal(video.srcObject, stream);
 
     const error = new DOMException("Playback failed", "NotAllowedError");
-    if (abortDuringPlay) {
+    if (failureMode === "abort") {
       scan.abort();
       await assert.rejects(pending, { name: "AbortError" });
       playback.reject(error);
+    } else if (failureMode === "timeout") {
+      expirePlayback();
+      await assert.rejects(pending, { message: "Could not play the camera preview" });
+      playback.resolve();
     } else {
       playback.reject(error);
       await assert.rejects(pending, (failure) => failure.cause === error);
