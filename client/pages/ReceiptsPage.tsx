@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "@/i18n";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { ApiError, api } from "@/api";
@@ -77,6 +77,10 @@ export function ReceiptsPage() {
   const [analytics, setAnalytics] = useState<PurchaseAnalytics | null>(null);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [analyticsRange, setAnalyticsRange] = useState("12");
+  // Guards against a slower request for an older range (or receipt) landing
+  // after a newer one and overwriting the fresh data.
+  const analyticsSeq = useRef(0);
+  const detailSeq = useRef(0);
   const [templates, setTemplates] = useState<ReceiptTemplate[]>([]);
   const [deleteTemplate, setDeleteTemplate] = useState<ReceiptTemplate | null>(null);
   const [eReceiptOpen, setEReceiptOpen] = useState(false);
@@ -102,6 +106,7 @@ export function ReceiptsPage() {
   }, [load]);
 
   const loadAnalytics = async (range = analyticsRange) => {
+    const seq = ++analyticsSeq.current;
     setAnalyticsLoading(true);
     try {
       const months = range === "all" ? null : Number(range);
@@ -109,12 +114,15 @@ export function ReceiptsPage() {
       if (months) fromDate.setMonth(fromDate.getMonth() - months);
       const from = months ? fromDate.toISOString().slice(0, 10) : null;
       const query = from ? `?from=${encodeURIComponent(from)}` : "";
-      setAnalytics(await api<PurchaseAnalytics>(`/api/houses/${house.id}/purchases/analytics${query}`));
+      const result = await api<PurchaseAnalytics>(`/api/houses/${house.id}/purchases/analytics${query}`);
+      if (seq !== analyticsSeq.current) return;
+      setAnalytics(result);
     } catch (err) {
+      if (seq !== analyticsSeq.current) return;
       toast.error(err instanceof Error ? t(err.message) : t("Could not load spending insights"));
       setAnalytics(null);
     } finally {
-      setAnalyticsLoading(false);
+      if (seq === analyticsSeq.current) setAnalyticsLoading(false);
     }
   };
 
@@ -124,15 +132,19 @@ export function ReceiptsPage() {
   }, [tab, analyticsRange, house.id]);
 
   const openDetail = async (receipt: Receipt) => {
+    const seq = ++detailSeq.current;
     setDetail({ ...receipt, lines: [] });
     setDetailLoading(true);
     try {
-      setDetail(await api<Receipt>(`/api/receipts/${receipt.id}`));
+      const full = await api<Receipt>(`/api/receipts/${receipt.id}`);
+      if (seq !== detailSeq.current) return;
+      setDetail(full);
     } catch (err) {
+      if (seq !== detailSeq.current) return;
       toast.error(err instanceof Error ? t(err.message) : t("Could not load the receipt"));
       setDetail(null);
     } finally {
-      setDetailLoading(false);
+      if (seq === detailSeq.current) setDetailLoading(false);
     }
   };
 

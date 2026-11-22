@@ -58,7 +58,12 @@ export function PlanPage() {
   const [moveTarget, setMoveTarget] = useState<MealPlanEntry | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // Live refreshes swap the week while the user pages through weeks; a slower
+  // response for an old week must not overwrite the one on screen.
+  const loadSeq = useRef(0);
+
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current;
     if (!hasData.current) setLoading(true);
     try {
       const [plan, recipeList, ideaList] = await Promise.all([
@@ -66,14 +71,16 @@ export function PlanPage() {
         api<Recipe[]>(`/api/houses/${house.id}/recipes`),
         api<SavedIdeas[]>(`/api/houses/${house.id}/ideas`),
       ]);
+      if (seq !== loadSeq.current) return;
       hasData.current = true;
       setWeek(plan);
       setRecipes(recipeList);
       setIdeas(ideaList);
     } catch (err) {
+      if (seq !== loadSeq.current) return;
       toast.error(err instanceof Error ? t(err.message) : t("Could not load the meal plan"));
     } finally {
-      setLoading(false);
+      if (seq === loadSeq.current) setLoading(false);
     }
   }, [house.id, weekStart, toast, t]);
 

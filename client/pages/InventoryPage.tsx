@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, qs } from "@/api";
 import { useHouse } from "@/state";
@@ -37,6 +37,9 @@ export function InventoryPage() {
     : "name";
   const [search, setSearch] = useState(query);
   const debouncedSearch = useDebounced(search, 250);
+  // Guards against a slow earlier response (old filters, live refresh)
+  // landing after a newer one and overwriting the fresh list.
+  const loadSeq = useRef(0);
 
   useEffect(() => {
     setSearch(query);
@@ -63,14 +66,17 @@ export function InventoryPage() {
   }, [house.id]);
 
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current;
     try {
       const data = await api<{ items: Item[]; total: number }>(
         `/api/houses/${house.id}/items${qs({ q: query, categoryId, locationId, tag, low: low ? 1 : undefined, expiring: expiring ? 1 : undefined, archived: archived ? 1 : undefined, sort, limit: 500 })}`,
       );
+      if (seq !== loadSeq.current) return;
       setItems(data.items);
       setTotal(data.total);
       setError(null);
     } catch (err) {
+      if (seq !== loadSeq.current) return;
       setError(err instanceof Error ? t(err.message) : t("Could not load items"));
     }
   }, [house.id, query, categoryId, locationId, tag, low, expiring, archived, sort, t]);
