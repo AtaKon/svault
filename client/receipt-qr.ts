@@ -70,7 +70,9 @@ function decodeStandard(pixels: GrayPixels, deadlineEpochMs: number): string | n
   const hints = new Map([[DecodeHintType.TRY_HARDER, true]]);
   const source = new RGBLuminanceSource(pixels.gray, pixels.width, pixels.height);
   for (const Binarizer of [HybridBinarizer, GlobalHistogramBinarizer]) {
-    if (Date.now() > deadlineEpochMs) return null;
+    // At or past the deadline no new pass starts, so a spent or negative
+    // budget decodes nothing.
+    if (Date.now() >= deadlineEpochMs) return null;
     try {
       const bitmap = new BinaryBitmap(new Binarizer(source));
       const text = new QRCodeReader().decode(bitmap, hints).getText();
