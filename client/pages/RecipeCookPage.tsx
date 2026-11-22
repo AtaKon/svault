@@ -202,26 +202,27 @@ export function RecipeCookPage() {
         toast.push(t("The shortfalls are already on the shopping list"));
         return;
       }
-      let added = 0;
+      let count = 0;
       try {
         for (const line of lines) {
-          const saved = await api<{ status: string }>(`/api/houses/${house.id}/shopping`, {
+          await api<{ status: string }>(`/api/houses/${house.id}/shopping`, {
             method: "POST",
             body: { name: line.name, quantity: line.shortfall, unit: line.unit, itemId: line.itemId ?? null },
           });
-          if (saved.status === "added") added++;
+          // A merged line is on the list too, so every successful POST counts.
+          count++;
         }
       } catch (err) {
         // A partial failure keeps the button enabled: the retry re-fetches the
-        // list and shortfallShoppingLines skips the lines already added, so
+        // list and shortfallShoppingLines skips the lines already put on it, so
         // only the remaining ones are retried.
         toast.error(
-          added > 0
+          count > 0
             ? t(
-                added === 1
-                  ? "Added {count} line before the failure. Try again to add the rest."
-                  : "Added {count} lines before the failure. Try again to add the rest.",
-                { count: added },
+                count === 1
+                  ? "Put {count} shortfall on the list before the failure. Try again to add the rest."
+                  : "Put {count} shortfalls on the list before the failure. Try again to add the rest.",
+                { count },
               )
             : err instanceof Error
               ? t(err.message)
@@ -230,7 +231,7 @@ export function RecipeCookPage() {
         return;
       }
       setShortfallsAdded(true);
-      toast.success(t(added === 1 ? "Added {count} line to the shopping list" : "Added {count} lines to the shopping list", { count: added }));
+      toast.success(t(count === 1 ? "Put {count} shortfall on the shopping list" : "Put {count} shortfalls on the shopping list", { count }));
     } catch (err) {
       toast.error(err instanceof Error ? t(err.message) : t("Could not add the shortfalls"));
     } finally {
