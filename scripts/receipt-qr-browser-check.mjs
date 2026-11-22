@@ -100,7 +100,7 @@ try {
           return readState.call(this);
         } });
         track.getCapabilities = () => ({ torch: true });
-        track.getSettings = () => ({});
+        track.getSettings = () => typeof globalThis.reportedTorch === "boolean" ? { torch: globalThis.reportedTorch } : {};
         track.applyConstraints = async ({ advanced }) => {
           globalThis.torchRequests.push(advanced[0].torch);
           if (globalThis.rejectTorchChange) throw new Error("Test torch request failed");
@@ -254,6 +254,15 @@ try {
   await page.locator('button[aria-label="Light"][aria-pressed="mixed"]:enabled').waitFor();
   await light.click();
   assert.deepEqual(await page.evaluate(() => torchRequests), [true, false, false]);
+  await setFixture({ reportedTorch: true });
+  await light.click();
+  const confirmedLight = page.locator('button[aria-label="Light"][aria-pressed="true"]:enabled');
+  await confirmedLight.waitFor();
+  await setFixture({ rejectTorchChange: true });
+  await light.click();
+  await confirmedLight.waitFor();
+  assert.deepEqual(await page.evaluate(() => torchRequests), [true, false, false, true, false]);
+  await setFixture({ rejectTorchChange: false, reportedTorch: null });
   await choosePhoto();
   assert.equal(await page.evaluate(() => lastQrCamera.getTracks().every((track) => track.readyState === "ended")), true);
   await setFixture({
@@ -307,7 +316,7 @@ try {
   assert.equal(await scanCode.isEnabled(), true);
   await reset.click();
 
-  await setFixture({ workerFaults: ["post", "error"] });
+  await setFixture({ workerFaults: ["invalid-reply", "invalid-reply"] });
   await scan.click();
   await page.getByText("Could not scan the QR code.").waitFor();
   await retry.waitFor();

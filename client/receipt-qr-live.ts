@@ -203,8 +203,8 @@ export async function startLiveQrScan(
         } catch (error) {
           if (error === SCAN_STOPPED) return;
           if (error === RESPONSE_TIMED_OUT) {
-            // BarcodeDetector.detect has no cancellation API. Discard its canvas
-            // so the next frame cannot overwrite pixels the detector may still read.
+            // BarcodeDetector.detect has no cancellation API. Use software for
+            // the rest of this session and leave the pending call's canvas alone.
             detector = null;
             canvas = null;
             return;

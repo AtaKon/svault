@@ -54,6 +54,7 @@ test("a scan response is a usable digital receipt only with QR provenance and pr
   assert.equal(isUsableDigitalReceipt(scan("qr", [])), false);
   assert.equal(isUsableDigitalReceipt({ provider: "qr" }), false);
   assert.equal(isUsableDigitalReceipt(scan("qr", [null])), false);
+  assert.equal(isUsableDigitalReceipt(scan("qr", [{}])), false);
   assert.equal(isUsableDigitalReceipt(scan("qr", [{ description: 42 }])), false);
   assert.equal(isUsableDigitalReceipt(scan("local", [{ description: "Milk" }])), false);
   assert.equal(isUsableDigitalReceipt(scan("template", [{ description: "Milk" }])), false);
