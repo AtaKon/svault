@@ -2,9 +2,19 @@
 // browser flags and /receipts/scan replies are intercepted with canned
 // responses; the real issuer is never contacted.
 // Set SV_BROWSER_CHANNEL=msedge to use Edge instead of Chrome.
+// The check mutates the instance it targets, so it refuses to run unless
+// SV_BROWSER_CHECK=1 confirms the target is a throwaway instance.
 import assert from "node:assert/strict";
 import { chromium } from "playwright-core";
 import zxing from "@zxing/library";
+
+if (process.env.SV_BROWSER_CHECK !== "1") {
+  console.error(
+    "Refusing to run: this check mutates the instance it targets (imports, resets, seeded data). " +
+      "Point it at a throwaway instance and opt in with SV_BROWSER_CHECK=1.",
+  );
+  process.exit(1);
+}
 
 const base = (process.argv[2] ?? "http://localhost:4201").replace(/\/$/, "");
 const qr = "https://e-invoicing.gr/edocuments/ViewInvoice/-1/12345678-1234-1234-1234-123456789abc_testAB12";

@@ -393,7 +393,7 @@ npm test                     # API integration + parser + unit tests (temp DB pe
 node scripts/smoke.mjs URL   # black-box smoke test against a running server
 node scripts/visual-check.mjs URL   # Playwright screenshots + console/API error scan
 node scripts/functional-check.mjs URL  # click-through UI checks on a throwaway copy
-node scripts/receipt-qr-browser-check.mjs URL  # simulated camera on a throwaway instance seeded with npm run seed
+SV_BROWSER_CHECK=1 node scripts/receipt-qr-browser-check.mjs URL  # simulated camera on a throwaway instance seeded with npm run seed (the check mutates the instance)
 ```
 
 The browser scripts need `npm i --no-save playwright-core` and a local Edge/Chrome install
@@ -412,8 +412,9 @@ npm run build
 )
 ```
 
-In a second terminal, run `node scripts/receipt-qr-browser-check.mjs http://localhost:4201`.
-Set `SV_BROWSER_CHANNEL=msedge` to use Edge. Stop the disposable server when the check finishes.
+In a second terminal, run `SV_BROWSER_CHECK=1 node scripts/receipt-qr-browser-check.mjs http://localhost:4201`.
+The env var is the explicit opt-in: the check imports receipts and resets state on the instance it
+runs against. Set `SV_BROWSER_CHANNEL=msedge` to use Edge. Stop the disposable server when the check finishes.
 
 The test suite covers unit conversion, OCR-noise parsing, auth, per-house isolation, membership
 roles, item creation, barcode conflicts and lookup, FIFO consumption, absolute counts, moves, low
