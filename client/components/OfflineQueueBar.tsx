@@ -46,6 +46,25 @@ export function OfflineQueueBar() {
   // auto-sync waits for them to act instead of reopening the sheet.
   const dismissedRef = useRef<string | null>(null);
 
+  // A manual queue action overrides the automatic backoff: the pending retry
+  // timer is dropped and the attempt counter reset, so the auto-sync effect
+  // can pick the queue up again right away instead of waiting out a delay
+  // armed by an earlier transient failure.
+  const clearBackoff = useCallback(() => {
+    if (retryTimer.current !== undefined) {
+      window.clearTimeout(retryTimer.current);
+      retryTimer.current = undefined;
+    }
+    retryAttempt.current = 0;
+  }, []);
+
+  // The dismissed head only blocks auto-sync while it is still queued; when
+  // the user's action removes that very action, the dismissal is resolved
+  // and auto-sync may resume.
+  const clearDismissed = useCallback((removedId: string) => {
+    if (dismissedRef.current === removedId) dismissedRef.current = null;
+  }, []);
+
   const refresh = useCallback(async () => {
     if (!user || !house) return;
     try {
@@ -147,6 +166,8 @@ export function OfflineQueueBar() {
     setRemovingId(action.id);
     try {
       await removeQueuedAction(action.id);
+      clearBackoff();
+      clearDismissed(action.id);
       await refresh();
     } catch {
       toast.error(t("Could not remove the queued change"));
@@ -160,6 +181,9 @@ export function OfflineQueueBar() {
     setDiscarding(true);
     try {
       await clearQueuedActions(user.id, house.id);
+      // Everything is gone, including any dismissed head.
+      clearBackoff();
+      dismissedRef.current = null;
       setDiscardOpen(false);
       await refresh();
     } catch {
@@ -186,7 +210,7 @@ export function OfflineQueueBar() {
           {!online && <> · {t("offline")}</>}
         </span>
         <span className="ml-auto flex items-center gap-1.5">
-          <Button size="sm" variant="secondary" onClick={() => void runSync()} loading={syncing} disabled={!online}>
+          <Button size="sm" variant="secondary" onClick={() => { dismissedRef.current = null; void runSync(); }} loading={syncing} disabled={!online}>
             {t("Sync now")}
           </Button>
           <Button size="sm" variant="ghost" onClick={() => setViewOpen(true)}>
@@ -258,6 +282,8 @@ export function OfflineQueueBar() {
               onClick={async () => {
                 if (!conflict) return;
                 await removeQueuedAction(conflict.action.id);
+                clearBackoff();
+                clearDismissed(conflict.action.id);
                 setConflict(null);
                 await refresh();
               }}
@@ -273,6 +299,8 @@ export function OfflineQueueBar() {
                     baseUpdatedAt: conflict.details.currentUpdatedAt ?? new Date().toISOString(),
                   };
                   await updateQueuedAction(next);
+                  clearBackoff();
+                  clearDismissed(conflict.action.id);
                   setConflict(null);
                   await refresh();
                   void runSync();
