@@ -7,7 +7,7 @@ import { Icon } from "@/components/icons";
 import { useI18n } from "@/i18n";
 import { parseLabelScan } from "@shared/label-links";
 import { nativeFormatName, nativeIdleFallback, PRODUCT_BARCODE_FORMATS } from "@/barcode-camera";
-import { openBarcodeCamera, setBarcodeTorch, stopBarcodeStream, storeLensId } from "@/barcode-camera-stream";
+import { clearStoredLensId, openBarcodeCamera, setBarcodeTorch, stopBarcodeStream, storeLensId } from "@/barcode-camera-stream";
 import { nextDecodeFailureCount, nextTorchTarget, resolveTorchState, type TorchState } from "@/receipt-qr-live-state";
 
 const DUPLICATE_SUPPRESSION_MS = 2500;
@@ -197,7 +197,15 @@ export function BarcodeScanner({
           }
           navigatingRef.current = true;
           releaseCamera();
-          navigateRef.current(target.path);
+          try {
+            navigateRef.current(target.path);
+          } catch {
+            // The navigation failed after the camera was already released:
+            // clear the flag and reopen the scanner instead of leaving it
+            // dead behind the page the user never left.
+            navigatingRef.current = false;
+            setCameraEpoch((n) => n + 1);
+          }
           return;
         }
         showNotice(tRef.current("That QR code is not an SVault label."));
@@ -369,6 +377,13 @@ export function BarcodeScanner({
         if (signal.aborted) return;
         setStarting(false);
         setError(friendlyCameraError(err, tRef.current));
+        // The failed open may have been pinned to a manually cycled lens;
+        // drop the request and its stored copy so Retry asks for the
+        // automatic pick instead of the same failed lens again.
+        if (lensRef.current !== null) {
+          lensRef.current = null;
+          clearStoredLensId();
+        }
       }
     })();
 
