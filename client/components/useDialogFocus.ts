@@ -13,6 +13,12 @@ const FOCUSABLE_SELECTOR = [
  * a confirm dialog over a sheet closes alone. */
 const openDialogs: symbol[] = [];
 
+/** How many open dialogs hold the body scroll lock. The original overflow is
+ * saved when the count goes 0→1 and restored only when it returns to 0, so
+ * closing an outer dialog while an inner one is open keeps the page locked. */
+let scrollLockCount = 0;
+let savedBodyOverflow = "";
+
 /**
  * Focus management for modal dialogs, shared by Sheet and ImageLightbox:
  * when the dialog opens, focus moves into it and the body scroll locks; Tab
@@ -31,7 +37,8 @@ export function useDialogFocus(open: boolean, onClose: () => void): RefObject<HT
     const token = Symbol("dialog");
     openDialogs.push(token);
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const bodyOverflow = document.body.style.overflow;
+    if (scrollLockCount === 0) savedBodyOverflow = document.body.style.overflow;
+    scrollLockCount += 1;
     document.body.style.overflow = "hidden";
     // Focus moves in after the portal content has painted.
     const focusTimer = window.setTimeout(() => {
@@ -67,7 +74,10 @@ export function useDialogFocus(open: boolean, onClose: () => void): RefObject<HT
       document.removeEventListener("keydown", onKey, true);
       const index = openDialogs.indexOf(token);
       if (index >= 0) openDialogs.splice(index, 1);
-      document.body.style.overflow = bodyOverflow;
+      // Release this dialog's hold on the scroll lock; an inner dialog that
+      // is still open keeps the body locked until it closes too.
+      scrollLockCount = Math.max(0, scrollLockCount - 1);
+      if (scrollLockCount === 0) document.body.style.overflow = savedBodyOverflow;
       if (previous?.isConnected) previous.focus();
     };
   }, [open]);
