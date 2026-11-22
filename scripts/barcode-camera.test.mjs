@@ -36,8 +36,10 @@ test("pickRearCamera prefers the Android main lens on a Galaxy device list", () 
   assert.equal(pickRearCamera(galaxy), "galaxy-0");
 });
 
-test("pickRearCamera prefers the plain back camera over auxiliary lenses on iPhone labels", () => {
-  assert.equal(pickRearCamera(iphone), "main");
+test("pickRearCamera keeps the browser default on iPhone labels", () => {
+  // iOS Safari already defaults to a suitable lens and offers virtual
+  // multi-lens cameras; only Android lens names identify the main lens.
+  assert.equal(pickRearCamera(iphone), null);
 });
 
 test("pickRearCamera returns null for a single back camera", () => {
@@ -55,10 +57,11 @@ test("pickRearCamera ignores unidentified lenses once two back cameras are label
   assert.equal(pickRearCamera([device("known", "camera2 0, facing back"), device("mystery", "")]), null);
 });
 
-test("pickRearCamera skips auxiliary lenses when no main lens is identifiable", () => {
+test("pickRearCamera makes no choice when no Android main lens is identifiable", () => {
   const ultra = device("ultra", "Back Ultra Wide Camera");
   const tele = device("tele", "Back Telephoto Camera");
-  assert.equal(pickRearCamera([tele, ultra, device("front", "Front Camera")]), "tele");
+  assert.equal(pickRearCamera([tele, ultra, device("front", "Front Camera")]), null);
+  assert.equal(pickRearCamera([device("b2", "camera2 2, facing back"), device("b3", "camera2 3, facing back")]), null);
 });
 
 test("rearCameras orders the Galaxy lenses main first and drops the front camera", () => {

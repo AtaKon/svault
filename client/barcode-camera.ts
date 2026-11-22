@@ -48,16 +48,20 @@ export function rearCameras(devices: CameraDeviceLike[]): CameraDeviceLike[] {
 }
 
 /**
- * The deviceId of the main rear lens, or null when the choice cannot be
- * made: fewer than two label-identified back cameras means either a
- * single-lens device, where the facingMode stream is already right, or
- * labels still hidden behind a missing permission, where the lens order
- * cannot be judged at all.
+ * The deviceId of the main rear lens, or null when the browser's own
+ * facingMode choice should stand. Only Android names its lenses in a way
+ * that identifies the main one ("camera2 0, facing back"), and Android
+ * Chrome is where a plain facingMode request hands out the ultra-wide or
+ * telephoto lens. Other platforms (iOS Safari offers virtual multi-lens
+ * cameras that switch for close focus on their own) keep their default,
+ * and so do single-lens devices and label-less lists before a permission
+ * grant. The Lens button still cycles every back camera manually.
  */
 export function pickRearCamera(devices: CameraDeviceLike[]): string | null {
   const rear = rearCameras(devices);
   if (rear.length < 2) return null;
-  return rear[0]?.deviceId || null;
+  const main = rear[0];
+  return main && ANDROID_MAIN_LENS_LABEL.test(main.label) ? main.deviceId || null : null;
 }
 
 /**
