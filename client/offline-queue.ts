@@ -191,6 +191,23 @@ export function rebaseQueuedAction(action: QueuedStockAction, baseline: RebaseBa
     : action;
 }
 
+/** Record what a successfully replayed action leaves behind for the next
+ *  action on the same item: a returned timestamp becomes the new rebase
+ *  target, while a success without one drops any earlier entry. Keeping the
+ *  older entry would rebase a later action onto a timestamp older than the
+ *  user's own last write, so it is deleted instead. */
+export function applySyncedBaseline(
+  baselines: Map<string, RebaseBaseline>,
+  action: QueuedStockAction,
+  detail: { updatedAt?: string } | null,
+): void {
+  if (detail?.updatedAt) {
+    baselines.set(action.itemId, { queuedBase: action.baseUpdatedAt, returnedUpdatedAt: detail.updatedAt });
+  } else {
+    baselines.delete(action.itemId);
+  }
+}
+
 /** Replay queued mutations in creation order. Stops on the first permanent
  * rejection (surfaced as a conflict the user can discard) or transport failure
  * so later actions cannot silently overtake it; transient failures are left
@@ -216,7 +233,10 @@ export async function syncQueue(
           baseUpdatedAt: rebased.baseUpdatedAt ?? undefined,
         },
       });
-      if (detail?.updatedAt) baselineByItem.set(action.itemId, { queuedBase: action.baseUpdatedAt, returnedUpdatedAt: detail.updatedAt });
+      // A success without a timestamp drops the item's earlier baseline
+      // (see applySyncedBaseline) so a later action never rebases onto a
+      // timestamp older than the user's own last write.
+      applySyncedBaseline(baselineByItem, action, detail);
       await removeQueuedAction(action.id);
       synced++;
       onProgress?.(synced, actions.length);

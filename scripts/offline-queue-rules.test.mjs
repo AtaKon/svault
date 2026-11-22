@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { PERMANENT_REJECTIONS, rebaseQueuedAction, syncBackoffMs } from "../client/offline-queue.js";
+import { PERMANENT_REJECTIONS, applySyncedBaseline, rebaseQueuedAction, syncBackoffMs } from "../client/offline-queue.js";
 
 /** @typedef {import("../client/offline-queue.js").QueuedStockAction} QueuedStockAction */
 
@@ -79,4 +79,31 @@ test("without a previous success the queued action keeps its own baseline", () =
     rebaseQueuedAction(noTimestamp, { queuedBase: noTimestamp.baseUpdatedAt, returnedUpdatedAt: "" }).baseUpdatedAt,
     noTimestamp.baseUpdatedAt,
   );
+});
+
+test("a successful replay records the returned timestamp as the next baseline", () => {
+  const baselines = new Map();
+  applySyncedBaseline(baselines, action({ id: "q_7" }), { updatedAt: "2026-01-05T00:00:00.000Z" });
+  const baseline = baselines.get("itm_1");
+  assert.equal(baseline.queuedBase, "2026-01-01T00:00:00.000Z");
+  assert.equal(baseline.returnedUpdatedAt, "2026-01-05T00:00:00.000Z");
+});
+
+test("a successful replay without a timestamp drops the item's earlier baseline", () => {
+  // The server applied an earlier queued action but returned no timestamp;
+  // keeping that entry would let a later action rebase onto a timestamp
+  // older than the user's own last write, so the entry is deleted.
+  const baselines = new Map();
+  applySyncedBaseline(baselines, action({ id: "q_8" }), { updatedAt: "2026-01-05T00:00:00.000Z" });
+  applySyncedBaseline(baselines, action({ id: "q_9" }), {});
+  assert.equal(baselines.has("itm_1"), false);
+
+  // With no entry left, a later action keeps its own queued baseline.
+  const later = action({ id: "q_10", baseUpdatedAt: "2026-01-01T00:00:00.000Z" });
+  assert.equal(rebaseQueuedAction(later, baselines.get("itm_1") ?? null).baseUpdatedAt, later.baseUpdatedAt);
+
+  // A replay with no response body at all clears the entry the same way.
+  applySyncedBaseline(baselines, action({ id: "q_11" }), { updatedAt: "2026-01-05T00:00:00.000Z" });
+  applySyncedBaseline(baselines, action({ id: "q_12" }), null);
+  assert.equal(baselines.has("itm_1"), false);
 });
