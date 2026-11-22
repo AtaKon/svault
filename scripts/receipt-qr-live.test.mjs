@@ -8,7 +8,10 @@ import zxing from "@zxing/library";
 // entry with vite into one self-contained chunk (codeSplitting: false, as the
 // client build assumes) and imports it through a data: URL; if the bundler
 // ever splits or reshapes its output, this import fails independently of the
-// scanner code under test.
+// scanner code under test. The rolldownOptions and codeSplitting option
+// names below are the spellings of the current Vite/Rolldown version; an
+// upgrade that renames them fails here with a bundler error, not a scanner
+// regression.
 async function importBundled(entry) {
   const [bundle] = await build({
     configFile: false,
