@@ -19,11 +19,12 @@ const action = (over = {}) => ({
 });
 
 test("statuses the server can never accept surface as a conflict, not a retry", () => {
-  for (const status of [400, 404, 409, 410, 422]) {
+  for (const status of [400, 403, 404, 409, 410, 422]) {
     assert.equal(PERMANENT_REJECTIONS.has(status), true, `status ${status} must be permanent`);
   }
-  // Offline, auth, throttling and server faults may pass on a later attempt.
-  for (const status of [0, 401, 403, 408, 425, 429, 500, 503]) {
+  // A lowered role (403) never passes on retry; offline, an expired session,
+  // throttling and server faults may pass on a later attempt.
+  for (const status of [0, 401, 408, 425, 429, 500, 503]) {
     assert.equal(PERMANENT_REJECTIONS.has(status), false, `status ${status} must stay retryable`);
   }
 });

@@ -123,9 +123,15 @@ export function OfflineQueueBar() {
     };
   }, [refresh]);
 
+  // Keyed on the queue's size and head rather than the array: every sync
+  // ends with refresh(), which yields a new array even when nothing changed,
+  // and re-running on that would skip the backoff after a transient failure.
+  const headId = actions[0]?.id;
   useEffect(() => {
-    if (online && actions.length > 0 && !conflict && actions[0]?.id !== dismissedRef.current) void runSync();
-  }, [online, actions, conflict, runSync]);
+    if (!online || actions.length === 0 || conflict || headId === dismissedRef.current) return;
+    if (retryTimer.current !== undefined) return;
+    void runSync();
+  }, [online, actions.length, headId, conflict, runSync]);
 
   useEffect(() => {
     if (!actions.length) return;

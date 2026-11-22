@@ -9,6 +9,10 @@ const FOCUSABLE_SELECTOR = [
   '[tabindex]:not([tabindex="-1"])',
 ].join(", ");
 
+/** Open dialogs, innermost last: only the top one answers Escape and Tab, so
+ * a confirm dialog over a sheet closes alone. */
+const openDialogs: symbol[] = [];
+
 /**
  * Focus management for modal dialogs, shared by Sheet and ImageLightbox:
  * when the dialog opens, focus moves into it and the body scroll locks; Tab
@@ -24,6 +28,8 @@ export function useDialogFocus(open: boolean, onClose: () => void): RefObject<HT
 
   useEffect(() => {
     if (!open) return;
+    const token = Symbol("dialog");
+    openDialogs.push(token);
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const bodyOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -34,6 +40,7 @@ export function useDialogFocus(open: boolean, onClose: () => void): RefObject<HT
     }, 0);
 
     const onKey = (event: KeyboardEvent) => {
+      if (openDialogs[openDialogs.length - 1] !== token) return;
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
@@ -58,6 +65,8 @@ export function useDialogFocus(open: boolean, onClose: () => void): RefObject<HT
     return () => {
       window.clearTimeout(focusTimer);
       document.removeEventListener("keydown", onKey, true);
+      const index = openDialogs.indexOf(token);
+      if (index >= 0) openDialogs.splice(index, 1);
       document.body.style.overflow = bodyOverflow;
       if (previous?.isConnected) previous.focus();
     };

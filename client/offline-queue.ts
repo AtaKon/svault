@@ -155,9 +155,11 @@ export interface SyncResult {
 }
 
 /** HTTP statuses after which replaying the same action can never succeed
- * (mirrors client/stocktake-draft.ts). Anything else — offline, timeout,
- * rate limit, 5xx — may pass later, so the queue retries with backoff. */
-export const PERMANENT_REJECTIONS = new Set([400, 404, 409, 410, 422]);
+ * (client/stocktake-draft.ts plus 403, for a member whose role was lowered
+ * to viewer while changes were queued). Anything else, such as offline,
+ * timeout, rate limit or 5xx, may pass later, so the queue retries with
+ * backoff. */
+export const PERMANENT_REJECTIONS = new Set([400, 403, 404, 409, 410, 422]);
 
 const BACKOFF_BASE_MS = 1000;
 const BACKOFF_MAX_MS = 30_000;

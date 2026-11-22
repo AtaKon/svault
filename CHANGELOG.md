@@ -19,6 +19,20 @@ All notable changes to SVault are documented here. The format follows
 
 ### Fixed
 
+- **Barcode scanning on Samsung Galaxy phones.** Chrome on Galaxy phones often opened the ultra-wide or telephoto lens, which cannot focus at barcode distance, so nothing scanned. The scanner now opens the main rear lens on Android, asks for continuous autofocus, uses the browser's native barcode detector when it has one (with ZXing tuned to product formats as the fallback), and releases the camera when the app goes to the background so the preview is not black on return. New **Light** and **Switch lens** buttons appear when the camera supports them, and a manually chosen lens is remembered on the device.
+- **Offline queue.** A queued change the server can never accept (deleted item, lowered role, invalid data) no longer blocks the queue in a tight retry loop: it is shown with a Discard option, and transient failures retry with backoff up to 30 seconds. Several queued changes to the same item no longer conflict with each other on sync. **Discard** now asks for confirmation, and **View** lists queued changes so one can be dropped on its own.
+- **Item page offline.** A background refresh that cannot reach the server keeps the item on screen instead of replacing it with "Item not found". Moving from one item to another no longer shows the previous item while the next one loads.
+- **Forms during live updates.** A housemate's change no longer resets the "Bought" sheet on the shopping list or the add/move meal sheets on the plan, and the week no longer flashes skeletons on each refresh. Slower, older responses on the inventory list, receipt analytics and plan week can no longer overwrite newer ones.
+- **Sheets and dialogs.** Focus moves into an open sheet, Tab stays inside it, focus returns to where it was on close, and the dialog is labelled by its title. Escape closes only the topmost dialog.
+- **Shopping list errors.** Unchecking or removing a line that fails now shows an error instead of failing silently.
+- **Malformed cookies.** A cookie with invalid percent-encoding set by another app on the same host no longer makes every request fail with 500.
+- **Recipe link import.** Links that members paste are always refused when they point to loopback, private or link-local addresses, whatever `SV_OUTBOUND_ALLOW_PRIVATE` says. That setting now applies only to URLs that admins configure.
+- **Stock changes on PostgreSQL.** The item stock route takes the household ledger lock and checks the idempotency key inside the same transaction, so a retried request cannot apply twice and concurrent removals cannot lose an update.
+- **Reminders.** An invalid `notifications.expiryDays` is rejected when saved, stored bad values fall back to the default, and a failure in one house no longer stops the reminder scan for every house after it.
+- **Password re-checks.** Changing the password, disabling two-factor sign-in, regenerating backup codes and profile updates that check the current password are now rate limited.
+- **AI budget.** House-level AI token prices apply only when the house uses its own key or endpoint, so calls on the server's key are always costed at the server's prices.
+- **Inventory paging.** A fractional or huge `offset` no longer returns 500.
+
 - **PostgreSQL upgrade.** The release that added item merging failed to start on an existing PostgreSQL database (`column "merged_into" does not exist`): an index on the new column was created before the migration that adds it, and the startup transaction aborted. The index is now created after the column. A test fails if the base schema ever indexes a column that existing databases only get from a migration.
 - **Offline reload.** Reloading SVault without a network no longer lands on the sign-in page. The last signed-in session is kept on the device and used only while the server cannot be reached; a 401 or signing out clears it. Requests that cannot reach the server now say "You are offline" instead of "Failed to fetch".
 - **PostgreSQL: replacing a bill document.** Uploading a new PDF for an existing bill failed with 500 on PostgreSQL ("could not determine data type of parameter").
@@ -27,6 +41,7 @@ All notable changes to SVault are documented here. The format follows
 
 ### Added
 
+- **Shortfalls to the shopping list.** After cooking, members can add the missing amounts to the shopping list in one tap. Items already on the open list are skipped.
 - **Digital receipt scans.** SVault checks photos for a receipt QR before running OCR. Supported
   Entersoft links fill the review screen with the issuer's product lines, quantities, prices,
   discounts and VAT. IMPACT eInvoicing links also fill the review screen with the issuer's product
