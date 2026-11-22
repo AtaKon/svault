@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "@/state";
-import { Badge, Button, Sheet } from "@/components/ui";
+import { Badge, Button, ConfirmDialog, IconButton, Sheet } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { useToast } from "@/components/toast";
 import { useI18n } from "@/i18n";
+import { relativeTime, qty } from "@/format";
 import {
   clearQueuedActions,
   listQueuedActions,
@@ -15,6 +16,15 @@ import {
   type QueuedStockAction,
 } from "@/offline-queue";
 
+/** Labels for the action verb stored in a queued change's body. */
+const QUEUE_ACTION_LABELS: Record<string, string> = {
+  add: "Stock in",
+  remove: "Used",
+  set: "Count",
+  waste: "Wasted",
+  move: "Moved",
+};
+
 export function OfflineQueueBar() {
   const { user, house } = useAuth();
   const { t } = useI18n();
@@ -23,6 +33,10 @@ export function OfflineQueueBar() {
   const [online, setOnline] = useState(() => (typeof navigator === "undefined" ? true : navigator.onLine));
   const [syncing, setSyncing] = useState(false);
   const [conflict, setConflict] = useState<QueueConflict | null>(null);
+  const [viewOpen, setViewOpen] = useState(false);
+  const [discardOpen, setDiscardOpen] = useState(false);
+  const [discarding, setDiscarding] = useState(false);
+  const [removingId, setRemovingId] = useState<string | null>(null);
   // Guards the sync loop: `syncing` state stays out of the auto-sync effect
   // so a failed replay does not immediately retrigger itself.
   const syncingRef = useRef(false);
@@ -123,6 +137,32 @@ export function OfflineQueueBar() {
     return () => window.removeEventListener("beforeunload", warn);
   }, [actions.length]);
 
+  const discardOne = async (action: QueuedStockAction) => {
+    setRemovingId(action.id);
+    try {
+      await removeQueuedAction(action.id);
+      await refresh();
+    } catch {
+      toast.error(t("Could not remove the queued change"));
+    } finally {
+      setRemovingId(null);
+    }
+  };
+
+  const discardAll = async () => {
+    if (!user || !house) return;
+    setDiscarding(true);
+    try {
+      await clearQueuedActions(user.id, house.id);
+      setDiscardOpen(false);
+      await refresh();
+    } catch {
+      toast.error(t("Could not remove the queued change"));
+    } finally {
+      setDiscarding(false);
+    }
+  };
+
   if (!actions.length) {
     return online ? null : (
       <div className="mb-3 flex items-center gap-2 rounded-xl border border-warn/30 bg-warn-soft px-3 py-2 text-[11px] text-warn">
@@ -143,19 +183,55 @@ export function OfflineQueueBar() {
           <Button size="sm" variant="secondary" onClick={() => void runSync()} loading={syncing} disabled={!online}>
             {t("Sync now")}
           </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={async () => {
-              if (!user || !house) return;
-              await clearQueuedActions(user.id, house.id);
-              await refresh();
-            }}
-          >
+          <Button size="sm" variant="ghost" onClick={() => setViewOpen(true)}>
+            {t("View")}
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setDiscardOpen(true)}>
             {t("Discard")}
           </Button>
         </span>
       </div>
+
+      <Sheet
+        open={viewOpen}
+        onClose={() => setViewOpen(false)}
+        title={t("Offline queue")}
+        description={t("Changes saved on this device. They sync automatically when the connection returns.")}
+      >
+        <div className="space-y-2">
+          {actions.map((action) => (
+            <div key={action.id} className="flex items-center gap-3 rounded-xl border border-line px-3 py-2">
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-medium">{action.itemName}</div>
+                <div className="text-[11px] text-muted">
+                  {t(QUEUE_ACTION_LABELS[String(action.body.action)] ?? "Count")}
+                  {" · "}
+                  {qty(Number(action.body.target ?? action.body.quantity ?? 0))} {action.unit}
+                  {" · "}
+                  {relativeTime(action.createdAt)}
+                </div>
+              </div>
+              <IconButton
+                icon="close"
+                label={t("Discard {item}", { item: action.itemName })}
+                disabled={removingId !== null}
+                onClick={() => void discardOne(action)}
+                className="h-8 w-8 text-muted hover:text-danger"
+              />
+            </div>
+          ))}
+        </div>
+      </Sheet>
+
+      <ConfirmDialog
+        open={discardOpen}
+        onClose={() => setDiscardOpen(false)}
+        onConfirm={() => void discardAll()}
+        title={t("Discard every queued change?")}
+        body={t("This cannot be undone. The queued stock changes are removed from this device.")}
+        confirmLabel={t("Discard all")}
+        loading={discarding}
+      />
 
       <Sheet
         open={Boolean(conflict)}
