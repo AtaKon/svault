@@ -23,6 +23,7 @@ async function importBundled(entry) {
     },
   });
   const chunk = bundle.output.find((output) => output.type === "chunk");
+  if (!chunk) throw new Error(`Bundling ${entry} produced no JavaScript chunk; check the Vite/Rolldown options above`);
   return import("data:text/javascript;base64," + Buffer.from(chunk.code).toString("base64"));
 }
 
@@ -630,6 +631,8 @@ test("grayscale reuses storage only when it fits the current pixels", () => {
   const wide = qr.rgbaToGray(new Uint8ClampedArray(16), 2, 2, gray);
   assert.notEqual(wide.gray, gray);
   assert.deepEqual([...wide.gray], [0, 0, 0, 0]);
+  // Short RGBA data is rejected instead of silently decoding missing pixels as black.
+  assert.throws(() => qr.rgbaToGray(rgba, 2, 2), RangeError);
 });
 
 test("the torch target flips whatever state the camera reported or was asked for", () => {
