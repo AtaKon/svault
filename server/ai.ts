@@ -159,6 +159,11 @@ export function resolveAi(settings: HouseSettings | Record<string, any>): AiConf
   const customEndpoint = Boolean(houseBase) && normaliseBaseUrl(houseBase) !== normaliseBaseUrl(envBase);
   const houseKey = ai.apiKey && ai.apiKey !== "***" ? String(ai.apiKey) : "";
   const apiKey = houseKey || (customEndpoint ? "" : AI_ENV.apiKey) || "";
+  // House token prices only apply when the house pays for its own provider
+  // (own key or own endpoint). On the server's key and endpoint the server's
+  // prices decide, so a house cannot zero out what the instance AI budget
+  // records for calls it does not pay for.
+  const ownProvider = Boolean(houseKey) || customEndpoint;
   const enabled = ai.enabled !== false && (Boolean(apiKey) || (customEndpoint && ai.enabled === true));
   const baseUrl = houseBase || envBase;
   const visionModel = ai.visionModel || AI_ENV.visionModel || ai.model || AI_ENV.model;
@@ -181,8 +186,8 @@ export function resolveAi(settings: HouseSettings | Record<string, any>): AiConf
     recipeVisionWarning: droppedVisionModels
       ? `Only the first ${MAX_RECIPE_VISION_CHAIN} recipe vision models are used; ${droppedVisionModels} configured model(s) were dropped.`
       : null,
-    inputPrice: optionalPrice(ai.inputPrice) ?? AI_ENV.inputPrice,
-    outputPrice: optionalPrice(ai.outputPrice) ?? AI_ENV.outputPrice,
+    inputPrice: (ownProvider ? optionalPrice(ai.inputPrice) : null) ?? AI_ENV.inputPrice,
+    outputPrice: (ownProvider ? optionalPrice(ai.outputPrice) : null) ?? AI_ENV.outputPrice,
     customEndpoint,
     recipeReasoning: normaliseRecipeReasoning(ai.recipeReasoning ?? AI_ENV.recipeReasoning),
     reasoningControl: supportsReasoningControl(baseUrl),
