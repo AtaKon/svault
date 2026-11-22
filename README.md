@@ -398,7 +398,22 @@ node scripts/receipt-qr-browser-check.mjs URL  # simulated camera on a throwaway
 
 The browser scripts need `npm i --no-save playwright-core` and a local Edge/Chrome install
 (the paths are set at the top of each script).
-The receipt QR check also uses ZXing from the app's normal npm dependencies.
+The receipt QR browser check runs locally with a simulated camera. It uses the app's ZXing
+dependency and the demo account from the seeder. To start a disposable instance on port 4201,
+run these commands in a terminal at the repository root:
+
+```bash
+npm run build
+(
+  export DATA_DIR="$(mktemp -d)"
+  export SV_DATABASE_KIND=sqlite DATABASE_URL= SV_DATABASE_URL= NODE_ENV=production PORT=4201 COOKIE_SECURE=false
+  node --import tsx --disable-warning=ExperimentalWarning server/seed.ts &&
+    node --disable-warning=ExperimentalWarning dist/server/index.js
+)
+```
+
+In a second terminal, run `node scripts/receipt-qr-browser-check.mjs http://localhost:4201`.
+Set `SV_BROWSER_CHANNEL=msedge` to use Edge. Stop the disposable server when the check finishes.
 
 The test suite covers unit conversion, OCR-noise parsing, auth, per-house isolation, membership
 roles, item creation, barcode conflicts and lookup, FIFO consumption, absolute counts, moves, low

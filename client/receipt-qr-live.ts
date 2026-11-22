@@ -158,7 +158,10 @@ export async function startLiveQrScan(
     const decoder = worker ??= new ReceiptQrWorker();
     try {
       return await waitForResponse(() => new Promise<string | null>((resolve, reject) => {
-        decoder.onmessage = ({ data }: MessageEvent<string | null>) => resolve(data);
+        decoder.onmessage = ({ data }: MessageEvent<unknown>) => {
+          if (data === null || typeof data === "string") resolve(data);
+          else reject(new Error("Unexpected receipt QR worker reply"));
+        };
         decoder.onerror = reject;
         decoder.onmessageerror = reject;
         decoder.postMessage(frame, [frame.data.buffer]);

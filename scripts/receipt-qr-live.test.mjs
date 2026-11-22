@@ -275,7 +275,7 @@ test("live frames are bounded and serialized, with native retry before switching
   const nextPost = postFrame.mock.callCount();
   postFrame.mock.mockImplementationOnce(failTransfer, nextPost);
   postFrame.mock.mockImplementationOnce(function () { this.onmessage({ data: null }); }, nextPost + 1);
-  postFrame.mock.mockImplementationOnce(failTransfer, nextPost + 2);
+  postFrame.mock.mockImplementationOnce(function () { this.onmessage({ data: 42 }); }, nextPost + 2);
   const recovering = await startLiveQrScan(video, (payload) => recovered.push(payload), new AbortController().signal, onDecoderError);
   for (let tick = 0; tick < 3; tick++) {
     await frame();

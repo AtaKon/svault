@@ -47,6 +47,11 @@ try {
       if (fault === "invalid") {
         return postFrame.call(this, { width: 1, height: 1, data: new Uint8ClampedArray(3) });
       }
+      if (fault === "invalid-reply") {
+        const onReply = this.onmessage;
+        queueMicrotask(() => onReply?.call(this, new MessageEvent("message", { data: 42 })));
+        return;
+      }
       if (fault === "stall") return;
       // Feed a printed-code fixture through the actual decoder worker.
       const rgba = new Uint8ClampedArray(pixels.length * 4).fill(255);
@@ -237,7 +242,11 @@ try {
   assert.deepEqual(await page.evaluate(() => torchRequests), [true, false, false]);
   await choosePhoto();
   assert.equal(await page.evaluate(() => lastQrCamera.getTracks().every((track) => track.readyState === "ended")), true);
-  await setFixture({ forceSoftware: true, workerFaults: ["post", "invalid", "error", "invalid", "stall"], torchRequests: null });
+  await setFixture({
+    forceSoftware: true,
+    workerFaults: ["post", "invalid", "error", "invalid", "invalid-reply", "invalid", "stall"],
+    torchRequests: null,
+  });
   await scan.click();
   await waitForRequest(5);
   assert.equal(await page.evaluate(() => qrRequests[4].qr), qr);
