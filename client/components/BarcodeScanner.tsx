@@ -89,11 +89,13 @@ export function BarcodeScanner({
   // A label QR whose target route is the one already shown keeps this
   // component mounted: the navigation pushes a new history entry (a new
   // location key) without unmounting the scanner. Once it settles, the flag
-  // is cleared and the camera effect re-runs below, so scanning resumes. A
+  // is cleared and the camera epoch bumped, so scanning resumes. A
   // label that points elsewhere unmounts this component, so the flag never
   // clears behind a different page.
   useEffect(() => {
+    if (!navigatingRef.current) return;
     navigatingRef.current = false;
+    setCameraEpoch((n) => n + 1);
   }, [location.key]);
 
   useEffect(() => {
@@ -330,9 +332,10 @@ export function BarcodeScanner({
       session.abort();
       if (noticeTimer.current) window.clearTimeout(noticeTimer.current);
     };
-    // location.key re-runs the effect once a label navigation to the already
-    // shown route settles (see the location effect above).
-  }, [facingMode, attempt, lens, cameraEpoch, t, navigate, location.key]);
+    // A label navigation to the already shown route restarts the camera by
+    // bumping cameraEpoch (see the location effect above). Other URL changes
+    // on the hosting page leave the running camera alone.
+  }, [facingMode, attempt, lens, cameraEpoch, t, navigate]);
 
   // Galaxy Chrome often shows a black preview after app switching: release
   // the camera while hidden and open a fresh stream on the way back.
