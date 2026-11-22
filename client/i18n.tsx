@@ -916,6 +916,8 @@ const EL: Record<string, string> = {
   "Edit {item}": "Επεξεργασία {item}",
   "Remove {item}": "Αφαίρεση {item}",
   "Could not save the line": "Δεν ήταν δυνατή η αποθήκευση της γραμμής",
+  "Could not update the line": "Δεν ήταν δυνατή η ενημέρωση της γραμμής",
+  "Could not remove the line": "Δεν ήταν δυνατή η αφαίρεση της γραμμής",
   "Edit shopping line": "Επεξεργασία γραμμής αγορών",
   "The line merges with an open line for the same item and compatible unit.": "Η γραμμή συγχωνεύεται με μια ανοιχτή γραμμή για το ίδιο αντικείμενο και συμβατή μονάδα.",
   "Milk, olive oil…": "Γάλα, ελαιόλαδο…",

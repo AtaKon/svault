@@ -151,45 +151,53 @@ export function ShoppingPage() {
       setCheckTarget(item);
       return;
     }
-    await api(`/api/houses/${house.id}/shopping/${item.id}`, { method: "PATCH", body: { checked: false } });
-    setLookedUp((current) => { const next = { ...current }; delete next[item.id]; return next; });
-    setExternalOffers((current) => {
-      const next = { ...current };
-      delete next[item.id];
-      return next;
-    });
-    setOfferFilters((current) => {
-      const next = { ...current };
-      delete next[item.id];
-      return next;
-    });
-    setLookupBarcodes((current) => {
-      const next = { ...current };
-      delete next[item.id];
-      return next;
-    });
-    await load();
+    try {
+      await api(`/api/houses/${house.id}/shopping/${item.id}`, { method: "PATCH", body: { checked: false } });
+      setLookedUp((current) => { const next = { ...current }; delete next[item.id]; return next; });
+      setExternalOffers((current) => {
+        const next = { ...current };
+        delete next[item.id];
+        return next;
+      });
+      setOfferFilters((current) => {
+        const next = { ...current };
+        delete next[item.id];
+        return next;
+      });
+      setLookupBarcodes((current) => {
+        const next = { ...current };
+        delete next[item.id];
+        return next;
+      });
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? t(err.message) : t("Could not update the line"));
+    }
   };
 
   const remove = async (item: ShoppingItem) => {
-    await api(`/api/houses/${house.id}/shopping/${item.id}`, { method: "DELETE" });
-    setLookedUp((current) => { const next = { ...current }; delete next[item.id]; return next; });
-    setExternalOffers((current) => {
-      const next = { ...current };
-      delete next[item.id];
-      return next;
-    });
-    setOfferFilters((current) => {
-      const next = { ...current };
-      delete next[item.id];
-      return next;
-    });
-    setLookupBarcodes((current) => {
-      const next = { ...current };
-      delete next[item.id];
-      return next;
-    });
-    await load();
+    try {
+      await api(`/api/houses/${house.id}/shopping/${item.id}`, { method: "DELETE" });
+      setLookedUp((current) => { const next = { ...current }; delete next[item.id]; return next; });
+      setExternalOffers((current) => {
+        const next = { ...current };
+        delete next[item.id];
+        return next;
+      });
+      setOfferFilters((current) => {
+        const next = { ...current };
+        delete next[item.id];
+        return next;
+      });
+      setLookupBarcodes((current) => {
+        const next = { ...current };
+        delete next[item.id];
+        return next;
+      });
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? t(err.message) : t("Could not remove the line"));
+    }
   };
 
   const lookupOffers = async (line: ShoppingItem) => {
