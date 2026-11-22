@@ -146,7 +146,7 @@ export function ReceiptQrScanner({
     try {
       const state = await handle.setTorch(next);
       // A failed or canceled request reports null and keeps the last state.
-      if (scanRef.current === handle) setTorch(resolveTorchState(torch, state));
+      if (scanRef.current === handle) setTorch((previous) => resolveTorchState(previous, state));
     } catch {
       // Keep the last reported state if the camera request fails.
     } finally {
