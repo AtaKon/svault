@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { useAuth } from "@/state";
 import { AppShell } from "@/components/AppShell";
 import { LogoMark } from "@/components/icons";
@@ -61,7 +61,7 @@ export function App() {
         <Route path="/items" element={<InventoryPage />} />
         <Route path="/items/duplicates" element={<DuplicatesPage />} />
         <Route path="/items/new" element={<ItemFormPage />} />
-        <Route path="/items/:itemId" element={<ItemPage />} />
+        <Route path="/items/:itemId" element={<ItemPageRoute />} />
         <Route path="/items/:itemId/edit" element={<ItemFormPage />} />
         <Route path="/scan" element={<ScanPage />} />
         <Route path="/receipts" element={<ReceiptsPage />} />
@@ -101,6 +101,13 @@ export function App() {
       </Route>
     </Routes>
   );
+}
+
+/** The item page keeps loaded state; keying it by the route param gives every
+ * item a fresh mount instead of showing the previous item while loading. */
+function ItemPageRoute() {
+  const { itemId = "" } = useParams();
+  return <ItemPage key={itemId} />;
 }
 
 function RequireAuth({ children }: { children: ReactNode }) {
