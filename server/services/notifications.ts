@@ -293,5 +293,12 @@ export async function scanAllHouses() {
       console.error(`Reminder scan failed for house ${house.id}:`, error);
     }
   }
-  await maybeSendWeeklySummaries();
+  // A failed weekly summary must not reject the whole scan: the per-house
+  // reminders above are already in sync, so log it and let the caller's
+  // success stand.
+  try {
+    await maybeSendWeeklySummaries();
+  } catch (error) {
+    console.error("Weekly summary delivery failed:", error);
+  }
 }
