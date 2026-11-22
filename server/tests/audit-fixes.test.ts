@@ -214,6 +214,30 @@ describe("password check rate limit", () => {
   });
 });
 
+describe("item list pagination", () => {
+  let listCookie = "";
+  let listHouseId = "";
+
+  before(async () => {
+    listCookie = await register("OffsetUser");
+    const me = await request("/api/auth/me", { auth: listCookie });
+    listHouseId = me.data.houses[0].id;
+    const item = await request(`/api/houses/${listHouseId}/items`, {
+      auth: listCookie,
+      body: { name: "OffsetSalt", unit: "pcs" },
+    });
+    assert.equal(item.status, 201, JSON.stringify(item.data));
+  });
+
+  it("accepts a fractional and a huge offset without erroring", async () => {
+    for (const offset of ["1.5", "1e300", "abc", "-3"]) {
+      const res = await request(`/api/houses/${listHouseId}/items?offset=${offset}`, { auth: listCookie });
+      assert.equal(res.status, 200, `offset=${offset}`);
+      assert.ok(Array.isArray(res.data.items));
+    }
+  });
+});
+
 describe("recipe import network guard", () => {
   let recipeServer: import("node:http").Server;
   let recipeServerHits = 0;

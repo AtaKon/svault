@@ -690,7 +690,9 @@ inventoryRoutes.get(
     const includeArchived = req.query.archived === "1";
     const sort = String(req.query.sort ?? "name");
     const limit = intParam(req.query.limit, 300, 1000);
-    const offset = Math.max(0, Number(req.query.offset ?? 0) || 0);
+    // Bind drivers reject non-integers, and SQLite errors out on a fractional
+    // or oversized OFFSET, so floor and clamp like intParam does for limit.
+    const offset = Math.max(0, Math.min(1e9, Math.floor(Number(req.query.offset ?? 0) || 0)));
 
     const where: string[] = ["i.house_id = ?"];
     const params: unknown[] = [houseId];
