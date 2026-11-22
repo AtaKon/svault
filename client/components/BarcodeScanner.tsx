@@ -58,6 +58,17 @@ export function BarcodeScanner({
   const videoRef = useRef<HTMLVideoElement>(null);
   const callbackRef = useRef(onDetected);
   callbackRef.current = onDetected;
+  // t and navigate change identity on a language switch or a router update;
+  // the camera effect reads them through refs so those changes never tear
+  // down and reopen the camera.
+  const tRef = useRef(t);
+  tRef.current = t;
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
+  // The label QR check compares against the URL shown right now; a ref
+  // keeps that fresh on every render without retriggering the camera effect.
+  const locationRef = useRef(location);
+  locationRef.current = location;
   const lastRef = useRef<{ code: string; at: number }>({ code: "", at: 0 });
   const noticeTimer = useRef<number | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -149,6 +160,12 @@ export function BarcodeScanner({
     };
     signal.addEventListener("abort", releaseCamera, { once: true });
 
+    const showNotice = (message: string) => {
+      setNotice(message);
+      if (noticeTimer.current) window.clearTimeout(noticeTimer.current);
+      noticeTimer.current = window.setTimeout(() => setNotice(null), 4000);
+    };
+
     const handleResult = (text: string, formatName: string | undefined) => {
       if (released || !text) return;
       const now = Date.now();
@@ -165,14 +182,18 @@ export function BarcodeScanner({
       if (formatName === "QR_CODE") {
         const target = parseLabelScan(text, window.location.origin);
         if (target) {
+          // A label for the page already shown would navigate to the very
+          // same URL: keep the camera running and say so instead.
+          if (target.path === locationRef.current.pathname + locationRef.current.search) {
+            showNotice(tRef.current("This label is for the page you are on."));
+            return;
+          }
           navigatingRef.current = true;
           releaseCamera();
-          navigate(target.path);
+          navigateRef.current(target.path);
           return;
         }
-        setNotice(t("That QR code is not an SVault label."));
-        if (noticeTimer.current) window.clearTimeout(noticeTimer.current);
-        noticeTimer.current = window.setTimeout(() => setNotice(null), 4000);
+        showNotice(tRef.current("That QR code is not an SVault label."));
         return;
       }
       callbackRef.current(text, typeof formatName === "string" ? formatName : undefined);
@@ -252,7 +273,7 @@ export function BarcodeScanner({
           try {
             await startZxing();
           } catch (error) {
-            setError(friendlyCameraError(error, t));
+            setError(friendlyCameraError(error, tRef.current));
           }
         }
       } finally {
@@ -323,7 +344,7 @@ export function BarcodeScanner({
       } catch (err: unknown) {
         if (signal.aborted) return;
         setStarting(false);
-        setError(friendlyCameraError(err, t));
+        setError(friendlyCameraError(err, tRef.current));
       }
     })();
 
@@ -334,8 +355,10 @@ export function BarcodeScanner({
     };
     // A label navigation to the already shown route restarts the camera by
     // bumping cameraEpoch (see the location effect above). Other URL changes
-    // on the hosting page leave the running camera alone.
-  }, [facingMode, attempt, lens, cameraEpoch, t, navigate]);
+    // on the hosting page leave the running camera alone, and t/navigate are
+    // read through refs: a language switch changes t's identity and must not
+    // tear the camera down either.
+  }, [facingMode, attempt, lens, cameraEpoch]);
 
   // Galaxy Chrome often shows a black preview after app switching: release
   // the camera while hidden and open a fresh stream on the way back.
