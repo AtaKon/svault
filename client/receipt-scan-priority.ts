@@ -1,8 +1,9 @@
 /**
- * Scan priority for the receipt photo flow: the issuer QR is looked for
- * first, and the photos are OCR'd only when no usable digital receipt comes
- * out of it. The rules live here, pure of the decoder, camera and network,
- * so the ordering they encode can be tested on its own (see
+ * Scan decision rules for the receipt flow, pure of the decoder, camera and
+ * network: which decoded payloads carry a receipt link, when the live
+ * scanner's link may start an import, when a scan response counts as a
+ * usable digital receipt, and whether the photos still need to be OCR'd.
+ * Each rule can be tested on its own (see
  * scripts/receipt-scan-priority.test.mjs).
  */
 
@@ -18,6 +19,16 @@ export function addReceiptQrPayload(links: Map<string, ReceiptQrLink>, payload: 
   const link = payload ? matchReceiptQrLink(payload) : null;
   if (link) links.set(link.url, link);
   return links.size > 1;
+}
+
+/**
+ * A live scan may start an import only on the workspace revision its
+ * scanner opened with (a Start over in between makes the detected code
+ * stale) and only while the scan flow is free to run. A stale or busy
+ * workspace rejects the link without starting a request.
+ */
+export function canAcceptLiveQrLink(scanRevision: number, workspaceRevision: number, scanAvailable: boolean): boolean {
+  return scanRevision === workspaceRevision && scanAvailable;
 }
 
 /**

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { addReceiptQrPayload, isUsableDigitalReceipt, shouldRunPhotoOcr } from "../client/receipt-scan-priority.js";
+import { addReceiptQrPayload, canAcceptLiveQrLink, isUsableDigitalReceipt, shouldRunPhotoOcr } from "../client/receipt-scan-priority.js";
 
 const entersoft = "https://e-invoicing.gr/edocuments/ViewInvoice/-1/12345678-1234-1234-1234-123456789abc_tEsTaB12";
 const epsilon = "https://epsilondigital-sklavenitis.epsilonnet.gr/fd/12345678123412341234123456789abc:12";
@@ -64,6 +64,14 @@ test("a scan response is a usable digital receipt only with QR provenance and pr
 test("an empty response body resolving to null or undefined is not usable", () => {
   assert.equal(isUsableDigitalReceipt(null), false);
   assert.equal(isUsableDigitalReceipt(undefined), false);
+});
+
+test("a live QR link is accepted only on the revision the scanner opened with", () => {
+  assert.equal(canAcceptLiveQrLink(3, 3, true), true);
+  // Start over reset the workspace while the scanner was open.
+  assert.equal(canAcceptLiveQrLink(3, 4, true), false);
+  // A receipt operation is running or the scan flow is unavailable.
+  assert.equal(canAcceptLiveQrLink(3, 3, false), false);
 });
 
 test("a malformed draft the applier would crash on is not usable", () => {

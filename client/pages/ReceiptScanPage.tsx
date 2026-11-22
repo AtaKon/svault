@@ -16,7 +16,7 @@ import { OffProductPicker } from "@/components/OffProductPicker";
 import { ItemPickerSheet } from "@/components/ItemPickerSheet";
 import { ZoomableImage } from "@/components/ZoomableImage";
 import { clearReceiptDraft, loadReceiptDraft, receiptDraftKey, saveReceiptDraft, type StoredReceiptDraft } from "@/receipt-draft-store";
-import { addReceiptQrPayload, isUsableDigitalReceipt, shouldRunPhotoOcr } from "@/receipt-scan-priority";
+import { addReceiptQrPayload, canAcceptLiveQrLink, isUsableDigitalReceipt, shouldRunPhotoOcr } from "@/receipt-scan-priority";
 import { ReceiptQrScanner } from "@/components/ReceiptQrScanner";
 import { reconcileReceipt } from "@shared/receipt-reconcile";
 import type { ReceiptQrLink } from "@shared/receipt-qr-links";
@@ -825,7 +825,7 @@ export function ReceiptScanPage() {
   };
 
   const acceptLiveQrLink = (link: ReceiptQrLink, revision: number) => {
-    if (revision !== workspaceRevisionRef.current || !canScanQr()) return false;
+    if (!canAcceptLiveQrLink(revision, workspaceRevisionRef.current, canScanQr())) return false;
     const controller = new AbortController();
     // Hold the workspace lock before closing the dialog or starting the request.
     liveQrImportRef.current = controller;
