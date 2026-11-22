@@ -77,6 +77,49 @@ describe("cookie parsing", () => {
   });
 });
 
+describe("stock mutation idempotency", () => {
+  let stockCookie = "";
+  let stockHouseId = "";
+  let raceItemId = "";
+
+  before(async () => {
+    stockCookie = await register("StockRace");
+    const me = await request("/api/auth/me", { auth: stockCookie });
+    stockHouseId = me.data.houses[0].id;
+    const locations = await request(`/api/houses/${stockHouseId}/locations`, { auth: stockCookie });
+    const fridgeId = locations.data.find((entry: any) => entry.name === "Fridge").id;
+    const item = await request(`/api/houses/${stockHouseId}/items`, {
+      auth: stockCookie,
+      body: { name: "RaceWalnuts", unit: "pcs", initialStock: { quantity: 2, locationId: fridgeId } },
+    });
+    assert.equal(item.status, 201, JSON.stringify(item.data));
+    raceItemId = item.data.id;
+  });
+
+  it("applies a retried removal once even when both requests run concurrently", async () => {
+    const key = "audit-concurrent-retry-0001";
+    const post = () =>
+      request(`/api/items/${raceItemId}/stock`, {
+        auth: stockCookie,
+        body: { action: "remove", quantity: 1, idempotencyKey: key },
+      });
+    const [first, second] = await Promise.all([post(), post()]);
+    assert.equal(first.status, 200, JSON.stringify(first.data));
+    assert.equal(second.status, 200, JSON.stringify(second.data));
+    // The second response is the recorded one, so both agree on the outcome.
+    assert.equal(first.data.quantity, second.data.quantity);
+
+    const detail = await request(`/api/items/${raceItemId}`, { auth: stockCookie });
+    assert.equal(detail.status, 200);
+    assert.equal(Number(detail.data.quantity), 1);
+
+    const movements = await request(`/api/items/${raceItemId}/movements`, { auth: stockCookie });
+    assert.equal(movements.status, 200);
+    const removals = movements.data.filter((movement: any) => movement.type === "out");
+    assert.equal(removals.length, 1);
+  });
+});
+
 describe("recipe import network guard", () => {
   let recipeServer: import("node:http").Server;
   let recipeServerHits = 0;

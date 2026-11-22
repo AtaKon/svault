@@ -2,7 +2,7 @@ import { effectiveExpiry } from "../services/effective-expiry.js";
 import { forecastsForHouse } from "../services/forecast.js";
 import { Router } from "express";
 import { z } from "zod";
-import { all, get, newId, now, parseJson, run, tx } from "../db.js";
+import { all, get, lockHouseholdLedger, newId, now, parseJson, run, tx } from "../db.js";
 import { memberRole, requireAuth, roleAtLeast } from "../auth.js";
 import { ApiError, handler, intParam, parseBody, requireHouse } from "../http.js";
 import {
@@ -1223,44 +1223,46 @@ itemRoutes.post(
       }),
       req.body,
     );
-    if (body.idempotencyKey) {
-      const previous = await get<any>("SELECT response FROM stock_mutations WHERE house_id = ? AND idempotency_key = ?", [
-        item.house_id,
-        body.idempotencyKey,
-      ]);
-      if (previous) {
-        res.json(parseJson(previous.response, {}));
-        return;
+    const result = await tx(async (session) => {
+      // Serialise stock writes per house, including the idempotency check, the
+      // same way the cook route does. Checking the key outside the transaction
+      // let a retried request apply twice, and an unlocked transaction let two
+      // removals from the same lot lose an update.
+      await lockHouseholdLedger(session, item.house_id);
+      if (body.idempotencyKey) {
+        const previous = await get<any>("SELECT response FROM stock_mutations WHERE house_id = ? AND idempotency_key = ?", [
+          item.house_id,
+          body.idempotencyKey,
+        ]);
+        if (previous) return { applied: false, response: parseJson(previous.response, {}) };
       }
-    }
-    if (body.action === "set" && body.baseUpdatedAt && item.updated_at > body.baseUpdatedAt) {
-      throw new ApiError(409, "This count is older than a newer server change", {
-        conflict: true,
-        currentUpdatedAt: item.updated_at,
-        currentQuantity: await itemQuantity(item.id),
-        baseUpdatedAt: body.baseUpdatedAt,
-      });
-    }
-    if (body.vendorId && !await get("SELECT id FROM vendors WHERE id = ? AND house_id = ?", [body.vendorId, item.house_id])) {
-      throw new ApiError(400, "Shop does not exist in this house");
-    }
-    const base = {
-      itemId: item.id,
-      houseId: item.house_id,
-      userId: req.user!.id,
-      quantity: body.quantity ?? 0,
-      unit: body.unit,
-      unitPrice: body.unitPrice ?? null,
-      currency: body.currency ?? null,
-      locationId: body.locationId ?? null,
-      lotId: body.lotId ?? null,
-      expiresAt: body.expiresAt ?? null,
-      purchasedAt: body.purchasedAt ?? null,
-      note: body.note ?? null,
-      reason: body.reason ?? null,
-      vendorId: body.vendorId ?? null,
-    };
-    const detail = await tx(async () => {
+      if (body.action === "set" && body.baseUpdatedAt && item.updated_at > body.baseUpdatedAt) {
+        throw new ApiError(409, "This count is older than a newer server change", {
+          conflict: true,
+          currentUpdatedAt: item.updated_at,
+          currentQuantity: await itemQuantity(item.id),
+          baseUpdatedAt: body.baseUpdatedAt,
+        });
+      }
+      if (body.vendorId && !await get("SELECT id FROM vendors WHERE id = ? AND house_id = ?", [body.vendorId, item.house_id])) {
+        throw new ApiError(400, "Shop does not exist in this house");
+      }
+      const base = {
+        itemId: item.id,
+        houseId: item.house_id,
+        userId: req.user!.id,
+        quantity: body.quantity ?? 0,
+        unit: body.unit,
+        unitPrice: body.unitPrice ?? null,
+        currency: body.currency ?? null,
+        locationId: body.locationId ?? null,
+        lotId: body.lotId ?? null,
+        expiresAt: body.expiresAt ?? null,
+        purchasedAt: body.purchasedAt ?? null,
+        note: body.note ?? null,
+        reason: body.reason ?? null,
+        vendorId: body.vendorId ?? null,
+      };
       let movementId: string | null = null;
       if (body.action === "add") movementId = await addStock(base);
       else if (body.action === "remove") movementId = await removeStock(base);
@@ -1277,17 +1279,17 @@ itemRoutes.post(
           toLocationId: body.toLocationId ?? "",
           note: body.note ?? undefined,
         });
-      const result = { ...(await itemDetail(item.id, req.user!.id)), lastMovementId: movementId };
+      const response = { ...(await itemDetail(item.id, req.user!.id)), lastMovementId: movementId };
       if (body.idempotencyKey) {
         await run(
           "INSERT INTO stock_mutations (id, house_id, idempotency_key, user_id, response, created_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
-          [newId("mut"), item.house_id, body.idempotencyKey, req.user!.id, JSON.stringify(result), now()],
+          [newId("mut"), item.house_id, body.idempotencyKey, req.user!.id, JSON.stringify(response), now()],
         );
       }
-      return result;
+      return { applied: true, response };
     });
-    await afterStockChange(item.id);
-    res.json(detail);
+    if (result.applied) await afterStockChange(item.id);
+    res.json(result.response);
   }),
 );
 
