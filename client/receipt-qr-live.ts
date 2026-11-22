@@ -38,7 +38,7 @@ export async function startLiveQrScan(
   video: HTMLVideoElement,
   onPayload: (text: string) => void,
   signal: AbortSignal,
-  onDecoderError?: () => void,
+  onScanError?: () => void,
 ): Promise<LiveQrScanHandle> {
   signal.throwIfAborted();
   const session = new AbortController();
@@ -46,6 +46,7 @@ export async function startLiveQrScan(
   const Detector = (globalThis as { BarcodeDetector?: NativeQrDetectorClass }).BarcodeDetector;
   let detector: InstanceType<NativeQrDetectorClass> | null = null;
   let stream: MediaStream | undefined;
+  let track: MediaStreamTrack;
   let scanning = false;
   let nativeFailures = 0;
   let workerFailures = 0;
@@ -54,6 +55,7 @@ export async function startLiveQrScan(
   let interval: number | undefined;
   const stop = () => {
     signal.removeEventListener("abort", stop);
+    track?.removeEventListener("ended", failScan);
     session.abort(SCAN_STOPPED);
     if (interval !== undefined) {
       window.clearInterval(interval);
@@ -72,6 +74,11 @@ export async function startLiveQrScan(
     canvas = null;
     worker?.terminate();
     worker = undefined;
+  };
+  const failScan = () => {
+    if (sessionSignal.aborted) return;
+    stop();
+    onScanError?.();
   };
 
   const waitForResponse = <T>(request: () => Promise<T>) => {
@@ -99,7 +106,6 @@ export async function startLiveQrScan(
   };
 
   signal.addEventListener("abort", stop, { once: true });
-  let track: MediaStreamTrack;
   try {
     signal.throwIfAborted();
     const acquired = await navigator.mediaDevices.getUserMedia({
@@ -224,28 +230,31 @@ export async function startLiveQrScan(
       }
       if (!sessionSignal.aborted && text) onPayload(text);
     } catch {
-      if (!sessionSignal.aborted) {
-        stop();
-        onDecoderError?.();
-      }
+      failScan();
     } finally {
       scanning = false;
     }
   };
   signal.throwIfAborted();
   sessionSignal.throwIfAborted();
+  if (track.readyState === "ended") {
+    stop();
+    throw new Error("The camera stopped before scanning began");
+  }
+  track.addEventListener("ended", failScan, { once: true });
   interval = window.setInterval(scanFrame, FRAME_INTERVAL_MS);
 
+  const cameraIsActive = () => !sessionSignal.aborted && track.readyState !== "ended";
   return {
     stop,
     setTorch: async (on) => {
-      if (!torchSupported || sessionSignal.aborted) return null;
+      if (!torchSupported || !cameraIsActive()) return null;
       try {
         await track.applyConstraints(cameraConstraint({ torch: on }));
       } catch {
         return null;
       }
-      if (sessionSignal.aborted) return null;
+      if (!cameraIsActive()) return null;
       try {
         const settings: CameraTrackSettings | undefined = track.getSettings?.();
         return { requested: on, reported: settings?.torch };

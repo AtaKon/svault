@@ -47,6 +47,7 @@ try {
       if (fault === "invalid") {
         return postFrame.call(this, { width: 1, height: 1, data: new Uint8ClampedArray(3) });
       }
+      if (fault === "stall") return;
       // Feed a printed-code fixture through the actual decoder worker.
       const rgba = new Uint8ClampedArray(pixels.length * 4).fill(255);
       pixels.forEach((value, i) => rgba.fill(value, i * 4, i * 4 + 3));
@@ -291,12 +292,36 @@ try {
   assert.equal(await page.evaluate(() => lastQrCamera.getTracks().every((track) => track.readyState === "ended")), true);
   await choosePhoto();
 
+  await setFixture({ workerFaults: ["stall"] });
+  await scan.click();
+  await retry.waitFor();
+  assert.equal(await page.evaluate(() => lastQrCamera.getTracks().every((track) => track.readyState === "ended")), true);
+  await retry.click();
+  await waitForRequest(11);
+  await page.evaluate(() => qrRequests[10].resolve(new Response("Invalid receipt response")));
+  await page.getByRole("alert").filter({ hasText: "The digital receipt could not be loaded." }).waitFor();
+  assert.equal(await page.getByRole("link", { name: "Open digital receipt" }).getAttribute("href"), qr);
+  await reset.click();
+
   await setFixture({ failReadback: true });
   await scan.click();
   await page.getByText("Could not scan the QR code.").waitFor();
   assert.equal(await page.evaluate(() => lastQrCamera.getTracks().every((track) => track.readyState === "ended")), true);
   await choosePhoto();
-  await setFixture({ failReadback: false, denyCamera: true });
+  await setFixture({ failReadback: false, forceSoftware: false, detectedQr: "https://example.com/menu", torchRequests: [] });
+  await scan.click();
+  await page.getByRole("dialog").getByText("This QR code is not a receipt link.").waitFor();
+  await light.waitFor();
+  await page.evaluate(() => {
+    const [track] = lastQrCamera.getVideoTracks();
+    track.stop();
+    track.dispatchEvent(new Event("ended"));
+  });
+  await retry.waitFor();
+  assert.equal(await light.count(), 0);
+  await choosePhoto();
+
+  await setFixture({ denyCamera: true });
   await scan.click();
   await choosePhoto();
   console.log("Receipt QR browser check passed.");

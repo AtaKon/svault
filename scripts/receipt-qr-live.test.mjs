@@ -66,7 +66,7 @@ test("live frames are bounded and serialized, with native retry before switching
   const gray = receiptPixels(width, height);
   const rgba = new Uint8ClampedArray(gray.length * 4);
   for (let i = 0; i < gray.length; i++) rgba.set([gray[i], gray[i], gray[i], 255], i * 4);
-  const track = { stop: t.mock.fn() };
+  const track = Object.assign(new EventTarget(), { stop: t.mock.fn() });
   const stream = { getTracks: () => [track], getVideoTracks: () => [track] };
   let frame;
   const firstDetection = Promise.withResolvers();
@@ -312,7 +312,7 @@ test("live frames are bounded and serialized, with native retry before switching
   detect.mock.mockImplementation(() => new Promise(() => {}));
   const first = await startLiveQrScan(video, () => {}, new AbortController().signal);
   const firstWait = frame();
-  const secondTrack = { stop: t.mock.fn() };
+  const secondTrack = Object.assign(new EventTarget(), { stop: t.mock.fn() });
   const secondStream = { getTracks: () => [secondTrack], getVideoTracks: () => [secondTrack] };
   const secondVideo = { ...video };
   getUserMedia.mock.mockImplementationOnce(async () => secondStream);
@@ -379,7 +379,7 @@ for (const [failureMode, testName] of [
   ["timeout", "playback that times out releases the stream"],
 ]) {
   test(testName, async (t) => {
-    const track = { stop: t.mock.fn() };
+    const track = Object.assign(new EventTarget(), { stop: t.mock.fn() });
     const stream = { getTracks: () => [track], getVideoTracks: () => [track] };
     const playing = Promise.withResolvers();
     const playback = Promise.withResolvers();
@@ -434,22 +434,23 @@ for (const [failureMode, testName] of [
   });
 }
 
-test("torch checks the reported state and ignores a completion after stop", async (t) => {
+test("torch checks the reported state and ignores results after the camera ends", async (t) => {
   const error = new Error("Cannot set torch");
   let torchSetting;
-  const track = {
+  const track = Object.assign(new EventTarget(), {
     stop: t.mock.fn(),
     getCapabilities: () => ({ torch: true }),
     getSettings: () => ({ torch: torchSetting }),
     applyConstraints: t.mock.fn(async () => undefined),
-  };
+  });
   const stream = { getTracks: () => [track], getVideoTracks: () => [track] };
   replaceGlobal(t, "BarcodeDetector", undefined);
   replaceGlobal(t, "navigator", { mediaDevices: { getUserMedia: async () => stream } });
   replaceGlobal(t, "window", { setTimeout, clearTimeout, setInterval: () => 1, clearInterval() {} });
   const scan = new AbortController();
   try {
-    const handle = await startLiveQrScan({ play: async () => {}, pause() {} }, () => {}, scan.signal);
+    const onScanError = t.mock.fn();
+    const handle = await startLiveQrScan({ play: async () => {}, pause() {} }, () => {}, scan.signal, onScanError);
     assert.equal(handle.torchAvailable, true);
     assert.deepEqual(await handle.setTorch(true), { requested: true, reported: undefined });
     assert.deepEqual(track.applyConstraints.mock.calls[0].arguments, [{ advanced: [{ torch: true }] }]);
@@ -473,9 +474,15 @@ test("torch checks the reported state and ignores a completion after stop", asyn
     const change = Promise.withResolvers();
     track.applyConstraints.mock.mockImplementation(() => change.promise);
     const pending = handle.setTorch(true);
-    handle.stop();
+    track.dispatchEvent(new Event("ended"));
     change.resolve();
     assert.equal(await pending, null);
+    assert.equal(onScanError.mock.callCount(), 1);
+    assert.equal(getEventListeners(track, "ended").length, 0);
+    handle.stop();
+    const constraintRequests = track.applyConstraints.mock.callCount();
+    assert.equal(await handle.setTorch(true), null);
+    assert.equal(track.applyConstraints.mock.callCount(), constraintRequests);
     assert.equal(track.stop.mock.callCount(), 1);
   } finally {
     scan.abort();
