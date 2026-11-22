@@ -143,6 +143,8 @@ export function ReceiptQrScanner({
     try {
       const state = await handle.setTorch(next);
       if (state && scanRef.current === handle) setTorch(state);
+    } catch {
+      // Keep the last reported state if the camera request fails.
     } finally {
       if (pendingTorchRef.current === handle) {
         pendingTorchRef.current = null;

@@ -16,6 +16,8 @@ const browser = await chromium.launch({
 try {
   const context = await browser.newContext({ locale: "en-US", viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   const page = await context.newPage();
+  const pageErrors = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
   page.setDefaultTimeout(10000);
   await page.addInitScript(({ text, side, pixels }) => {
     Object.assign(globalThis, { qrRequests: [], holdDetector: false, denyCamera: false, failNextPlayback: true });
@@ -89,6 +91,14 @@ try {
       const stream = await getUserMedia(constraints);
       if (globalThis.torchRequests) {
         const [track] = stream.getVideoTracks();
+        const readState = Object.getOwnPropertyDescriptor(MediaStreamTrack.prototype, "readyState").get;
+        Object.defineProperty(track, "readyState", { get() {
+          if (globalThis.failTorchStatus) {
+            globalThis.failTorchStatus = false;
+            throw new Error("Test camera status failed");
+          }
+          return readState.call(this);
+        } });
         track.getCapabilities = () => ({ torch: true });
         track.getSettings = () => ({});
         track.applyConstraints = async ({ advanced }) => {
@@ -238,6 +248,10 @@ try {
   await light.click();
   await page.locator('button[aria-label="Light"][aria-pressed="mixed"]:enabled').waitFor();
   await setFixture({ rejectTorchChange: false });
+  await setFixture({ failTorchStatus: true });
+  await light.click();
+  await page.waitForFunction(() => !globalThis.failTorchStatus);
+  await page.locator('button[aria-label="Light"][aria-pressed="mixed"]:enabled').waitFor();
   await light.click();
   assert.deepEqual(await page.evaluate(() => torchRequests), [true, false, false]);
   await choosePhoto();
@@ -307,9 +321,14 @@ try {
   assert.equal(await page.evaluate(() => lastQrCamera.getTracks().every((track) => track.readyState === "ended")), true);
   await retry.click();
   await waitForRequest(11);
-  await page.evaluate(() => qrRequests[10].resolve(new Response("Invalid receipt response")));
+  await resolve(10, {
+    provider: "qr",
+    draft: { vendorName: "Malformed receipt", lines: [{ description: "Milk", quantity: { toString: null } }] },
+  });
   await page.getByRole("alert").filter({ hasText: "The digital receipt could not be loaded." }).waitFor();
   assert.equal(await page.getByRole("link", { name: "Open digital receipt" }).getAttribute("href"), qr);
+  assert.equal(await vendor.inputValue(), "");
+  assert.equal(await scanCode.isEnabled(), true);
   await reset.click();
 
   await setFixture({ failReadback: true });
@@ -333,6 +352,7 @@ try {
   await setFixture({ denyCamera: true });
   await scan.click();
   await choosePhoto();
+  assert.deepEqual(pageErrors, []);
   console.log("Receipt QR browser check passed.");
 } finally {
   await browser.close();

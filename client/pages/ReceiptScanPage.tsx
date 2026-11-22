@@ -755,6 +755,7 @@ export function ReceiptScanPage() {
   const uploading = stitching || pagesUploading;
 
   const applyScan = (data: ReceiptScanResponse) => {
+    const scannedLines = toDraftLines(data.draft);
     setVendorName(data.draft.vendorName ?? "");
     setPurchasedAt(data.draft.purchasedAt ?? todayInput());
     setCurrency(data.draft.currency ?? house.currency);
@@ -763,7 +764,7 @@ export function ReceiptScanPage() {
     setTax(data.draft.tax != null ? String(data.draft.tax) : "");
     setSavings(data.draft.savings != null ? String(data.draft.savings) : "");
     setTaxBreakdown(data.draft.taxBreakdown ?? []);
-    setLines(toDraftLines(data.draft));
+    setLines(scannedLines);
     setValidation({});
     setNewItemCount(null);
     setProvider(data.provider);
@@ -780,33 +781,34 @@ export function ReceiptScanPage() {
     link: ReceiptQrLink,
     options: { revision: number; notLoadedMessage: string; signal?: AbortSignal },
   ): Promise<DigitalLinkOutcome> => {
-    let data: ReceiptScanResponse | undefined;
+    const wasCanceled = () => options.signal?.aborted || options.revision !== workspaceRevisionRef.current;
     try {
-      data = await api<ReceiptScanResponse>(`/api/houses/${house.id}/receipts/scan`, {
+      const data = await api<ReceiptScanResponse>(`/api/houses/${house.id}/receipts/scan`, {
         method: "POST",
         body: { qr: link.url },
         signal: options.signal,
       });
-    } catch {
-      // Failed requests have no receipt data. Check ownership before showing a warning.
-    }
-    if (options.signal?.aborted || options.revision !== workspaceRevisionRef.current) return "aborted";
-    if (!data || !isUsableDigitalReceipt(data)) {
+      if (wasCanceled()) return "aborted";
+      if (data && isUsableDigitalReceipt(data)) {
+        if (hasReceiptDetails(snapshotRef.current() ?? snapshot(), house.currency)) {
+          setWarning(DIGITAL_RECEIPT_EDITS_KEPT);
+          setDigitalLink(link.url);
+          return "kept";
+        }
+        applyScan(data);
+        setManualMode(true);
+        setDigitalLink(null);
+        setText(data.selectedText ?? "");
+        setMergeRemoved(0);
+        return "applied";
+      }
       setWarning(data?.qr?.message || options.notLoadedMessage);
-      setDigitalLink(link.url);
-      return "failed";
+    } catch {
+      if (wasCanceled()) return "aborted";
+      setWarning(options.notLoadedMessage);
     }
-    if (hasReceiptDetails(snapshotRef.current() ?? snapshot(), house.currency)) {
-      setWarning(DIGITAL_RECEIPT_EDITS_KEPT);
-      setDigitalLink(link.url);
-      return "kept";
-    }
-    applyScan(data);
-    setManualMode(true);
-    setDigitalLink(null);
-    setText(data.selectedText ?? "");
-    setMergeRemoved(0);
-    return "applied";
+    setDigitalLink(link.url);
+    return "failed";
   };
 
   const canScanQr = () => !hasReceiptOperation() && !qrScanUnavailable;

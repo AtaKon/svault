@@ -26,7 +26,9 @@ export function addReceiptQrPayload(links: Map<string, ReceiptQrLink>, payload: 
  * challenge page, an empty draft — falls back to reading the photos.
  */
 export function isUsableDigitalReceipt(data: ReceiptScanResponse): boolean {
-  return data.provider === "qr" && data.draft.lines.length > 0;
+  const lines = data.draft?.lines;
+  return data.provider === "qr" && Array.isArray(lines) && lines.length > 0 &&
+    lines.every((line) => typeof line?.description === "string");
 }
 
 /**
