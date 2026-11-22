@@ -1,4 +1,6 @@
-// Run against a seeded, throwaway instance. Uses a simulated camera and issuer.
+// Run against a seeded, throwaway instance. The camera is simulated through
+// browser flags and /receipts/scan replies are intercepted with canned
+// responses; the real issuer is never contacted.
 // Set SV_BROWSER_CHANNEL=msedge to use Edge instead of Chrome.
 import assert from "node:assert/strict";
 import { chromium } from "playwright-core";
@@ -34,6 +36,8 @@ try {
         return codes;
       }
     };
+    // This stub only substitutes frames when forceSoftware is set; the native
+    // path is exercised through the BarcodeDetector stub above instead.
     const postFrame = Worker.prototype.postMessage;
     Worker.prototype.postMessage = function (frame, transfer) {
       if (!globalThis.forceSoftware || !(frame instanceof ImageData)) return postFrame.call(this, frame, transfer);
@@ -242,6 +246,8 @@ try {
   await setFixture({ holdDetector: false, detectedQr: "https://example.com/menu", torchRequests: [] });
   await scan.click();
   const light = page.getByRole("button", { name: "Light", exact: true });
+  // aria-pressed="mixed" is the scanner's unknown torch state: the last
+  // request finished without a confirmed on or off read-back.
   await light.click();
   await page.locator('button[aria-label="Light"][aria-pressed="mixed"]:enabled').waitFor();
   await setFixture({ rejectTorchChange: true });
