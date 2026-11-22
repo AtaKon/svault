@@ -30,17 +30,48 @@ function printableAmount(value: unknown): boolean {
 }
 
 /**
+ * The applier and its rendering trim, print or index into the draft's text
+ * fields, and compare or print its number fields. Only a value of the
+ * declared type (or nothing at all) survives those steps.
+ */
+function textOrNull(value: unknown): boolean {
+  return value == null || typeof value === "string";
+}
+
+function numberOrNull(value: unknown): boolean {
+  return value == null || typeof value === "number";
+}
+
+/**
+ * Every rendered tax entry is indexed into for its rate, and that rate is
+ * printed inside a template literal. A null entry or a non-number rate
+ * would throw while rendering the applied draft.
+ */
+function usableTaxBreakdown(entries: unknown): boolean {
+  return entries == null || (Array.isArray(entries) &&
+    entries.every((entry) => typeof entry === "object" && entry !== null && numberOrNull(entry.rate)));
+}
+
+/**
  * A scan response counts as a usable digital receipt only with QR provenance
  * and product lines to show for it. Anything else — an unavailable issuer, a
- * challenge page, an empty draft — falls back to reading the photos.
+ * challenge page, an empty draft — falls back to reading the photos. The
+ * draft's text, number, line and tax-breakdown fields must also hold their
+ * declared shapes: the applier and the rendering that follows it trim, print
+ * or map over each one, so a malformed value would throw partway through
+ * applying the draft.
  */
 export function isUsableDigitalReceipt(data: ReceiptScanResponse): boolean {
   const lines = data.draft?.lines;
   return data.provider === "qr" && Array.isArray(lines) && lines.length > 0 &&
+    textOrNull(data.draft?.vendorName) && textOrNull(data.draft?.purchasedAt) &&
+    textOrNull(data.draft?.currency) && textOrNull(data.draft?.templateId) &&
     printableAmount(data.draft?.total) && printableAmount(data.draft?.subtotal) &&
     printableAmount(data.draft?.tax) && printableAmount(data.draft?.savings) &&
+    usableTaxBreakdown(data.draft?.taxBreakdown) &&
     lines.every((line) =>
-      typeof line?.description === "string" &&
+      typeof line?.description === "string" && textOrNull(line?.rawDescription) && textOrNull(line?.unit) &&
+      numberOrNull(line?.taxRate) && numberOrNull(line?.discount) &&
       printableAmount(line?.quantity) && printableAmount(line?.unitPrice) && printableAmount(line?.lineTotal));
 }
 
