@@ -398,3 +398,32 @@ describe("recipe import redirect guard", () => {
     }
   });
 });
+
+describe("stored recipe source link", () => {
+  let linkCookie = "";
+  let linkHouseId = "";
+
+  before(async () => {
+    linkCookie = await register("RecipeLink");
+    linkHouseId = (await request("/api/auth/me", { auth: linkCookie })).data.houses[0].id;
+  });
+
+  it("rejects a loopback source link even when SV_OUTBOUND_ALLOW_PRIVATE is true", async () => {
+    // House-admin-configured URLs may stay private (a LAN Ollama server), but
+    // a member-supplied recipe link is stored and rendered for every member,
+    // so it must be refused whatever the instance-wide setting allows.
+    const previous = process.env.SV_OUTBOUND_ALLOW_PRIVATE;
+    process.env.SV_OUTBOUND_ALLOW_PRIVATE = "true";
+    try {
+      const res = await request(`/api/houses/${linkHouseId}/recipes`, {
+        auth: linkCookie,
+        body: { title: "Loopback link", sourceUrl: "http://127.0.0.1/x" },
+      });
+      assert.equal(res.status, 400, JSON.stringify(res.data));
+      assert.match(res.data.error, /private or local network/i);
+    } finally {
+      if (previous === undefined) delete process.env.SV_OUTBOUND_ALLOW_PRIVATE;
+      else process.env.SV_OUTBOUND_ALLOW_PRIVATE = previous;
+    }
+  });
+});
