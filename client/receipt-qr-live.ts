@@ -121,6 +121,9 @@ export async function startLiveQrScan(
     track = stream.getVideoTracks()[0];
     if (!track) throw new DOMException("The camera stream contains no video", "NotFoundError");
     video.srcObject = stream;
+    // A preview that never starts yields no frames to scan, so this startup
+    // timeout ends the session instead of degrading; the scanner dialog
+    // offers Retry, and the stream is released on the way out.
     try {
       await waitForResponse(() => video.play());
     } catch (error) {
@@ -212,6 +215,7 @@ export async function startLiveQrScan(
             canvas = null;
             return;
           }
+          // The other native disable path: repeated failures also retire the detector for this session.
           if (++nativeFailures >= MAX_CONSECUTIVE_NATIVE_FAILURES) detector = null;
         }
         if (sessionSignal.aborted) return;
