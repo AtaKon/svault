@@ -85,7 +85,10 @@ try {
         const [track] = stream.getVideoTracks();
         track.getCapabilities = () => ({ torch: true });
         track.getSettings = () => ({});
-        track.applyConstraints = async ({ advanced }) => { globalThis.torchRequests.push(advanced[0].torch); };
+        track.applyConstraints = async ({ advanced }) => {
+          globalThis.torchRequests.push(advanced[0].torch);
+          if (globalThis.rejectTorchChange) throw new Error("Test torch request failed");
+        };
       }
       globalThis.lastQrCamera = stream;
       if (globalThis.holdCamera) await new Promise((resolve) => { globalThis.releaseCamera = resolve; });
@@ -199,11 +202,17 @@ try {
   await page.evaluate(() => globalThis.finishCompetingPdf());
 
   const choosePhoto = async () => {
+    await page.locator('input[capture="environment"]').evaluate((input) => {
+      input.addEventListener("click", () => {
+        globalThis.photoUserActivation = navigator.userActivation.isActive;
+      }, { once: true });
+    });
     const [chooser] = await Promise.all([
       page.waitForEvent("filechooser"),
       page.getByRole("button", { name: "Photograph instead" }).click(),
     ]);
     assert.equal(await chooser.element().getAttribute("capture"), "environment");
+    assert.equal(await page.evaluate(() => photoUserActivation), true);
     await page.locator("dialog").waitFor({ state: "detached" });
   };
   await setFixture({ holdCamera: true });
@@ -218,8 +227,12 @@ try {
   const light = page.getByRole("button", { name: "Light", exact: true });
   await light.click();
   await page.locator('button[aria-label="Light"][aria-pressed="mixed"]:enabled').waitFor();
+  await setFixture({ rejectTorchChange: true });
   await light.click();
-  assert.deepEqual(await page.evaluate(() => torchRequests), [true, false]);
+  await page.locator('button[aria-label="Light"][aria-pressed="mixed"]:enabled').waitFor();
+  await setFixture({ rejectTorchChange: false });
+  await light.click();
+  assert.deepEqual(await page.evaluate(() => torchRequests), [true, false, false]);
   await choosePhoto();
   assert.equal(await page.evaluate(() => lastQrCamera.getTracks().every((track) => track.readyState === "ended")), true);
   await setFixture({ forceSoftware: true, workerFaults: ["post", "invalid", "error", "invalid"], torchRequests: null });

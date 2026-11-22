@@ -73,8 +73,7 @@ test("live frames are bounded and serialized, with native retry before switching
   const nativeQr = "native QR payload";
   const replies = [firstDetection.promise, failure, [], failure, [{ format: "qr_code", rawValue: nativeQr }], failure, failure];
   const expectedNativeAttempts = replies.length;
-  const detect = t.mock.fn(async (source) => {
-    assert.equal(source.width * source.height, width * height);
+  const detect = t.mock.fn(async () => {
     const reply = replies.shift();
     if (reply instanceof Error) throw reply;
     return reply;
@@ -104,7 +103,9 @@ test("live frames are bounded and serialized, with native retry before switching
   let timeoutId = 0;
   const expireFrame = () => {
     assert.equal(timers.size, 1);
-    timers.values().next().value();
+    const [id, callback] = timers.entries().next().value;
+    timers.delete(id);
+    callback();
   };
   const getUserMedia = t.mock.fn(async () => stream);
   replaceGlobal(t, "navigator", { mediaDevices: { getUserMedia } });
@@ -129,15 +130,19 @@ test("live frames are bounded and serialized, with native retry before switching
     terminate = terminateWorker;
   });
 
-  const video = { videoWidth: 1920, videoHeight: 1080, readyState: 2, play: async () => {} };
+  const video = { videoWidth: 4000, videoHeight: 3000, readyState: 1, play: async () => {} };
   const scan = new AbortController();
   t.after(() => scan.abort());
   const found = [];
   const handle = await startLiveQrScan(video, (payload) => found.push(payload), scan.signal);
   assert.equal(video.srcObject, stream);
   assert.equal(await handle.setTorch(true), null);
+  await frame();
+  assert.equal(createCanvas.mock.callCount(), 0);
+  video.readyState = 2;
   const pendingFrame = frame();
-  assert.equal(detect.mock.calls[0].arguments[0].width, 1280);
+  const firstCanvas = detect.mock.calls[0].arguments[0];
+  assert.deepEqual([firstCanvas.width, firstCanvas.height], [1280, 960]);
   await frame();
   assert.equal(detect.mock.callCount(), 1);
   firstDetection.resolve([{ format: "ean_13", rawValue: "0123456789012" }, { format: "qr_code", rawValue: "" }]);
@@ -185,23 +190,30 @@ test("live frames are bounded and serialized, with native retry before switching
   assert.deepEqual(afterTimeout, [text]);
   holdSoftwareFrame = true;
   const stalledFrame = frame();
+  const stalledWorker = postFrame.mock.calls.at(-1).this;
+  const lateReply = stalledWorker.onmessage;
   expireFrame();
   await stalledFrame;
   assert.equal(onDecoderError.mock.callCount(), 1);
   assert.equal(track.stop.mock.callCount(), 2);
   assert.equal(terminateWorker.mock.callCount(), 2);
+  assert.equal(terminateWorker.mock.calls.at(-1).this, stalledWorker);
+  assert.equal(stalledWorker.onmessage, null);
+  assert.equal(video.srcObject, null);
   assert.equal(timers.size, 0);
 
-  const lateReply = replyToWorker;
   const previousReads = getImageData.mock.callCount();
   const previousPosts = postFrame.mock.callCount();
+  await frame();
+  assert.equal(postFrame.mock.callCount(), previousPosts);
   const nativeResponse = Promise.withResolvers();
   detect.mock.mockImplementation(() => nativeResponse.promise);
   const canceled = await startLiveQrScan(video, () => assert.fail("Unexpected QR payload"), new AbortController().signal);
   const pendingNative = frame();
   canceled.stop();
   await pendingNative;
-  nativeResponse.resolve([]);
+  nativeResponse.resolve([{ format: "qr_code", rawValue: nativeQr }]);
+  await Promise.resolve();
   assert.equal(getImageData.mock.callCount(), previousReads);
   assert.equal(postFrame.mock.callCount(), previousPosts);
 
@@ -211,7 +223,10 @@ test("live frames are bounded and serialized, with native retry before switching
   const restarted = await startLiveQrScan(video, (payload) => received.push(payload), new AbortController().signal);
   const nextFrame = frame();
   await softwareStarted.promise;
+  assert.notEqual(postFrame.mock.calls.at(-1).this, stalledWorker);
   lateReply({ data: "stale worker reply" });
+  await Promise.resolve();
+  assert.deepEqual(received, []);
   replyToWorker({ data: text });
   await nextFrame;
   assert.deepEqual(received, [text]);
@@ -221,10 +236,17 @@ test("live frames are bounded and serialized, with native retry before switching
   const recovered = [];
   supportedFormats.mock.mockImplementation(async () => []);
   holdSoftwareFrame = false;
-  postFrame.mock.mockImplementationOnce(() => { throw cloneError; });
+  const failTransfer = () => { throw cloneError; };
+  const nextPost = postFrame.mock.callCount();
+  postFrame.mock.mockImplementationOnce(failTransfer, nextPost);
+  postFrame.mock.mockImplementationOnce(function () { this.onmessage({ data: null }); }, nextPost + 1);
+  postFrame.mock.mockImplementationOnce(failTransfer, nextPost + 2);
   const recovering = await startLiveQrScan(video, (payload) => recovered.push(payload), new AbortController().signal, onDecoderError);
-  await frame();
-  assert.equal(video.srcObject, stream);
+  for (let tick = 0; tick < 3; tick++) {
+    await frame();
+    assert.equal(video.srcObject, stream);
+    assert.deepEqual(recovered, []);
+  }
   await frame();
   assert.deepEqual(recovered, [text]);
   assert.equal(onDecoderError.mock.callCount(), 1);
