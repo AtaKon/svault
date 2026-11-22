@@ -68,7 +68,7 @@ try {
     window.fetch = (resource, init) => {
       if (!String(resource).endsWith("/receipts/scan") || init?.method !== "POST") return realFetch(resource, init);
       return new Promise((resolve, reject) => {
-        const request = { signal: init.signal, qr: JSON.parse(init.body).qr, resolve };
+        const request = { signal: init.signal, qr: JSON.parse(init.body).qr, resolve, reject };
         if (globalThis.rejectOnAbort) init.signal.addEventListener("abort", () => {
           request.rejectedOnAbort = init.signal.reason.name;
           reject(init.signal.reason);
@@ -163,6 +163,7 @@ try {
   await resolve(1, digital("Fresh result"));
   await vendor.waitFor();
   assert.equal(await vendor.inputValue(), "Fresh result");
+  assert.equal(await scanCode.isEnabled(), true);
 
   await vendor.fill("Edited merchant");
   await scanCode.click();
@@ -257,6 +258,21 @@ try {
   await reset.click();
   await page.waitForFunction(() => qrRequests[6].rejectedOnAbort === "AbortError");
   assert.equal(await scan.isDisabled(), false);
+
+  await setFixture({ rejectOnAbort: false });
+  await scan.click();
+  await waitForRequest(8);
+  await reset.click();
+  assert.equal(await page.evaluate(() => qrRequests[7].signal.aborted), true);
+  assert.equal(await scan.isEnabled(), true);
+  // Leave this canceled fetch pending for the rest of the browser check.
+  await scan.click();
+  await waitForRequest(9);
+  await page.evaluate(() => qrRequests[8].reject(new TypeError("Network unavailable for test")));
+  await page.locator("p").filter({ hasText: "The digital receipt could not be loaded." }).waitFor();
+  assert.equal(await page.getByRole("link", { name: "Open digital receipt" }).getAttribute("href"), qr);
+  assert.equal(await scanCode.isEnabled(), true);
+  await reset.click();
 
   await setFixture({ failReadback: true });
   await scan.click();
