@@ -1238,10 +1238,14 @@ itemRoutes.post(
         ]);
         if (previous) return { applied: false, response: parseJson(previous.response, {}) };
       }
-      if (body.action === "set" && body.baseUpdatedAt && item.updated_at > body.baseUpdatedAt) {
+      // Read the timestamp under the lock: a change committed while this
+      // request waited must still make an older count conflict.
+      const current = await get<{ updated_at: string }>("SELECT updated_at FROM items WHERE id = ?", [item.id]);
+      const currentUpdatedAt = current?.updated_at ?? item.updated_at;
+      if (body.action === "set" && body.baseUpdatedAt && currentUpdatedAt > body.baseUpdatedAt) {
         throw new ApiError(409, "This count is older than a newer server change", {
           conflict: true,
-          currentUpdatedAt: item.updated_at,
+          currentUpdatedAt,
           currentQuantity: await itemQuantity(item.id),
           baseUpdatedAt: body.baseUpdatedAt,
         });

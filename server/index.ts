@@ -236,7 +236,11 @@ app.post("/api/auth/invites/:code/accept", limitRequests(limiters.invite));
    session cannot brute-force the account password at leisure. */
 const passwordLimit = limitRequests(limiters.login, userOrIp, "Too many password attempts. Wait a few minutes and try again.");
 app.post("/api/auth/me/password", passwordLimit);
-app.patch("/api/auth/me", passwordLimit);
+// PATCH /me also saves the language and display name; only a request that
+// re-checks the password counts toward the limit.
+app.patch("/api/auth/me", (req, res, next) =>
+  req.body && typeof req.body === "object" && "currentPassword" in req.body ? passwordLimit(req, res, next) : next(),
+);
 app.post("/api/auth/2fa/disable", passwordLimit);
 app.post("/api/auth/2fa/backup-codes", passwordLimit);
 const aiLimit = limitRequests(limiters.ai, userOrIp, "Too many AI requests. Wait a few minutes and try again.");
