@@ -27,6 +27,7 @@ const steps = [
   [...shared, "--test", "server/tests/posokanei-mapping.test.ts"],
   [...shared, "--test", "server/tests/api.test.ts"],
   [...shared, "--test", "server/tests/label-links.test.ts"],
+  [...shared, "--test", "server/tests/audit-fixes.test.ts"],
 ];
 
 let failed = false;

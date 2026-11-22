@@ -69,7 +69,15 @@ export function parseCookies(header: string | undefined): Record<string, string>
     if (idx < 0) continue;
     const key = part.slice(0, idx).trim();
     const value = part.slice(idx + 1).trim();
-    if (key) out[key] = decodeURIComponent(value);
+    if (!key) continue;
+    // Another application on the same host can set cookies whose values are
+    // not valid percent-encoding. Keep the raw value instead of throwing, so
+    // one foreign cookie cannot turn every /api request into a 500.
+    try {
+      out[key] = decodeURIComponent(value);
+    } catch {
+      out[key] = value;
+    }
   }
   return out;
 }
