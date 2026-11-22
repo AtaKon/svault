@@ -185,6 +185,35 @@ describe("notifications expiry window", () => {
   });
 });
 
+describe("password check rate limit", () => {
+  let limitCookie = "";
+
+  before(async () => {
+    // Limiters are off under NODE_ENV=test unless this is set.
+    process.env.SV_RATE_LIMIT = "on";
+    limitCookie = await register("LimiterUser");
+  });
+
+  after(() => {
+    delete process.env.SV_RATE_LIMIT;
+  });
+
+  it("eventually answers 429 after repeated wrong current passwords", async () => {
+    let sawRejected = false;
+    let saw429 = false;
+    for (let attempt = 0; attempt < 40 && !saw429; attempt += 1) {
+      const res = await request("/api/auth/me/password", {
+        auth: limitCookie,
+        body: { currentPassword: "totally wrong password", newPassword: "another valid password" },
+      });
+      if (res.status === 400) sawRejected = true;
+      if (res.status === 429) saw429 = true;
+    }
+    assert.ok(sawRejected, "a wrong password is rejected before the limit is reached");
+    assert.ok(saw429, "repeated password checks are rate limited");
+  });
+});
+
 describe("recipe import network guard", () => {
   let recipeServer: import("node:http").Server;
   let recipeServerHits = 0;
