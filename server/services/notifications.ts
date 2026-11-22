@@ -211,7 +211,11 @@ export async function syncHouseExpiry(houseId: string, expiryDays?: number) {
     const settings = parseJson<any>(house?.settings, {});
     expiryDays = Number(settings?.notifications?.expiryDays ?? 7);
   }
-  const horizon = new Date(Date.now() + expiryDays * DAY).toISOString().slice(0, 10);
+  // Older rows can hold anything ("abc", an object, a huge number); anything
+  // outside 0..3650 would make toISOString throw and break every reminder for
+  // the house, so fall back to the default like syncHouseWarranties does.
+  const safeDays = Number.isFinite(expiryDays) ? Math.max(0, Math.min(3650, Math.trunc(expiryDays))) : 7;
+  const horizon = new Date(Date.now() + safeDays * DAY).toISOString().slice(0, 10);
   const lots = await all<any>(
     `SELECT l.*, i.name AS item_name, i.house_id, i.opened_shelf_life_days,
             i.freezer_shelf_life_days, i.thaw_shelf_life_days
@@ -264,24 +268,30 @@ export async function syncHouseWarranties(houseId: string, days = 30) {
 export async function scanAllHouses() {
   const houses = await all<{ id: string; settings: string }>("SELECT id, settings FROM houses");
   for (const house of houses) {
-    await cleanupOrphanNotifications(house.id);
-    let expiryDays = 7;
-    let warrantyDays = 30;
+    // One house with broken data must not stop reminders for every house after
+    // it, so a failed scan is logged and the loop moves on.
     try {
-      const settings = JSON.parse(house.settings);
-      expiryDays = Number(settings?.notifications?.expiryDays ?? 7);
-      warrantyDays = Number(settings?.notifications?.warrantyDays ?? 30);
-    } catch {
-      /* ignore */
+      await cleanupOrphanNotifications(house.id);
+      let expiryDays = 7;
+      let warrantyDays = 30;
+      try {
+        const settings = JSON.parse(house.settings);
+        expiryDays = Number(settings?.notifications?.expiryDays ?? 7);
+        warrantyDays = Number(settings?.notifications?.warrantyDays ?? 30);
+      } catch {
+        /* ignore */
+      }
+      const items = await all<{ id: string }>("SELECT id FROM items WHERE house_id = ? AND archived = 0", [house.id]);
+      for (const item of items) await syncItemLowStock(item.id);
+      await syncHouseExpiry(house.id, expiryDays);
+      const { scanBudgetAlerts } = await import("./insights.js");
+      await scanBudgetAlerts(house.id);
+      await syncHouseWarranties(house.id, warrantyDays);
+      const { syncHouseLoans } = await import("./loans.js");
+      await syncHouseLoans(house.id);
+    } catch (error) {
+      console.error(`Reminder scan failed for house ${house.id}:`, error);
     }
-    const items = await all<{ id: string }>("SELECT id FROM items WHERE house_id = ? AND archived = 0", [house.id]);
-    for (const item of items) await syncItemLowStock(item.id);
-    await syncHouseExpiry(house.id, expiryDays);
-    const { scanBudgetAlerts } = await import("./insights.js");
-    await scanBudgetAlerts(house.id);
-    await syncHouseWarranties(house.id, warrantyDays);
-    const { syncHouseLoans } = await import("./loans.js");
-    await syncHouseLoans(house.id);
   }
   await maybeSendWeeklySummaries();
 }

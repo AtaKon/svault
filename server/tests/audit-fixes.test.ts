@@ -13,7 +13,7 @@ process.env.SVAI_API_KEY = "";
 process.env.SV_REGISTRATION = "open";
 
 const { app } = await import("../index.js");
-const { closeDb } = await import("../db.js");
+const { all, closeDb, run } = await import("../db.js");
 
 let server: import("node:http").Server;
 let base = "";
@@ -117,6 +117,71 @@ describe("stock mutation idempotency", () => {
     assert.equal(movements.status, 200);
     const removals = movements.data.filter((movement: any) => movement.type === "out");
     assert.equal(removals.length, 1);
+  });
+});
+
+describe("notifications expiry window", () => {
+  // Created first so a broken value here would stop reminders for the good
+  // house created after it if the scan did not isolate per-house failures.
+  let badCookie = "";
+  let badHouseId = "";
+  let goodCookie = "";
+  let goodHouseId = "";
+
+  before(async () => {
+    badCookie = await register("ExpiryBad");
+    badHouseId = (await request("/api/auth/me", { auth: badCookie })).data.houses[0].id;
+    goodCookie = await register("ExpiryGood");
+    goodHouseId = (await request("/api/auth/me", { auth: goodCookie })).data.houses[0].id;
+
+    const soon = new Date(Date.now() + 3 * 864e5).toISOString().slice(0, 10);
+    const item = await request(`/api/houses/${goodHouseId}/items`, {
+      auth: goodCookie,
+      body: { name: "ExpiringYogurt", unit: "pcs", initialStock: { quantity: 1, expiresAt: soon } },
+    });
+    assert.equal(item.status, 201, JSON.stringify(item.data));
+  });
+
+  it("rejects a non-numeric expiryDays in the house settings", async () => {
+    const bad = await request(`/api/houses/${goodHouseId}`, {
+      method: "PATCH",
+      auth: goodCookie,
+      body: { settings: { notifications: { expiryDays: "abc" } } },
+    });
+    assert.equal(bad.status, 400);
+
+    const alsoBad = await request(`/api/houses/${goodHouseId}`, {
+      method: "PATCH",
+      auth: goodCookie,
+      body: { settings: { notifications: { expiryDays: 1e9 } } },
+    });
+    assert.equal(alsoBad.status, 400);
+  });
+
+  it("keeps the scan and item updates working when a stored value is invalid", async () => {
+    // Simulate a row written before validation existed.
+    await run("UPDATE houses SET settings = ? WHERE id = ?", [
+      JSON.stringify({ notifications: { expiryDays: "abc" } }),
+      badHouseId,
+    ]);
+
+    const item = await request(`/api/houses/${badHouseId}/items`, {
+      auth: badCookie,
+      body: { name: "BadSettingsRice", unit: "kg", initialStock: { quantity: 1 } },
+    });
+    assert.equal(item.status, 201, JSON.stringify(item.data));
+    const patched = await request(`/api/items/${item.data.id}`, {
+      method: "PATCH",
+      auth: badCookie,
+      body: { openedShelfLifeDays: 5 },
+    });
+    assert.equal(patched.status, 200, JSON.stringify(patched.data));
+
+    const { scanAllHouses } = await import("../services/notifications.js");
+    await scanAllHouses();
+
+    const reminders = await all<any>("SELECT * FROM notifications WHERE house_id = ? AND type = 'expiring'", [goodHouseId]);
+    assert.ok(reminders.length >= 1, "the good house still gets its expiry reminder");
   });
 });
 
