@@ -21,6 +21,15 @@ export function addReceiptQrPayload(links: Map<string, ReceiptQrLink>, payload: 
 }
 
 /**
+ * The applier prints the draft's amounts with String(), so only primitive
+ * values survive that step. A malformed object there would throw partway
+ * through applying the draft, after some fields have already been written.
+ */
+function printableAmount(value: unknown): boolean {
+  return value == null || typeof value === "number" || typeof value === "string";
+}
+
+/**
  * A scan response counts as a usable digital receipt only with QR provenance
  * and product lines to show for it. Anything else — an unavailable issuer, a
  * challenge page, an empty draft — falls back to reading the photos.
@@ -28,7 +37,11 @@ export function addReceiptQrPayload(links: Map<string, ReceiptQrLink>, payload: 
 export function isUsableDigitalReceipt(data: ReceiptScanResponse): boolean {
   const lines = data.draft?.lines;
   return data.provider === "qr" && Array.isArray(lines) && lines.length > 0 &&
-    lines.every((line) => typeof line?.description === "string");
+    printableAmount(data.draft?.total) && printableAmount(data.draft?.subtotal) &&
+    printableAmount(data.draft?.tax) && printableAmount(data.draft?.savings) &&
+    lines.every((line) =>
+      typeof line?.description === "string" &&
+      printableAmount(line?.quantity) && printableAmount(line?.unitPrice) && printableAmount(line?.lineTotal));
 }
 
 /**

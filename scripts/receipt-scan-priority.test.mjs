@@ -61,6 +61,18 @@ test("a scan response is a usable digital receipt only with QR provenance and pr
   assert.equal(isUsableDigitalReceipt(scan("ai", [{ description: "Milk" }])), false);
 });
 
+test("a malformed draft the applier would crash on is not usable", () => {
+  const poison = { toString: null };
+  assert.equal(isUsableDigitalReceipt(scan("qr", [{ description: "Milk", quantity: poison }])), false);
+  assert.equal(isUsableDigitalReceipt(scan("qr", [{ description: "Milk", unitPrice: poison }])), false);
+  assert.equal(isUsableDigitalReceipt(scan("qr", [{ description: "Milk", lineTotal: poison }])), false);
+  for (const field of ["total", "subtotal", "tax", "savings"]) {
+    assert.equal(isUsableDigitalReceipt({ provider: "qr", draft: { lines: [{ description: "Milk" }], [field]: poison } }), false);
+  }
+  // Printable amounts, including absent ones, stay usable.
+  assert.equal(isUsableDigitalReceipt(scan("qr", [{ description: "Milk", quantity: 2, unitPrice: 1.25, lineTotal: 2.5 }])), true);
+});
+
 test("photo OCR is the fallback: it runs only without a digital receipt to use", () => {
   // No QR decoded, or the issuer import was unusable, challenged or unavailable.
   assert.equal(shouldRunPhotoOcr("local", false), true);
