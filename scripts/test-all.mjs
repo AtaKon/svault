@@ -13,6 +13,7 @@ const steps = [
   ["--test", "scripts/receipt-qr-live.test.mjs"],
   [...shared, "--test", "scripts/receipt-scan-priority.test.mjs"],
   [...shared, "--test", "scripts/barcode-camera.test.mjs"],
+  [...shared, "--test", "scripts/offline-queue-rules.test.mjs"],
   [...shared, "--test", "server/tests/ai-reasoning.test.ts"],
   [...shared, "--test", "server/tests/recipe-vision.test.ts"],
   [...shared, "--test", "server/tests/recipe-vision-env.test.ts"],

@@ -154,8 +154,24 @@ export interface SyncResult {
   conflict: QueueConflict | null;
 }
 
-/** Replay queued mutations in creation order. Stops on the first conflict or
- * transport failure so later actions cannot silently overtake it. */
+/** HTTP statuses after which replaying the same action can never succeed
+ * (mirrors client/stocktake-draft.ts). Anything else — offline, timeout,
+ * rate limit, 5xx — may pass later, so the queue retries with backoff. */
+export const PERMANENT_REJECTIONS = new Set([400, 404, 409, 410, 422]);
+
+const BACKOFF_BASE_MS = 1000;
+const BACKOFF_MAX_MS = 30_000;
+
+/** Exponential backoff for retrying a transient sync failure: 1 s, 2 s, 4 s…
+ * capped at 30 s so an unreachable server cannot drain the battery. */
+export function syncBackoffMs(attempt: number): number {
+  return Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** Math.max(0, attempt - 1));
+}
+
+/** Replay queued mutations in creation order. Stops on the first permanent
+ * rejection (surfaced as a conflict the user can discard) or transport failure
+ * so later actions cannot silently overtake it; transient failures are left
+ * queued for the caller to retry with backoff. */
 export async function syncQueue(
   userId: string,
   houseId: string,
@@ -177,8 +193,11 @@ export async function syncQueue(
       synced++;
       onProgress?.(synced, actions.length);
     } catch (error) {
-      if (error instanceof ApiError && error.status === 409) {
-        const details = (error.details ?? {}) as Record<string, any>;
+      if (error instanceof ApiError && PERMANENT_REJECTIONS.has(error.status)) {
+        // A 409 carries the server's newer baseline; 400/404/410/422 can
+        // never succeed on retry, but both are decisions for the user, so
+        // they surface like a conflict instead of blocking the queue.
+        const details = { ...((error.details ?? {}) as Record<string, any>), message: error.message };
         return {
           synced,
           remaining: actions.length - synced,
