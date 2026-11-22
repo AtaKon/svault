@@ -169,15 +169,15 @@ try {
   await scanCode.click();
   await waitForRequest(3);
   await resolve(2, digital("Replacement"));
-  await page.getByRole("status").filter({ hasText: "Your edits were kept. Start over to import the digital receipt." }).waitFor();
+  await page.getByRole("alert").filter({ hasText: "Your edits were kept. Start over to import the digital receipt." }).waitFor();
   assert.equal(await vendor.inputValue(), "Edited merchant");
   assert.equal(await page.getByRole("link", { name: "Open digital receipt" }).getAttribute("href"), qr);
 
   await reset.click();
   await scan.click();
   await waitForRequest(4);
-  await resolve(3, { provider: "local", draft: { lines: [] } });
-  await page.locator("p").filter({ hasText: "The digital receipt could not be loaded." }).waitFor();
+  await resolve(3, { provider: "local", draft: { lines: [] }, qr: { message: "The issuer is unavailable." } });
+  await page.getByRole("alert").filter({ hasText: "The issuer is unavailable." }).waitFor();
   assert.equal(await page.getByRole("link", { name: "Open digital receipt" }).getAttribute("href"), qr);
   assert.equal(await vendor.inputValue(), "");
 
@@ -249,7 +249,8 @@ try {
   await waitForRequest(6);
   await resolve(5, { error: "Test server error" }, 500);
   assert.equal(await page.getByRole("link", { name: "Open digital receipt" }).getAttribute("href"), qr);
-  await page.getByRole("status").filter({ hasText: "The digital receipt could not be loaded." }).waitFor();
+  await page.getByRole("alert").filter({ hasText: "The digital receipt could not be loaded." }).waitFor();
+  assert.equal(await page.getByText("The digital receipt could not be loaded. Photograph the receipt instead.", { exact: true }).count(), 1);
 
   await reset.click();
   await setFixture({ rejectOnAbort: true });
@@ -277,7 +278,7 @@ try {
   await scan.click();
   await waitForRequest(10);
   await page.evaluate(() => qrRequests[9].reject(new TypeError("Network unavailable for test")));
-  await page.locator("p").filter({ hasText: "The digital receipt could not be loaded." }).waitFor();
+  await page.getByRole("alert").filter({ hasText: "The digital receipt could not be loaded." }).waitFor();
   assert.equal(await page.getByRole("link", { name: "Open digital receipt" }).getAttribute("href"), qr);
   assert.equal(await scanCode.isEnabled(), true);
   await reset.click();

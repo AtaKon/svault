@@ -843,12 +843,8 @@ export function ReceiptScanPage() {
       if (controller.signal.aborted) return;
       if (outcome === "applied") {
         toast.success(t("Digital receipt imported"));
-      } else if (outcome === "kept") {
-        toast.push(t(DIGITAL_RECEIPT_EDITS_KEPT));
-      } else if (outcome === "failed") {
-        toast.error(t("The digital receipt could not be loaded. Photograph the receipt instead."));
-        // Show the issuer link and warning even when no photo has been added.
-        if (!pagesRef.current.length) setManualMode(true);
+      } else if (outcome === "failed" && !pagesRef.current.length) {
+        setManualMode(true);
       }
     } finally {
       finishLiveQrImport(controller);
@@ -1361,6 +1357,15 @@ export function ReceiptScanPage() {
         }
       />
 
+      {digitalLink && (
+        <Card className="space-y-1 p-3">
+          {warning && <p role="alert" className="text-xs leading-relaxed text-muted">{t(warning)}</p>}
+          <a href={digitalLink} target="_blank" rel="noopener noreferrer" className="inline-block text-xs font-medium text-brand hover:underline">
+            {t("Open digital receipt")}
+          </a>
+        </Card>
+      )}
+
       {pendingDraft && (
         <Card className="flex flex-col gap-3 border-brand/40 p-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-start gap-3">
@@ -1730,12 +1735,7 @@ export function ReceiptScanPage() {
                   </div>
                 )}
               </div>
-              {warning && <p className="rounded-xl bg-raised px-3 py-2 text-[11px] leading-relaxed text-muted">{t(warning)}</p>}
-              {digitalLink && (
-                <a href={digitalLink} target="_blank" rel="noopener noreferrer" className="inline-block text-xs font-medium text-brand hover:underline">
-                  {t("Open digital receipt")}
-                </a>
-              )}
+              {warning && !digitalLink && <p className="rounded-xl bg-raised px-3 py-2 text-[11px] leading-relaxed text-muted">{t(warning)}</p>}
               {provider && aiAvailable && (
                 <div className="flex flex-wrap items-center gap-2">
                   <Button type="button" size="sm" variant="secondary" icon="sparkles" loading={busy} onClick={() => void readReceipt(true)}>
