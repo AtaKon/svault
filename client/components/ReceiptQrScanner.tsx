@@ -130,8 +130,10 @@ export function ReceiptQrScanner({
 
   const photograph = () => {
     stopScanRef.current?.();
-    dialogRef.current?.close();
+    // The file input click must stay inside this user gesture on iOS Safari,
+    // so it runs before the dialog close and the unmount that follows it.
     onPhotograph();
+    dialogRef.current?.close();
   };
 
   const toggleTorch = async () => {
