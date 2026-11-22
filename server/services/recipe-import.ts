@@ -414,6 +414,10 @@ export async function importRecipeFromUrl(rawUrl: string): Promise<RecipeImportR
   try {
     const fetched = await fetchOutbound(requestedUrl, {
       label: "The recipe link",
+      // The URL comes from a member, not an admin, so private, loopback and
+      // link-local targets are refused even when SV_OUTBOUND_ALLOW_PRIVATE
+      // (an admin-scoped setting) would allow them for configured URLs.
+      blockPrivate: true,
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       headers: {
         accept: "text/html,application/xhtml+xml,text/plain;q=0.8,*/*;q=0.5",

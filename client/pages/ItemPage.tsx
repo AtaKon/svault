@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { api } from "@/api";
+import { ApiError, api } from "@/api";
 import { useHouse } from "@/state";
 import { useAuth } from "@/state";
 import { enqueueStockAction, isOffline } from "@/offline-queue";
@@ -117,13 +117,30 @@ export function ItemPage() {
   const [offBusy, setOffBusy] = useState(false);
   const [offUnlinkOpen, setOffUnlinkOpen] = useState(false);
 
+  // Whether any item is on screen; read by load() from refs so a failed
+  // background refresh does not wipe the page and a language switch does
+  // not trigger a reload.
+  const loadedRef = useRef(false);
+  const tRef = useRef(t);
+  tRef.current = t;
+
   const load = useCallback(async () => {
     try {
       const detail = await api<ItemDetail>(`/api/items/${itemId}`);
+      loadedRef.current = true;
       setItem(detail);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("Could not load this item"));
+      // A background refresh that cannot reach the server keeps the loaded
+      // item on screen instead of replacing it with an error.
+      if (loadedRef.current && err instanceof ApiError && err.status === 0) return;
+      // A 404 on a refresh means the item was deleted elsewhere: clear the
+      // loaded item so the not-found screen shows instead of a stale page.
+      if (loadedRef.current && err instanceof ApiError && err.status === 404) {
+        setItem(null);
+        loadedRef.current = false;
+      }
+      setError(err instanceof Error ? err.message : tRef.current("Could not load this item"));
     }
   }, [itemId]);
 
@@ -405,7 +422,7 @@ export function ItemPage() {
     }
   };
 
-  if (error) {
+  if (error && !item) {
     return (
       <EmptyState
         icon="alert"

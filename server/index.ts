@@ -232,6 +232,17 @@ app.post("/api/auth/passkeys/login/options", limitRequests(limiters.passkey));
 app.post("/api/auth/passkeys/login/verify", limitRequests(limiters.passkey));
 app.get("/api/auth/invites/:code", limitRequests(limiters.invite));
 app.post("/api/auth/invites/:code/accept", limitRequests(limiters.invite));
+/* Password re-checks after sign-in share the login limiter, so a stolen
+   session cannot brute-force the account password at leisure. */
+const passwordLimit = limitRequests(limiters.login, userOrIp, "Too many password attempts. Wait a few minutes and try again.");
+app.post("/api/auth/me/password", passwordLimit);
+// PATCH /me also saves the language and display name; only a request that
+// re-checks the password counts toward the limit.
+app.patch("/api/auth/me", (req, res, next) =>
+  req.body && typeof req.body === "object" && "currentPassword" in req.body ? passwordLimit(req, res, next) : next(),
+);
+app.post("/api/auth/2fa/disable", passwordLimit);
+app.post("/api/auth/2fa/backup-codes", passwordLimit);
 const aiLimit = limitRequests(limiters.ai, userOrIp, "Too many AI requests. Wait a few minutes and try again.");
 const aiBudgetGuard: express.RequestHandler = (_req, _res, next) => {
   assertAiBudget().then(() => next()).catch(next);

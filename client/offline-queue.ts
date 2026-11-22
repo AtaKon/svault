@@ -154,8 +154,64 @@ export interface SyncResult {
   conflict: QueueConflict | null;
 }
 
-/** Replay queued mutations in creation order. Stops on the first conflict or
- * transport failure so later actions cannot silently overtake it. */
+/** HTTP statuses after which replaying the same action can never succeed
+ * (client/stocktake-draft.ts plus 403, for a member whose role was lowered
+ * to viewer while changes were queued). Anything else, such as offline,
+ * timeout, rate limit or 5xx, may pass later, so the queue retries with
+ * backoff. */
+export const PERMANENT_REJECTIONS = new Set([400, 403, 404, 409, 410, 422]);
+
+const BACKOFF_BASE_MS = 1000;
+const BACKOFF_MAX_MS = 30_000;
+
+/** Exponential backoff for retrying a transient sync failure: 1 s, 2 s, 4 s…
+ * capped at 30 s so an unreachable server cannot drain the battery. */
+export function syncBackoffMs(attempt: number): number {
+  return Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** Math.max(0, attempt - 1));
+}
+
+/** Every stock movement bumps the item's updated_at, so a queued "set" would
+ * 409 against the user's own earlier queued movement. Replaying may rebase a
+ * later action onto the timestamp the server returned for a previous action on
+ * the same item, but only when both were queued from the same view of the item
+ * (their queued baseUpdatedAt values match): then the only server change
+ * between the two is the user's own, so the rebase is safe. When the views
+ * differ the queued base stands, so a genuine conflict still surfaces as 409.
+ */
+export interface RebaseBaseline {
+  /** The baseUpdatedAt the previous action carried when it was queued. */
+  queuedBase: string | null;
+  /** The updatedAt the server returned after replaying that action. */
+  returnedUpdatedAt: string;
+}
+
+export function rebaseQueuedAction(action: QueuedStockAction, baseline: RebaseBaseline | null): QueuedStockAction {
+  return baseline && baseline.returnedUpdatedAt && baseline.queuedBase === action.baseUpdatedAt
+    ? { ...action, baseUpdatedAt: baseline.returnedUpdatedAt }
+    : action;
+}
+
+/** Record what a successfully replayed action leaves behind for the next
+ *  action on the same item: a returned timestamp becomes the new rebase
+ *  target, while a success without one drops any earlier entry. Keeping the
+ *  older entry would rebase a later action onto a timestamp older than the
+ *  user's own last write, so it is deleted instead. */
+export function applySyncedBaseline(
+  baselines: Map<string, RebaseBaseline>,
+  action: QueuedStockAction,
+  detail: { updatedAt?: string } | null,
+): void {
+  if (detail?.updatedAt) {
+    baselines.set(action.itemId, { queuedBase: action.baseUpdatedAt, returnedUpdatedAt: detail.updatedAt });
+  } else {
+    baselines.delete(action.itemId);
+  }
+}
+
+/** Replay queued mutations in creation order. Stops on the first permanent
+ * rejection (surfaced as a conflict the user can discard) or transport failure
+ * so later actions cannot silently overtake it; transient failures are left
+ * queued for the caller to retry with backoff. */
 export async function syncQueue(
   userId: string,
   houseId: string,
@@ -163,22 +219,33 @@ export async function syncQueue(
 ): Promise<SyncResult> {
   const actions = await listQueuedActions(userId, houseId);
   let synced = 0;
+  // Per item, the queued baseline and the server timestamp of the last
+  // successfully replayed action; see rebaseQueuedAction for the rebase rule.
+  const baselineByItem = new Map<string, RebaseBaseline>();
   for (const action of actions) {
     try {
-      await api(`/api/items/${action.itemId}/stock`, {
+      const rebased = rebaseQueuedAction(action, baselineByItem.get(action.itemId) ?? null);
+      const detail = await api<{ updatedAt?: string }>(`/api/items/${action.itemId}/stock`, {
         method: "POST",
         body: {
-          ...action.body,
+          ...rebased.body,
           idempotencyKey: action.id,
-          baseUpdatedAt: action.baseUpdatedAt ?? undefined,
+          baseUpdatedAt: rebased.baseUpdatedAt ?? undefined,
         },
       });
+      // A success without a timestamp drops the item's earlier baseline
+      // (see applySyncedBaseline) so a later action never rebases onto a
+      // timestamp older than the user's own last write.
+      applySyncedBaseline(baselineByItem, action, detail);
       await removeQueuedAction(action.id);
       synced++;
       onProgress?.(synced, actions.length);
     } catch (error) {
-      if (error instanceof ApiError && error.status === 409) {
-        const details = (error.details ?? {}) as Record<string, any>;
+      if (error instanceof ApiError && PERMANENT_REJECTIONS.has(error.status)) {
+        // A 409 carries the server's newer baseline; 400/404/410/422 can
+        // never succeed on retry, but both are decisions for the user, so
+        // they surface like a conflict instead of blocking the queue.
+        const details = { ...((error.details ?? {}) as Record<string, any>), message: error.message };
         return {
           synced,
           remaining: actions.length - synced,

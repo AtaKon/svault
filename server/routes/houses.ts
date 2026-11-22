@@ -177,6 +177,15 @@ houseRoutes.patch(
         incomingSettings.priceLookup.accessibleVendorIds = [...new Set(accessibleVendorIds)];
       }
     }
+    if (incomingSettings?.notifications !== undefined) {
+      // The expiry window feeds every reminder scan and the freezer view, so
+      // reject a bad value here instead of storing something that would break
+      // reminders for the whole house later.
+      incomingSettings.notifications = parseBody(
+        z.object({ expiryDays: z.number().int().min(0).max(3650).optional() }).loose(),
+        incomingSettings.notifications,
+      );
+    }
     const settings = incomingSettings
       ? mergeSettings(parseJson<Record<string, any>>(current.settings, {}), incomingSettings)
       : parseJson<Record<string, any>>(current.settings, {});

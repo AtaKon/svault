@@ -307,7 +307,7 @@ authRoutes.post(
   requireAuth,
   handler(async (req, res) => {
     const body = parseBody(
-      z.object({ currentPassword: z.string().min(1), newPassword: passwordSchema }),
+      z.object({ currentPassword: z.string().min(1).max(200), newPassword: passwordSchema }),
       req.body,
     );
     const user = (await get<any>("SELECT * FROM users WHERE id = ?", [req.user!.id]))!;

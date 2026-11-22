@@ -182,7 +182,10 @@ async function validateSourceUrl(raw: string | null): Promise<string | null> {
     throw new ApiError(400, error instanceof Error ? error.message : "That does not look like a valid link");
   }
   try {
-    await assertOutboundUrl(normalised, "The recipe link");
+    // A stored link is member-supplied like an import URL, so it gets the
+    // importer's stricter policy: private targets are refused even when
+    // SV_OUTBOUND_ALLOW_PRIVATE lets house admins keep LAN integrations.
+    await assertOutboundUrl(normalised, "The recipe link", { blockPrivate: true });
   } catch (error) {
     if (error instanceof OutboundBlockedError) throw new ApiError(400, error.message);
     throw error;

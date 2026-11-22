@@ -151,45 +151,53 @@ export function ShoppingPage() {
       setCheckTarget(item);
       return;
     }
-    await api(`/api/houses/${house.id}/shopping/${item.id}`, { method: "PATCH", body: { checked: false } });
-    setLookedUp((current) => { const next = { ...current }; delete next[item.id]; return next; });
-    setExternalOffers((current) => {
-      const next = { ...current };
-      delete next[item.id];
-      return next;
-    });
-    setOfferFilters((current) => {
-      const next = { ...current };
-      delete next[item.id];
-      return next;
-    });
-    setLookupBarcodes((current) => {
-      const next = { ...current };
-      delete next[item.id];
-      return next;
-    });
-    await load();
+    try {
+      await api(`/api/houses/${house.id}/shopping/${item.id}`, { method: "PATCH", body: { checked: false } });
+      setLookedUp((current) => { const next = { ...current }; delete next[item.id]; return next; });
+      setExternalOffers((current) => {
+        const next = { ...current };
+        delete next[item.id];
+        return next;
+      });
+      setOfferFilters((current) => {
+        const next = { ...current };
+        delete next[item.id];
+        return next;
+      });
+      setLookupBarcodes((current) => {
+        const next = { ...current };
+        delete next[item.id];
+        return next;
+      });
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? t(err.message) : t("Could not update the line"));
+    }
   };
 
   const remove = async (item: ShoppingItem) => {
-    await api(`/api/houses/${house.id}/shopping/${item.id}`, { method: "DELETE" });
-    setLookedUp((current) => { const next = { ...current }; delete next[item.id]; return next; });
-    setExternalOffers((current) => {
-      const next = { ...current };
-      delete next[item.id];
-      return next;
-    });
-    setOfferFilters((current) => {
-      const next = { ...current };
-      delete next[item.id];
-      return next;
-    });
-    setLookupBarcodes((current) => {
-      const next = { ...current };
-      delete next[item.id];
-      return next;
-    });
-    await load();
+    try {
+      await api(`/api/houses/${house.id}/shopping/${item.id}`, { method: "DELETE" });
+      setLookedUp((current) => { const next = { ...current }; delete next[item.id]; return next; });
+      setExternalOffers((current) => {
+        const next = { ...current };
+        delete next[item.id];
+        return next;
+      });
+      setOfferFilters((current) => {
+        const next = { ...current };
+        delete next[item.id];
+        return next;
+      });
+      setLookupBarcodes((current) => {
+        const next = { ...current };
+        delete next[item.id];
+        return next;
+      });
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? t(err.message) : t("Could not remove the line"));
+    }
   };
 
   const lookupOffers = async (line: ShoppingItem) => {
@@ -564,16 +572,28 @@ function CheckSheet({
   const [expiresAt, setExpiresAt] = useState("");
   const [itemId, setItemId] = useState("");
   const [busy, setBusy] = useState(false);
+  // Live refreshes swap the catalog array while the sheet is open; the form
+  // is seeded only when the entry itself changes, reading the catalog through
+  // a ref so an edit in progress is never wiped.
+  const catalogRef = useRef(catalog);
+  catalogRef.current = catalog;
+  const seededFor = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!entry) return;
+    if (!entry) {
+      seededFor.current = null;
+      return;
+    }
+    if (seededFor.current === entry.id) return;
+    seededFor.current = entry.id;
+    const catalogNow = catalogRef.current;
     setQuantity(entry.quantity == null ? "1" : String(entry.quantity));
     setUnit(entry.unit ?? "");
     setUnitPrice("");
     setLocationId("");
     setExpiresAt("");
-    setItemId(entry.itemId ?? catalog.find((item) => item.name.toLowerCase() === entry.name.toLowerCase())?.id ?? "");
-  }, [entry, catalog]);
+    setItemId(entry.itemId ?? catalogNow.find((item) => item.name.toLowerCase() === entry.name.toLowerCase())?.id ?? "");
+  }, [entry]);
 
   if (!entry) return null;
   const item = catalog.find((candidate) => candidate.id === itemId) ?? null;

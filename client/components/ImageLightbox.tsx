@@ -1,6 +1,6 @@
-import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { Icon } from "@/components/icons";
+import { useDialogFocus } from "@/components/useDialogFocus";
 import { useI18n } from "@/i18n";
 
 /**
@@ -18,47 +18,7 @@ export function ImageLightbox({
   onClose: () => void;
 }) {
   const { t } = useI18n();
-  const closeRef = useRef<HTMLButtonElement>(null);
-  const dialogRef = useRef<HTMLDivElement>(null);
-  const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
-
-  useEffect(() => {
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const bodyOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    closeRef.current?.focus();
-
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        event.stopPropagation();
-        onCloseRef.current();
-        return;
-      }
-      if (event.key !== "Tab") return;
-      const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
-        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-      );
-      if (!focusable?.length) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-
-    document.addEventListener("keydown", onKey, true);
-    return () => {
-      document.removeEventListener("keydown", onKey, true);
-      document.body.style.overflow = bodyOverflow;
-      if (previous?.isConnected) previous.focus();
-    };
-  }, []);
+  const dialogRef = useDialogFocus(true, onClose);
 
   return createPortal(
     <div
@@ -66,14 +26,14 @@ export function ImageLightbox({
       role="dialog"
       aria-modal="true"
       aria-label={alt ? `${t("Full-size image")}: ${alt}` : t("Full-size image")}
-      className="fade-in fixed inset-0 z-[60] flex items-center justify-center bg-black/90 p-3 sm:p-6"
+      tabIndex={-1}
+      className="fade-in fixed inset-0 z-[60] flex items-center justify-center bg-black/90 p-3 focus:outline-none sm:p-6"
       onClick={(event) => {
         event.stopPropagation();
         if (event.target === event.currentTarget) onClose();
       }}
     >
       <button
-        ref={closeRef}
         type="button"
         aria-label={t("Close full-size image")}
         title={t("Close")}

@@ -2,7 +2,7 @@ import { effectiveExpiry } from "../services/effective-expiry.js";
 import { forecastsForHouse } from "../services/forecast.js";
 import { Router } from "express";
 import { z } from "zod";
-import { all, get, newId, now, parseJson, run, tx } from "../db.js";
+import { all, get, lockHouseholdLedger, newId, now, parseJson, run, tx } from "../db.js";
 import { memberRole, requireAuth, roleAtLeast } from "../auth.js";
 import { ApiError, handler, intParam, parseBody, requireHouse } from "../http.js";
 import {
@@ -690,7 +690,9 @@ inventoryRoutes.get(
     const includeArchived = req.query.archived === "1";
     const sort = String(req.query.sort ?? "name");
     const limit = intParam(req.query.limit, 300, 1000);
-    const offset = Math.max(0, Number(req.query.offset ?? 0) || 0);
+    // Bind drivers reject non-integers, and SQLite errors out on a fractional
+    // or oversized OFFSET, so floor and clamp like intParam does for limit.
+    const offset = Math.max(0, Math.min(1e9, Math.floor(Number(req.query.offset ?? 0) || 0)));
 
     const where: string[] = ["i.house_id = ?"];
     const params: unknown[] = [houseId];
@@ -1223,44 +1225,52 @@ itemRoutes.post(
       }),
       req.body,
     );
-    if (body.idempotencyKey) {
-      const previous = await get<any>("SELECT response FROM stock_mutations WHERE house_id = ? AND idempotency_key = ?", [
-        item.house_id,
-        body.idempotencyKey,
-      ]);
-      if (previous) {
-        res.json(parseJson(previous.response, {}));
-        return;
+    const result = await tx(async (session) => {
+      // Serialise stock writes per house, including the idempotency check, the
+      // same way the cook route does. Checking the key outside the transaction
+      // let a retried request apply twice, and an unlocked transaction let two
+      // removals from the same lot lose an update. The write lock makes SQLite
+      // take the write reservation at BEGIN IMMEDIATE, so the serialisation is
+      // explicit instead of emerging from the first UPDATE.
+      await lockHouseholdLedger(session, item.house_id);
+      if (body.idempotencyKey) {
+        const previous = await get<any>("SELECT response FROM stock_mutations WHERE house_id = ? AND idempotency_key = ?", [
+          item.house_id,
+          body.idempotencyKey,
+        ]);
+        if (previous) return { applied: false, response: parseJson(previous.response, {}) };
       }
-    }
-    if (body.action === "set" && body.baseUpdatedAt && item.updated_at > body.baseUpdatedAt) {
-      throw new ApiError(409, "This count is older than a newer server change", {
-        conflict: true,
-        currentUpdatedAt: item.updated_at,
-        currentQuantity: await itemQuantity(item.id),
-        baseUpdatedAt: body.baseUpdatedAt,
-      });
-    }
-    if (body.vendorId && !await get("SELECT id FROM vendors WHERE id = ? AND house_id = ?", [body.vendorId, item.house_id])) {
-      throw new ApiError(400, "Shop does not exist in this house");
-    }
-    const base = {
-      itemId: item.id,
-      houseId: item.house_id,
-      userId: req.user!.id,
-      quantity: body.quantity ?? 0,
-      unit: body.unit,
-      unitPrice: body.unitPrice ?? null,
-      currency: body.currency ?? null,
-      locationId: body.locationId ?? null,
-      lotId: body.lotId ?? null,
-      expiresAt: body.expiresAt ?? null,
-      purchasedAt: body.purchasedAt ?? null,
-      note: body.note ?? null,
-      reason: body.reason ?? null,
-      vendorId: body.vendorId ?? null,
-    };
-    const detail = await tx(async () => {
+      // Read the timestamp under the lock: a change committed while this
+      // request waited must still make an older count conflict.
+      const current = await get<{ updated_at: string }>("SELECT updated_at FROM items WHERE id = ?", [item.id]);
+      const currentUpdatedAt = current?.updated_at ?? item.updated_at;
+      if (body.action === "set" && body.baseUpdatedAt && currentUpdatedAt > body.baseUpdatedAt) {
+        throw new ApiError(409, "This count is older than a newer server change", {
+          conflict: true,
+          currentUpdatedAt,
+          currentQuantity: await itemQuantity(item.id),
+          baseUpdatedAt: body.baseUpdatedAt,
+        });
+      }
+      if (body.vendorId && !await get("SELECT id FROM vendors WHERE id = ? AND house_id = ?", [body.vendorId, item.house_id])) {
+        throw new ApiError(400, "Shop does not exist in this house");
+      }
+      const base = {
+        itemId: item.id,
+        houseId: item.house_id,
+        userId: req.user!.id,
+        quantity: body.quantity ?? 0,
+        unit: body.unit,
+        unitPrice: body.unitPrice ?? null,
+        currency: body.currency ?? null,
+        locationId: body.locationId ?? null,
+        lotId: body.lotId ?? null,
+        expiresAt: body.expiresAt ?? null,
+        purchasedAt: body.purchasedAt ?? null,
+        note: body.note ?? null,
+        reason: body.reason ?? null,
+        vendorId: body.vendorId ?? null,
+      };
       let movementId: string | null = null;
       if (body.action === "add") movementId = await addStock(base);
       else if (body.action === "remove") movementId = await removeStock(base);
@@ -1277,17 +1287,25 @@ itemRoutes.post(
           toLocationId: body.toLocationId ?? "",
           note: body.note ?? undefined,
         });
-      const result = { ...(await itemDetail(item.id, req.user!.id)), lastMovementId: movementId };
+      const response = { ...(await itemDetail(item.id, req.user!.id)), lastMovementId: movementId };
       if (body.idempotencyKey) {
-        await run(
+        const recorded = await run(
           "INSERT INTO stock_mutations (id, house_id, idempotency_key, user_id, response, created_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
-          [newId("mut"), item.house_id, body.idempotencyKey, req.user!.id, JSON.stringify(result), now()],
+          [newId("mut"), item.house_id, body.idempotencyKey, req.user!.id, JSON.stringify(response), now()],
         );
+        // Defensive invariant: under the write lock the check above is the
+        // only writer for this key in the transaction, so a skipped insert is
+        // unreachable. If it ever happens, the response was not recorded, so
+        // roll back rather than acknowledge a write that cannot be replayed.
+        if (recorded.changes === 0) {
+          throw new Error("The stock mutation could not be recorded");
+        }
       }
-      return result;
-    });
-    await afterStockChange(item.id);
-    res.json(detail);
+      return { applied: true, response };
+    }, { writeLock: true });
+    // An idempotent replay returns the stored response and intentionally skips side effects: the original request already ran them.
+    if (result.applied) await afterStockChange(item.id);
+    res.json(result.response);
   }),
 );
 

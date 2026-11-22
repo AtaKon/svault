@@ -57,13 +57,21 @@ const REDIRECT_STATUS = new Set([301, 302, 303, 307, 308]);
  */
 export async function fetchOutbound(
   rawUrl: string,
-  init: RequestInit & { label: string },
+  init: RequestInit & {
+    label: string;
+    /**
+     * Refuse loopback/private/link-local targets even when
+     * SV_OUTBOUND_ALLOW_PRIVATE is true. Set for URLs that members supply
+     * (recipe imports); house-admin-configured URLs keep the setting's policy.
+     */
+    blockPrivate?: boolean;
+  },
 ): Promise<{ response: Response; url: string }> {
   let current = new URL(rawUrl);
-  const { label, ...requestInit } = init;
+  const { label, blockPrivate = false, ...requestInit } = init;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
-    await assertOutboundUrl(current.toString(), label);
-    const response = await outboundFetch(current, { ...requestInit, redirect: "manual" });
+    await assertOutboundUrl(current.toString(), label, { blockPrivate });
+    const response = await outboundFetch(current, { ...requestInit, redirect: "manual" }, { blockPrivate });
     if (!REDIRECT_STATUS.has(response.status)) return { response, url: current.toString() };
     const location = response.headers.get("location");
     if (!location) return { response, url: current.toString() };
@@ -131,9 +139,14 @@ export function isPrivateAddress(address: string): boolean {
 /**
  * Validate a house-configured URL before the server calls it. Always requires
  * http(s); with SV_OUTBOUND_ALLOW_PRIVATE=false it also resolves the host and
- * refuses loopback/private/link-local targets.
+ * refuses loopback/private/link-local targets. `blockPrivate` forces that
+ * refusal on for member-supplied URLs whatever the setting says.
  */
-export async function assertOutboundUrl(raw: string, label: string): Promise<void> {
+export async function assertOutboundUrl(
+  raw: string,
+  label: string,
+  opts: { blockPrivate?: boolean } = {},
+): Promise<void> {
   let url: URL;
   try {
     url = new URL(raw);
@@ -143,7 +156,7 @@ export async function assertOutboundUrl(raw: string, label: string): Promise<voi
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new OutboundBlockedError(`${label} must start with http:// or https://`);
   }
-  if (outboundAllowPrivate()) return;
+  if (outboundAllowPrivate() && !opts.blockPrivate) return;
   const host = url.hostname.replace(/^\[|\]$/g, "");
   let addresses: string[];
   if (net.isIP(host)) {
@@ -240,10 +253,16 @@ function pinnedRequest(url: URL, init: RequestInit): Promise<Response> {
  * `fetch` for house-configured or user-supplied URLs. While private targets are
  * allowed (the default) it is plain `fetch`. Otherwise the request is made over
  * a connection whose resolved address is checked, and redirects are either
- * returned (`manual`) or rejected, never followed blindly.
+ * returned (`manual`) or rejected, never followed blindly. `opts.blockPrivate`
+ * forces the guarded path for member-supplied URLs even when private targets
+ * are otherwise allowed.
  */
-export async function outboundFetch(input: string | URL, init: RequestInit = {}): Promise<Response> {
-  if (outboundAllowPrivate()) return fetch(input, init);
+export async function outboundFetch(
+  input: string | URL,
+  init: RequestInit = {},
+  opts: { blockPrivate?: boolean } = {},
+): Promise<Response> {
+  if (outboundAllowPrivate() && !opts.blockPrivate) return fetch(input, init);
   const url = new URL(input);
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new OutboundBlockedError("Only http:// and https:// addresses are allowed");

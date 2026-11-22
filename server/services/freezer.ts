@@ -10,7 +10,9 @@ export async function freezerUseSoonDays(houseId: string): Promise<number> {
   const house = await get<{ settings: string }>("SELECT settings FROM houses WHERE id = ?", [houseId]);
   const settings = parseJson<any>(house?.settings, {});
   const days = Number(settings?.notifications?.expiryDays ?? 7);
-  return Number.isFinite(days) && days >= 0 ? days : 7;
+  // Same clamp as syncHouseExpiry: a stored value that is not a finite
+  // 0..3650 day count falls back to the default instead of poisoning the view.
+  return Number.isFinite(days) ? Math.max(0, Math.min(3650, Math.trunc(days))) : 7;
 }
 
 /**

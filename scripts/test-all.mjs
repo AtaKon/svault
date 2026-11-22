@@ -12,6 +12,9 @@ const steps = [
   ["--test", "scripts/receipt-qr-recovery.test.mjs"],
   ["--test", "scripts/receipt-qr-live.test.mjs"],
   [...shared, "--test", "scripts/receipt-scan-priority.test.mjs"],
+  [...shared, "--test", "scripts/barcode-camera.test.mjs"],
+  [...shared, "--test", "scripts/offline-queue-rules.test.mjs"],
+  [...shared, "--test", "scripts/cook-shortfall.test.mjs"],
   [...shared, "--test", "server/tests/ai-reasoning.test.ts"],
   [...shared, "--test", "server/tests/recipe-vision.test.ts"],
   [...shared, "--test", "server/tests/recipe-vision-env.test.ts"],
@@ -26,6 +29,8 @@ const steps = [
   [...shared, "--test", "server/tests/posokanei-mapping.test.ts"],
   [...shared, "--test", "server/tests/api.test.ts"],
   [...shared, "--test", "server/tests/label-links.test.ts"],
+  [...shared, "--test", "server/tests/ai-pricing.test.ts"],
+  [...shared, "--test", "server/tests/audit-fixes.test.ts"],
 ];
 
 let failed = false;

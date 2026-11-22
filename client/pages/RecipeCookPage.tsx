@@ -14,10 +14,11 @@ import {
 } from "@shared/recipe-grams";
 import { scaledCalories } from "@shared/recipe-calories";
 import { scaledRecipeCost } from "@shared/recipe-cost";
-import type { Location, Recipe } from "@shared/types";
+import type { Location, Recipe, ShoppingItem } from "@shared/types";
 import { useHouse } from "@/state";
 import { useI18n } from "@/i18n";
 import { newQueueId } from "@/offline-queue";
+import { shortfallShoppingLines } from "@/cook-shortfall";
 
 /** Scale an ingredient line and keep a readable quantity. */
 function scaled(quantity: number | null, base: number | null, portions: number): number | null {
@@ -43,7 +44,14 @@ export function RecipeCookPage() {
   const [useBy, setUseBy] = useState(() => { const d = new Date(); d.setDate(d.getDate() + 3); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; });
   const [cookKey, setCookKey] = useState("");
   const [saving, setSaving] = useState(false);
-  const [result, setResult] = useState<{ lines: { name: string; shortfall: number; unit: string }[] } | null>(null);
+  // The cook response also carries itemId per line (see server/routes/recipes.ts);
+  // the client type keeps it optional so an older replay stays renderable.
+  const [result, setResult] = useState<{ lines: { name: string; shortfall: number; unit: string; itemId?: string | null }[] } | null>(null);
+  const [addingShortfalls, setAddingShortfalls] = useState(false);
+  // Set once every shortfall line for this cook made it onto the shopping
+  // list, so the button turns into a done state and a second tap cannot add
+  // duplicate lines.
+  const [shortfallsAdded, setShortfallsAdded] = useState(false);
   const [recipe, setRecipe] = useState<Recipe | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [portions, setPortions] = useState(1);
@@ -156,6 +164,7 @@ export function RecipeCookPage() {
     // newQueueId falls back when crypto.randomUUID is missing (plain-HTTP LAN installs).
     setCookKey(newQueueId());
     setResult(null);
+    setShortfallsAdded(false);
     setReviewOpen(true);
   };
   const confirmCook = async () => {
@@ -171,7 +180,7 @@ export function RecipeCookPage() {
     }
     setSaving(true);
     try {
-      const response = await api<{ lines: { name: string; shortfall: number; unit: string }[] }>(`/api/recipes/${recipe.id}/cook`, { body: {
+      const response = await api<{ lines: { name: string; shortfall: number; unit: string; itemId?: string | null }[] }>(`/api/recipes/${recipe.id}/cook`, { body: {
         portions, idempotencyKey: cookKey,
         lines: selected.map(({ ingredientId, itemId, quantity, unit }) => ({ ingredientId, itemId, quantity: Number(quantity), unit })),
         ...(saveLeftovers ? { leftovers: { portions: Number(leftoverPortions), locationId: locationId || null, useBy: freezeLeftovers ? undefined : useBy, freeze: freezeLeftovers, ...(freezeLeftovers ? { frozenOn } : {}) } } : {}),
@@ -179,6 +188,55 @@ export function RecipeCookPage() {
       setResult(response);
     } catch (err) { toast.error(err instanceof Error ? t(err.message) : t("Could not finish cooking")); }
     finally { setSaving(false); }
+  };
+
+  // Missing amounts for the cook just recorded: offer them as shopping lines.
+  const addShortfalls = async () => {
+    if (!result || shortfallsAdded) return;
+    setAddingShortfalls(true);
+    try {
+      const list = await api<{ items: ShoppingItem[] }>(`/api/houses/${house.id}/shopping`);
+      const lines = shortfallShoppingLines(result.lines, list.items);
+      if (!lines.length) {
+        setShortfallsAdded(true);
+        toast.push(t("The shortfalls are already on the shopping list"));
+        return;
+      }
+      let count = 0;
+      try {
+        for (const line of lines) {
+          await api<{ status: string }>(`/api/houses/${house.id}/shopping`, {
+            method: "POST",
+            body: { name: line.name, quantity: line.shortfall, unit: line.unit, itemId: line.itemId ?? null },
+          });
+          // A merged line is on the list too, so every successful POST counts.
+          count++;
+        }
+      } catch (err) {
+        // A partial failure keeps the button enabled: the retry re-fetches the
+        // list and shortfallShoppingLines skips the lines already put on it, so
+        // only the remaining ones are retried.
+        toast.error(
+          count > 0
+            ? t(
+                count === 1
+                  ? "Put {count} shortfall on the list before the failure. Try again to add the rest."
+                  : "Put {count} shortfalls on the list before the failure. Try again to add the rest.",
+                { count },
+              )
+            : err instanceof Error
+              ? t(err.message)
+              : t("Could not add the shortfalls"),
+        );
+        return;
+      }
+      setShortfallsAdded(true);
+      toast.success(t(count === 1 ? "Put {count} shortfall on the shopping list" : "Put {count} shortfalls on the shopping list", { count }));
+    } catch (err) {
+      toast.error(err instanceof Error ? t(err.message) : t("Could not add the shortfalls"));
+    } finally {
+      setAddingShortfalls(false);
+    }
   };
 
   // Keep the two figures consistent: whatever the whole scaled recipe holds,
@@ -428,7 +486,7 @@ export function RecipeCookPage() {
         </div>
       </div>
       <Sheet open={reviewOpen} onClose={() => { if (!saving) { if (result) navigate(`/recipes/${recipe.id}`); else setReviewOpen(false); } }} title={result ? t("Cooking saved") : t("Review cooking")} footer={result ? <Button className="w-full" onClick={() => navigate(`/recipes/${recipe.id}`)}>{t("Back to recipe")}</Button> : <Button className="w-full" disabled={saving} onClick={confirmCook}>{saving ? t("Saving…") : t("Confirm cooking")}</Button>}>
-        {result ? <div className="space-y-2"><p>{t("Cooking has been saved.")}</p>{result.lines.some((line) => line.shortfall > 0) ? <><p className="font-semibold">{t("Stock shortfall")}</p>{result.lines.filter((line) => line.shortfall > 0).map((line, index) => <p key={index}>{line.name}: {qty(line.shortfall)} {line.unit}</p>)}</> : <p>{t("No stock shortfalls.")}</p>}</div> : <div className="space-y-4">
+        {result ? <div className="space-y-2"><p>{t("Cooking has been saved.")}</p>{result.lines.some((line) => line.shortfall > 0) ? <><p className="font-semibold">{t("Stock shortfall")}</p>{result.lines.filter((line) => line.shortfall > 0).map((line, index) => <p key={index}>{line.name}: {qty(line.shortfall)} {line.unit}</p>)}{can("member") && <Button variant="secondary" icon="list" className="w-full" loading={addingShortfalls} disabled={shortfallsAdded} onClick={() => void addShortfalls()}>{shortfallsAdded ? t("Added to shopping list") : t("Add shortfalls to shopping list")}</Button>}</> : <p>{t("No stock shortfalls.")}</p>}</div> : <div className="space-y-4">
           <p className="text-sm text-muted">{t("Review the amounts used for {count} portions.", { count: portions })}</p>
           {reviewLines.map((line, index) => <div key={line.ingredientId} className="rounded-xl border border-line p-3"><label className="flex items-center gap-2"><input type="checkbox" checked={line.enabled} onChange={(e) => setReviewLines((lines) => lines.map((entry, i) => i === index ? { ...entry, enabled: e.target.checked } : entry))} /><span className="min-w-0 break-words font-medium">{line.name}</span></label><div className="mt-2 flex gap-2"><input aria-label={t("Quantity")} type="number" min="0" step="any" disabled={!line.enabled} value={line.quantity} onChange={(e) => setReviewLines((lines) => lines.map((entry, i) => i === index ? { ...entry, quantity: e.target.value } : entry))} className="w-1/2 min-w-0 rounded-xl border border-line bg-bg p-2" /><input aria-label={t("Unit")} disabled={!line.enabled} value={line.unit} onChange={(e) => setReviewLines((lines) => lines.map((entry, i) => i === index ? { ...entry, unit: e.target.value } : entry))} className="w-1/2 min-w-0 rounded-xl border border-line bg-bg p-2" /></div></div>)}
           {recipe.ingredients.filter((ingredient) => !ingredient.itemId).map((ingredient, index) => <p key={index} className="text-sm text-muted">{ingredient.name} · {t("Not tracked")}</p>)}
