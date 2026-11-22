@@ -78,6 +78,19 @@ export function OfflineQueueBar() {
   // auto-sync effect while a sync is in flight.
   const runSyncRef = useRef<(() => Promise<void>) | null>(null);
 
+  // Arm the shared backoff retry for both no-progress outcomes: a transient
+  // replay failure and a sync that threw. Without the timer a thrown sync
+  // could stall the queue until an online event happens to fire.
+  const scheduleRetry = useCallback(() => {
+    if (retryTimer.current !== undefined) return;
+    const delay = syncBackoffMs(retryAttempt.current + 1);
+    retryAttempt.current += 1;
+    retryTimer.current = window.setTimeout(() => {
+      retryTimer.current = undefined;
+      void runSyncRef.current?.();
+    }, delay);
+  }, []);
+
   const runSync = useCallback(async () => {
     if (!user || !house || syncingRef.current || !online) return;
     syncingRef.current = true;
@@ -94,23 +107,17 @@ export function OfflineQueueBar() {
       } else {
         // A transient failure made no progress: retry later instead of
         // hot-looping while the server is unreachable.
-        if (retryTimer.current === undefined) {
-          const delay = syncBackoffMs(retryAttempt.current + 1);
-          retryAttempt.current += 1;
-          retryTimer.current = window.setTimeout(() => {
-            retryTimer.current = undefined;
-            void runSyncRef.current?.();
-          }, delay);
-        }
+        scheduleRetry();
       }
       await refresh();
     } catch {
+      scheduleRetry();
       toast.error(t("Could not sync the offline queue"));
     } finally {
       syncingRef.current = false;
       setSyncing(false);
     }
-  }, [user, house, online, toast, refresh, t]);
+  }, [user, house, online, toast, refresh, t, scheduleRetry]);
 
   runSyncRef.current = runSync;
 
@@ -281,11 +288,17 @@ export function OfflineQueueBar() {
               variant="secondary"
               onClick={async () => {
                 if (!conflict) return;
-                await removeQueuedAction(conflict.action.id);
-                clearBackoff();
-                clearDismissed(conflict.action.id);
-                setConflict(null);
-                await refresh();
+                // A failed removal keeps the sheet open so the user can retry
+                // or pick the other option instead of losing the decision.
+                try {
+                  await removeQueuedAction(conflict.action.id);
+                  clearBackoff();
+                  clearDismissed(conflict.action.id);
+                  setConflict(null);
+                  await refresh();
+                } catch {
+                  toast.error(t("Could not update the queued change"));
+                }
               }}
             >
               {t(conflict?.status === 409 ? "Discard my count" : "Discard my change")}
@@ -298,12 +311,18 @@ export function OfflineQueueBar() {
                     ...conflict.action,
                     baseUpdatedAt: conflict.details.currentUpdatedAt ?? new Date().toISOString(),
                   };
-                  await updateQueuedAction(next);
-                  clearBackoff();
-                  clearDismissed(conflict.action.id);
-                  setConflict(null);
-                  await refresh();
-                  void runSync();
+                  // A failed update keeps the sheet open, so the queued
+                  // change is never left in limbo without the user seeing it.
+                  try {
+                    await updateQueuedAction(next);
+                    clearBackoff();
+                    clearDismissed(conflict.action.id);
+                    setConflict(null);
+                    await refresh();
+                    void runSync();
+                  } catch {
+                    toast.error(t("Could not update the queued change"));
+                  }
                 }}
               >
                 {t("Retry on the new baseline")}
