@@ -286,3 +286,115 @@ describe("recipe import network guard", () => {
     assert.ok(res.data.error.length > 0);
   });
 });
+
+describe("profile update password throttle", () => {
+  let profileCookie = "";
+
+  before(async () => {
+    // Limiters are off under NODE_ENV=test unless this is set.
+    process.env.SV_RATE_LIMIT = "on";
+    profileCookie = await register("ProfileThrottle");
+  });
+
+  after(() => {
+    delete process.env.SV_RATE_LIMIT;
+  });
+
+  it("throttles PATCH /me only when it carries a password check", async () => {
+    // A plain profile update never re-checks the password, so the shared
+    // login limiter must leave it alone however many arrive.
+    for (let i = 0; i < 40; i += 1) {
+      const res = await request("/api/auth/me", { method: "PATCH", auth: profileCookie, body: { language: "en" } });
+      assert.equal(res.status, 200, `plain update ${i} must not be throttled`);
+    }
+
+    // Changing the email requires the current password; guessing it is what
+    // the shared login limiter exists to slow down.
+    let sawRejected = false;
+    let saw429 = false;
+    for (let attempt = 0; attempt < 40 && !saw429; attempt += 1) {
+      const res = await request("/api/auth/me", {
+        method: "PATCH",
+        auth: profileCookie,
+        body: { email: "profile-throttle-target@audit.example.com", currentPassword: "totally wrong password" },
+      });
+      if (res.status === 400) sawRejected = true;
+      if (res.status === 429) saw429 = true;
+    }
+    assert.ok(sawRejected, "a wrong password is rejected before the limit is reached");
+    assert.ok(saw429, "repeated password checks on PATCH /me are rate limited");
+
+    // The password path being exhausted must not throttle a plain update.
+    const plain = await request("/api/auth/me", { method: "PATCH", auth: profileCookie, body: { language: "en" } });
+    assert.equal(plain.status, 200, "a plain update still works while the password path is throttled");
+  });
+});
+
+describe("recipe import redirect guard", () => {
+  let redirectCookie = "";
+  let redirectHouseId = "";
+  let hopServer: import("node:http").Server;
+  let privateServer: import("node:http").Server;
+  let hopPort = 0;
+  let privatePort = 0;
+  let privateHits = 0;
+
+  before(async () => {
+    // The private target: it must never be connected to.
+    privateServer = http.createServer((_req, res) => {
+      privateHits += 1;
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end("<html><body>Internal panel</body></html>");
+    });
+    await new Promise<void>((resolve) => privateServer.listen(0, "127.0.0.1", () => resolve()));
+    const privateAddress = privateServer.address();
+    if (!privateAddress || typeof privateAddress === "string") throw new Error("no private server address");
+    privatePort = privateAddress.port;
+
+    // The first hop: a member-supplied link that redirects to the private one.
+    hopServer = http.createServer((_req, res) => {
+      res.writeHead(302, { location: `http://127.0.0.1:${privatePort}/leaked` });
+      res.end();
+    });
+    await new Promise<void>((resolve) => hopServer.listen(0, "127.0.0.1", () => resolve()));
+    const hopAddress = hopServer.address();
+    if (!hopAddress || typeof hopAddress === "string") throw new Error("no hop server address");
+    hopPort = hopAddress.port;
+
+    redirectCookie = await register("RedirectGuard");
+    redirectHouseId = (await request("/api/auth/me", { auth: redirectCookie })).data.houses[0].id;
+  });
+
+  after(async () => {
+    await new Promise<void>((resolve) => hopServer.close(() => resolve()));
+    await new Promise<void>((resolve) => privateServer.close(() => resolve()));
+  });
+
+  it("refuses a redirect to a private address even when SV_OUTBOUND_ALLOW_PRIVATE is true", async () => {
+    const { isPrivateAddress, setOutboundResolverForTests } = await import("../lib/outbound.js");
+    // The pinned blockPrivate path checks the loopback first hop twice before
+    // connecting (assertOutboundUrl and outboundFetch's own literal check).
+    // Both hops are the same literal address, so call counting is the only
+    // shape the test seam offers: the first two checks let the local first-hop
+    // server answer, and the third — the redirect target's — refuses it.
+    process.env.SV_OUTBOUND_ALLOW_PRIVATE = "true";
+    let guardCalls = 0;
+    setOutboundResolverForTests(undefined, (address) => {
+      guardCalls += 1;
+      return guardCalls > 2 && isPrivateAddress(address);
+    });
+    try {
+      const res = await request(`/api/houses/${redirectHouseId}/recipes/import`, {
+        auth: redirectCookie,
+        body: { url: `http://127.0.0.1:${hopPort}/recipe` },
+      });
+      assert.equal(res.status, 400, JSON.stringify(res.data));
+      assert.ok(res.data.error.length > 0);
+      assert.equal(privateHits, 0, "the private second hop is never connected to");
+      assert.ok(guardCalls >= 3, "the redirect target is validated before any second connection");
+    } finally {
+      delete process.env.SV_OUTBOUND_ALLOW_PRIVATE;
+      setOutboundResolverForTests();
+    }
+  });
+});
