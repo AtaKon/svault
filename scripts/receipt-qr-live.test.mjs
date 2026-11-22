@@ -201,11 +201,27 @@ test("live frames are bounded and serialized, with native retry before switching
   const lateReply = stalledWorker.onmessage;
   expireFrame();
   await stalledFrame;
-  assert.equal(onDecoderError.mock.callCount(), 1);
-  assert.equal(track.stop.mock.callCount(), 2);
+  assert.equal(onDecoderError.mock.callCount(), 0);
+  assert.equal(video.srcObject, stream);
   assert.equal(terminateWorker.mock.callCount(), 2);
   assert.equal(terminateWorker.mock.calls.at(-1).this, stalledWorker);
   assert.equal(stalledWorker.onmessage, null);
+
+  const replacementFrame = frame();
+  assert.notEqual(postFrame.mock.calls.at(-1).this, stalledWorker);
+  lateReply({ data: "stale worker reply" });
+  replyToWorker({ data: text });
+  await replacementFrame;
+  assert.deepEqual(afterTimeout, [text, text]);
+
+  for (const expectedErrors of [0, 1]) {
+    const timedOutFrame = frame();
+    expireFrame();
+    await timedOutFrame;
+    assert.equal(onDecoderError.mock.callCount(), expectedErrors);
+  }
+  assert.equal(track.stop.mock.callCount(), 2);
+  assert.equal(terminateWorker.mock.callCount(), 4);
   assert.equal(video.srcObject, null);
   assert.equal(timers.size, 0);
 

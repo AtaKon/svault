@@ -225,7 +225,7 @@ export async function startLiveQrScan(
         workerFailures = 0;
       } catch (error) {
         if (error === SCAN_STOPPED) return;
-        if (error === RESPONSE_TIMED_OUT || ++workerFailures >= MAX_CONSECUTIVE_WORKER_FAILURES) throw error;
+        if (++workerFailures >= MAX_CONSECUTIVE_WORKER_FAILURES) throw error;
         return;
       }
       if (!sessionSignal.aborted && text) onPayload(text);

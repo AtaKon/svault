@@ -237,7 +237,7 @@ try {
   assert.deepEqual(await page.evaluate(() => torchRequests), [true, false, false]);
   await choosePhoto();
   assert.equal(await page.evaluate(() => lastQrCamera.getTracks().every((track) => track.readyState === "ended")), true);
-  await setFixture({ forceSoftware: true, workerFaults: ["post", "invalid", "error", "invalid"], torchRequests: null });
+  await setFixture({ forceSoftware: true, workerFaults: ["post", "invalid", "error", "invalid", "stall"], torchRequests: null });
   await scan.click();
   await waitForRequest(5);
   assert.equal(await page.evaluate(() => qrRequests[4].qr), qr);
@@ -292,7 +292,7 @@ try {
   assert.equal(await page.evaluate(() => lastQrCamera.getTracks().every((track) => track.readyState === "ended")), true);
   await choosePhoto();
 
-  await setFixture({ workerFaults: ["stall"] });
+  await setFixture({ workerFaults: ["stall", "post"] });
   await scan.click();
   await retry.waitFor();
   assert.equal(await page.evaluate(() => lastQrCamera.getTracks().every((track) => track.readyState === "ended")), true);
