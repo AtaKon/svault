@@ -53,18 +53,22 @@ export async function startLiveQrScan(
   let worker: Worker | undefined;
   let interval: number | undefined;
   const stop = () => {
-    if (sessionSignal.aborted) return;
-    session.abort(SCAN_STOPPED);
     signal.removeEventListener("abort", stop);
+    session.abort(SCAN_STOPPED);
     if (interval !== undefined) {
       window.clearInterval(interval);
       interval = undefined;
     }
     if (stream) {
-      stopCamera(stream);
-      if (video.srcObject === stream) video.srcObject = null;
+      const acquired = stream;
       stream = undefined;
+      stopCamera(acquired);
+      if (video.srcObject === acquired) {
+        video.pause();
+        video.srcObject = null;
+      }
     }
+    detector = null;
     canvas = null;
     worker?.terminate();
     worker = undefined;

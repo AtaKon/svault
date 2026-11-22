@@ -131,7 +131,7 @@ test("live frames are bounded and serialized, with native retry before switching
     terminate = terminateWorker;
   });
 
-  const video = { videoWidth: 4000, videoHeight: 3000, readyState: 1, play: async () => {} };
+  const video = { videoWidth: 4000, videoHeight: 3000, readyState: 1, play: async () => {}, pause: t.mock.fn() };
   const scan = new AbortController();
   t.after(() => scan.abort());
   const found = [];
@@ -169,6 +169,7 @@ test("live frames are bounded and serialized, with native retry before switching
   assert.equal(track.stop.mock.callCount(), 1);
   assert.equal(clearInterval.mock.callCount(), 1);
   assert.equal(terminateWorker.mock.callCount(), 1);
+  assert.equal(video.pause.mock.callCount(), 1);
   assert.equal(video.srcObject, null);
 
   // A new session survives the previous cancellation, then bounds both missing replies.
@@ -399,6 +400,11 @@ for (const [failureMode, testName] of [
     });
     const video = {
       srcObject: null,
+      pause: t.mock.fn(() => {
+        if (failureMode === "abort" || failureMode === "timeout") {
+          queueMicrotask(() => playback.reject(new DOMException("Preview paused", "AbortError")));
+        }
+      }),
       play() {
         playing.resolve();
         if (failureMode === "throw") throw error;
@@ -413,11 +419,9 @@ for (const [failureMode, testName] of [
     if (failureMode === "abort") {
       scan.abort();
       await assert.rejects(pending, { name: "AbortError" });
-      playback.reject(error);
     } else if (failureMode === "timeout") {
       expirePlayback();
       await assert.rejects(pending, { message: "Could not play the camera preview" });
-      playback.resolve();
     } else {
       if (failureMode === "rejection") playback.reject(error);
       await assert.rejects(pending, (failure) => failure.cause === error);
@@ -425,6 +429,7 @@ for (const [failureMode, testName] of [
     assert.deepEqual(clearTimeout.mock.calls.map(({ arguments: args }) => args), [[1]]);
     assert.equal(setInterval.mock.callCount(), 0);
     assert.equal(track.stop.mock.callCount(), 1);
+    assert.equal(video.pause.mock.callCount(), 1);
     assert.equal(video.srcObject, null);
   });
 }
@@ -444,7 +449,7 @@ test("torch checks the reported state and ignores a completion after stop", asyn
   replaceGlobal(t, "window", { setTimeout, clearTimeout, setInterval: () => 1, clearInterval() {} });
   const scan = new AbortController();
   try {
-    const handle = await startLiveQrScan({ play: async () => {} }, () => {}, scan.signal);
+    const handle = await startLiveQrScan({ play: async () => {}, pause() {} }, () => {}, scan.signal);
     assert.equal(handle.torchAvailable, true);
     assert.deepEqual(await handle.setTorch(true), { requested: true, reported: undefined });
     assert.deepEqual(track.applyConstraints.mock.calls[0].arguments, [{ advanced: [{ torch: true }] }]);

@@ -268,7 +268,15 @@ try {
   // Leave this canceled fetch pending for the rest of the browser check.
   await scan.click();
   await waitForRequest(9);
-  await page.evaluate(() => qrRequests[8].reject(new TypeError("Network unavailable for test")));
+  await reset.click();
+  await page.evaluate(() => qrRequests[8].reject(new TypeError("Network failed after reset")));
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  assert.equal(await page.getByRole("link", { name: "Open digital receipt" }).count(), 0);
+  assert.equal(await scan.isEnabled(), true);
+
+  await scan.click();
+  await waitForRequest(10);
+  await page.evaluate(() => qrRequests[9].reject(new TypeError("Network unavailable for test")));
   await page.locator("p").filter({ hasText: "The digital receipt could not be loaded." }).waitFor();
   assert.equal(await page.getByRole("link", { name: "Open digital receipt" }).getAttribute("href"), qr);
   assert.equal(await scanCode.isEnabled(), true);
