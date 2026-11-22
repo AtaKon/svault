@@ -35,12 +35,16 @@ try {
     const postFrame = Worker.prototype.postMessage;
     Worker.prototype.postMessage = function (frame, transfer) {
       if (!globalThis.forceSoftware || !(frame instanceof ImageData)) return postFrame.call(this, frame, transfer);
-      if (globalThis.failWorkerPost) {
-        globalThis.failWorkerPost = false;
+      const fault = globalThis.workerFaults?.shift();
+      if (fault === "post") {
         throw new DOMException("Test frame could not be transferred", "DataCloneError");
       }
-      if (globalThis.badWorkerFrame) {
-        globalThis.badWorkerFrame = false;
+      if (fault === "error") {
+        const onError = this.onmessageerror;
+        queueMicrotask(() => onError?.call(this, new MessageEvent("messageerror")));
+        return;
+      }
+      if (fault === "invalid") {
         return postFrame.call(this, { width: 1, height: 1, data: new Uint8ClampedArray(3) });
       }
       // Feed a printed-code fixture through the actual decoder worker.
@@ -218,7 +222,7 @@ try {
   assert.deepEqual(await page.evaluate(() => torchRequests), [true, false]);
   await choosePhoto();
   assert.equal(await page.evaluate(() => lastQrCamera.getTracks().every((track) => track.readyState === "ended")), true);
-  await setFixture({ forceSoftware: true, failWorkerPost: true, badWorkerFrame: true, torchRequests: null });
+  await setFixture({ forceSoftware: true, workerFaults: ["post", "invalid", "error", "invalid"], torchRequests: null });
   await scan.click();
   await waitForRequest(5);
   assert.equal(await page.evaluate(() => qrRequests[4].qr), qr);

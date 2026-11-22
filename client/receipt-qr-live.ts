@@ -12,7 +12,7 @@ type CameraSettings = MediaTrackConstraintSet & { torch?: boolean; focusMode?: "
 type CameraTrackSettings = MediaTrackSettings & { torch?: boolean };
 const cameraConstraint = (setting: CameraSettings): MediaTrackConstraints => ({ advanced: [setting] });
 
-export type TorchState = { requested: boolean; reported?: boolean };
+export type TorchState = { requested: boolean; reported: boolean | undefined };
 
 export interface LiveQrScanHandle {
   /** Release the camera and stop reading frames. Safe to call again. */
@@ -70,22 +70,28 @@ export async function startLiveQrScan(
     worker = undefined;
   };
 
-  const waitForResponse = async <T>(request: () => Promise<T>) => {
+  const waitForResponse = <T>(request: () => Promise<T>) => {
     sessionSignal.throwIfAborted();
-    let cancelWait: (() => void) | undefined;
-    let timeout: number | undefined;
-    const interrupted = new Promise<never>((_, reject) => {
-      cancelWait = () => reject(SCAN_STOPPED);
-      sessionSignal.addEventListener("abort", cancelWait, { once: true });
-      timeout = window.setTimeout(() => reject(RESPONSE_TIMED_OUT), RESPONSE_TIMEOUT_MS);
+    return new Promise<T>((resolve, reject) => {
+      let settled = false;
+      const finish = (complete: () => void) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeout);
+        sessionSignal.removeEventListener("abort", cancel);
+        complete();
+      };
+      const fail = (error: unknown) => finish(() => reject(error));
+      const cancel = () => fail(SCAN_STOPPED);
+      const timeout = window.setTimeout(() => fail(RESPONSE_TIMED_OUT), RESPONSE_TIMEOUT_MS);
+      sessionSignal.addEventListener("abort", cancel, { once: true });
+      try {
+        // Keep both reply handlers attached even after timeout or cancellation.
+        void request().then((value) => finish(() => resolve(value)), fail);
+      } catch (error) {
+        fail(error);
+      }
     });
-    try {
-      const reply = new Promise<T>((resolve) => resolve(request()));
-      return await Promise.race([reply, interrupted]);
-    } finally {
-      window.clearTimeout(timeout);
-      if (cancelWait) sessionSignal.removeEventListener("abort", cancelWait);
-    }
   };
 
   signal.addEventListener("abort", stop, { once: true });
@@ -239,7 +245,7 @@ export async function startLiveQrScan(
         const settings: CameraTrackSettings | undefined = track.getSettings?.();
         return { requested: on, reported: settings?.torch };
       } catch {
-        return { requested: on };
+        return { requested: on, reported: undefined };
       }
     },
     torchAvailable: torchSupported,

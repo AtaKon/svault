@@ -398,6 +398,7 @@ node scripts/receipt-qr-browser-check.mjs URL  # simulated camera on a throwaway
 
 The browser scripts need `npm i --no-save playwright-core` and a local Edge/Chrome install
 (the paths are set at the top of each script).
+The receipt QR check also uses ZXing from the app's normal npm dependencies.
 
 The test suite covers unit conversion, OCR-noise parsing, auth, per-house isolation, membership
 roles, item creation, barcode conflicts and lookup, FIFO consumption, absolute counts, moves, low
