@@ -45,6 +45,16 @@ export function OfflineQueueBar() {
   // The head of the queue the user dismissed by closing the conflict sheet:
   // auto-sync waits for them to act instead of reopening the sheet.
   const dismissedRef = useRef<string | null>(null);
+  // False once the component unmounts: a retry timer or a late syncQueue
+  // reply must not set state, toast or arm another retry on a gone bar.
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   // A manual queue action overrides the automatic backoff: the pending retry
   // timer is dropped and the attempt counter reset, so the auto-sync effect
@@ -82,21 +92,25 @@ export function OfflineQueueBar() {
   // replay failure and a sync that threw. Without the timer a thrown sync
   // could stall the queue until an online event happens to fire.
   const scheduleRetry = useCallback(() => {
-    if (retryTimer.current !== undefined) return;
+    if (retryTimer.current !== undefined || !mountedRef.current) return;
     const delay = syncBackoffMs(retryAttempt.current + 1);
     retryAttempt.current += 1;
     retryTimer.current = window.setTimeout(() => {
       retryTimer.current = undefined;
+      if (!mountedRef.current) return;
       void runSyncRef.current?.();
     }, delay);
   }, []);
 
   const runSync = useCallback(async () => {
-    if (!user || !house || syncingRef.current || !online) return;
+    if (!user || !house || syncingRef.current || !online || !mountedRef.current) return;
     syncingRef.current = true;
     setSyncing(true);
     try {
       const result = await syncQueue(user.id, house.id);
+      // A sync that resolved after unmount must not touch state, toast or
+      // arm a retry on the gone bar.
+      if (!mountedRef.current) return;
       if (result.conflict) {
         setConflict(result.conflict);
       } else if (result.synced > 0) {
@@ -111,11 +125,13 @@ export function OfflineQueueBar() {
       }
       await refresh();
     } catch {
-      scheduleRetry();
-      toast.error(t("Could not sync the offline queue"));
+      if (mountedRef.current) {
+        scheduleRetry();
+        toast.error(t("Could not sync the offline queue"));
+      }
     } finally {
       syncingRef.current = false;
-      setSyncing(false);
+      if (mountedRef.current) setSyncing(false);
     }
   }, [user, house, online, toast, refresh, t, scheduleRetry]);
 
