@@ -734,6 +734,7 @@ const EL: Record<string, string> = {
   "Starting camera…": "Εκκίνηση κάμερας…",
   "Point the camera at a barcode": "Στρέψε την κάμερα σε έναν γραμμικό κώδικα",
   "Flip": "Αναστροφή",
+  "Switch lens": "Εναλλαγή φακού",
   "Camera access was blocked. Allow the camera in your browser settings, or type the barcode below.": "Η πρόσβαση στην κάμερα αποκλείστηκε. Επίτρεψέ την από τις ρυθμίσεις του προγράμματος περιήγησης ή πληκτρολόγησε παρακάτω τον γραμμικό κώδικα.",
   "No camera found on this device. You can still type the barcode below.": "Δεν βρέθηκε κάμερα σε αυτή τη συσκευή. Μπορείς να πληκτρολογήσεις παρακάτω τον γραμμικό κώδικα.",
   "The camera is busy in another app. Close it and try again, or type the barcode below.": "Η κάμερα χρησιμοποιείται από άλλη εφαρμογή. Κλείσε την και δοκίμασε ξανά ή πληκτρολόγησε παρακάτω τον γραμμικό κώδικα.",
