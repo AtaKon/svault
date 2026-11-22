@@ -134,6 +134,12 @@ export function ItemPage() {
       // A background refresh that cannot reach the server keeps the loaded
       // item on screen instead of replacing it with an error.
       if (loadedRef.current && err instanceof ApiError && err.status === 0) return;
+      // A 404 on a refresh means the item was deleted elsewhere: clear the
+      // loaded item so the not-found screen shows instead of a stale page.
+      if (loadedRef.current && err instanceof ApiError && err.status === 404) {
+        setItem(null);
+        loadedRef.current = false;
+      }
       setError(err instanceof Error ? err.message : tRef.current("Could not load this item"));
     }
   }, [itemId]);
