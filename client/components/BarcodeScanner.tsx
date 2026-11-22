@@ -87,8 +87,10 @@ export function BarcodeScanner({
   const [facingMode, setFacingMode] = useState<"environment" | "user">("environment");
   const [attempt, setAttempt] = useState(0);
   // A lens the user cycled to manually; it overrides the automatic pick and
-  // is remembered in localStorage by the camera stream module.
-  const [lens, setLens] = useState<string | null>(null);
+  // is remembered in localStorage by the camera stream module. Kept in a ref
+  // so choosing a lens reopens the camera only through the epoch bump in
+  // cycleLens, never as a plain dep change.
+  const lensRef = useRef<string | null>(null);
   // Bumped to restart the camera after the page becomes visible again.
   const [cameraEpoch, setCameraEpoch] = useState(0);
   const [torch, setTorch] = useState<TorchState>({ requested: false, reported: false });
@@ -312,7 +314,7 @@ export function BarcodeScanner({
 
     void (async () => {
       try {
-        const handle = await openBarcodeCamera(facingMode, lens ?? undefined);
+        const handle = await openBarcodeCamera(facingMode, lensRef.current ?? undefined);
         // A stream that arrived after cancellation is released before it
         // is ever attached to the video.
         if (signal.aborted) {
@@ -333,10 +335,10 @@ export function BarcodeScanner({
         setRearLenses(handle.rearCameras);
         setActiveLensId(handle.deviceId);
         // The requested lens may have been refused and the stream fallen
-        // back to the automatic pick; drop the stale request so the lens
-        // state matches the camera that is actually open. The null guard
-        // keeps this from looping: a cleared lens never differs again.
-        if (lens !== null && handle.deviceId !== lens) setLens(null);
+        // back to the automatic pick; drop the stale request so a later
+        // reopen asks for the camera that is actually open. Clearing the
+        // ref alone reopens nothing; cycleLens reopens through the epoch.
+        if (lensRef.current !== null && handle.deviceId !== lensRef.current) lensRef.current = null;
 
         // Chrome Android's native BarcodeDetector is far faster than ZXing;
         // ZXing takes over when it is missing or fails repeatedly.
@@ -380,7 +382,7 @@ export function BarcodeScanner({
     // on the hosting page leave the running camera alone, and t/navigate are
     // read through refs: a language switch changes t's identity and must not
     // tear the camera down either.
-  }, [facingMode, attempt, lens, cameraEpoch]);
+  }, [facingMode, attempt, cameraEpoch]);
 
   // Galaxy Chrome often shows a black preview after app switching: release
   // the camera while hidden and open a fresh stream on the way back.
@@ -431,7 +433,10 @@ export function BarcodeScanner({
     if (!next?.deviceId) return;
     storeLensId(next.deviceId);
     setActiveLensId(next.deviceId);
-    setLens(next.deviceId);
+    // The lens is requested through the ref; the epoch bump is what
+    // actually reopens the camera with it.
+    lensRef.current = next.deviceId;
+    setCameraEpoch((n) => n + 1);
   };
 
   return (
