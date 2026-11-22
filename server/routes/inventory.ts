@@ -1294,6 +1294,7 @@ itemRoutes.post(
       }
       return { applied: true, response };
     });
+    // An idempotent replay returns the stored response and intentionally skips side effects: the original request already ran them.
     if (result.applied) await afterStockChange(item.id);
     res.json(result.response);
   }),
