@@ -168,6 +168,14 @@ export function syncBackoffMs(attempt: number): number {
   return Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** Math.max(0, attempt - 1));
 }
 
+/** Every stock movement bumps the item's updated_at, so a queued "set" would
+ * 409 against the user's own earlier queued movement. Replaying uses the
+ * timestamp the server returned for the previous action on that item as the
+ * base for the next one; without one the queued baseline stands. */
+export function rebaseQueuedAction(action: QueuedStockAction, latestUpdatedAt: string | null): QueuedStockAction {
+  return latestUpdatedAt ? { ...action, baseUpdatedAt: latestUpdatedAt } : action;
+}
+
 /** Replay queued mutations in creation order. Stops on the first permanent
  * rejection (surfaced as a conflict the user can discard) or transport failure
  * so later actions cannot silently overtake it; transient failures are left
@@ -179,16 +187,19 @@ export async function syncQueue(
 ): Promise<SyncResult> {
   const actions = await listQueuedActions(userId, houseId);
   let synced = 0;
+  const latestByItem = new Map<string, string>();
   for (const action of actions) {
     try {
-      await api(`/api/items/${action.itemId}/stock`, {
+      const rebased = rebaseQueuedAction(action, latestByItem.get(action.itemId) ?? null);
+      const detail = await api<{ updatedAt?: string }>(`/api/items/${action.itemId}/stock`, {
         method: "POST",
         body: {
-          ...action.body,
+          ...rebased.body,
           idempotencyKey: action.id,
-          baseUpdatedAt: action.baseUpdatedAt ?? undefined,
+          baseUpdatedAt: rebased.baseUpdatedAt ?? undefined,
         },
       });
+      if (detail?.updatedAt) latestByItem.set(action.itemId, detail.updatedAt);
       await removeQueuedAction(action.id);
       synced++;
       onProgress?.(synced, actions.length);
