@@ -2,7 +2,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Button, IconButton, Spinner } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { useI18n } from "@/i18n";
-import { nextTorchTarget, resolveTorchState, type LiveQrScanHandle, type TorchState } from "@/receipt-qr-live";
+import { nextTorchTarget, resolveTorchState, type TorchState } from "@/receipt-qr-live-state";
+import type { LiveQrScanHandle } from "@/receipt-qr-live";
 import { matchReceiptQrLink, type ReceiptQrLink } from "@shared/receipt-qr-links";
 
 function friendlyCameraError(error: unknown, t: (key: string) => string): string {

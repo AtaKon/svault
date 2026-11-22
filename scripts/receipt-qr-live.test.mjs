@@ -26,10 +26,13 @@ async function importBundled(entry) {
   return import("data:text/javascript;base64," + Buffer.from(chunk.code).toString("base64"));
 }
 
-const [qr, { startLiveQrScan, nextTorchTarget, resolveTorchState, nextDecodeFailureCount }] = await Promise.all([
+const [qr, live, state] = await Promise.all([
   importBundled("client/receipt-qr.ts"),
   importBundled("client/receipt-qr-live.ts"),
+  importBundled("client/receipt-qr-live-state.ts"),
 ]);
+const { startLiveQrScan } = live;
+const { nextTorchTarget, resolveTorchState, nextDecodeFailureCount } = state;
 
 const text = "https://e-invoicing.gr/edocuments/ViewInvoice/-1/12345678-1234-1234-1234-123456789abc_testAB12";
 

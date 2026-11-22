@@ -1,4 +1,5 @@
 import ReceiptQrWorker from "./receipt-qr-worker.ts?worker";
+import { nextDecodeFailureCount, type TorchState } from "./receipt-qr-live-state.js";
 
 type DetectedCode = { rawValue: string; format: string };
 
@@ -11,18 +12,6 @@ type CameraCapabilities = MediaTrackCapabilities & { torch?: boolean; focusMode?
 type CameraSettings = MediaTrackConstraintSet & { torch?: boolean; focusMode?: "continuous" };
 type CameraTrackSettings = MediaTrackSettings & { torch?: boolean };
 const cameraConstraint = (setting: CameraSettings): MediaTrackConstraints => ({ advanced: [setting] });
-
-export type TorchState = { requested: boolean; reported: boolean | undefined };
-
-/** The torch target the Light button asks for next: whatever is not in effect. */
-export function nextTorchTarget(state: TorchState): boolean {
-  return !(state.reported ?? state.requested);
-}
-
-/** A failed or canceled request keeps the last state; a reply replaces it. */
-export function resolveTorchState(previous: TorchState, outcome: TorchState | null): TorchState {
-  return outcome ?? previous;
-}
 
 export interface LiveQrScanHandle {
   /** Release the camera and stop reading frames. Safe to call again. */
@@ -39,16 +28,6 @@ const SCAN_STOPPED = Symbol("QR scan stopped");
 const MAX_FRAME_SIDE = 1280;
 const MAX_CONSECUTIVE_NATIVE_FAILURES = 2;
 const MAX_CONSECUTIVE_WORKER_FAILURES = 2;
-
-/**
- * Consecutive-failure counter for the frame decoders: any reply, including
- * "no code found", proves a decoder is alive and resets the count, while
- * each counted failure steps it toward the threshold that retires the
- * decoder for the rest of the session.
- */
-export function nextDecodeFailureCount(previous: number, failed: boolean): number {
-  return failed ? previous + 1 : 0;
-}
 
 function stopCamera(stream: MediaStream) {
   for (const track of stream.getTracks()) track.stop();
