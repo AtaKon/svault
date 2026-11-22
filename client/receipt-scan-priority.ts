@@ -61,7 +61,9 @@ function usableTaxBreakdown(entries: unknown): boolean {
  * or map over each one, so a malformed value would throw partway through
  * applying the draft.
  */
-export function isUsableDigitalReceipt(data: ReceiptScanResponse): boolean {
+export function isUsableDigitalReceipt(data: ReceiptScanResponse | null | undefined): boolean {
+  // An empty response body resolves to null or undefined instead of a scan.
+  if (!data) return false;
   const lines = data.draft?.lines;
   return data.provider === "qr" && Array.isArray(lines) && lines.length > 0 &&
     textOrNull(data.draft?.vendorName) && textOrNull(data.draft?.purchasedAt) &&

@@ -61,6 +61,11 @@ test("a scan response is a usable digital receipt only with QR provenance and pr
   assert.equal(isUsableDigitalReceipt(scan("ai", [{ description: "Milk" }])), false);
 });
 
+test("an empty response body resolving to null or undefined is not usable", () => {
+  assert.equal(isUsableDigitalReceipt(null), false);
+  assert.equal(isUsableDigitalReceipt(undefined), false);
+});
+
 test("a malformed draft the applier would crash on is not usable", () => {
   const poison = { toString: null };
   assert.equal(isUsableDigitalReceipt(scan("qr", [{ description: "Milk", quantity: poison }])), false);

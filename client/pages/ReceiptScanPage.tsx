@@ -789,7 +789,7 @@ export function ReceiptScanPage() {
         signal: options.signal,
       });
       if (wasCanceled()) return "aborted";
-      if (data && isUsableDigitalReceipt(data)) {
+      if (isUsableDigitalReceipt(data)) {
         if (hasReceiptDetails(snapshotRef.current() ?? snapshot(), house.currency)) {
           setWarning(DIGITAL_RECEIPT_EDITS_KEPT);
           setDigitalLink(link.url);
