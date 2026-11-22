@@ -4,7 +4,11 @@ import { test } from "node:test";
 import { build } from "vite";
 import zxing from "@zxing/library";
 
-// Match the client's resolution of ZXing's browser-side exports.
+// Match the client's resolution of ZXing's browser-side exports. Bundles each
+// entry with vite into one self-contained chunk (codeSplitting: false, as the
+// client build assumes) and imports it through a data: URL; if the bundler
+// ever splits or reshapes its output, this import fails independently of the
+// scanner code under test.
 async function importBundled(entry) {
   const [bundle] = await build({
     configFile: false,
@@ -528,6 +532,52 @@ test("torch checks the reported state and ignores results after the camera ends"
   }
 });
 
+test("a track that ended before playback is released before capture starts", async (t) => {
+  const track = Object.assign(new EventTarget(), { stop: t.mock.fn(), readyState: "ended" });
+  const stream = { getTracks: () => [track], getVideoTracks: () => [track] };
+  replaceGlobal(t, "BarcodeDetector", undefined);
+  replaceGlobal(t, "navigator", { mediaDevices: { getUserMedia: async () => stream } });
+  replaceGlobal(t, "window", { setTimeout, clearTimeout });
+  const video = { srcObject: null, pause: t.mock.fn(), play: async () => {} };
+  await assert.rejects(
+    startLiveQrScan(video, () => assert.fail("Unexpected QR payload"), new AbortController().signal),
+    { message: "The camera stopped before scanning began" },
+  );
+  assert.equal(track.stop.mock.callCount(), 1);
+  assert.equal(video.pause.mock.callCount(), 1);
+  assert.equal(video.srcObject, null);
+});
+
+test("concurrent torch requests each settle with the state they observe", async (t) => {
+  const apply = [];
+  let reported;
+  const track = Object.assign(new EventTarget(), {
+    stop: t.mock.fn(),
+    getCapabilities: () => ({ torch: true }),
+    getSettings: () => ({ torch: reported }),
+    applyConstraints: t.mock.fn(({ advanced }) => new Promise((resolve) => {
+      apply.push(() => { reported = advanced[0].torch; resolve(); });
+    })),
+  });
+  const stream = { getTracks: () => [track], getVideoTracks: () => [track] };
+  replaceGlobal(t, "BarcodeDetector", undefined);
+  replaceGlobal(t, "navigator", { mediaDevices: { getUserMedia: async () => stream } });
+  replaceGlobal(t, "window", { setTimeout, clearTimeout, setInterval: () => 1, clearInterval() {} });
+  const scan = new AbortController();
+  try {
+    const handle = await startLiveQrScan({ play: async () => {}, pause() {} }, () => {}, scan.signal);
+    const on = handle.setTorch(true);
+    const off = handle.setTorch(false);
+    assert.equal(track.applyConstraints.mock.callCount(), 2);
+    apply[0]();
+    assert.deepEqual(await on, { requested: true, reported: true });
+    apply[1]();
+    assert.deepEqual(await off, { requested: false, reported: false });
+  } finally {
+    scan.abort();
+  }
+});
+
 test("live frame decoding checks an absolute deadline before each ZXing pass", (t) => {
   const width = 320;
   const height = 480;
@@ -548,10 +598,30 @@ test("live frame decoding checks an absolute deadline before each ZXing pass", (
   assert.equal(decodeAt(blank, 10_000, 10_199, 10_201), null);
 });
 
+test("a live frame with a spent budget is not decoded", (t) => {
+  const width = 320;
+  const height = 480;
+  const frame = { gray: receiptPixels(width, height), width, height };
+  const now = t.mock.method(Date, "now", () => 10_000);
+  try {
+    assert.equal(qr.decodeReceiptQrFrame(frame, { budgetMs: 0 }), null);
+    assert.equal(qr.decodeReceiptQrFrame(frame, { budgetMs: -1 }), null);
+    assert.equal(qr.decodeReceiptQrFrame(frame, { budgetMs: 200 }), text);
+  } finally {
+    now.mock.restore();
+  }
+});
+
 test("grayscale reuses storage only when it fits the current pixels", () => {
   const rgba = new Uint8ClampedArray([255, 0, 0, 255, 0, 255, 0, 255]);
   const { gray } = qr.rgbaToGray(rgba, 2, 1);
   assert.deepEqual([...gray], [76, 150]);
   assert.equal(qr.rgbaToGray(rgba, 1, 2, gray).gray, gray);
-  assert.equal(qr.rgbaToGray(rgba, 1, 1, gray).gray.length, 1);
+  // A resolution change reallocates instead of reusing the stale buffer.
+  const shrunk = qr.rgbaToGray(rgba, 1, 1, gray);
+  assert.notEqual(shrunk.gray, gray);
+  assert.equal(shrunk.gray.length, 1);
+  const wide = qr.rgbaToGray(new Uint8ClampedArray(16), 2, 2, gray);
+  assert.notEqual(wide.gray, gray);
+  assert.deepEqual([...wide.gray], [0, 0, 0, 0]);
 });
