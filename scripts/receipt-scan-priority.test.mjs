@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { addReceiptQrPayload, isUsableDigitalReceipt, shouldRunPhotoOcr } from "../client/receipt-scan-priority.js";
+import { addReceiptQrPayload, canAcceptLiveQrLink, isUsableDigitalReceipt, shouldRunPhotoOcr } from "../client/receipt-scan-priority.js";
 
 const entersoft = "https://e-invoicing.gr/edocuments/ViewInvoice/-1/12345678-1234-1234-1234-123456789abc_tEsTaB12";
 const epsilon = "https://epsilondigital-sklavenitis.epsilonnet.gr/fd/12345678123412341234123456789abc:12";
@@ -52,9 +52,82 @@ test("flags a second distinct receipt QR immediately", () => {
 test("a scan response is a usable digital receipt only with QR provenance and product lines", () => {
   assert.equal(isUsableDigitalReceipt(scan("qr", [{ description: "Milk" }])), true);
   assert.equal(isUsableDigitalReceipt(scan("qr", [])), false);
+  assert.equal(isUsableDigitalReceipt({ provider: "qr" }), false);
+  assert.equal(isUsableDigitalReceipt(scan("qr", [null])), false);
+  assert.equal(isUsableDigitalReceipt(scan("qr", [{}])), false);
+  assert.equal(isUsableDigitalReceipt(scan("qr", [{ description: 42 }])), false);
   assert.equal(isUsableDigitalReceipt(scan("local", [{ description: "Milk" }])), false);
   assert.equal(isUsableDigitalReceipt(scan("template", [{ description: "Milk" }])), false);
   assert.equal(isUsableDigitalReceipt(scan("ai", [{ description: "Milk" }])), false);
+});
+
+test("an empty response body resolving to null or undefined is not usable", () => {
+  assert.equal(isUsableDigitalReceipt(null), false);
+  assert.equal(isUsableDigitalReceipt(undefined), false);
+});
+
+test("a live QR link is accepted only on the revision the scanner opened with", () => {
+  assert.equal(canAcceptLiveQrLink(3, 3, true), true);
+  // Start over reset the workspace while the scanner was open.
+  assert.equal(canAcceptLiveQrLink(3, 4, true), false);
+  // A receipt operation is running or the scan flow is unavailable.
+  assert.equal(canAcceptLiveQrLink(3, 3, false), false);
+});
+
+test("a malformed draft the applier would crash on is not usable", () => {
+  const poison = { toString: null };
+  assert.equal(isUsableDigitalReceipt(scan("qr", [{ description: "Milk", quantity: poison }])), false);
+  assert.equal(isUsableDigitalReceipt(scan("qr", [{ description: "Milk", unitPrice: poison }])), false);
+  assert.equal(isUsableDigitalReceipt(scan("qr", [{ description: "Milk", lineTotal: poison }])), false);
+  for (const field of ["total", "subtotal", "tax", "savings"]) {
+    assert.equal(isUsableDigitalReceipt({ provider: "qr", draft: { lines: [{ description: "Milk" }], [field]: poison } }), false);
+  }
+  // toDraftLines maps over the lines before anything else, so a draft whose
+  // lines are not an array, or a line whose description is not a string,
+  // would throw on the first mapped line.
+  assert.equal(isUsableDigitalReceipt({ provider: "qr", draft: { lines: "not an array" } }), false);
+  assert.equal(isUsableDigitalReceipt({ provider: "qr", draft: { lines: { length: 1, 0: { description: "Milk" } } } }), false);
+  assert.equal(isUsableDigitalReceipt(scan("qr", [{ description: poison }])), false);
+  // Printable amounts, including absent ones, stay usable.
+  assert.equal(isUsableDigitalReceipt(scan("qr", [{ description: "Milk", quantity: 2, unitPrice: 1.25, lineTotal: 2.5 }])), true);
+});
+
+test("draft text fields the applier or its rendering would crash on are not usable", () => {
+  const poison = { toString: null };
+  const line = { description: "Milk" };
+  for (const field of ["vendorName", "purchasedAt", "currency", "templateId"]) {
+    assert.equal(isUsableDigitalReceipt({ provider: "qr", draft: { lines: [line], [field]: poison } }), false);
+  }
+  // Text fields holding their declared shape, including absent ones, stay usable.
+  assert.equal(isUsableDigitalReceipt(scan("qr", [line])), true);
+  assert.equal(
+    isUsableDigitalReceipt({ provider: "qr", draft: { lines: [line], vendorName: "Store", purchasedAt: "2026-01-02", currency: "EUR", templateId: "lidl-gr" } }),
+    true,
+  );
+});
+
+test("a tax breakdown the rendering would crash on is not usable", () => {
+  const line = { description: "Milk" };
+  // A string or a length-carrying object passes the truthiness check on
+  // taxBreakdown.length but has no map for the render and the save to call.
+  for (const taxBreakdown of ["24", { length: 1, 0: {} }, [null], [{ rate: { toString: null } }]]) {
+    assert.equal(isUsableDigitalReceipt({ provider: "qr", draft: { lines: [line], taxBreakdown } }), false);
+  }
+  assert.equal(
+    isUsableDigitalReceipt({ provider: "qr", draft: { lines: [line], taxBreakdown: [{ rate: 24, net: 1, tax: 0.24, gross: 1.24 }] } }),
+    true,
+  );
+});
+
+test("malformed line metadata the rendering would crash on is not usable", () => {
+  const poison = { toString: null };
+  for (const field of ["rawDescription", "unit", "taxRate", "discount"]) {
+    assert.equal(isUsableDigitalReceipt(scan("qr", [{ description: "Milk", [field]: poison }])), false);
+  }
+  assert.equal(
+    isUsableDigitalReceipt(scan("qr", [{ description: "Milk", rawDescription: "Milk 1l", unit: "l", taxRate: 24, discount: 0.5 }])),
+    true,
+  );
 });
 
 test("photo OCR is the fallback: it runs only without a digital receipt to use", () => {

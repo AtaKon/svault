@@ -16,7 +16,8 @@ import { OffProductPicker } from "@/components/OffProductPicker";
 import { ItemPickerSheet } from "@/components/ItemPickerSheet";
 import { ZoomableImage } from "@/components/ZoomableImage";
 import { clearReceiptDraft, loadReceiptDraft, receiptDraftKey, saveReceiptDraft, type StoredReceiptDraft } from "@/receipt-draft-store";
-import { addReceiptQrPayload, isUsableDigitalReceipt, shouldRunPhotoOcr } from "@/receipt-scan-priority";
+import { addReceiptQrPayload, canAcceptLiveQrLink, isUsableDigitalReceipt, shouldRunPhotoOcr } from "@/receipt-scan-priority";
+import { ReceiptQrScanner } from "@/components/ReceiptQrScanner";
 import { reconcileReceipt } from "@shared/receipt-reconcile";
 import type { ReceiptQrLink } from "@shared/receipt-qr-links";
 import type {
@@ -115,9 +116,12 @@ interface SavedDraft {
   warning: string | null;
 }
 
+type DigitalLinkOutcome = "applied" | "kept" | "failed" | "aborted";
+
 /** Suggestions this certain are pre-selected; weaker ones wait for a tap. */
 const AUTO_SELECT_SCORE = 0.9;
 const MAX_VISION_PAGES = 8;
+const DIGITAL_RECEIPT_EDITS_KEPT = "Your edits were kept. Start over to import the digital receipt.";
 
 function hasEditedReceiptText(draft: SavedDraft): boolean {
   return Boolean(draft.text.trim()) && draft.text.trim() !== mergeOcrTexts(draft.pages.map((page) => page.text)).text.trim();
@@ -274,6 +278,7 @@ export function ReceiptScanPage() {
   const stitchSeqRef = useRef(0);
   const workspaceRevisionRef = useRef(0);
   const readingRef = useRef(false);
+  const liveQrImportRef = useRef<AbortController | null>(null);
   const pageUploadsRef = useRef(new Map<string, Promise<string | null>>());
   const validationSeqRef = useRef(0);
   const draftKey = receiptDraftKey(user?.id, house.id);
@@ -292,9 +297,11 @@ export function ReceiptScanPage() {
   const [ocrProgress, setOcrProgress] = useState(0);
   const [ocrStatus, setOcrStatus] = useState("");
   const [ocrError, setOcrError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [receiptBusy, setBusy] = useState(false);
+  const [liveQrImporting, setLiveQrImporting] = useState(false);
   const [digitalLink, setDigitalLink] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [qrScannerRevision, setQrScannerRevision] = useState<number | null>(null);
 
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
@@ -325,6 +332,9 @@ export function ReceiptScanPage() {
   const [draftReady, setDraftReady] = useState(false);
   const [pendingDraft, setPendingDraft] = useState<StoredReceiptDraft<SavedDraft> | null>(null);
   const [resuming, setResuming] = useState(false);
+  const busy = receiptBusy || liveQrImporting;
+  const qrScanUnavailable = !draftReady || resuming || busy || ocrRunning || saving || Boolean(pendingDraft);
+  const hasReceiptOperation = () => readingRef.current || liveQrImportRef.current !== null;
 
   useEffect(() => {
     Promise.all([
@@ -566,7 +576,7 @@ export function ReceiptScanPage() {
   };
 
   const rerunOcr = async (key?: string) => {
-    if (readingRef.current || busy || ocrRunning) return;
+    if (hasReceiptOperation() || busy || ocrRunning) return;
     readingRef.current = true;
     const revision = workspaceRevisionRef.current;
     const current = [...pagesRef.current];
@@ -640,16 +650,16 @@ export function ReceiptScanPage() {
   };
 
   const handleFiles = async (files: File[]) => {
-    if (!files.length || pendingDraft || readingRef.current || busy || ocrRunning) return;
+    if (!files.length || pendingDraft || hasReceiptOperation() || busy || ocrRunning) return;
     readingRef.current = true;
     setBusy(true);
     // Only resetting the workspace invalidates a read. Reset also removes its pages.
     const revision = workspaceRevisionRef.current;
     const addedKeys: string[] = [];
-    const existingDraft = snapshotRef.current() ?? snapshot();
-    const hasDigitalDraft = existingDraft.provider === "qr";
-    const tryDigital = !hasReceiptDetails(existingDraft, house.currency);
     try {
+      const existingDraft = snapshotRef.current() ?? snapshot();
+      const hasDigitalDraft = existingDraft.provider === "qr";
+      const tryDigital = !hasReceiptDetails(existingDraft, house.currency);
       // Find the receipt QR before any photo is read: a usable digital
       // receipt decides whether the photos are OCR'd at all.
       const decoder = tryDigital ? await import("@/receipt-qr").catch(() => null) : null;
@@ -695,34 +705,12 @@ export function ReceiptScanPage() {
       let appliedDigital = false;
       const link = links.values().next().value ?? null;
       if (link) {
-        try {
-          const data = await api<ReceiptScanResponse>(`/api/houses/${house.id}/receipts/scan`, {
-            method: "POST",
-            body: { qr: link.url },
-          });
-          if (revision !== workspaceRevisionRef.current) return;
-          if (isUsableDigitalReceipt(data)) {
-            if (hasReceiptDetails(snapshotRef.current() ?? snapshot(), house.currency)) {
-              setWarning("Your edits were kept. Start over to import the digital receipt.");
-              setDigitalLink(link.url);
-            } else {
-              applyScan(data);
-              setManualMode(true);
-              setDigitalLink(null);
-              setText(data.selectedText ?? "");
-              setMergeRemoved(0);
-              appliedDigital = true;
-            }
-          } else if (data.qr?.message) {
-            setWarning(data.qr.message);
-            setDigitalLink(link.url);
-          }
-        } catch {
-          // The original photo can still be parsed locally when the issuer is unavailable.
-          if (revision !== workspaceRevisionRef.current) return;
-          setWarning("The digital receipt could not be loaded. Reading the photo instead.");
-          setDigitalLink(link.url);
-        }
+        const outcome = await importDigitalLink(link, {
+          revision,
+          notLoadedMessage: "The digital receipt could not be loaded. Reading the photo instead.",
+        });
+        if (outcome === "aborted") return;
+        appliedDigital = outcome === "applied";
       }
       if (!shouldRunPhotoOcr(existingDraft.provider, appliedDigital)) {
         commitPages(pagesRef.current.map((page) => addedKeys.includes(page.key) ? { ...page, status: "skipped" } : page), false);
@@ -741,7 +729,7 @@ export function ReceiptScanPage() {
   };
 
   const removePage = async (key: string) => {
-    if (readingRef.current) return;
+    if (hasReceiptOperation()) return;
     const page = pagesRef.current.find((entry) => entry.key === key);
     if (page) URL.revokeObjectURL(page.url);
     commitPages(pagesRef.current.filter((entry) => entry.key !== key));
@@ -751,7 +739,7 @@ export function ReceiptScanPage() {
   };
 
   const movePage = async (key: string, direction: -1 | 1) => {
-    if (readingRef.current) return;
+    if (hasReceiptOperation()) return;
     const next = [...pagesRef.current];
     const index = next.findIndex((entry) => entry.key === key);
     const target = index + direction;
@@ -767,6 +755,7 @@ export function ReceiptScanPage() {
   const uploading = stitching || pagesUploading;
 
   const applyScan = (data: ReceiptScanResponse) => {
+    const scannedLines = toDraftLines(data.draft);
     setVendorName(data.draft.vendorName ?? "");
     setPurchasedAt(data.draft.purchasedAt ?? todayInput());
     setCurrency(data.draft.currency ?? house.currency);
@@ -775,7 +764,7 @@ export function ReceiptScanPage() {
     setTax(data.draft.tax != null ? String(data.draft.tax) : "");
     setSavings(data.draft.savings != null ? String(data.draft.savings) : "");
     setTaxBreakdown(data.draft.taxBreakdown ?? []);
-    setLines(toDraftLines(data.draft));
+    setLines(scannedLines);
     setValidation({});
     setNewItemCount(null);
     setProvider(data.provider);
@@ -787,8 +776,85 @@ export function ReceiptScanPage() {
     setWarning(data.warning ?? null);
   };
 
+  /** Import a receipt link detected in a photo or in the live scanner. */
+  const importDigitalLink = async (
+    link: ReceiptQrLink,
+    options: { revision: number; notLoadedMessage: string; signal?: AbortSignal },
+  ): Promise<DigitalLinkOutcome> => {
+    const wasCanceled = () => options.signal?.aborted || options.revision !== workspaceRevisionRef.current;
+    try {
+      const data = await api<ReceiptScanResponse>(`/api/houses/${house.id}/receipts/scan`, {
+        method: "POST",
+        body: { qr: link.url },
+        signal: options.signal,
+      });
+      if (wasCanceled()) return "aborted";
+      if (isUsableDigitalReceipt(data)) {
+        if (hasReceiptDetails(snapshotRef.current() ?? snapshot(), house.currency)) {
+          setWarning(DIGITAL_RECEIPT_EDITS_KEPT);
+          setDigitalLink(link.url);
+          return "kept";
+        }
+        applyScan(data);
+        setManualMode(true);
+        setDigitalLink(null);
+        setText(data.selectedText ?? "");
+        setMergeRemoved(0);
+        return "applied";
+      }
+      setWarning(data?.qr?.message || options.notLoadedMessage);
+    } catch {
+      if (wasCanceled()) return "aborted";
+      setWarning(options.notLoadedMessage);
+    }
+    setDigitalLink(link.url);
+    return "failed";
+  };
+
+  const canScanQr = () => !hasReceiptOperation() && !qrScanUnavailable;
+
+  const openQrScanner = () => {
+    if (canScanQr()) setQrScannerRevision(workspaceRevisionRef.current);
+    else toast.push(t("Wait for the current receipt operation to finish."));
+  };
+
+  const finishLiveQrImport = (controller: AbortController) => {
+    if (liveQrImportRef.current !== controller) return;
+    liveQrImportRef.current = null;
+    setLiveQrImporting(false);
+  };
+
+  const acceptLiveQrLink = (link: ReceiptQrLink, revision: number) => {
+    if (!canAcceptLiveQrLink(revision, workspaceRevisionRef.current, canScanQr())) return false;
+    const controller = new AbortController();
+    // Hold the workspace lock before closing the dialog or starting the request.
+    liveQrImportRef.current = controller;
+    setLiveQrImporting(true);
+    setQrScannerRevision(null);
+    void importLiveQrLink(link, revision, controller);
+    return true;
+  };
+
+  const importLiveQrLink = async (link: ReceiptQrLink, revision: number, controller: AbortController) => {
+    try {
+      const outcome = await importDigitalLink(link, {
+        revision,
+        notLoadedMessage: "The digital receipt could not be loaded. Photograph the receipt instead.",
+        signal: controller.signal,
+      });
+      if (controller.signal.aborted) return;
+      if (outcome === "applied") {
+        toast.success(t("Digital receipt imported"));
+      } else if (outcome === "failed" && !pagesRef.current.length) {
+        setManualMode(true);
+      }
+    } finally {
+      finishLiveQrImport(controller);
+    }
+  };
+
   const handlePdf = async (file: File | undefined) => {
-    if (!file || pendingDraft || readingRef.current || busy || ocrRunning) return;
+    if (!file || pendingDraft || hasReceiptOperation() || busy || ocrRunning) return;
     readingRef.current = true;
     setBusy(true);
     const revision = workspaceRevisionRef.current;
@@ -828,7 +894,7 @@ export function ReceiptScanPage() {
   };
 
   const readReceipt = async (preferAi = false) => {
-    if (busy || readingRef.current) return;
+    if (busy || hasReceiptOperation()) return;
     const pageImages = pagesRef.current
       .map((page) => page.uploadedPath)
       .filter((path): path is string => Boolean(path))
@@ -1034,7 +1100,7 @@ export function ReceiptScanPage() {
   };
 
   const save = async (allowDuplicate = false) => {
-    if (busy || readingRef.current || ocrRunning) return;
+    if (busy || hasReceiptOperation() || ocrRunning) return;
     if (uploading) {
       toast.error(t("The scan is still being stored"));
       return;
@@ -1101,8 +1167,12 @@ export function ReceiptScanPage() {
   /* -------------------------------------------------------- reset & resume */
 
   const clearWorkspace = () => {
-    // An in-flight operation owns readingRef until its finally block releases it.
     workspaceRevisionRef.current++;
+    const qrImport = liveQrImportRef.current;
+    if (qrImport) {
+      qrImport.abort();
+      finishLiveQrImport(qrImport);
+    }
     stitchSeqRef.current++;
     validationSeqRef.current++;
     for (const page of pagesRef.current) URL.revokeObjectURL(page.url);
@@ -1144,6 +1214,7 @@ export function ReceiptScanPage() {
     setOcrStatus("");
     setOcrProgress(0);
     setManualMode(false);
+    setQrScannerRevision(null);
     if (cameraRef.current) cameraRef.current.value = "";
     if (libraryRef.current) libraryRef.current.value = "";
   };
@@ -1235,6 +1306,9 @@ export function ReceiptScanPage() {
 
   useEffect(() => {
     return () => {
+      const qrImport = liveQrImportRef.current;
+      liveQrImportRef.current = null;
+      qrImport?.abort();
       for (const page of pagesRef.current) URL.revokeObjectURL(page.url);
       if (stitchedUrlRef.current) URL.revokeObjectURL(stitchedUrlRef.current);
     };
@@ -1276,14 +1350,23 @@ export function ReceiptScanPage() {
         back={() => navigate("/receipts")}
         eyebrow={t("Receipt intake")}
         title={t("Scan a shopping receipt")}
-        subtitle={t("Photograph the receipt — one shot or several for a long one — check the lines, and the whole shop lands in inventory with the shop recorded.")}
+        subtitle={t("Scan the receipt’s QR code or add photos.")}
         actions={
-          showWorkspace ? (
+          showWorkspace || liveQrImporting ? (
             <Button variant="ghost" size="sm" icon="refresh" onClick={reset} disabled={saving}>
               {t("Start over")}</Button>
           ) : undefined
         }
       />
+
+      {digitalLink && (
+        <Card className="space-y-1 p-3">
+          {warning && <p role="alert" className="text-xs leading-relaxed text-muted">{t(warning)}</p>}
+          <a href={digitalLink} target="_blank" rel="noopener noreferrer" className="inline-block text-xs font-medium text-brand hover:underline">
+            {t("Open digital receipt")}
+          </a>
+        </Card>
+      )}
 
       {pendingDraft && (
         <Card className="flex flex-col gap-3 border-brand/40 p-4 sm:flex-row sm:items-center sm:justify-between">
@@ -1324,12 +1407,22 @@ export function ReceiptScanPage() {
             <span className="flex h-16 w-16 items-center justify-center rounded-2xl bg-brand text-brand-ink shadow-soft">
               <Icon name="receipt" size={28} />
             </span>
-            <div>
-              <div className="font-display text-xl">{t("Add the receipt photos")}</div>
-              <div className="mt-1 text-xs text-muted">{t("Any angle · each paper is straightened on this device")}</div>
-            </div>
             <div className="flex flex-wrap justify-center gap-2">
-              <Button type="button" icon="camera" disabled={busy || Boolean(pendingDraft)} onClick={() => cameraRef.current?.click()}>
+              <Button
+                type="button"
+                icon="scan"
+                disabled={qrScanUnavailable}
+                loading={liveQrImporting}
+                onClick={openQrScanner}
+              >
+                {t("Scan receipt code")}</Button>
+              <Button
+                type="button"
+                variant="secondary"
+                icon="camera"
+                disabled={busy || Boolean(pendingDraft)}
+                onClick={() => cameraRef.current?.click()}
+              >
                 {t("Take photo")}</Button>
               <Button
                 type="button"
@@ -1530,6 +1623,14 @@ export function ReceiptScanPage() {
                         : t("No photo")}
                 </span>
                 <span className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={qrScanUnavailable}
+                    onClick={openQrScanner}
+                    className="font-medium text-brand hover:underline"
+                  >
+                    {t("Scan code")}</button>
+                  <span>·</span>
                   <button type="button" disabled={busy} onClick={() => cameraRef.current?.click()} className="font-medium text-brand hover:underline">
                     {t("Camera")}</button>
                   <span>·</span>
@@ -1636,12 +1737,7 @@ export function ReceiptScanPage() {
                   </div>
                 )}
               </div>
-              {warning && <p className="rounded-xl bg-raised px-3 py-2 text-[11px] leading-relaxed text-muted">{t(warning)}</p>}
-              {digitalLink && (
-                <a href={digitalLink} target="_blank" rel="noopener noreferrer" className="inline-block text-xs font-medium text-brand hover:underline">
-                  {t("Open digital receipt")}
-                </a>
-              )}
+              {warning && !digitalLink && <p className="rounded-xl bg-raised px-3 py-2 text-[11px] leading-relaxed text-muted">{t(warning)}</p>}
               {provider && aiAvailable && (
                 <div className="flex flex-wrap items-center gap-2">
                   <Button type="button" size="sm" variant="secondary" icon="sparkles" loading={busy} onClick={() => void readReceipt(true)}>
@@ -2038,6 +2134,14 @@ export function ReceiptScanPage() {
         initialQuery={offLine?.barcode ?? offLine?.description ?? ""}
         title={t("Match receipt line")}
       />
+
+      {qrScannerRevision !== null && (
+        <ReceiptQrScanner
+          onLink={(link) => acceptLiveQrLink(link, qrScannerRevision)}
+          onClose={() => setQrScannerRevision(null)}
+          onPhotograph={() => cameraRef.current?.click()}
+        />
+      )}
 
       <ItemPickerSheet
         open={Boolean(pickerLine)}

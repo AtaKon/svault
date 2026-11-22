@@ -1,8 +1,9 @@
 /**
- * Scan priority for the receipt photo flow: the issuer QR is looked for
- * first, and the photos are OCR'd only when no usable digital receipt comes
- * out of it. The rules live here, pure of the decoder, camera and network,
- * so the ordering they encode can be tested on its own (see
+ * Scan decision rules for the receipt flow, pure of the decoder, camera and
+ * network: which decoded payloads carry a receipt link, when the live
+ * scanner's link may start an import, when a scan response counts as a
+ * usable digital receipt, and whether the photos still need to be OCR'd.
+ * Each rule can be tested on its own (see
  * scripts/receipt-scan-priority.test.mjs).
  */
 
@@ -21,12 +22,70 @@ export function addReceiptQrPayload(links: Map<string, ReceiptQrLink>, payload: 
 }
 
 /**
+ * A live scan may start an import only on the workspace revision its
+ * scanner opened with (a Start over in between makes the detected code
+ * stale) and only while the scan flow is free to run. A stale or busy
+ * workspace rejects the link without starting a request.
+ */
+export function canAcceptLiveQrLink(scanRevision: number, workspaceRevision: number, scanAvailable: boolean): boolean {
+  return scanRevision === workspaceRevision && scanAvailable;
+}
+
+/**
+ * The applier prints the draft's amounts with String(), so only primitive
+ * values survive that step. A malformed object there would throw partway
+ * through applying the draft, after some fields have already been written.
+ */
+function printableAmount(value: unknown): boolean {
+  return value == null || typeof value === "number" || typeof value === "string";
+}
+
+/**
+ * The applier and its rendering trim, print or index into the draft's text
+ * fields, and compare or print its number fields. Only a value of the
+ * declared type (or nothing at all) survives those steps.
+ */
+function textOrNull(value: unknown): boolean {
+  return value == null || typeof value === "string";
+}
+
+function numberOrNull(value: unknown): boolean {
+  return value == null || typeof value === "number";
+}
+
+/**
+ * Every rendered tax entry is indexed into for its rate, and that rate is
+ * printed inside a template literal. A null entry or a non-number rate
+ * would throw while rendering the applied draft.
+ */
+function usableTaxBreakdown(entries: unknown): boolean {
+  return entries == null || (Array.isArray(entries) &&
+    entries.every((entry) => typeof entry === "object" && entry !== null && numberOrNull(entry.rate)));
+}
+
+/**
  * A scan response counts as a usable digital receipt only with QR provenance
  * and product lines to show for it. Anything else — an unavailable issuer, a
- * challenge page, an empty draft — falls back to reading the photos.
+ * challenge page, an empty draft — falls back to reading the photos. The
+ * draft's text, number, line and tax-breakdown fields must also hold their
+ * declared shapes: the applier and the rendering that follows it trim, print
+ * or map over each one, so a malformed value would throw partway through
+ * applying the draft.
  */
-export function isUsableDigitalReceipt(data: ReceiptScanResponse): boolean {
-  return data.provider === "qr" && data.draft.lines.length > 0;
+export function isUsableDigitalReceipt(data: ReceiptScanResponse | null | undefined): boolean {
+  // An empty response body resolves to null or undefined instead of a scan.
+  if (!data) return false;
+  const lines = data.draft?.lines;
+  return data.provider === "qr" && Array.isArray(lines) && lines.length > 0 &&
+    textOrNull(data.draft?.vendorName) && textOrNull(data.draft?.purchasedAt) &&
+    textOrNull(data.draft?.currency) && textOrNull(data.draft?.templateId) &&
+    printableAmount(data.draft?.total) && printableAmount(data.draft?.subtotal) &&
+    printableAmount(data.draft?.tax) && printableAmount(data.draft?.savings) &&
+    usableTaxBreakdown(data.draft?.taxBreakdown) &&
+    lines.every((line) =>
+      typeof line?.description === "string" && textOrNull(line?.rawDescription) && textOrNull(line?.unit) &&
+      numberOrNull(line?.taxRate) && numberOrNull(line?.discount) &&
+      printableAmount(line?.quantity) && printableAmount(line?.unitPrice) && printableAmount(line?.lineTotal));
 }
 
 /**

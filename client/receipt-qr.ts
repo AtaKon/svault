@@ -65,12 +65,14 @@ function downscale(source: GrayPixels, targetMaxSide: number): GrayPixels {
   return { gray, width, height };
 }
 
-/** Standard ZXing QR decode over one grayscale variant. */
-function decodeStandard(pixels: GrayPixels, deadline: number): string | null {
+/** Standard ZXing QR decode with a Date.now() deadline checked before each pass. */
+function decodeStandard(pixels: GrayPixels, deadlineEpochMs: number): string | null {
   const hints = new Map([[DecodeHintType.TRY_HARDER, true]]);
   const source = new RGBLuminanceSource(pixels.gray, pixels.width, pixels.height);
   for (const Binarizer of [HybridBinarizer, GlobalHistogramBinarizer]) {
-    if (Date.now() > deadline) return null;
+    // At or past the deadline no new pass starts, so a spent or negative
+    // budget decodes nothing.
+    if (Date.now() >= deadlineEpochMs) return null;
     try {
       const bitmap = new BinaryBitmap(new Binarizer(source));
       const text = new QRCodeReader().decode(bitmap, hints).getText();
@@ -123,6 +125,24 @@ export async function decodeReceiptQrPixels(
   return null;
 }
 
+const DEFAULT_FRAME_BUDGET_MS = 200;
+
+/** Decode a live frame synchronously. Check the soft deadline between passes. */
+export function decodeReceiptQrFrame(pixels: GrayPixels, options: ReceiptQrDecodeOptions = {}): string | null {
+  return decodeStandard(pixels, Date.now() + (options.budgetMs ?? DEFAULT_FRAME_BUDGET_MS));
+}
+
+/** RGBA image data to row-major grayscale luminance (ITU-R 601). */
+export function rgbaToGray(rgba: Uint8ClampedArray, width: number, height: number, buffer?: Uint8ClampedArray): GrayPixels {
+  const pixelCount = width * height;
+  if (rgba.length < pixelCount * 4) throw new RangeError("RGBA data is shorter than width × height × 4");
+  const gray = buffer?.length === pixelCount ? buffer : new Uint8ClampedArray(pixelCount);
+  for (let i = 0, p = 0; i < gray.length; i++, p += 4) {
+    gray[i] = (rgba[p] * 299 + rgba[p + 1] * 587 + rgba[p + 2] * 114) / 1000;
+  }
+  return { gray, width, height };
+}
+
 /** Draw a decoded image to grayscale, capping extreme resolutions. */
 function bitmapToGray(bitmap: ImageBitmap): GrayPixels {
   const scale = Math.min(1, MAX_SOURCE_SIDE / Math.max(bitmap.width, bitmap.height));
@@ -134,14 +154,10 @@ function bitmapToGray(bitmap: ImageBitmap): GrayPixels {
   const context = canvas.getContext("2d", { willReadFrequently: true });
   if (!context) throw new Error("no 2d context");
   context.drawImage(bitmap, 0, 0, width, height);
-  const rgba = context.getImageData(0, 0, width, height).data;
-  const gray = new Uint8ClampedArray(width * height);
-  for (let i = 0, p = 0; i < gray.length; i++, p += 4) {
-    gray[i] = (rgba[p] * 299 + rgba[p + 1] * 587 + rgba[p + 2] * 114) / 1000;
-  }
+  const pixels = rgbaToGray(context.getImageData(0, 0, width, height).data, width, height);
   canvas.width = 0;
   canvas.height = 0;
-  return { gray, width, height };
+  return pixels;
 }
 
 /**
