@@ -1,6 +1,7 @@
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
+import http from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -73,5 +74,54 @@ describe("cookie parsing", () => {
     const list = await request("/api/houses", { headers: { cookie: `x=100%; ${cookie}` } });
     assert.equal(list.status, 200);
     assert.ok(Array.isArray(list.data));
+  });
+});
+
+describe("recipe import network guard", () => {
+  let recipeServer: import("node:http").Server;
+  let recipeServerHits = 0;
+  let recipePort = 0;
+  let importCookie = "";
+  let importHouseId = "";
+
+  before(async () => {
+    recipeServer = http.createServer((_req, res) => {
+      recipeServerHits += 1;
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end("<html><body>Pancakes</body></html>");
+    });
+    await new Promise<void>((resolve) => recipeServer.listen(0, "127.0.0.1", () => resolve()));
+    const address = recipeServer.address();
+    if (!address || typeof address === "string") throw new Error("no recipe server address");
+    recipePort = address.port;
+
+    importCookie = await register("RecipeImport");
+    const me = await request("/api/auth/me", { auth: importCookie });
+    importHouseId = me.data.houses[0].id;
+  });
+
+  after(async () => {
+    await new Promise<void>((resolve) => recipeServer.close(() => resolve()));
+  });
+
+  it("refuses a loopback recipe link without connecting to it", async () => {
+    // SV_OUTBOUND_ALLOW_PRIVATE is unset, so admin-configured URLs may be
+    // private; a member-supplied recipe link must still be refused.
+    const res = await request(`/api/houses/${importHouseId}/recipes/import`, {
+      auth: importCookie,
+      body: { url: `http://127.0.0.1:${recipePort}/recipe` },
+    });
+    assert.equal(res.status, 400);
+    assert.ok(res.data.error.length > 0);
+    assert.equal(recipeServerHits, 0);
+  });
+
+  it("refuses the cloud metadata address", async () => {
+    const res = await request(`/api/houses/${importHouseId}/recipes/import`, {
+      auth: importCookie,
+      body: { url: "http://169.254.169.254/latest/meta-data/" },
+    });
+    assert.equal(res.status, 400);
+    assert.ok(res.data.error.length > 0);
   });
 });
