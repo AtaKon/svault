@@ -97,7 +97,10 @@ export async function startLiveQrScan(
       const cancel = () => fail(SCAN_STOPPED);
       sessionSignal.addEventListener("abort", cancel, { once: true });
       try {
-        // Keep both reply handlers attached even after timeout or cancellation.
+        // The request keeps running after a timeout or session stop, and it
+        // has no cancellation API. Its late result or rejection is
+        // intentionally dropped, and these attached handlers are what keep
+        // that late rejection from going unhandled.
         void request().then((value) => finish(() => resolve(value)), fail);
       } catch (error) {
         fail(error);
