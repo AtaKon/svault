@@ -119,7 +119,9 @@ export function OfflineQueueBar() {
     }
   }, [user, house, online, toast, refresh, t, scheduleRetry]);
 
-  runSyncRef.current = runSync;
+  useEffect(() => {
+    runSyncRef.current = runSync;
+  }, [runSync]);
 
   useEffect(() => {
     void refresh();

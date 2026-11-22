@@ -73,12 +73,15 @@ export function useDialogFocus(open: boolean, onClose: () => void): RefObject<HT
       window.clearTimeout(focusTimer);
       document.removeEventListener("keydown", onKey, true);
       const index = openDialogs.indexOf(token);
+      // Only the dialog that was on top when it closed returns focus; a
+      // dialog closing behind a newer one must not steal focus from it.
+      const wasTopmost = index >= 0 && index === openDialogs.length - 1;
       if (index >= 0) openDialogs.splice(index, 1);
       // Release this dialog's hold on the scroll lock; an inner dialog that
       // is still open keeps the body locked until it closes too.
       scrollLockCount = Math.max(0, scrollLockCount - 1);
       if (scrollLockCount === 0) document.body.style.overflow = savedBodyOverflow;
-      if (previous?.isConnected) previous.focus();
+      if (wasTopmost && previous?.isConnected) previous.focus();
     };
   }, [open]);
 
