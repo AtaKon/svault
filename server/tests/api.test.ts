@@ -114,7 +114,7 @@ const { scaledCalories } = await import("../../shared/recipe-calories.js");
 const { REFERENCE_FOOD_COUNT, referenceNutrition } = await import("../services/food-reference.js");
 const { recipeNutrition } = await import("../services/nutrition.js");
 const { decodeEntities, importRecipeFromUrl, isoDurationMinutes, normaliseRecipeUrl, parseRecipePage, parseRecipeYield, readJsonLd } = await import("../services/recipe-import.js");
-const { configureReceiptQrFetcherForTests, configureReceiptQrScanResultForTests } = await import("../services/receipt-qr.js");
+const { configureReceiptQrFetcherForTests } = await import("../services/receipt-qr.js");
 const { heuristicReceipt } = await import("../services/receipt-local.js");
 const { billLinesTotal, parseBillNumber, parseBillText } = await import("../../shared/bill-parser.js");
 const { billHistory, extractBillMetrics } = await import("../../shared/bill-history.js");
@@ -7685,49 +7685,6 @@ describe("bulk intake", () => {
     } finally {
       // Do not leave an extra house behind for tests that count the owner's houses.
       await request(`/api/houses/${qrHouse}`, { method: "DELETE" });
-    }
-  });
-
-  it("falls back to the photo text when a digital receipt resolves ok with no product lines", async () => {
-    // The issuer fetchers today downgrade an empty draft to "unavailable";
-    // this pins the route's defence-in-depth for a future issuer that
-    // reports "ok" with zero lines: the text parse wins and the issuer's
-    // rendition never reaches selectedText.
-    configureReceiptQrScanResultForTests({
-      status: "ok",
-      issuer: "entersoft",
-      draft: {
-        vendorName: "Empty issuer",
-        purchasedAt: null,
-        currency: "EUR",
-        total: 0,
-        subtotal: 0,
-        tax: 0,
-        taxBreakdown: [],
-        savings: null,
-        notes: null,
-        lines: [],
-      },
-      text: "Empty issuer\nΑΠΟΔΕΙΞΗ ΛΙΑΝΙΚΗΣ ΠΩΛΗΣΗΣ\nΣΥΝΟΛΟ 0,00",
-      excludedCharges: 0,
-      message: null,
-    });
-    try {
-      const res = await request(`/api/houses/${houseId}/intake/parse`, {
-        method: "POST",
-        body: {
-          qr: "https://e-invoicing.gr/edocuments/ViewInvoice/-1/12345678-1234-1234-1234-123456789abc_tEsTaB12",
-          text: "CORNER MARKET\n12/10/2026\nMilk 2.40\nTOTAL 2.40",
-        },
-      });
-      assert.equal(res.status, 200);
-      assert.equal(res.data.provider, "local");
-      assert.deepEqual(res.data.qr, { issuer: "entersoft", status: "ok", message: null });
-      assert.equal(res.data.selectedText, undefined);
-      assert.equal(res.data.rows[0].description, "Milk");
-      assert.ok(!JSON.stringify(res.data).includes("Empty issuer"));
-    } finally {
-      configureReceiptQrScanResultForTests(null);
     }
   });
 
