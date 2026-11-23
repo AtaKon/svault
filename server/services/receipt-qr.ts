@@ -86,6 +86,16 @@ export function configureReceiptQrFetcherForTests(fetch: QrFetch | null): void {
   testFetch = fetch;
 }
 
+/**
+ * Injected in tests to pin how routes handle results the current issuers
+ * never emit (an "ok" draft with no product lines); production never sets it.
+ */
+let testScanResult: ReceiptQrFetchResult | null = null;
+
+export function configureReceiptQrScanResultForTests(result: ReceiptQrFetchResult | null): void {
+  testScanResult = result;
+}
+
 async function issuerFetch(url: string, signal: AbortSignal): Promise<Response> {
   if (testFetch) return testFetch(url, signal);
   return outboundFetch(url, {
@@ -416,6 +426,7 @@ export async function readQrReceiptScan(
   payload: string,
   timeoutMs = RECEIPT_QR_BUDGET_MS,
 ): Promise<ReceiptQrFetchResult> {
+  if (testScanResult) return testScanResult;
   const link = matchReceiptQrLink(payload);
   if (!link) return result(null, "unsupported", UNSUPPORTED_MESSAGE);
   if (limiters.receiptQr.blocked(houseId) || limiters.receiptQrGlobal.blocked("all")) {

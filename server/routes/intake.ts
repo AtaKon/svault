@@ -190,6 +190,9 @@ intakeRoutes.post(
       }
     }
 
+    // A QR draft and the AI branch are mutually exclusive: useQr is false
+    // whenever preferAi is true, so a re-read request never produces a QR
+    // draft for the AI parse to overwrite.
     if (body.preferAi) {
       if (cfg.enabled && (rawText || (body.image && hasVisionModel))) {
         try {
