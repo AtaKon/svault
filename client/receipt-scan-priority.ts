@@ -2,8 +2,9 @@
  * Scan decision rules for the receipt flow, pure of the decoder, camera and
  * network: which decoded payloads carry a receipt link, when the live
  * scanner's link may start an import, when a scan or intake response counts
- * as a usable digital receipt, and whether the photos still need to be
- * OCR'd. Each rule can be tested on its own (see
+ * as a usable digital receipt, whether the photos still need to be OCR'd,
+ * and what bulk intake's QR-first flow and its explicit AI re-read send.
+ * Each rule can be tested on its own (see
  * scripts/receipt-scan-priority.test.mjs).
  */
 
@@ -102,6 +103,40 @@ export function isUsableDigitalIntake(data: IntakeParseResult | null | undefined
   const rows = data.rows;
   return data.provider === "qr" && Array.isArray(rows) && rows.length > 0 &&
     rows.every((row) => typeof row?.description === "string" && Array.isArray(row?.candidates));
+}
+
+/**
+ * Bulk intake reads the photo's QR before anything else: a usable digital
+ * receipt from that link replaces the photo entirely, so nothing is
+ * uploaded or OCR'd. An import that failed or came back unusable — and a
+ * photo with no receipt QR at all — reads the photo as before.
+ */
+export function digitalIntakeReplacesPhoto(link: ReceiptQrLink | null | undefined, intake: IntakeParseResult | null | undefined): boolean {
+  return Boolean(link) && isUsableDigitalIntake(intake);
+}
+
+/**
+ * The bulk-intake parse body for receipt mode: the reviewed text, the
+ * attached photo and the OCR candidates while the text is still the raw
+ * reading. It never carries the QR link — only the photo flow attempts a
+ * QR — so an explicit AI re-read parses the reviewed text instead of
+ * re-fetching the issuer.
+ */
+export function intakeReceiptParseBody(
+  { text, image, ocrText = "", ocrCandidates = [], preferAi = false }: {
+    text: string;
+    image?: string | null;
+    ocrText?: string;
+    ocrCandidates?: string[];
+    preferAi?: boolean;
+  },
+): { text?: string; image?: string; candidates?: string[]; preferAi?: true } {
+  return {
+    text: text.trim() || undefined,
+    image: image ?? undefined,
+    ...(text === ocrText && ocrCandidates.length ? { candidates: ocrCandidates } : {}),
+    ...(preferAi ? { preferAi: true } : {}),
+  };
 }
 
 /**

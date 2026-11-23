@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { addReceiptQrPayload, canAcceptLiveQrLink, isUsableDigitalIntake, isUsableDigitalReceipt, shouldRunPhotoOcr } from "../client/receipt-scan-priority.js";
+import { addReceiptQrPayload, canAcceptLiveQrLink, digitalIntakeReplacesPhoto, intakeReceiptParseBody, isUsableDigitalIntake, isUsableDigitalReceipt, shouldRunPhotoOcr } from "../client/receipt-scan-priority.js";
 
 const entersoft = "https://e-invoicing.gr/edocuments/ViewInvoice/-1/12345678-1234-1234-1234-123456789abc_tEsTaB12";
 const epsilon = "https://epsilondigital-sklavenitis.epsilonnet.gr/fd/12345678123412341234123456789abc:12";
@@ -161,4 +161,39 @@ test("an intake parse response the review table would crash on is not usable", (
   // An empty response body resolving to null or undefined is not usable.
   assert.equal(isUsableDigitalIntake(null), false);
   assert.equal(isUsableDigitalIntake(undefined), false);
+});
+
+test("bulk intake reads the photo unless the QR's digital receipt is usable", () => {
+  const links = new Map();
+  addReceiptQrPayload(links, entersoft);
+  const link = links.values().next().value;
+  const good = { provider: "qr", rows: [{ description: "Milk", candidates: [] }] };
+  // A usable digital receipt replaces the photo: no upload, no OCR.
+  assert.equal(digitalIntakeReplacesPhoto(link, good), true);
+  // A QR request that failed before a response arrived reads the photo instead.
+  assert.equal(digitalIntakeReplacesPhoto(link, null), false);
+  // An unusable response — no rows, or non-QR provenance — reads the photo.
+  assert.equal(digitalIntakeReplacesPhoto(link, { provider: "qr", rows: [] }), false);
+  assert.equal(digitalIntakeReplacesPhoto(link, { provider: "local", rows: [{ description: "Milk", candidates: [] }] }), false);
+  // A photo without a receipt QR never leaves the photo path.
+  assert.equal(digitalIntakeReplacesPhoto(null, good), false);
+});
+
+test("an explicit AI re-read parses the reviewed text and never attempts the QR", () => {
+  const reRead = intakeReceiptParseBody({ text: "  Milk 1.50 ", image: null, ocrText: "", ocrCandidates: [], preferAi: true });
+  assert.equal(reRead.preferAi, true);
+  assert.equal(reRead.text, "Milk 1.50");
+  assert.equal("qr" in reRead, false);
+  // A plain parse of the reviewed text and photo never carries the QR either.
+  const plain = intakeReceiptParseBody({ text: "Milk 1.50", image: "/uploads/receipts/r-1.png", ocrText: "Milk 1.50", ocrCandidates: ["Milk 1.5O"] });
+  assert.equal("qr" in plain, false);
+  assert.equal("preferAi" in plain, false);
+  assert.equal(plain.image, "/uploads/receipts/r-1.png");
+  // Candidates ride along only while the text is still the raw OCR reading.
+  assert.deepEqual(plain.candidates, ["Milk 1.5O"]);
+  const edited = intakeReceiptParseBody({ text: "Milk edited", image: null, ocrText: "Milk 1.50", ocrCandidates: ["Milk 1.5O"] });
+  assert.equal("candidates" in edited, false);
+  assert.equal(edited.text, "Milk edited");
+  // Blank text is not sent at all.
+  assert.equal(intakeReceiptParseBody({ text: "   ", image: null }).text, undefined);
 });

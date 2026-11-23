@@ -1399,7 +1399,7 @@ subtracts stock once per ingredient, and uses the plan week as the idempotency k
 | Method | Path | Min role | Purpose |
 | --- | --- | --- | --- |
 | `POST` | `/api/houses/:houseId/intake/upload` | member+ | Upload a receipt image (`field: image`), returns `{ path }`. |
-| `POST` | `/api/houses/:houseId/intake/parse` | member+ | Parse `{ text?, image?, candidates?, preferAi?, barcodes?, qr? }` and return review rows. A supported issuer QR link is fetched before any text parsing; the text is only parsed when it yields no draft. AI is used only when requested. Never writes. |
+| `POST` | `/api/houses/:houseId/intake/parse` | member+ | Parse `{ text?, image?, candidates?, preferAi?, barcodes?, qr? }` and return review rows. A supported issuer QR link is fetched before any text parsing, but skipped for an explicit `preferAi` re-read, which needs text or an image of its own; the text is only parsed when the QR yields no draft. AI is used only when requested. Never writes. |
 | `POST` | `/api/houses/:houseId/intake/commit` | member+ | Validate and apply reviewed rows atomically. |
 
 `parse` returns `provider` (`ai`, `local`, `template`, `barcode`, `qr`), a warning and rows. Each row contains

@@ -140,7 +140,11 @@ intakeRoutes.post(
     }
 
     let rawText = (body.text ?? "").trim();
-    if (!rawText && !body.image && !body.qr) throw new ApiError(400, "Provide receipt text, an image or barcodes");
+    // A QR link is only usable input when it will actually be read: an
+    // explicit AI re-read skips it, so a QR alone with preferAi would
+    // otherwise parse an empty receipt and return 200 with no rows.
+    const useQr = Boolean(body.qr) && !body.preferAi;
+    if (!rawText && !body.image && !useQr) throw new ApiError(400, "Provide receipt text, an image or barcodes");
     await assertUploadsOwned([body.image], houseId).catch((error: Error) => {
       throw error instanceof UploadOwnershipError ? new ApiError(400, error.message) : error;
     });
@@ -151,7 +155,7 @@ intakeRoutes.post(
 
     // Membership and upload ownership are checked above. The QR service
     // validates the issuer allowlist before reserving a slot or fetching.
-    const qrImport = !body.preferAi && body.qr ? await readQrReceiptScan(houseId, body.qr) : null;
+    const qrImport = useQr ? await readQrReceiptScan(houseId, body.qr!) : null;
     // The issuer service returns success only with product lines and source text.
     const digitalReceipt = qrImport?.status === "ok" && qrImport.draft.lines.length ? qrImport : null;
     const qrDraft = digitalReceipt?.draft;

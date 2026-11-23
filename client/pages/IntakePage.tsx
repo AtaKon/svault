@@ -7,11 +7,14 @@ import { Icon } from "@/components/icons";
 import { BarcodeScanner } from "@/components/BarcodeScanner";
 import { useToast } from "@/components/toast";
 import { ocrImage } from "@/ocr";
-import { isUsableDigitalIntake } from "@/receipt-scan-priority";
+import { digitalIntakeReplacesPhoto, intakeReceiptParseBody } from "@/receipt-scan-priority";
 import { matchReceiptQrLink } from "@shared/receipt-qr-links";
 import { qty } from "@/format";
 import type { IntakeParseResult, IntakeRow, Item } from "@shared/types";
 import { useI18n } from "@/i18n";
+
+/** Note shown when the QR's digital receipt cannot be fetched or used, so the photo is read instead. */
+const QR_FALLBACK_NOTE = "The digital receipt could not be loaded. Reading the photo instead.";
 
 export function IntakePage() {
   const { t } = useI18n();
@@ -68,7 +71,7 @@ export function IntakePage() {
             method: "POST",
             body: { qr: link.url },
           });
-          if (isUsableDigitalIntake(data)) {
+          if (digitalIntakeReplacesPhoto(link, data)) {
             if (data.selectedText != null) setText(data.selectedText);
             setResult(data);
             setRows(data.rows);
@@ -78,9 +81,9 @@ export function IntakePage() {
             toast.success(t("Digital receipt imported"));
             return;
           }
-          setQrNote(data.qr?.message ?? "The digital receipt could not be loaded. Reading the photo instead.");
+          setQrNote(data.qr?.message ?? QR_FALLBACK_NOTE);
         } catch {
-          setQrNote("The digital receipt could not be loaded. Reading the photo instead.");
+          setQrNote(QR_FALLBACK_NOTE);
         }
       }
       setOcrRunning(true);
@@ -104,6 +107,9 @@ export function IntakePage() {
     } catch (err) {
       toast.error(err instanceof Error ? t(err.message) : t("Could not read the photo"));
     } finally {
+      // Every exit passes through here, including the digital-receipt early
+      // return above: ocrRunning is only set after that branch, and resetting
+      // it here keeps that invariant explicit no matter which path ran.
       setOcrRunning(false);
       setReading(false);
       if (fileRef.current) fileRef.current.value = "";
@@ -120,9 +126,7 @@ export function IntakePage() {
         body:
           mode === "barcodes"
             ? { barcodes }
-            : { text: text.trim() || undefined, image: uploadedPath ?? undefined,
-                ...(text === ocrText && ocrCandidates.length ? { candidates: ocrCandidates } : {}),
-                ...(preferAi ? { preferAi: true } : {}) },
+            : intakeReceiptParseBody({ text, image: uploadedPath, ocrText, ocrCandidates, preferAi }),
       });
       if (data.selectedText != null) setText(data.selectedText);
       setResult(data);

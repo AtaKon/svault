@@ -7617,6 +7617,13 @@ describe("bulk intake", () => {
       assert.equal(reRead.data.qr, undefined);
       assert.equal(reRead.data.rows[0].description, "Milk");
       assert.equal(attempts, 5);
+
+      // A QR alone has nothing for the AI to re-read: the QR is skipped, so
+      // the request keeps the empty-input 400 instead of empty rows.
+      const qrOnlyReRead = await request(path, { method: "POST", body: { qr: entersoft, preferAi: true } });
+      assert.equal(qrOnlyReRead.status, 400);
+      assert.equal(qrOnlyReRead.data.error, "Provide receipt text, an image or barcodes");
+      assert.equal(attempts, 5);
     } finally {
       configureReceiptQrFetcherForTests(null);
     }
