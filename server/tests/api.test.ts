@@ -7542,6 +7542,152 @@ describe("bulk intake", () => {
     void row;
   });
 
+  it("reads a receipt QR before the photo text and falls back when the QR yields no draft", async () => {
+    const path = `/api/houses/${houseId}/intake/parse`;
+    const ref = "12345678-1234-1234-1234-123456789abc";
+    const token = "tEsTaB12";
+    const entersoft = `https://e-invoicing.gr/edocuments/ViewInvoice/-1/${ref}_${token}`;
+    const frame = `/api/GetInvoice?contentType=PEPPOL&amp;intRefDocID=${ref}&amp;hashToken=${token}&amp;ofenm=-1&amp;isPreview=True`;
+    const text = "CORNER MARKET\n12/10/2026\nMilk 2.40\nTOTAL 2.40";
+    let attempts = 0;
+    let reachable = true;
+    configureReceiptQrFetcherForTests(async (url) => {
+      attempts++;
+      if (!reachable) return new Response(null, { status: 404 });
+      const body = url === entersoft
+        ? `<iframe id="iframeContent" src="${frame}"></iframe>`
+        : `<table><tbody><tr><td data-title="Κωδικός">SKU</td>
+           <td data-title="Περιγραφή">Sample digital product</td>
+           <td data-title="Ποσότητα">1</td><td data-title="Συνολική Αξία">2,40</td></tr></tbody></table>
+           <div>ΤΕΛΙΚΗ ΑΞΙΑ 2,40EUR</div>`;
+      return new Response(body, { headers: { "content-type": "text/html" } });
+    });
+    try {
+      // A usable digital receipt wins: the photo text is never parsed.
+      const digital = await request(path, { method: "POST", body: { qr: entersoft, text } });
+      assert.equal(digital.status, 200);
+      assert.equal(digital.data.provider, "qr");
+      assert.deepEqual(digital.data.qr, { issuer: "entersoft", status: "ok", message: null });
+      assert.equal(digital.data.rows.length, 1);
+      assert.equal(digital.data.rows[0].description, "Sample digital product");
+      assert.ok(!JSON.stringify(digital.data).includes("Milk"));
+      assert.match(digital.data.selectedText, /Sample digital product/);
+      assert.equal(digital.data.warning, null);
+      // The viewer page and the framed invoice document.
+      assert.equal(attempts, 2);
+
+      // A QR link alone is enough: no text or image has to be supplied.
+      const digitalOnly = await request(path, { method: "POST", body: { qr: entersoft } });
+      assert.equal(digitalOnly.status, 200);
+      assert.equal(digitalOnly.data.provider, "qr");
+      assert.equal(digitalOnly.data.rows[0].description, "Sample digital product");
+      assert.equal(attempts, 4);
+
+      // An unsupported QR is never fetched and falls back to the photo text.
+      const unsupported = await request(path, {
+        method: "POST",
+        body: { qr: "https://e-invoicing.gr/unrelated", text },
+      });
+      assert.equal(unsupported.status, 200);
+      assert.equal(unsupported.data.provider, "local");
+      assert.deepEqual(unsupported.data.qr, {
+        issuer: null,
+        status: "unsupported",
+        message: "That QR code or link is not from a supported digital receipt issuer.",
+      });
+      assert.ok(unsupported.data.warning.includes(unsupported.data.qr.message));
+      assert.equal(unsupported.data.rows[0].description, "Milk");
+      assert.equal(attempts, 4);
+
+      // An unreadable issuer keeps its safe message and falls back to the text.
+      reachable = false;
+      const failed = await request(path, { method: "POST", body: { qr: entersoft, text } });
+      assert.equal(failed.status, 200);
+      assert.equal(failed.data.provider, "local");
+      assert.equal(failed.data.qr.status, "unavailable");
+      assert.ok(failed.data.warning.includes(failed.data.qr.message));
+      assert.equal(failed.data.rows[0].description, "Milk");
+      assert.ok(!JSON.stringify(failed.data).includes(token));
+      assert.equal(attempts, 5);
+
+      // An explicit AI re-read parses the given text and never attempts the QR.
+      const reRead = await request(path, { method: "POST", body: { qr: entersoft, text, preferAi: true } });
+      assert.equal(reRead.status, 200);
+      assert.equal(reRead.data.provider, "local");
+      assert.equal(reRead.data.qr, undefined);
+      assert.equal(reRead.data.rows[0].description, "Milk");
+      assert.equal(attempts, 5);
+
+      // A QR alone has nothing for the AI to re-read: the QR is skipped, so
+      // the request keeps the empty-input 400 instead of empty rows.
+      const qrOnlyReRead = await request(path, { method: "POST", body: { qr: entersoft, preferAi: true } });
+      assert.equal(qrOnlyReRead.status, 400);
+      assert.equal(qrOnlyReRead.data.error, "Provide receipt text, an image or barcodes");
+      assert.equal(attempts, 5);
+    } finally {
+      configureReceiptQrFetcherForTests(null);
+    }
+  });
+
+  it("keeps a usable QR draft ahead of a configured AI provider", async () => {
+    const created = await request("/api/houses", { method: "POST", body: { name: "Intake QR AI house", currency: "EUR" } });
+    assert.equal(created.status, 201);
+    const qrHouse = created.data.id;
+    try {
+      const configured = await request(`/api/houses/${qrHouse}`, {
+        method: "PATCH",
+        body: { settings: { ai: { enabled: true, baseUrl: aiBase, apiKey: "test-key", model: "mock-model" } } },
+      });
+      assert.equal(configured.status, 200);
+
+      const ref = "12345678-1234-1234-1234-123456789abc";
+      const token = "tEsTaB12";
+      const entersoft = `https://e-invoicing.gr/edocuments/ViewInvoice/-1/${ref}_${token}`;
+      const frame = `/api/GetInvoice?contentType=PEPPOL&amp;intRefDocID=${ref}&amp;hashToken=${token}&amp;ofenm=-1&amp;isPreview=True`;
+      const text = "CORNER MARKET\n12/10/2026\nMilk 2.40\nTOTAL 2.40";
+      configureReceiptQrFetcherForTests(async (url) => {
+        const body = url === entersoft
+          ? `<iframe id="iframeContent" src="${frame}"></iframe>`
+          : `<table><tbody><tr><td data-title="Κωδικός">SKU</td>
+             <td data-title="Περιγραφή">Sample digital product</td>
+             <td data-title="Ποσότητα">1</td><td data-title="Συνολική Αξία">2,40</td></tr></tbody></table>
+             <div>ΤΕΛΙΚΗ ΑΞΙΑ 2,40EUR</div>`;
+        return new Response(body, { headers: { "content-type": "text/html" } });
+      });
+      try {
+        aiRequests.length = 0;
+        const path = `/api/houses/${qrHouse}/intake/parse`;
+        // A usable QR draft and the AI branch are mutually exclusive: with
+        // preferAi unset the text path (AI cleanup included) is never run,
+        // so a configured provider cannot overwrite the digital rows.
+        const digital = await request(path, { method: "POST", body: { qr: entersoft, text } });
+        assert.equal(digital.status, 200);
+        assert.equal(digital.data.provider, "qr");
+        assert.deepEqual(digital.data.qr, { issuer: "entersoft", status: "ok", message: null });
+        assert.equal(digital.data.rows[0].description, "Sample digital product");
+        assert.match(digital.data.selectedText, /Sample digital product/);
+        assert.equal(aiRequests.length, 0);
+
+        // A QR-only request still reports AI as available: the issuer text
+        // becomes the source for an explicit Re-read with AI, so the button
+        // keeps working after a digital import.
+        const digitalOnly = await request(path, { method: "POST", body: { qr: entersoft } });
+        assert.equal(digitalOnly.status, 200);
+        assert.equal(digitalOnly.data.provider, "qr");
+        assert.equal(digitalOnly.data.aiAvailable, true);
+        assert.equal(digitalOnly.data.rows[0].description, "Sample digital product");
+        assert.equal(aiRequests.length, 0);
+      } finally {
+        configureReceiptQrFetcherForTests(null);
+        limiters.receiptQr.reset(qrHouse);
+        limiters.receiptQrGlobal.reset("all");
+      }
+    } finally {
+      // Do not leave an extra house behind for tests that count the owner's houses.
+      await request(`/api/houses/${qrHouse}`, { method: "DELETE" });
+    }
+  });
+
   it("rolls back every row when one is invalid", async () => {
     const fail = await request(`/api/houses/${houseId}/intake/commit`, {
       method: "POST",

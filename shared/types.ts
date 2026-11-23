@@ -1212,9 +1212,11 @@ export interface IntakeRow {
 }
 
 export interface IntakeParseResult {
-  provider: "ai" | "local" | "template" | "barcode";
+  provider: "ai" | "local" | "template" | "barcode" | "qr";
   aiAvailable?: boolean;
   selectedText?: string;
+  /** Present when the request carried an issuer QR payload. */
+  qr?: ReceiptQrInfo | null;
   warning: string | null;
   vendorName: string | null;
   purchasedAt: string | null;
