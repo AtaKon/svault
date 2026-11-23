@@ -225,6 +225,39 @@ test("passes only the canonical validated receipt URL to the fetcher", async () 
   assert.deepEqual(requests, [entersoftUrl]);
 });
 
+test("accepts the shorter Entersoft tokens real receipts print and rejects lookalikes", async () => {
+  // Field receipts carry tokens of 6 to 12 alphanumeric characters (7 was
+  // observed on a real Lidl receipt); the originally assumed 8 was one
+  // issuer's spelling, not the route's shape.
+  for (const [token, ofenm] of [["testAB1", "-1"], ["aB12cD34eF56", "12"]] as const) {
+    const link = matchReceiptQrLink(`https://e-invoicing.gr/edocuments/ViewInvoice/${ofenm}/${ref}_${token}`);
+    assert.ok(link?.issuer === "entersoft");
+    assert.deepEqual(link.entersoft, { ofenm, uuid: ref, token });
+  }
+  // Tokens outside the issuer's shape stay unfetchable, whatever the host.
+  for (const token of ["tstAB", "aB12cD34eF567", "tst_AB1"]) {
+    assert.equal(matchReceiptQrLink(`https://e-invoicing.gr/edocuments/ViewInvoice/-1/${ref}_${token}`), null);
+  }
+  // Lookalike hosts and route tails never match, with a short token too.
+  for (const url of [
+    `https://e-invoicing.gr.example/edocuments/ViewInvoice/-1/${ref}_testAB1`,
+    `https://einvoking.gr/edocuments/ViewInvoice/-1/${ref}_testAB1`,
+    `https://e-invoicing.gr/edocuments/ViewInvoice/-1/${ref}_testAB1/extra`,
+  ]) {
+    assert.equal(matchReceiptQrLink(url), null);
+  }
+  // The whole fetch path follows the shared matcher: the server's own
+  // viewer allowlist accepts the short token up to its verification page.
+  const shortUrl = `https://e-invoicing.gr/edocuments/ViewInvoice/-1/${ref}_testAB1`;
+  const requests: string[] = [];
+  configureReceiptQrFetcherForTests(async (url) => {
+    requests.push(url);
+    return html('<div id="cf-turnstile"></div>');
+  });
+  assert.equal((await fetchQrReceiptDraft(shortUrl)).status, "challenge");
+  assert.deepEqual(requests, [shortUrl]);
+});
+
 test("stops a redirect loop and requires the named Entersoft viewer frame", async () => {
   let requests = 0;
   configureReceiptQrFetcherForTests(async () => {

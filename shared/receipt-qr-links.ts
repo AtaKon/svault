@@ -27,9 +27,9 @@ const IMPACT_HOST = "einvoice.impact.gr";
 
 /** Epsilon Digital (Sklavenitis): /fd/{32 hex}:{register digits} */
 const EPSILON_PATH = /^\/fd\/([0-9a-f]{8})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{12}):\d{1,10}$/i;
-/** Entersoft: /edocuments/ViewInvoice/{ofenm}/{uuid}_{8 alphanumeric} */
+/** Entersoft: /edocuments/ViewInvoice/{ofenm}/{uuid}_{6-12 alphanumeric} */
 const ENTERSOFT_PATH =
-  /^\/edocuments\/ViewInvoice\/(-?\d{1,4})\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})_([A-Za-z0-9]{8})$/i;
+  /^\/edocuments\/ViewInvoice\/(-?\d{1,4})\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})_([A-Za-z0-9]{6,12})$/i;
 /** The observed EL prefix is deliberately case-sensitive. Both hex cases are accepted and preserved. */
 const IMPACT_PATH = /^\/p\/EL\d{9}\/[0-9a-fA-F]{40}\/[0-9a-fA-F]{32}$/;
 
