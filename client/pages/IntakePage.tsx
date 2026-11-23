@@ -63,7 +63,9 @@ export function IntakePage() {
       // A receipt QR decides whether OCR runs at all: decode the original
       // pixels before the photo is prepared, uploaded or read.
       const decoder = await import("@/receipt-qr").catch(() => null);
-      const payload = decoder ? await decoder.decodeReceiptQrFile(file) : null;
+      // decodeReceiptQrFile resolves null on failure; the catch keeps any
+      // unexpected throw from skipping the OCR fallback.
+      const payload = decoder ? await decoder.decodeReceiptQrFile(file).catch(() => null) : null;
       const link = payload ? matchReceiptQrLink(payload) : null;
       if (link) {
         try {
