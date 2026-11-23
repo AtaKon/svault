@@ -10,7 +10,10 @@ import zxing from "@zxing/library";
 // fresh module instance with its own module-level BarcodeDetector probe
 // cache: the still-image path caches the platform probe per page load, and
 // the tests exercise an absent, an unsupported and a supported platform
-// without one cached result leaking into the next.
+// without one cached result leaking into the next. The remaining tags give
+// tests that drive the whole File flow their own fresh instance, so each
+// one hands the module its own detector through a per-test platform class
+// instead of steering one shared mutable detector.
 async function importBundledInstances(entry, tags) {
   const [bundle] = await build({
     configFile: false,
@@ -32,11 +35,10 @@ async function importBundledInstances(entry, tags) {
   );
 }
 
-const { absent, unsupported, supported } = await importBundledInstances("client/receipt-qr.ts", [
-  "absent",
-  "unsupported",
-  "supported",
-]);
+const { absent, unsupported, supported, slowMiss, nonLink, zeroBudget } = await importBundledInstances(
+  "client/receipt-qr.ts",
+  ["absent", "unsupported", "supported", "slowMiss", "nonLink", "zeroBudget"],
+);
 
 // The payload from the field report: an Epsilon Digital (Sklavenitis) thermal
 // receipt whose QR only the platform decoder reads.
@@ -100,10 +102,28 @@ function stubStillImage(t) {
 
 const fakeFile = () => new File([Uint8Array.of(1, 2, 3)], "receipt.jpg", { type: "image/jpeg" });
 
-// The supported-platform stub. The still-image path caches its probe per page
-// load, so the first decode builds the only detector instance the module ever
-// uses; later tests steer it through these mutable closures and read the
-// counters instead of replacing the class.
+/**
+ * A per-test platform class for a fresh bundle instance: the module's
+ * probe builds exactly one detector, and the constructor hands it this
+ * test's own detector object, so no shared mutable state is involved.
+ */
+function barcodeDetectorClass(detector) {
+  return class {
+    static async getSupportedFormats() {
+      return ["qr_code"];
+    }
+    constructor() {
+      return detector;
+    }
+  };
+}
+
+// The supported-platform stub for the tests that share one bundle instance.
+// The still-image path caches its probe per page load, so the first decode
+// builds the only detector instance that module ever uses; the tests below
+// steer it through these mutable closures and read the counters instead of
+// replacing the class. Tests added since drive their own fresh instance
+// through barcodeDetectorClass instead.
 let nativeCalls = 0;
 let formatsCalls = 0;
 let lastNativeSource;
@@ -139,9 +159,12 @@ test("the native attempt prefers the first code that is a receipt link", async (
   assert.equal(await supported.decodeReceiptQrNatively(bitmap, Promise.resolve(detector)), epsilonUrl);
 });
 
-test("a native hit without any receipt link still returns its decoded text", async () => {
+test("a native hit without any receipt link yields no payload", async () => {
+  // A decoded menu or payment code is no answer: null sends the caller to
+  // the software ladder, which may find the receipt link elsewhere in the
+  // same photo.
   const detector = { detect: async () => [{ rawValue: "not a receipt link" }] };
-  assert.equal(await supported.decodeReceiptQrNatively({}, detector), "not a receipt link");
+  assert.equal(await supported.decodeReceiptQrNatively({}, detector), null);
 });
 
 test("an empty or blank native reply yields no payload", async () => {
@@ -199,14 +222,54 @@ test("a thrown native error falls back to the software ladder", async (t) => {
   assert.equal(getImageData.mock.callCount(), 1);
 });
 
-test("a spent budget skips the native attempt too", async (t) => {
+test("an explicit zero budget decodes nothing: the native attempt is skipped and the ladder is left nothing", async (t) => {
   const { createElement } = stubStillImage(t);
-  replaceGlobal(t, "BarcodeDetector", supportedStub);
-  nativeBehavior = async () => [{ rawValue: epsilonUrl }];
-  const before = nativeCalls;
-  assert.equal(await supported.decodeReceiptQrFile(fakeFile(), { budgetMs: 0 }), null);
-  assert.equal(nativeCalls, before);
-  assert.equal(createElement.mock.callCount(), 1);
+  // The detector would answer with the receipt link if it were ever asked:
+  // a null result proves the native attempt never ran.
+  const detect = t.mock.fn(async () => [{ format: "qr_code", rawValue: epsilonUrl }]);
+  replaceGlobal(t, "BarcodeDetector", barcodeDetectorClass({ detect }));
+  assert.equal(await zeroBudget.decodeReceiptQrFile(fakeFile(), { budgetMs: 0 }), null);
+  assert.equal(detect.mock.callCount(), 0, "no budget means no native attempt at all");
+  assert.equal(createElement.mock.callCount(), 1, "the pixels are still read once for the ladder");
+});
+
+test("a slow native miss still leaves the software ladder a working budget", async (t) => {
+  const { createElement } = stubStillImage(t);
+  // Every native decode costs a quarter of the 4000 ms budget on the fake
+  // clock, so the retry grid alone would consume the whole budget and the
+  // ladder would get budgetMs 0 — exactly the no-QR photo regression.
+  let fakeNow = 10_000;
+  const now = t.mock.method(Date, "now", () => fakeNow);
+  try {
+    const detect = t.mock.fn(async () => {
+      fakeNow += 1_000;
+      return [];
+    });
+    replaceGlobal(t, "BarcodeDetector", barcodeDetectorClass({ detect }));
+    const payload = await slowMiss.decodeReceiptQrFile(fakeFile(), { budgetMs: 4_000 });
+    assert.equal(payload, epsilonUrl, "the ladder decoded the code after the slow native miss");
+    // The grid was cut off after two windows: the third decode crossed the
+    // native attempt's 2400 ms share of the budget, and the ladder then ran
+    // on its floored 1500 ms slice instead of the nothing that remained.
+    assert.equal(detect.mock.callCount(), 3);
+    assert.equal(createElement.mock.callCount(), 1);
+  } finally {
+    now.mock.restore();
+  }
+});
+
+test("a native hit on a non-receipt QR does not stop the ladder from finding the receipt link", async (t) => {
+  const { createElement } = stubStillImage(t);
+  // The photo's pixels carry the receipt QR while the platform detector
+  // reads only some other code from every window of it.
+  const menu = "https://example.com/menu";
+  const detect = t.mock.fn(async () => [{ format: "qr_code", rawValue: menu }]);
+  replaceGlobal(t, "BarcodeDetector", barcodeDetectorClass({ detect }));
+  assert.equal(await nonLink.decodeReceiptQrFile(fakeFile()), epsilonUrl);
+  // The menu code was read on the full frame and every retry window, and
+  // none of it ended the search before the software ladder ran.
+  assert.equal(detect.mock.callCount(), 1 + nonLink.nativeRetryTiles(width, height).length);
+  assert.equal(createElement.mock.callCount(), 1, "the ZXing ladder ran and found the receipt link");
 });
 
 test("a platform without BarcodeDetector decodes with the software ladder", async (t) => {
@@ -248,6 +311,31 @@ test("the retry grid covers the frame, lower rows and centre column first", () =
       assert.ok(tile.sx >= 0 && tile.sy >= 0 && tile.sx + tile.sw <= width && tile.sy + tile.sh <= height);
     }
   }
+});
+
+test("a code up to a quarter of the frame fits one window whole; a larger one can straddle them all", () => {
+  const width = 480;
+  const height = 360;
+  const tiles = supported.nativeRetryTiles(width, height);
+  const contains = (tile, x, y, w, h) =>
+    tile.sx <= x && tile.sy <= y && x + w <= tile.sx + tile.sw && y + h <= tile.sy + tile.sh;
+  const overlaps = (tile, x, y, w, h) => tile.sx < x + w && x < tile.sx + tile.sw && tile.sy < y + h && y < tile.sy + tile.sh;
+  // The corrected coverage claim: windows are half the frame with origins
+  // at 0, 1/4 and 1/2, so a code of at most a quarter of the frame in each
+  // dimension fits fully inside at least one window wherever it sits.
+  const w = width / 4;
+  const h = height / 4;
+  for (let x = 0; x + w <= width; x++) {
+    for (let y = 0; y + h <= height; y++) {
+      assert.ok(tiles.some((tile) => contains(tile, x, y, w, h)), `no window fully covers a quarter-frame code at (${x}, ${y})`);
+    }
+  }
+  // Between a quarter and half the frame a code can straddle every window:
+  // each one only partially overlaps it, so the grid may read it only
+  // through the windows that cover enough of it — or not at all.
+  const straddling = { x: 70, y: 0, w: (width * 3) / 8, h: height / 4 };
+  assert.ok(tiles.every((tile) => !contains(tile, straddling.x, straddling.y, straddling.w, straddling.h)));
+  assert.ok(tiles.some((tile) => overlaps(tile, straddling.x, straddling.y, straddling.w, straddling.h)));
 });
 
 test("a full-frame miss is retried on upscaled crops until a window hits", async (t) => {
@@ -305,15 +393,35 @@ test("an expired deadline mid-grid leaves the remaining windows undecoded", asyn
   const create = t.mock.fn(async () => ({ close: t.mock.fn() }));
   replaceGlobal(t, "createImageBitmap", create);
   const detect = t.mock.fn(async () => []);
-  const times = [10_000, 10_050, 10_100];
+  // Each deadline check consumes one clock reading: after the full frame,
+  // before and after each crop, and after each window decode.
+  const times = [10_000, 10_050, 10_060, 10_070, 10_080, 10_090, 99_999];
   const now = t.mock.method(Date, "now", () => times.shift() ?? 99_999);
   try {
     assert.equal(await supported.decodeReceiptQrNatively(bitmap, { detect }, { deadline: 10_500 }), null);
   } finally {
     now.mock.restore();
   }
-  assert.equal(detect.mock.callCount(), 4, "the full frame plus two windows were decoded");
-  assert.equal(create.mock.callCount(), 3);
+  assert.equal(detect.mock.callCount(), 3, "the full frame plus two windows were decoded");
+  assert.equal(create.mock.callCount(), 2, "the third window was never cropped");
+});
+
+test("a crop that outlasts the deadline is closed without being decoded", async (t) => {
+  const bitmap = { width: 480, height: 360, close: t.mock.fn() };
+  const crop = { close: t.mock.fn() };
+  const create = t.mock.fn(async () => crop);
+  replaceGlobal(t, "createImageBitmap", create);
+  const detect = t.mock.fn(async () => []);
+  const times = [10_000, 10_050, 99_999];
+  const now = t.mock.method(Date, "now", () => times.shift() ?? 99_999);
+  try {
+    assert.equal(await supported.decodeReceiptQrNatively(bitmap, { detect }, { deadline: 10_500 }), null);
+  } finally {
+    now.mock.restore();
+  }
+  assert.equal(detect.mock.callCount(), 1, "only the full frame was decoded");
+  assert.equal(create.mock.callCount(), 1, "one window was cropped");
+  assert.equal(crop.close.mock.callCount(), 1, "the over-budget crop was still closed");
 });
 
 test("a window that cannot be cropped is skipped, not fatal", async (t) => {

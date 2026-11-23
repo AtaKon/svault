@@ -228,8 +228,9 @@ test("passes only the canonical validated receipt URL to the fetcher", async () 
 test("accepts the shorter Entersoft tokens real receipts print and rejects lookalikes", async () => {
   // Field receipts carry tokens of 6 to 12 alphanumeric characters (7 was
   // observed on a real Lidl receipt); the originally assumed 8 was one
-  // issuer's spelling, not the route's shape.
-  for (const [token, ofenm] of [["testAB1", "-1"], ["aB12cD34eF56", "12"]] as const) {
+  // issuer's spelling, not the route's shape. The boundary lengths 6 and 12
+  // are exercised explicitly, synthetic tokens only.
+  for (const [token, ofenm] of [["testAB", "-1"], ["testAB1", "-1"], ["aB12cD34eF56", "12"]] as const) {
     const link = matchReceiptQrLink(`https://e-invoicing.gr/edocuments/ViewInvoice/${ofenm}/${ref}_${token}`);
     assert.ok(link?.issuer === "entersoft");
     assert.deepEqual(link.entersoft, { ofenm, uuid: ref, token });
@@ -247,15 +248,18 @@ test("accepts the shorter Entersoft tokens real receipts print and rejects looka
     assert.equal(matchReceiptQrLink(url), null);
   }
   // The whole fetch path follows the shared matcher: the server's own
-  // viewer allowlist accepts the short token up to its verification page.
-  const shortUrl = `https://e-invoicing.gr/edocuments/ViewInvoice/-1/${ref}_testAB1`;
-  const requests: string[] = [];
-  configureReceiptQrFetcherForTests(async (url) => {
-    requests.push(url);
-    return html('<div id="cf-turnstile"></div>');
-  });
-  assert.equal((await fetchQrReceiptDraft(shortUrl)).status, "challenge");
-  assert.deepEqual(requests, [shortUrl]);
+  // viewer allowlist accepts the boundary tokens up to their verification
+  // page — a rejected token would never reach the issuer.
+  for (const token of ["testAB", "testAB1", "aB12cD34eF56"]) {
+    const url = `https://e-invoicing.gr/edocuments/ViewInvoice/-1/${ref}_${token}`;
+    const requests: string[] = [];
+    configureReceiptQrFetcherForTests(async (fetchUrl) => {
+      requests.push(fetchUrl);
+      return html('<div id="cf-turnstile"></div>');
+    });
+    assert.equal((await fetchQrReceiptDraft(url)).status, "challenge");
+    assert.deepEqual(requests, [url]);
+  }
 });
 
 test("stops a redirect loop and requires the named Entersoft viewer frame", async () => {

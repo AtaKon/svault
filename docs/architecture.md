@@ -219,9 +219,11 @@ food ideas. What never does: stock, prices, barcodes, reminders, photo labelling
   bitmap is offered to the browser's native `BarcodeDetector` before the ZXing binarizer/downscale
   ladder and the recovery sampler (`client/receipt-qr.ts`), because platform decoders tolerate the
   faint white rows and slight warp of thermal-printed codes that defeat pure-JavaScript decoders.
-  When the platform detector reads nothing from the full frame, it is retried once on a coarse grid
-  of overlapping, doubled crops — lower half first, where receipt QRs sit — inside the same soft
-  time budget, before software runs. The receipt API restricts retrieval to known issuer routes. When the issuer requires
+  When the platform detector reads no receipt link from the full frame, it is retried once on a coarse
+  grid of overlapping, doubled crops — lower half first, where receipt QRs sit — within about 60
+  percent of the soft time budget, so the software ladder always keeps a slice of it and a slow native
+  miss cannot disable the fallback. A native code that is not a receipt link counts as a miss: the
+  ladder still runs and may find the receipt link elsewhere in the photo. The receipt API restricts retrieval to known issuer routes. When the issuer requires
   verification, the browser can import the downloaded PDF's text layer. Photo scans fall back to
   browser OCR. Bulk intake follows the same order: `POST /intake/parse` fetches a supplied `qr` link before parsing any text and returns
   the issuer's rows when it succeeds. A local line parser (`server/services/receipt-local.ts`)
