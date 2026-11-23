@@ -1,18 +1,23 @@
 /**
  * Still-image QR decoding for the receipt scan flow.
  *
- * Receipt photos carry a QR with the issuer's digital receipt link. The photo
- * is decoded at its original resolution before any straightening or
- * recompression, because a small code (~3 px per module) does not survive
- * resampling. Standard ZXing runs first across a small ladder of
- * binarizer/downscale variants; when every quick attempt fails, the
- * low-resolution recovery sampler is loaded lazily and retried on the
- * untouched pixels (see client/receipt-qr-recovery.ts).
+ * Receipt photos carry a QR with the issuer's digital receipt link. The
+ * photo's untouched, full-resolution bitmap is offered to the browser's
+ * native BarcodeDetector first when the platform has one — platform decoders
+ * tolerate the faint white rows and slight warp thermal printers leave
+ * across a code, which defeat pure-JavaScript decoders — and whatever it
+ * cannot read falls back to software. The photo is decoded at its original
+ * resolution before any straightening or recompression, because a small code
+ * (~3 px per module) does not survive resampling. Standard ZXing runs across
+ * a small ladder of binarizer/downscale variants; when every quick attempt
+ * fails, the low-resolution recovery sampler is loaded lazily and retried on
+ * the untouched pixels (see client/receipt-qr-recovery.ts).
  *
  * The module never throws: a photo without a readable QR simply yields null.
  * Only QR is decoded — other barcode formats are not receipt links.
  */
 
+import { matchReceiptQrLink } from "@shared/receipt-qr-links";
 import {
   BinaryBitmap,
   DecodeHintType,
@@ -160,6 +165,68 @@ function bitmapToGray(bitmap: ImageBitmap): GrayPixels {
   return pixels;
 }
 
+/** One native detection result; only its payload matters here. */
+type DetectedQrCode = { rawValue: string };
+
+/**
+ * The Shape Detection API's minimal surface for still images. The standard
+ * DOM types do not include BarcodeDetector (Chromium-only), so this module
+ * declares the slice it uses, as the live scanner and BarcodeScanner do.
+ */
+export interface NativeQrDetector {
+  detect(source: ImageBitmap): Promise<DetectedQrCode[]>;
+}
+
+interface NativeQrDetectorClass {
+  new (options: { formats: string[] }): NativeQrDetector;
+  getSupportedFormats(): Promise<string[]>;
+}
+
+/** Cached platform probe and detector; null once the platform has none. */
+let nativeQrDetector: Promise<NativeQrDetector | null> | null = null;
+
+function loadNativeQrDetector(): Promise<NativeQrDetector | null> {
+  nativeQrDetector ??= (async () => {
+    try {
+      if (!("BarcodeDetector" in globalThis)) return null;
+      const Detector = (globalThis as { BarcodeDetector?: NativeQrDetectorClass }).BarcodeDetector;
+      if (!Detector) return null;
+      if (!(await Detector.getSupportedFormats()).includes("qr_code")) return null;
+      return new Detector({ formats: ["qr_code"] });
+    } catch {
+      // Any native failure leaves the photo to the software ladder.
+      return null;
+    }
+  })();
+  return nativeQrDetector;
+}
+
+/**
+ * Decode a QR with the platform's native detector, injected so tests can
+ * stub it. A hit returns the first rawValue that is a receipt link; when no
+ * code is one, the first decoded text is returned anyway, exactly as the
+ * software ladder returns payloads it does not recognize (callers filter
+ * both with matchReceiptQrLink). Null means no native answer — the caller
+ * falls back to the ZXing ladder.
+ */
+export async function decodeReceiptQrNatively(
+  bitmap: ImageBitmap,
+  detector: NativeQrDetector | null | Promise<NativeQrDetector | null>,
+): Promise<string | null> {
+  try {
+    const native = await detector;
+    if (!native) return null;
+    const codes = await native.detect(bitmap);
+    for (const code of codes) {
+      if (code.rawValue && matchReceiptQrLink(code.rawValue)) return code.rawValue;
+    }
+    return codes.find((code) => code.rawValue)?.rawValue ?? null;
+  } catch {
+    // Any native error falls through to the software ladder.
+    return null;
+  }
+}
+
 /**
  * Decode a QR from a receipt photo File. The original pixels are used before
  * any straightening or recompression the scan flow applies later.
@@ -176,8 +243,16 @@ export async function decodeReceiptQrFile(
     return null;
   }
   try {
+    // The platform detector reads the untouched bitmap first, at the
+    // original resolution and before any downscale; the soft budget covers
+    // the whole read, so the software ladder gets whatever remains.
+    const deadline = Date.now() + (options.budgetMs ?? DEFAULT_BUDGET_MS);
+    if (Date.now() < deadline) {
+      const native = await decodeReceiptQrNatively(bitmap, loadNativeQrDetector());
+      if (native !== null) return native;
+    }
     const pixels = bitmapToGray(bitmap);
-    return await decodeReceiptQrPixels(pixels, options);
+    return await decodeReceiptQrPixels(pixels, { ...options, budgetMs: Math.max(0, deadline - Date.now()) });
   } catch {
     return null;
   } finally {

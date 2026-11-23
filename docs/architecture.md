@@ -215,10 +215,13 @@ food ideas. What never does: stock, prices, barcodes, reminders, photo labelling
   pass never rewrites a product name or price; only
   numeric look-alikes (`O`/`Θ`/`Β`, missing decimals) are repaired in the parser.
 - Barcode decoding uses `@zxing/browser`. The camera API requires HTTPS or localhost.
-- Receipt scans first decode supported issuer QR links from the original photo. The receipt API
-  restricts retrieval to known issuer routes. When the issuer requires verification, the browser
-  can import the downloaded PDF's text layer. Photo scans fall back to browser OCR. Bulk intake follows
-  the same order: `POST /intake/parse` fetches a supplied `qr` link before parsing any text and returns
+- Receipt scans first decode supported issuer QR links from the original photo: the untouched
+  bitmap is offered to the browser's native `BarcodeDetector` before the ZXing binarizer/downscale
+  ladder and the recovery sampler (`client/receipt-qr.ts`), because platform decoders tolerate the
+  faint white rows and slight warp of thermal-printed codes that defeat pure-JavaScript decoders.
+  The receipt API restricts retrieval to known issuer routes. When the issuer requires
+  verification, the browser can import the downloaded PDF's text layer. Photo scans fall back to
+  browser OCR. Bulk intake follows the same order: `POST /intake/parse` fetches a supplied `qr` link before parsing any text and returns
   the issuer's rows when it succeeds. A local line parser (`server/services/receipt-local.ts`)
   drops totals, tax and payment lines, then reads quantity/unit/price from the remaining lines. AI can
   replace that draft when explicitly requested. Merchant names are resolved against `vendor_catalog`
