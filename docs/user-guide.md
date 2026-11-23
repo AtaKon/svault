@@ -594,7 +594,9 @@ accessible, no drag and drop) and **Shopping list** to build the week's missing 
 ### Bulk intake
 
 **Bulk intake** accepts a receipt photo, pasted text, or a queue of scanned barcodes. A receipt photo is
-checked for a digital receipt QR before anything else: when the QR belongs to a supported issuer and the
+checked for a digital receipt QR before anything else, with the browser's built-in QR reader when it
+has one (re-reading the photo in overlapping crops when the whole frame defeats it) and the bundled
+decoder as fallback: when the QR belongs to a supported issuer and the
 digital receipt can be read, its product lines fill the review table and the photo is not OCR'd at all. A
 photo without a QR (or one whose digital receipt is unavailable or needs verification) is read with OCR as
 before, with a note explaining what happened to the link. Parsing only

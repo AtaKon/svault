@@ -11,6 +11,7 @@ const steps = [
   [...shared, "--test", "server/tests/receipt-qr.test.ts"],
   ["--test", "scripts/receipt-qr-recovery.test.mjs"],
   ["--test", "scripts/receipt-qr-live.test.mjs"],
+  ["--test", "scripts/receipt-qr-native.test.mjs"],
   [...shared, "--test", "scripts/receipt-scan-priority.test.mjs"],
   [...shared, "--test", "scripts/barcode-camera.test.mjs"],
   [...shared, "--test", "scripts/offline-queue-rules.test.mjs"],

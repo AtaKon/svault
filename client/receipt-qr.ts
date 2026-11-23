@@ -1,10 +1,22 @@
 /**
  * Still-image QR decoding for the receipt scan flow.
  *
- * Receipt photos carry a QR with the issuer's digital receipt link. The photo
- * is decoded at its original resolution before any straightening or
+ * Receipt photos carry a QR with the issuer's digital receipt link. The
+ * photo's untouched, full-resolution bitmap is offered to the browser's
+ * native BarcodeDetector first when the platform has one — platform decoders
+ * tolerate the faint white rows and slight warp thermal printers leave
+ * across a code, which defeat pure-JavaScript decoders. When the platform
+ * detector reads nothing there, it is retried once on a coarse grid of
+ * overlapping, upscaled crops before software runs: a code too small for
+ * the detector's view of a large frame is often readable inside a window
+ * of it. Whatever the platform cannot read falls back to software, and
+ * the platform attempt may spend only a reserved share of the soft budget
+ * (about 60 percent), so the software ladder always keeps a slice of it:
+ * a slow native miss on a photo without any readable QR cannot disable
+ * the fallback that used to work. The
+ * photo is decoded at its original resolution before any straightening or
  * recompression, because a small code (~3 px per module) does not survive
- * resampling. Standard ZXing runs first across a small ladder of
+ * resampling. Standard ZXing runs across a small ladder of
  * binarizer/downscale variants; when every quick attempt fails, the
  * low-resolution recovery sampler is loaded lazily and retried on the
  * untouched pixels (see client/receipt-qr-recovery.ts).
@@ -13,6 +25,7 @@
  * Only QR is decoded — other barcode formats are not receipt links.
  */
 
+import { matchReceiptQrLink } from "@shared/receipt-qr-links";
 import {
   BinaryBitmap,
   DecodeHintType,
@@ -28,6 +41,20 @@ export interface ReceiptQrDecodeOptions {
 }
 
 const DEFAULT_BUDGET_MS = 4000;
+/**
+ * The share of the soft budget the native attempt — full frame plus retry
+ * tiles — may spend. The rest is the software ladder's guaranteed slice,
+ * so a slow native miss cannot spend the whole budget and disable the
+ * software fallback that used to work.
+ */
+const NATIVE_BUDGET_SHARE = 0.6;
+/**
+ * The software ladder's minimum slice after a native miss, when the
+ * caller's budget leaves at least this much for it. One in-flight crop or
+ * detect can overrun the native share — it cannot be aborted — so the
+ * ladder's budget is floored instead of just whatever time remains.
+ */
+const LADDER_FLOOR_MS = 1500;
 /** Photos above this are downscaled once; the QR needs the pixels it can get. */
 const MAX_SOURCE_SIDE = 5120;
 /** Extra decodes at smaller sizes; small codes are often found faster there. */
@@ -160,6 +187,157 @@ function bitmapToGray(bitmap: ImageBitmap): GrayPixels {
   return pixels;
 }
 
+/** One native detection result; only its payload matters here. */
+type DetectedQrCode = { rawValue: string };
+
+/**
+ * The Shape Detection API's minimal surface for still images. The standard
+ * DOM types do not include BarcodeDetector (Chromium-only), so this module
+ * declares the slice it uses, as the live scanner and BarcodeScanner do.
+ */
+export interface NativeQrDetector {
+  detect(source: ImageBitmap): Promise<DetectedQrCode[]>;
+}
+
+interface NativeQrDetectorClass {
+  new (options: { formats: string[] }): NativeQrDetector;
+  getSupportedFormats(): Promise<string[]>;
+}
+
+/** Cached platform probe and detector; null once the platform has none. */
+let nativeQrDetector: Promise<NativeQrDetector | null> | null = null;
+
+function loadNativeQrDetector(): Promise<NativeQrDetector | null> {
+  nativeQrDetector ??= (async () => {
+    try {
+      if (!("BarcodeDetector" in globalThis)) return null;
+      const Detector = (globalThis as { BarcodeDetector?: NativeQrDetectorClass }).BarcodeDetector;
+      if (!Detector) return null;
+      if (!(await Detector.getSupportedFormats()).includes("qr_code")) return null;
+      return new Detector({ formats: ["qr_code"] });
+    } catch {
+      // Any native failure leaves the photo to the software ladder.
+      return null;
+    }
+  })();
+  return nativeQrDetector;
+}
+
+/** One retry window over the source bitmap, in source pixels. */
+export interface NativeQrTile {
+  /** Crop origin. */
+  sx: number;
+  sy: number;
+  /** Crop size. */
+  sw: number;
+  sh: number;
+}
+
+/**
+ * A coarse grid of overlapping windows covering the frame, ordered for the
+ * native retry: receipt QRs sit in the lower half of a photo and near the
+ * horizontal centre, so those windows are tried first. Each window is half
+ * the frame wide and tall, with origins at 0, 1/4 and 1/2 of each side, so
+ * a code up to a quarter of the frame in each dimension fits fully inside
+ * at least one window wherever it sits. Anything larger, up to half the
+ * frame, only partially overlaps the grid in some positions.
+ */
+export function nativeRetryTiles(width: number, height: number): NativeQrTile[] {
+  const sw = Math.max(1, Math.round(width / 2));
+  const sh = Math.max(1, Math.round(height / 2));
+  // Crop origins, clamped inside the frame for odd or tiny dimensions.
+  const origins = (frame: number, side: number, order: readonly number[]) =>
+    order.map((at) => Math.max(0, Math.min(Math.round(frame * at), frame - side)));
+  const xs = origins(width, sw, [1 / 4, 0, 1 / 2]); // centre column first
+  const ys = origins(height, sh, [1 / 2, 1 / 4, 0]); // lower rows first
+  return ys.flatMap((sy) => xs.map((sx) => ({ sx, sy, sw, sh })));
+}
+
+/** Retry windows are doubled: a small thermal code grows past the size the
+ * platform decoder reads reliably inside a full phone frame. */
+const NATIVE_TILE_UPSCALE = 2;
+
+/**
+ * The first code that is a receipt link. A native read of some other QR
+ * (a menu, a payment code…) is no answer: null sends the caller to the
+ * software ladder, which may find the receipt link elsewhere in the same
+ * photo.
+ */
+function pickNativePayload(codes: DetectedQrCode[]): string | null {
+  for (const code of codes) {
+    if (code.rawValue && matchReceiptQrLink(code.rawValue)) return code.rawValue;
+  }
+  return null;
+}
+
+/** Options for the native decode of a still photo. */
+export interface NativeQrDecodeOptions {
+  /**
+   * Epoch-ms wall-clock deadline: at or past it no further retry window is
+   * cropped or decoded, and a crop or window decode that outlasts it ends
+   * the retry instead of starting another. The full-frame attempt always
+   * runs. Default: the retry is not time-limited.
+   */
+  deadline?: number;
+}
+
+/**
+ * Decode a receipt QR link with the platform's native detector, injected
+ * so tests can stub it. The untouched bitmap is offered first; when no code
+ * on it is a receipt link, the detector is retried on a coarse grid of
+ * overlapping, upscaled crops while the deadline (when given) lasts. Null
+ * means no native answer — the caller falls back to the ZXing ladder.
+ */
+export async function decodeReceiptQrNatively(
+  bitmap: ImageBitmap,
+  detector: NativeQrDetector | null | Promise<NativeQrDetector | null>,
+  { deadline = Infinity }: NativeQrDecodeOptions = {},
+): Promise<string | null> {
+  try {
+    const native = await detector;
+    if (!native) return null;
+    const payload = pickNativePayload(await native.detect(bitmap));
+    if (payload !== null) return payload;
+    // The full-frame attempt is over the deadline: no window is cropped.
+    if (Date.now() >= deadline) return null;
+    // No receipt link on the full frame: retry on windows of it while the
+    // soft budget lasts. Crops need createImageBitmap; without it
+    // (non-browser hosts) there is nothing to retry.
+    if (typeof createImageBitmap !== "function") return null;
+    for (const tile of nativeRetryTiles(bitmap.width, bitmap.height)) {
+      // At or past the deadline no new crop is made.
+      if (Date.now() >= deadline) break;
+      let crop: ImageBitmap;
+      try {
+        crop = await createImageBitmap(bitmap, tile.sx, tile.sy, tile.sw, tile.sh, {
+          resizeWidth: tile.sw * NATIVE_TILE_UPSCALE,
+          resizeHeight: tile.sh * NATIVE_TILE_UPSCALE,
+          resizeQuality: "high",
+        });
+      } catch {
+        continue; // A window that cannot be cropped leaves the rest to try.
+      }
+      try {
+        // The crop may alone have outlasted the budget: decoding it would
+        // only spend more.
+        if (Date.now() >= deadline) break;
+        const tilePayload = pickNativePayload(await native.detect(crop));
+        if (tilePayload !== null) return tilePayload;
+      } catch {
+        // A failing window decode falls through to the next crop.
+      } finally {
+        crop.close();
+      }
+      // A window decode that outlasted the budget ends the retry.
+      if (Date.now() >= deadline) break;
+    }
+    return null;
+  } catch {
+    // Any native error falls through to the software ladder.
+    return null;
+  }
+}
+
 /**
  * Decode a QR from a receipt photo File. The original pixels are used before
  * any straightening or recompression the scan flow applies later.
@@ -176,8 +354,28 @@ export async function decodeReceiptQrFile(
     return null;
   }
   try {
+    // The soft budget is split, not shared. The platform detector reads
+    // the untouched bitmap first, at the original resolution and before any
+    // downscale, and its attempt — full frame plus retry windows — may
+    // spend at most about 60 percent of the budget. The software ladder
+    // always keeps the rest, floored, so a slow native miss on a photo
+    // without a readable QR cannot leave the ladder budgetMs 0 and disable
+    // the fallback that used to work. One crop or detect can overrun the
+    // native share — it cannot be aborted — never more than one.
+    const budgetMs = Math.max(0, options.budgetMs ?? DEFAULT_BUDGET_MS);
+    const nativeBudgetMs = Math.round(budgetMs * NATIVE_BUDGET_SHARE);
+    const deadline = Date.now() + budgetMs;
+    const nativeDeadline = Date.now() + nativeBudgetMs;
+    if (Date.now() < nativeDeadline) {
+      const native = await decodeReceiptQrNatively(bitmap, loadNativeQrDetector(), { deadline: nativeDeadline });
+      if (native !== null) return native;
+    }
+    const ladderBudgetMs = Math.max(
+      deadline - Date.now(),
+      Math.min(LADDER_FLOOR_MS, budgetMs - nativeBudgetMs),
+    );
     const pixels = bitmapToGray(bitmap);
-    return await decodeReceiptQrPixels(pixels, options);
+    return await decodeReceiptQrPixels(pixels, { ...options, budgetMs: ladderBudgetMs });
   } catch {
     return null;
   } finally {

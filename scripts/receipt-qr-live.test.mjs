@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { getEventListeners } from "node:events";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { build } from "vite";
 import zxing from "@zxing/library";
 
@@ -11,7 +12,8 @@ import zxing from "@zxing/library";
 // scanner code under test. The rolldownOptions and codeSplitting option
 // names below are the spellings of the current Vite/Rolldown version; an
 // upgrade that renames them fails here with a bundler error, not a scanner
-// regression.
+// regression. The @shared alias mirrors vite.config.ts, which the
+// configFile: false build does not load.
 async function importBundled(entry) {
   const [bundle] = await build({
     configFile: false,
@@ -21,6 +23,7 @@ async function importBundled(entry) {
       lib: { entry, formats: ["es"] },
       rolldownOptions: { output: { codeSplitting: false } },
     },
+    resolve: { alias: { "@shared": fileURLToPath(new URL("../shared", import.meta.url)) } },
   });
   const chunk = bundle.output.find((output) => output.type === "chunk");
   if (!chunk) throw new Error(`Bundling ${entry} produced no JavaScript chunk; check the Vite/Rolldown options above`);
