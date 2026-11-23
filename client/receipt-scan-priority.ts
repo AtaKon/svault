@@ -1,14 +1,14 @@
 /**
  * Scan decision rules for the receipt flow, pure of the decoder, camera and
  * network: which decoded payloads carry a receipt link, when the live
- * scanner's link may start an import, when a scan response counts as a
- * usable digital receipt, and whether the photos still need to be OCR'd.
- * Each rule can be tested on its own (see
+ * scanner's link may start an import, when a scan or intake response counts
+ * as a usable digital receipt, and whether the photos still need to be
+ * OCR'd. Each rule can be tested on its own (see
  * scripts/receipt-scan-priority.test.mjs).
  */
 
 import { matchReceiptQrLink, type ReceiptQrLink } from "@shared/receipt-qr-links";
-import type { ReceiptProvider, ReceiptScanResponse } from "@shared/types";
+import type { IntakeParseResult, ReceiptProvider, ReceiptScanResponse } from "@shared/types";
 
 /**
  * The receipt links decoded from a batch of photos. Two distinct links mean
@@ -86,6 +86,22 @@ export function isUsableDigitalReceipt(data: ReceiptScanResponse | null | undefi
       typeof line?.description === "string" && textOrNull(line?.rawDescription) && textOrNull(line?.unit) &&
       numberOrNull(line?.taxRate) && numberOrNull(line?.discount) &&
       printableAmount(line?.quantity) && printableAmount(line?.unitPrice) && printableAmount(line?.lineTotal));
+}
+
+/**
+ * An intake parse response counts as a usable digital receipt only with QR
+ * provenance and review rows to show for it. Anything else — an unavailable
+ * issuer, a challenge page, an empty draft — falls back to reading the photo.
+ * Each row must hold the shape the review table renders: the description
+ * feeds an Input value and the candidates list is mapped over for the item
+ * picker, so a malformed value there would throw while rendering.
+ */
+export function isUsableDigitalIntake(data: IntakeParseResult | null | undefined): boolean {
+  // An empty response body resolves to null or undefined instead of a parse.
+  if (!data) return false;
+  const rows = data.rows;
+  return data.provider === "qr" && Array.isArray(rows) && rows.length > 0 &&
+    rows.every((row) => typeof row?.description === "string" && Array.isArray(row?.candidates));
 }
 
 /**

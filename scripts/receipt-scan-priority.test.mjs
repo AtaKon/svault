@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { addReceiptQrPayload, canAcceptLiveQrLink, isUsableDigitalReceipt, shouldRunPhotoOcr } from "../client/receipt-scan-priority.js";
+import { addReceiptQrPayload, canAcceptLiveQrLink, isUsableDigitalIntake, isUsableDigitalReceipt, shouldRunPhotoOcr } from "../client/receipt-scan-priority.js";
 
 const entersoft = "https://e-invoicing.gr/edocuments/ViewInvoice/-1/12345678-1234-1234-1234-123456789abc_tEsTaB12";
 const epsilon = "https://epsilondigital-sklavenitis.epsilonnet.gr/fd/12345678123412341234123456789abc:12";
@@ -139,4 +139,26 @@ test("photo OCR is the fallback: it runs only without a digital receipt to use",
   // Preserve existing behavior for QR provenance, including an empty edited draft.
   assert.equal(shouldRunPhotoOcr("qr", false), false);
   assert.equal(shouldRunPhotoOcr("qr", true), false);
+});
+
+test("an intake parse response is a usable digital receipt only with QR provenance and review rows", () => {
+  const intake = (provider, rows) => ({ provider, rows });
+  assert.equal(isUsableDigitalIntake(intake("qr", [{ description: "Milk", candidates: [] }])), true);
+  assert.equal(isUsableDigitalIntake(intake("qr", [])), false);
+  assert.equal(isUsableDigitalIntake({ provider: "qr" }), false);
+  assert.equal(isUsableDigitalIntake(intake("local", [{ description: "Milk", candidates: [] }])), false);
+  assert.equal(isUsableDigitalIntake(intake("template", [{ description: "Milk", candidates: [] }])), false);
+  assert.equal(isUsableDigitalIntake(intake("ai", [{ description: "Milk", candidates: [] }])), false);
+});
+
+test("an intake parse response the review table would crash on is not usable", () => {
+  // The review table renders each row's description and maps over its candidates.
+  assert.equal(isUsableDigitalIntake({ provider: "qr", rows: [null] }), false);
+  assert.equal(isUsableDigitalIntake({ provider: "qr", rows: [{}] }), false);
+  assert.equal(isUsableDigitalIntake({ provider: "qr", rows: [{ description: "Milk" }] }), false);
+  assert.equal(isUsableDigitalIntake({ provider: "qr", rows: [{ description: 42, candidates: [] }] }), false);
+  assert.equal(isUsableDigitalIntake({ provider: "qr", rows: "not an array" }), false);
+  // An empty response body resolving to null or undefined is not usable.
+  assert.equal(isUsableDigitalIntake(null), false);
+  assert.equal(isUsableDigitalIntake(undefined), false);
 });

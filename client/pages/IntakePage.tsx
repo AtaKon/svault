@@ -7,6 +7,8 @@ import { Icon } from "@/components/icons";
 import { BarcodeScanner } from "@/components/BarcodeScanner";
 import { useToast } from "@/components/toast";
 import { ocrImage } from "@/ocr";
+import { isUsableDigitalIntake } from "@/receipt-scan-priority";
+import { matchReceiptQrLink } from "@shared/receipt-qr-links";
 import { qty } from "@/format";
 import type { IntakeParseResult, IntakeRow, Item } from "@shared/types";
 import { useI18n } from "@/i18n";
@@ -33,6 +35,7 @@ export function IntakePage() {
   const [ocrProgress, setOcrProgress] = useState(0);
   const [uploadedPath, setUploadedPath] = useState<string | null>(null);
   const [reading, setReading] = useState(false);
+  const [qrNote, setQrNote] = useState<string | null>(null);
 
   const loadItems = useCallback(async () => {
     try {
@@ -50,11 +53,37 @@ export function IntakePage() {
   const readPhoto = async (file: File | undefined) => {
     if (!file) return;
     setReading(true);
-    setOcrRunning(true);
     setOcrProgress(0);
     setOcrCandidates([]);
     setOcrText("");
     try {
+      // A receipt QR decides whether OCR runs at all: decode the original
+      // pixels before the photo is prepared, uploaded or read.
+      const decoder = await import("@/receipt-qr").catch(() => null);
+      const payload = decoder ? await decoder.decodeReceiptQrFile(file) : null;
+      const link = payload ? matchReceiptQrLink(payload) : null;
+      if (link) {
+        try {
+          const data = await api<IntakeParseResult>(`/api/houses/${house.id}/intake/parse`, {
+            method: "POST",
+            body: { qr: link.url },
+          });
+          if (isUsableDigitalIntake(data)) {
+            if (data.selectedText != null) setText(data.selectedText);
+            setResult(data);
+            setRows(data.rows);
+            setQrNote(null);
+            // The digital receipt replaces the photo: no image is attached.
+            setUploadedPath(null);
+            toast.success(t("Digital receipt imported"));
+            return;
+          }
+          setQrNote(data.qr?.message ?? "The digital receipt could not be loaded. Reading the photo instead.");
+        } catch {
+          setQrNote("The digital receipt could not be loaded. Reading the photo instead.");
+        }
+      }
+      setOcrRunning(true);
       const prepared = await prepareImage(file, { maxSize: 4000, quality: 0.92 });
       const form = new FormData();
       form.append("image", prepared);
@@ -98,6 +127,7 @@ export function IntakePage() {
       if (data.selectedText != null) setText(data.selectedText);
       setResult(data);
       setRows(data.rows);
+      setQrNote(null);
       if (!data.rows.length) toast.push(t(data.warning ?? "No product lines were found"));
     } catch (err) {
       toast.error(err instanceof Error ? t(err.message) : t("Could not parse the intake"));
@@ -141,6 +171,7 @@ export function IntakePage() {
       setResult(null);
       setUploadedPath(null);
       setText("");
+      setQrNote(null);
       setBarcodes([]);
       navigate("/items");
     } catch (err) {
@@ -257,6 +288,12 @@ export function IntakePage() {
           </>
         )}
 
+        {qrNote && (
+          <div className="rounded-xl border border-line bg-raised px-3 py-2 text-[11px] text-muted" role="status">
+            {t(qrNote)}
+          </div>
+        )}
+
         {result?.warning && (
           <div className="rounded-xl border border-warn/30 bg-warn-soft px-3 py-2 text-[11px] text-warn">{t(result.warning)}</div>
         )}
@@ -273,6 +310,7 @@ export function IntakePage() {
           <div className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-2.5">
             <h2 className="font-display text-lg">{t("Review")}</h2>
             <Badge tone="outline">{rows.length} {' '}{t(" lines")}</Badge>
+            {result?.provider === "qr" && <Badge tone="outline">{t("Digital receipt")}</Badge>}
             {result?.vendorName && <Badge tone="brand">{result.vendorName}</Badge>}
             <Button size="sm" className="ml-auto" icon="check" onClick={() => void commit()} loading={committing} disabled={!can("member")}>
               {t("Commit ")}{' '}{rows.filter((row) => row.action !== "skip").length} {' '}{t(" lines ")}</Button>

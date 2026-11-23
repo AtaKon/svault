@@ -1399,12 +1399,14 @@ subtracts stock once per ingredient, and uses the plan week as the idempotency k
 | Method | Path | Min role | Purpose |
 | --- | --- | --- | --- |
 | `POST` | `/api/houses/:houseId/intake/upload` | member+ | Upload a receipt image (`field: image`), returns `{ path }`. |
-| `POST` | `/api/houses/:houseId/intake/parse` | member+ | Parse `{ text?, image?, candidates?, preferAi?, barcodes? }` and return review rows. AI is used only when requested. Never writes. |
+| `POST` | `/api/houses/:houseId/intake/parse` | member+ | Parse `{ text?, image?, candidates?, preferAi?, barcodes?, qr? }` and return review rows. A supported issuer QR link is fetched before any text parsing; the text is only parsed when it yields no draft. AI is used only when requested. Never writes. |
 | `POST` | `/api/houses/:houseId/intake/commit` | member+ | Validate and apply reviewed rows atomically. |
 
-`parse` returns `provider` (`ai`, `local`, `template`, `barcode`), a warning and rows. Each row contains
+`parse` returns `provider` (`ai`, `local`, `template`, `barcode`, `qr`), a warning and rows. Each row contains
 `description`, `quantity`, `unit`, `unitPrice`, `barcode`, `itemId`, candidate matches and an initial
-`action`. Barcode mode also looks up OpenFoodFacts for unknown codes. No item, stock or receipt row is
+`action`. Barcode mode also looks up OpenFoodFacts for unknown codes. A request carrying `qr` (a decoded
+issuer QR payload) also returns `qr` with the issuer, status and a safe message; when the digital receipt is
+read the rows and `selectedText` come from it. No item, stock or receipt row is
 written during parsing.
 
 Commit body:

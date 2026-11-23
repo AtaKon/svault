@@ -47,7 +47,9 @@ All notable changes to SVault are documented here. The format follows
   discounts and VAT. IMPACT eInvoicing links also fill the review screen with the issuer's product
   lines, prices, VAT, merchant and issue date. For Epsilon Digital links that require browser
   verification, open the issuer's viewer and import the downloaded receipt PDF, or continue
-  with photo OCR.
+  with photo OCR. Bulk intake follows the same order: a receipt photo with a usable digital receipt
+  fills the review table without any OCR, and a QR that is unreadable or unsupported leaves a note
+  and falls back to reading the photo.
 - **PosoKanei retailer and product matching.** Offers are now filtered by receipt shops an admin marks as
   accessible, so a shopping line only shows shops the house can reach. PosoKanei retailer labels are
   discovered from offers, matched automatically to a house shop when the name is unambiguous, and can be

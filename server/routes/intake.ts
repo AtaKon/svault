@@ -6,6 +6,7 @@ import { requireAuth } from "../auth.js";
 import { ApiError, handler, parseBody, requireHouse } from "../http.js";
 import { aiParseReceipt, resolveAi } from "../ai.js";
 import { heuristicReceipt, normaliseReceiptDraft } from "../services/receipt-local.js";
+import { readQrReceiptScan } from "../services/receipt-qr.js";
 import { selectReceiptTemplate } from "../services/receipt-templates.js";
 import { hasOcrNumericDisagreement, selectOcrCandidate } from "../services/receipt-candidates.js";
 import { suggestProductMatches } from "../services/product-match.js";
@@ -128,6 +129,8 @@ intakeRoutes.post(
         preferAi: z.boolean().optional(),
         image: z.string().max(300).optional(),
         barcodes: z.array(z.string().trim().min(1).max(80)).max(100).optional(),
+        /** A decoded issuer QR link, tried before any text parsing. */
+        qr: z.string().trim().min(1).max(600).optional(),
       }),
       req.body,
     );
@@ -137,7 +140,7 @@ intakeRoutes.post(
     }
 
     let rawText = (body.text ?? "").trim();
-    if (!rawText && !body.image) throw new ApiError(400, "Provide receipt text, an image or barcodes");
+    if (!rawText && !body.image && !body.qr) throw new ApiError(400, "Provide receipt text, an image or barcodes");
     await assertUploadsOwned([body.image], houseId).catch((error: Error) => {
       throw error instanceof UploadOwnershipError ? new ApiError(400, error.message) : error;
     });
@@ -146,10 +149,23 @@ intakeRoutes.post(
     const cfg = resolveAi(settings);
     const hasVisionModel = Boolean(settings?.ai?.visionModel || AI_ENV.visionModel);
 
-    const template = await selectReceiptTemplate(rawText, houseId);
-    let draft = heuristicReceipt(rawText, house.currency ?? null);
-    let provider: "ai" | "local" | "template" = "local";
-    let warning: string | null = null;
+    // Membership and upload ownership are checked above. The QR service
+    // validates the issuer allowlist before reserving a slot or fetching.
+    const qrImport = !body.preferAi && body.qr ? await readQrReceiptScan(houseId, body.qr) : null;
+    // The issuer service returns success only with product lines and source text.
+    const digitalReceipt = qrImport?.status === "ok" && qrImport.draft.lines.length ? qrImport : null;
+    const qrDraft = digitalReceipt?.draft;
+    const qrText = digitalReceipt?.text;
+    // selectedText records the actual source used for review. The issuer's
+    // rendition can be edited or reused as text for an explicit AI re-read.
+    if (qrText) rawText = qrText;
+    const warnings: string[] = [];
+    if (qrImport?.message) warnings.push(qrImport.message);
+
+    // A usable digital receipt decides whether the text is parsed at all.
+    const template = qrDraft ? null : await selectReceiptTemplate(rawText, houseId);
+    let draft = qrDraft ?? heuristicReceipt(rawText, house.currency ?? null);
+    let provider: IntakeParseResult["provider"] = qrDraft ? "qr" : "local";
     let candidateSelected = false;
 
     if (template) {
@@ -158,15 +174,15 @@ intakeRoutes.post(
       if (selected.changed) {
         rawText = selected.text;
         candidateSelected = true;
-        warning = "A different OCR reading matched the receipt arithmetic better. Check product names and prices against the photo.";
+        warnings.push("A different OCR reading matched the receipt arithmetic better. Check product names and prices against the photo.");
       } else if (hasOcrNumericDisagreement(templated, body.candidates ?? [], template, house.currency ?? null)) {
-        warning = "OCR readings disagree on some quantities, prices or barcodes. Check them against the photo.";
+        warnings.push("OCR readings disagree on some quantities, prices or barcodes. Check them against the photo.");
       }
       if (templated.lines.length) {
         draft = templated;
         provider = "template";
       } else {
-        warning = `${template.name} layout detected, but no product lines were read — using the generic parser.`;
+        warnings.push(`${template.name} layout detected, but no product lines were read — using the generic parser.`);
       }
     }
 
@@ -191,19 +207,20 @@ intakeRoutes.post(
           if (aiResult.lines.length) {
             draft = aiResult;
             provider = "ai";
-            warning = imageWarning;
-          } else warning = "AI did not find any product lines, so the local result was kept.";
+            if (imageWarning) warnings.push(imageWarning);
+          } else warnings.push("AI did not find any product lines, so the local result was kept.");
         } catch (err) {
-          warning = `AI cleanup failed, kept the locally parsed version. ${err instanceof Error ? err.message : ""}`.trim();
+          warnings.push(`AI cleanup failed, kept the locally parsed version. ${err instanceof Error ? err.message : ""}`.trim());
         }
       } else if (cfg.enabled) {
-        warning = "No text was recognised. Add a vision model in Settings → AI, or paste the receipt text.";
+        warnings.push("No text was recognised. Add a vision model in Settings → AI, or paste the receipt text.");
       } else {
-        warning = "No AI provider configured — parsed locally. Check the rows before adding them to your inventory.";
+        warnings.push("No AI provider configured — parsed locally. Check the rows before adding them to your inventory.");
       }
-    } else if (provider !== "template") {
-      warning = cfg.enabled ? "Parsed locally. Check the rows, or choose Re-read with AI." :
-        "No AI provider configured — parsed locally. Check the rows before adding them to your inventory.";
+    } else if (!qrDraft && provider !== "template") {
+      // A digital receipt stands on its own: no local-parse note is needed.
+      warnings.push(cfg.enabled ? "Parsed locally. Check the rows, or choose Re-read with AI." :
+        "No AI provider configured — parsed locally. Check the rows before adding them to your inventory.");
     }
 
     const country = await purchaseCountry(houseId);
@@ -239,14 +256,15 @@ intakeRoutes.post(
     }));
 
     if (!rows.length) {
-      warning = [warning, "Could not find any product lines in this text."].filter(Boolean).join(" ");
+      warnings.push("Could not find any product lines in this text.");
     }
 
     res.json({
       provider,
       aiAvailable: Boolean(cfg.enabled && (rawText || (body.image && hasVisionModel))),
-      ...(candidateSelected ? { selectedText: rawText } : {}),
-      warning,
+      ...(candidateSelected || qrText ? { selectedText: rawText } : {}),
+      ...(qrImport ? { qr: { issuer: qrImport.issuer, status: qrImport.status, message: qrImport.message } } : {}),
+      warning: warnings.length ? warnings.join(" ") : null,
       vendorName: draft.vendorName ?? null,
       purchasedAt: draft.purchasedAt ?? null,
       currency: draft.currency ?? house.currency ?? null,
